@@ -1,0 +1,77 @@
+# name: test/sql/macros/replace_self_dependency.test
+# description: CREATE OR REPLACE of a macro or view that depends on itself is refused
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/replace_self_dependency')
+
+statement ok
+SET enable_macro_dependencies = true
+
+statement ok
+SET enable_view_dependencies = true
+
+statement ok
+CREATE MACRO dl.m1(a) AS a + 1
+
+statement ok
+CREATE MACRO dl.m2(a) AS dl.m1(a) + 1
+
+statement error
+CREATE OR REPLACE MACRO dl.m1(a) AS dl.m2(a) + 1
+----
+Catalog Error: CREATE OR REPLACE is not allowed to depend on itself
+
+statement error
+CREATE OR REPLACE MACRO dl.m1(a) AS dl.m1(a) + 1
+----
+Catalog Error: CREATE OR REPLACE is not allowed to depend on itself
+
+statement ok
+CREATE MACRO dl.m3(a) AS TABLE SELECT dl.m1(a) AS x
+
+statement error
+CREATE OR REPLACE MACRO dl.m1(a) AS (FROM dl.m3(42))
+----
+Catalog Error: CREATE OR REPLACE is not allowed to depend on itself
+
+query II
+SELECT dl.m2(1), (FROM dl.m3(1))
+----
+3	2
+
+statement ok
+CREATE VIEW dl.v1 AS SELECT 1 AS x
+
+statement ok
+CREATE VIEW dl.v2 AS SELECT x + 1 AS x FROM dl.v1
+
+statement error
+CREATE OR REPLACE VIEW dl.v1 AS SELECT * FROM dl.v2
+----
+Catalog Error: CREATE OR REPLACE is not allowed to depend on itself
+
+query I
+FROM dl.v2
+----
+2
+
+# a replacement without a cycle still works
+statement ok
+CREATE OR REPLACE MACRO dl.m1(a) AS a + 10
+
+statement ok
+CREATE OR REPLACE VIEW dl.v1 AS SELECT 10 AS x
+
+query II
+SELECT dl.m2(1), (FROM dl.v2)
+----
+12	11

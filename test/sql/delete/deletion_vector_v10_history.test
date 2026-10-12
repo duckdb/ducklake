@@ -1,0 +1,117 @@
+# name: test/sql/delete/deletion_vector_v10_history.test
+# description: deletes from several snapshots of one file are written as a parquet delete file in a DuckLake 1.0 catalog
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dv_v10_history', DUCKLAKE_VERSION '1.0',
+    WRITE_DELETION_VECTORS true, DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE dl
+
+statement ok
+CREATE TABLE t AS SELECT i id FROM range(100) r(i)
+
+statement ok
+SET VARIABLE v_create = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'))
+
+# a single delete is one deletion vector
+statement ok
+DELETE FROM t WHERE id % 10 = 0
+
+statement ok
+SET VARIABLE v_d1 = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'))
+
+query III
+SELECT format, delete_count, footer_size FROM __ducklake_metadata_dl.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+puffin	10	0
+
+statement ok
+DELETE FROM t WHERE id % 10 = 1
+
+statement ok
+SET VARIABLE v_d2 = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'))
+
+query III
+SELECT format, delete_count, begin_snapshot = getvariable('v_d1')
+FROM __ducklake_metadata_dl.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+parquet	20	true
+
+# the delete is dated to the commit snapshot when another commit comes first
+statement ok con1
+BEGIN
+
+statement ok con1
+DELETE FROM dl.t WHERE id % 10 = 2
+
+statement ok
+CREATE TABLE dl.other (i INTEGER)
+
+statement ok con1
+COMMIT
+
+statement ok
+SET VARIABLE v_d3 = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'))
+
+query III
+SELECT format, delete_count, partial_max = getvariable('v_d3')
+FROM __ducklake_metadata_dl.ducklake_delete_file WHERE end_snapshot IS NULL
+----
+parquet	30	true
+
+query IIII
+SELECT (SELECT count(*) FROM t AT (VERSION => getvariable('v_create'))),
+       (SELECT count(*) FROM t AT (VERSION => getvariable('v_d1'))),
+       (SELECT count(*) FROM t AT (VERSION => getvariable('v_d2'))),
+       (SELECT count(*) FROM t AT (VERSION => getvariable('v_d3')))
+----
+100	90	80	70
+
+query II
+SELECT id % 10, count(*) FILTER (WHERE snapshot_id = getvariable('v_d1') + id % 10 + (id % 10 = 2)::INT)
+FROM ducklake_table_deletions('dl', 'main', 't', getvariable('v_create'), getvariable('v_d3'))
+GROUP BY ALL ORDER BY ALL
+----
+0	10
+1	10
+2	10
+
+# a flush of inlined deletes from several snapshots
+statement ok
+CREATE TABLE f AS SELECT i id FROM range(100) r(i)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10, table_name => 'f')
+
+statement ok
+DELETE FROM f WHERE id = 0
+
+statement ok
+SET VARIABLE v_f1 = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'))
+
+statement ok
+DELETE FROM f WHERE id = 1
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'f')
+
+query II
+SELECT format, delete_count FROM __ducklake_metadata_dl.ducklake_delete_file
+WHERE end_snapshot IS NULL AND table_id = (SELECT table_id FROM ducklake_table_info('dl') WHERE table_name = 'f')
+----
+parquet	2
+
+query II
+SELECT (SELECT count(*) FROM f AT (VERSION => getvariable('v_f1'))), (SELECT count(*) FROM f)
+----
+99	98

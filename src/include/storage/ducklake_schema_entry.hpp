@@ -74,8 +74,7 @@ public:
 
 private:
 	DuckLakeCatalogSet &GetCatalogSet(CatalogType type);
-	bool HandleCreateConflict(CatalogTransaction transaction, CatalogType type, const string &name,
-	                          OnCreateConflict on_conflict);
+	bool HandleCreateConflict(CatalogTransaction transaction, CatalogType type, const string &name, CreateInfo &info);
 
 	optional_ptr<CatalogEntry> TryLoadBuiltInFunction(const string &entry_name);
 	optional_ptr<CatalogEntry> LoadBuiltInFunction(DefaultTableMacro macro);

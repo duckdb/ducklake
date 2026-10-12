@@ -31,12 +31,21 @@ ALTER TABLE dl.t RENAME COLUMN s TO s2
 statement ok
 INSERT INTO dl.t VALUES (3, 'renamed', '[1]', DATE '2026-03-18', NULL, NULL, -2.5)
 
+statement ok
+CREATE TABLE dl.nested (id INTEGER, s VARCHAR, l INTEGER[], m MAP(VARCHAR, INTEGER), st STRUCT(a INTEGER))
+
+statement ok
+INSERT INTO dl.nested VALUES (1, 'x', [1, 2], MAP {'a': 1}, {'a': 5})
+
 # DuckLake 0.3 created these columns with their native Postgres types
 statement ok
 CALL postgres_execute('__ducklake_metadata_dl', 'ALTER TABLE ducklake_inlined_data_1_1 ALTER COLUMN s TYPE VARCHAR USING convert_from(s, ''UTF8''), ALTER COLUMN j TYPE JSON USING convert_from(j, ''UTF8'')::JSON, ALTER COLUMN d TYPE DATE USING d::DATE, ALTER COLUMN ts TYPE TIMESTAMP USING ts::TIMESTAMP, ALTER COLUMN tz TYPE TIMESTAMPTZ USING tz::TIMESTAMPTZ, ALTER COLUMN f TYPE DOUBLE PRECISION USING f::DOUBLE PRECISION')
 
 statement ok
 CALL postgres_execute('__ducklake_metadata_dl', 'ALTER TABLE ducklake_inlined_data_1_2 ALTER COLUMN s2 TYPE VARCHAR USING convert_from(s2, ''UTF8''), ALTER COLUMN j TYPE JSON USING convert_from(j, ''UTF8'')::JSON, ALTER COLUMN d TYPE DATE USING d::DATE, ALTER COLUMN ts TYPE TIMESTAMP USING ts::TIMESTAMP, ALTER COLUMN tz TYPE TIMESTAMPTZ USING tz::TIMESTAMPTZ, ALTER COLUMN f TYPE DOUBLE PRECISION USING f::DOUBLE PRECISION')
+
+statement ok
+CALL postgres_execute('__ducklake_metadata_dl', 'ALTER TABLE ducklake_inlined_data_2_3 ALTER COLUMN s TYPE VARCHAR USING convert_from(s, ''UTF8'')')
 
 statement ok
 DETACH dl
@@ -50,6 +59,16 @@ SELECT id, s2, j, d, ts, tz = TIMESTAMPTZ '2026-03-17 08:25:46+00', f FROM dl.t 
 1	back\slash \x62 é漢	{"a": "line\nbreak"}	2026-03-17	2026-03-17 08:25:46.123456	true	1.5
 2	(empty)	NULL	NULL	NULL	NULL	NULL
 3	renamed	[1]	2026-03-18	NULL	NULL	-2.5
+
+query IIIII
+SELECT id, s, l, m, st FROM dl.nested ORDER BY id
+----
+1	x	[1, 2]	{a=1}	{'a': 5}
+
+query I
+SELECT * FROM postgres_query('__ducklake_metadata_dl', 'SELECT pg_typeof(s)::TEXT FROM ducklake_inlined_data_2_3')
+----
+bytea
 
 statement ok
 INSERT INTO dl.t VALUES (4, 'b', '{}', DATE '2026-03-19', TIMESTAMP '2026-03-19 01:02:03', TIMESTAMPTZ '2026-03-19 01:02:03+00', 0.25)

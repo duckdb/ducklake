@@ -755,8 +755,11 @@ unique_ptr<QueryResult> DuckLakeServerSideCommit::RunQuery(const string &query, 
 unique_ptr<QueryResult> DuckLakeServerSideCommit::ScanStagedTable(DuckLakeStagedTableType kind) {
 	string table_name = DuckLakeStagedTable::BaseName(kind);
 	auto &temp_catalog = Catalog::GetCatalog(context, TEMP_CATALOG);
-	auto &table_entry = temp_catalog.GetEntry<TableCatalogEntry>(context, DEFAULT_SCHEMA, Identifier(table_name))
-	                        .Cast<DuckTableEntry>();
+	auto &table_entry =
+	    temp_catalog
+	        .GetEntry<TableCatalogEntry>(
+	            context, QualifiedName(temp_catalog.GetName(), Identifier(DEFAULT_SCHEMA), Identifier(table_name)))
+	        .Cast<DuckTableEntry>();
 	auto &storage = table_entry.GetStorage();
 
 	auto types = storage.GetTypes();

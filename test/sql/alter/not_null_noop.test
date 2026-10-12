@@ -1,0 +1,58 @@
+# name: test/sql/alter/not_null_noop.test
+# description: SET NOT NULL on a NOT NULL column and DROP NOT NULL on a nullable column change nothing
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/not_null_noop')
+
+statement ok
+CREATE TABLE dl.t (i INTEGER, j INTEGER NOT NULL)
+
+statement ok
+SET VARIABLE snapshots = (SELECT count(*) FROM ducklake_snapshots('dl'))
+
+statement ok
+ALTER TABLE dl.t ALTER COLUMN j SET NOT NULL
+
+statement ok
+ALTER TABLE dl.t ALTER COLUMN i DROP NOT NULL
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.t ALTER COLUMN j SET NOT NULL
+
+statement ok
+ALTER TABLE dl.t ALTER COLUMN i DROP NOT NULL
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) = getvariable('snapshots') FROM ducklake_snapshots('dl')
+----
+true
+
+query II
+SELECT column_name, is_nullable FROM information_schema.columns
+WHERE table_catalog = 'dl' AND table_name = 't' ORDER BY ordinal_position
+----
+i	YES
+j	NO
+
+statement error
+INSERT INTO dl.t VALUES (1, NULL)
+----
+NOT NULL constraint failed
+
+statement ok
+INSERT INTO dl.t VALUES (NULL, 1)

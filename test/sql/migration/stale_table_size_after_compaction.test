@@ -1,0 +1,64 @@
+# name: test/sql/migration/stale_table_size_after_compaction.test
+# description: Whole-file deletes on a catalog whose compaction left the stored table size below its live files
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+# written by DuckDB 1.5.6, whose ducklake_merge_adjacent_files kept the size of the source files
+unzip data/old_ducklake/stale_table_size.db.gz {TEST_DIR}/stale_table_size_delete.db
+
+unzip data/old_ducklake/stale_table_size.db.gz {TEST_DIR}/stale_table_size_insert.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/stale_table_size_delete.db' AS stale (DATA_PATH 'data/old_ducklake/stale_table_size/', OVERRIDE_DATA_PATH TRUE)
+
+query III
+SELECT record_count, file_size_bytes, (SELECT file_size_bytes FROM __ducklake_metadata_stale.ducklake_data_file WHERE end_snapshot IS NULL) FROM __ducklake_metadata_stale.ducklake_table_stats
+----
+201	1546	1888
+
+# drops the merged file and keeps the inlined row
+query I
+DELETE FROM stale.t WHERE id > 0
+----
+200
+
+query I
+SELECT COUNT(*) FROM stale.t
+----
+1
+
+query II
+SELECT record_count, file_size_bytes FROM __ducklake_metadata_stale.ducklake_table_stats
+----
+1	0
+
+# the same drop in a commit that also inlines a row
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/stale_table_size_insert.db' AS stale2 (DATA_PATH 'data/old_ducklake/stale_table_size/', OVERRIDE_DATA_PATH TRUE, DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+BEGIN
+
+query I
+DELETE FROM stale2.t WHERE id > 0
+----
+200
+
+statement ok
+INSERT INTO stale2.t VALUES (500)
+
+statement ok
+COMMIT
+
+query II
+SELECT COUNT(*), SUM(id) FROM stale2.t
+----
+2	500
+
+query II
+SELECT record_count, file_size_bytes FROM __ducklake_metadata_stale2.ducklake_table_stats
+----
+2	0

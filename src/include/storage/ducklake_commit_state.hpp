@@ -72,6 +72,12 @@ struct DuckLakeCommitState {
 	map<TableIndex, set<FieldIndex>> float_widened_columns;
 	//! The widened columns with values that read as DOUBLE without FLOAT rounding
 	map<TableIndex, set<FieldIndex>> float_bounds_to_clear;
+	//! The oid of each entry that gets its id in this commit
+	ducklake_entry_oids_t new_entry_oids;
+
+	void AddNewEntry(const CatalogEntry &entry, idx_t id) {
+		new_entry_oids.emplace(make_pair(entry.type, id), entry.oid);
+	}
 
 	//! Whether this commit widens a column of the given table from FLOAT to DOUBLE
 	bool WidensFloatColumns(TableIndex table_id) const;

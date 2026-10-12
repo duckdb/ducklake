@@ -1,0 +1,39 @@
+# name: test/sql/stats/filter_pushdown_unprintable_constant.test
+# description: a filter constant that cannot be printed skips file pruning instead of failing the query
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/unprintable_constant', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (ts TIMESTAMP)
+
+# without bounds year() becomes a range starting just above -infinity
+query I
+SELECT count(*) FROM dl.t WHERE year(ts) < 2002
+----
+0
+
+statement ok
+INSERT INTO dl.t SELECT TIMESTAMP '2001-01-01' FROM range(20)
+
+statement ok
+UPDATE dl.t SET ts = NULL WHERE true
+
+query I
+SELECT count(*) FROM dl.t WHERE year(ts) < 2002
+----
+0
+
+query I
+DELETE FROM dl.t WHERE year(ts) < 2002
+----
+0

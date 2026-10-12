@@ -1,0 +1,243 @@
+# name: test/sql/default/literal_default_rendering.test
+# description: literal column defaults read back with the type of their column
+# group: [default]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/literal_default_rendering.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/literal_default_rendering')
+
+statement ok
+CREATE TABLE dl.t (a UTINYINT DEFAULT CAST(1 AS UTINYINT), b INTEGER DEFAULT -1, c BOOLEAN DEFAULT false,
+    d DATE DEFAULT DATE '2020-01-01', h DOUBLE DEFAULT CAST(1.0 AS DOUBLE), s VARCHAR DEFAULT 'x',
+    i INTEGER DEFAULT 1 + 1)
+
+query II
+SELECT column_name, column_default FROM information_schema.columns
+WHERE table_catalog = 'dl' AND table_name = 't' ORDER BY ordinal_position
+----
+a	CAST(1 AS UTINYINT)
+b	-1
+c	false
+d	CAST('2020-01-01' AS DATE)
+h	CAST(1.0 AS DOUBLE)
+s	'x'
+i	(1 + 1)
+
+query III
+SELECT contains(sql, 'a UTINYINT DEFAULT(CAST(1 AS UTINYINT))'), contains(sql, 'b INTEGER DEFAULT(-1)'),
+    contains(sql, 's VARCHAR DEFAULT(''x'')')
+FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 't'
+----
+true	true	true
+
+statement ok
+INSERT INTO dl.t DEFAULT VALUES
+
+query IIIIIIII
+SELECT a, typeof(a), b, c, d, h, s, i FROM dl.t
+----
+1	UTINYINT	-1	false	2020-01-01	1.0	x	2
+
+# time zone defaults are cast when used, in the time zone of the session
+statement ok
+SET TimeZone = 'America/New_York'
+
+statement ok
+CREATE TABLE dl.z (tz TIMESTAMPTZ DEFAULT '2020-01-01 00:00:00',
+    ns TIMESTAMPTZ_NS DEFAULT '2020-01-01 00:00:00.123456789', tt TIMETZ DEFAULT '01:00:00', k INTEGER)
+
+# inlined, as parquet keeps a TIMETZ value without its offset
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10, table_name => 'z')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/literal_default_rendering')
+
+statement ok
+INSERT INTO dl.z (k) VALUES (1)
+
+query III
+SELECT tz = TIMESTAMPTZ '2020-01-01 05:00:00+00',
+    ns = TIMESTAMPTZ_NS '2020-01-01 05:00:00.123456789+00', tt = '01:00:00'::TIMETZ FROM dl.z
+----
+true	true	true
+
+statement ok
+SET TimeZone = 'Asia/Tokyo'
+
+statement ok
+INSERT INTO dl.z (k) VALUES (2)
+
+query III
+SELECT tz = TIMESTAMPTZ '2019-12-31 15:00:00+00',
+    ns = TIMESTAMPTZ_NS '2019-12-31 15:00:00.123456789+00', tt = '01:00:00'::TIMETZ FROM dl.z WHERE k = 2
+----
+true	true	true
+
+# a literal that does not fit its column keeps its text through a type change
+statement ok
+SET TimeZone = 'UTC'
+
+statement ok
+CREATE TABLE dl.w (i INTEGER DEFAULT 1.5, k INTEGER)
+
+query I
+SELECT column_default FROM information_schema.columns
+WHERE table_catalog = 'dl' AND table_name = 'w' AND column_name = 'i'
+----
+'1.5'
+
+statement ok
+ALTER TABLE dl.w ALTER i TYPE DOUBLE
+
+statement ok
+INSERT INTO dl.w (k) VALUES (1)
+
+query II
+SELECT i, (SELECT column_default FROM information_schema.columns WHERE table_catalog = 'dl' AND table_name = 'w'
+    AND column_name = 'i') FROM dl.w
+----
+1.5	CAST(1.5 AS DOUBLE)
+
+# a FLOAT default widened to DOUBLE in a transaction is the literal and not its FLOAT rounding
+statement ok
+CREATE TABLE dl.fl (f FLOAT DEFAULT 0.1, k INTEGER)
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/literal_default_rendering')
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.fl ALTER f TYPE DOUBLE
+
+statement ok
+INSERT INTO dl.fl (k) VALUES (1)
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO dl.fl (k) VALUES (2)
+
+query II
+SELECT k, f = 0.1::DOUBLE FROM dl.fl ORDER BY k
+----
+1	true
+2	true
+
+# a DATE default widened to TIMESTAMPTZ_NS in a transaction is midnight in the session time zone
+statement ok
+SET TimeZone = 'America/New_York'
+
+statement ok
+CREATE TABLE dl.dt (d DATE DEFAULT DATE '2020-01-01', k INTEGER)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10, table_name => 'dt')
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.dt ALTER d TYPE TIMESTAMPTZ_NS
+
+statement ok
+INSERT INTO dl.dt (k) VALUES (1)
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO dl.dt (k) VALUES (2)
+
+query II
+SELECT k, d = TIMESTAMPTZ_NS '2020-01-01 05:00:00+00' FROM dl.dt ORDER BY k
+----
+1	true
+2	true
+
+# a literal that does not cast to the new type fails when used, also within the transaction
+statement ok
+CREATE TABLE dl.b (v BOOLEAN)
+
+statement ok
+ALTER TABLE dl.b ALTER v SET DEFAULT true
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.b ALTER v TYPE INTEGER
+
+query I
+SELECT column_default FROM information_schema.columns
+WHERE table_catalog = 'dl' AND table_name = 'b' AND column_name = 'v'
+----
+'true'
+
+statement ok
+COMMIT
+
+statement error
+INSERT INTO dl.b DEFAULT VALUES
+----
+Could not convert string 'true' to INT32
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.b ALTER v TYPE BIGINT
+
+statement error
+INSERT INTO dl.b DEFAULT VALUES
+----
+Could not convert string 'true' to INT64
+
+statement ok
+ROLLBACK
+
+# expression and NULL defaults are kept through a type change
+statement ok
+CREATE TABLE dl.e (v INTEGER DEFAULT 1 + 1, n INTEGER DEFAULT NULL)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.e ALTER v TYPE DOUBLE
+
+statement ok
+ALTER TABLE dl.e ALTER n TYPE BIGINT
+
+statement ok
+INSERT INTO dl.e DEFAULT VALUES
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO dl.e DEFAULT VALUES
+
+query II
+SELECT v, n FROM dl.e
+----
+2.0	NULL
+2.0	NULL

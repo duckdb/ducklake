@@ -725,6 +725,15 @@ bool DuckLakeUtil::TryGetLiteralValue(const ParsedExpression &expr, Value &resul
 	return true;
 }
 
+unique_ptr<ParsedExpression> DuckLakeUtil::LiteralDefaultExpression(const Value &text, const LogicalType &type) {
+	// keep the text when the column type would print it differently, as for a rounded value or a time zone
+	auto typed_value = text.DefaultTryCastAs(type);
+	if (typed_value && typed_value->ToString() == text.ToString()) {
+		return ConstantExpression::FromValue(*typed_value);
+	}
+	return ConstantExpression::FromValue(text);
+}
+
 bool DuckLakeUtil::TryGetMacroDefaultLiteral(const ParsedExpression &expr, Value &result) {
 	if (!TryGetLiteralValue(expr, result)) {
 		return false;

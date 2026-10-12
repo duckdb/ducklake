@@ -1,0 +1,86 @@
+# name: test/sql/sorted_table/sort_key_macro_search_path.test
+# description: A sort key that calls an unqualified macro resolves in the schema of the table from any search path
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/sort_key_macro_search_path', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE dl
+
+statement ok
+CREATE TABLE t (i INTEGER)
+
+statement ok
+CREATE TABLE other (i INTEGER)
+
+statement ok
+INSERT INTO t VALUES (1), (2)
+
+statement ok
+INSERT INTO other VALUES (1), (2)
+
+statement ok
+CREATE MACRO sort_key(x) AS -x
+
+statement ok
+ALTER TABLE t SET SORTED BY (sort_key(i))
+
+# CHECKPOINT runs on a connection without the search path of this session
+statement ok
+CHECKPOINT
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 'other')
+----
+1
+
+query I
+SELECT i FROM t
+----
+2
+1
+
+statement ok
+USE memory
+
+statement ok
+INSERT INTO dl.t VALUES (16), (15)
+
+query I
+SELECT rows_flushed FROM ducklake_flush_inlined_data('dl', table_name => 't')
+----
+2
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range(3, 15)
+
+query I
+SELECT files_created FROM ducklake_merge_adjacent_files('dl', 't')
+----
+1
+
+query I
+SELECT i FROM dl.t LIMIT 3
+----
+16
+15
+14
+
+statement ok
+CREATE TABLE dl.c SORTED BY (sort_key(i)) AS SELECT range::INTEGER AS i FROM range(20)
+
+query I
+SELECT i FROM dl.c LIMIT 3
+----
+19
+18
+17

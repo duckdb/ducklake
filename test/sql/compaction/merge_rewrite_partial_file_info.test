@@ -65,7 +65,10 @@ SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't');
 # Capture expected partial_max before merge: max begin_snapshot of the small files (B and C)
 # (exclude file A which has the smallest begin_snapshot and won't be merged)
 statement ok
-SET VARIABLE expected_pm_1 = (SELECT max(begin_snapshot) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL AND begin_snapshot != (SELECT min(begin_snapshot) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL));
+SET VARIABLE min_begin = (SELECT min(begin_snapshot) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL);
+
+statement ok
+SET VARIABLE expected_pm_1 = (SELECT max(begin_snapshot) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL AND begin_snapshot != getvariable('min_begin'));
 
 # Merge B+C into a single file (A is too big to merge)
 query III

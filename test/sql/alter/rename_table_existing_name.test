@@ -1,0 +1,40 @@
+# name: test/sql/alter/rename_table_existing_name.test
+# description: renaming a table to the name of another table gives the catalog error of DuckDB
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/rename_table_existing_name')
+
+statement ok
+CREATE TABLE dl.a (i INTEGER)
+
+statement ok
+CREATE TABLE dl.b (i INTEGER)
+
+statement error
+ALTER TABLE dl.b RENAME TO a
+----
+Catalog Error: Could not rename "b" to "a": another entry with this name already exists!
+
+query I
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'dl' ORDER BY ALL
+----
+a
+b
+
+# a quote in the name is escaped as in DuckDB
+statement ok
+CREATE TABLE dl."quoted""name" (i INTEGER)
+
+statement error
+ALTER TABLE dl."quoted""name" RENAME TO a
+----
+Could not rename "quoted""name" to "a": another entry with this name already exists!

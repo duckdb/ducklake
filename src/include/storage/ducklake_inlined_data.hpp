@@ -25,8 +25,6 @@ struct DuckLakeInlinedData {
 	//! Row count of the inlined collection.
 	idx_t Count() const;
 	bool HasPreservedRowIds() const;
-	//! Get the row_id for a given position in the data collection
-	idx_t GetRowId(idx_t position) const;
 	//! Get the output row_id for a surviving (non-deleted) row
 	int64_t GetOutputRowId(idx_t position) const;
 	//! Merge preserved row_ids from update inlining

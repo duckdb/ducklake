@@ -49,15 +49,22 @@ vector<OrderByNode> DuckLakeCompactor::ParseSortOrders(const DuckLakeSort &sort_
 	return pre_bound_orders;
 }
 
-vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, const ColumnList &columns,
-                                                           const Identifier &table_name, TableIndex table_index,
+vector<BoundOrderByNode> DuckLakeCompactor::BindSortOrders(Binder &binder, SchemaCatalogEntry &schema,
+                                                           const ColumnList &columns, const Identifier &table_name,
+                                                           TableIndex table_index,
                                                            const vector<OrderByNode> &pre_bound_orders) {
 	DuckLakeTableEntry::ValidateSortExpressionColumns(columns, pre_bound_orders);
 	vector<OrderByNode> orders;
 	for (auto &order : pre_bound_orders) {
 		orders.emplace_back(order.type, order.null_order, order.expression->Copy());
 	}
-	return BindOrderByNodes(binder, table_index, table_name, StringsToIdentifiers(columns.GetColumnNames()),
+	auto sort_binder = Binder::CreateBinder(binder.context, &binder);
+	// a search path cannot name a nested schema
+	if (!schema.GetParentSchema()) {
+		// names in the sort expressions resolve in the schema of the table first, as in a view
+		sort_binder->SetSearchPath(schema.ParentCatalog(), schema.name);
+	}
+	return BindOrderByNodes(*sort_binder, table_index, table_name, StringsToIdentifiers(columns.GetColumnNames()),
 	                        columns.GetColumnTypes(), orders);
 }
 
@@ -100,6 +107,9 @@ SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, 
 		throw InternalException("DuckLakeCompaction - missing sink state while producing result");
 	}
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
+	if (gstate.state == SinkFinalizeType::NO_OUTPUT_POSSIBLE) {
+		return SourceResultType::FINISHED;
+	}
 	auto files_created = gstate.written_files.size();
 
 	chunk.data[0].Append(Value(table.schema.GetSchemaName()));
@@ -161,7 +171,13 @@ SinkFinalizeType DuckLakeCompaction::Finalize(Pipeline &pipeline, Event &event, 
 	compaction_entry.type = type;
 
 	auto &transaction = DuckLakeTransaction::Get(context, global_state.table.catalog);
-	transaction.AddCompaction(global_state.table.GetTableId(), std::move(compaction_entry));
+	if (!transaction.AddCompaction(global_state.table.GetTableId(), std::move(compaction_entry))) {
+		auto &fs = FileSystem::GetFileSystem(context);
+		for (auto &file : global_state.written_files) {
+			fs.TryRemoveFile(file.file_name);
+		}
+		return SinkFinalizeType::NO_OUTPUT_POSSIBLE;
+	}
 	return SinkFinalizeType::READY;
 }
 
@@ -262,6 +278,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	// FIXME: pass in the sort_data so that list of files is approximately sorted in the same way
 	// (sorted by the min/max metadata)
 	auto files = metadata_manager.GetFilesForCompaction(table, type, delete_threshold, snapshot, filter_options);
+	auto files_compacted_in_transaction = transaction.GetCompactedFiles(table_id);
 
 	// Resolve, per schema_version (cached), whether a file written under it can be rewritten under the latest schema.
 	auto latest_entry = catalog.GetEntryById(transaction, snapshot, table_id);
@@ -305,6 +322,9 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 		     type == CompactionType::MERGE_ADJACENT_TABLES) ||
 		    candidate.file.end_snapshot.IsValid()) {
 			// Merge Adjacent Tables doesn't perform the merge if any deletes are present
+			continue;
+		}
+		if (files_compacted_in_transaction.count(candidate.file.id)) {
 			continue;
 		}
 		// construct the compaction group for this file - i.e. the set of candidate files we can compact it with
@@ -388,8 +408,8 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
                                                           optional_ptr<DuckLakeSort> sort_data) {
 	auto bindings = plan->GetColumnBindings();
 	D_ASSERT(!bindings.empty());
-	auto orders =
-	    BindSortOrders(binder, table.GetColumns(), table.name, bindings[0].table_index, ParseSortOrders(*sort_data));
+	auto orders = BindSortOrders(binder, table.schema, table.GetColumns(), table.name, bindings[0].table_index,
+	                             ParseSortOrders(*sort_data));
 	if (orders.empty()) {
 		// Then the sorts were not in the DuckDB dialect and we return the original plan
 		return std::move(plan);
@@ -447,7 +467,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::PlanRewriteScan(
     unique_ptr<LogicalCopyToFile> &copy) {
 	auto table_idx = binder.GenerateTableIndex();
 	unique_ptr<FunctionData> bind_data;
-	EntryLookupInfo info(CatalogType::TABLE_ENTRY, table.name);
+	EntryLookupInfo info(CatalogType::TABLE_ENTRY, QualifiedName(table.name));
 	auto scan_function = table.GetScanFunction(context, bind_data, info);
 	auto &multi_file_bind_data = bind_data->Cast<MultiFileBindData>();
 	auto &read_info = scan_function.function_info->Cast<DuckLakeFunctionInfo>();

@@ -1,0 +1,112 @@
+# name: test/sql/compaction/expire_snapshots_file_ranges.test
+# description: Expiring snapshots removes exactly the files whose range no remaining snapshot lies in
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/expire_snapshots_file_ranges', DATA_INLINING_ROW_LIMIT 0)
+
+# snapshot 1
+statement ok
+CREATE TABLE ducklake.t (i INTEGER)
+
+# snapshots 2 and 3 add a file each
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+statement ok
+INSERT INTO ducklake.t VALUES (2)
+
+# snapshot 4 drops the file of snapshot 2
+statement ok
+DELETE FROM ducklake.t WHERE i = 1
+
+# snapshot 5 adds a file, snapshot 6 writes a delete file for it, snapshot 7 drops both
+statement ok
+INSERT INTO ducklake.t VALUES (3), (4)
+
+statement ok
+DELETE FROM ducklake.t WHERE i = 3
+
+statement ok
+DELETE FROM ducklake.t WHERE i = 4
+
+# snapshots 8 to 10 create, fill and drop a second table
+statement ok
+CREATE TABLE ducklake.u (j INTEGER)
+
+statement ok
+INSERT INTO ducklake.u VALUES (5)
+
+statement ok
+DROP TABLE ducklake.u
+
+query II
+SELECT count(*), count(end_snapshot) FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+4	3
+
+query II
+SELECT count(*), count(end_snapshot) FROM __ducklake_metadata_ducklake.ducklake_delete_file
+----
+1	0
+
+# snapshot 3 still lies in the range of the dropped file of snapshot 2
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [2])
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+4
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [3])
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+3
+
+# snapshot 6 keeps the file of snapshot 5, whose delete file goes with it
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [5])
+
+query II
+SELECT (SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file), (SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_delete_file)
+----
+3	1
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [6])
+
+query II
+SELECT (SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file), (SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_delete_file)
+----
+2	0
+
+# expiring the snapshots of the dropped table removes its file
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [8, 9])
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file
+----
+1
+
+query I
+SELECT * FROM ducklake.t
+----
+2
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_files_scheduled_for_deletion
+----
+4

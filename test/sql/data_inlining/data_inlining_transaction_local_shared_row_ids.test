@@ -1,0 +1,144 @@
+# name: test/sql/data_inlining/data_inlining_transaction_local_shared_row_ids.test
+# description: delete transaction local inlined rows that share a row id with another row
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/inlining_shared_row_ids', DATA_INLINING_ROW_LIMIT 10)
+
+# update a row of a transaction local file while inlined rows exist
+statement ok
+CREATE TABLE ducklake.t1 (id INTEGER, v INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t1 SELECT i, 0 FROM range(20) r(i)
+
+statement ok
+INSERT INTO ducklake.t1 VALUES (100, 0)
+
+statement ok
+UPDATE ducklake.t1 SET v = 1 WHERE id = 0
+
+query I
+DELETE FROM ducklake.t1 WHERE id = 100
+----
+1
+
+query II
+SELECT count(*), sum(v) FROM ducklake.t1
+----
+20	1
+
+statement ok
+COMMIT
+
+query II
+SELECT count(*), sum(v) FROM ducklake.t1
+----
+20	1
+
+# update rows of two transaction local partition files
+statement ok
+CREATE TABLE ducklake.t2 (id INTEGER, p INTEGER, v INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t2 SET PARTITIONED BY (p)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 1, table_name => 't2')
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t2 VALUES (1, 1, 0), (2, 2, 0)
+
+statement ok
+UPDATE ducklake.t2 SET v = 1 WHERE id = 1
+
+statement ok
+UPDATE ducklake.t2 SET v = 1 WHERE id = 2
+
+query I
+DELETE FROM ducklake.t2 WHERE id = 1
+----
+1
+
+statement ok
+COMMIT
+
+query II
+SELECT id, v FROM ducklake.t2
+----
+2	1
+
+# merge into transaction local inlined data on multiple threads
+statement ok
+SET threads = 4
+
+statement ok
+CREATE OR REPLACE TABLE ducklake.t3 (id INTEGER, v INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t3 VALUES (1, 100)
+
+statement ok
+MERGE INTO ducklake.t3 USING (VALUES (1), (2), (3)) s(id) ON t3.id = s.id
+    WHEN MATCHED THEN UPDATE SET v = 101
+    WHEN NOT MATCHED THEN INSERT VALUES (s.id, 0)
+
+query I
+DELETE FROM ducklake.t3 WHERE id = 1
+----
+1
+
+statement ok
+COMMIT
+
+query II
+SELECT id, v FROM ducklake.t3 ORDER BY id
+----
+2	0
+3	0
+
+statement ok
+CREATE OR REPLACE TABLE ducklake.t3 (id INTEGER, v INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t3 VALUES (1, 100)
+
+statement ok
+MERGE INTO ducklake.t3 USING (VALUES (1), (2), (3)) s(id) ON t3.id = s.id
+    WHEN MATCHED THEN UPDATE SET v = 101
+    WHEN NOT MATCHED THEN INSERT VALUES (s.id, 0)
+
+query I
+UPDATE ducklake.t3 SET v = 7 WHERE id = 1
+----
+1
+
+statement ok
+COMMIT
+
+query II
+SELECT id, v FROM ducklake.t3 ORDER BY id
+----
+1	7
+2	0
+3	0

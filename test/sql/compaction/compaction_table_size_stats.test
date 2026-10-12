@@ -1,0 +1,163 @@
+# name: test/sql/compaction/compaction_table_size_stats.test
+# description: Compactions keep the stored table size equal to the size of the live data files
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/compaction_table_size_stats', DATA_INLINING_ROW_LIMIT 0)
+
+# the merged file is larger than its two sources
+statement ok
+CREATE TABLE ducklake.merged (id BIGINT)
+
+statement ok
+INSERT INTO ducklake.merged SELECT i FROM range(1, 101) r(i)
+
+statement ok
+INSERT INTO ducklake.merged SELECT i FROM range(101, 201) r(i)
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'merged')
+
+statement ok
+INSERT INTO ducklake.merged SELECT i FROM range(201, 301) r(i)
+
+statement ok
+SET VARIABLE merged_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'merged')
+
+statement ok
+SET VARIABLE live_size = (SELECT SUM(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('merged_id') AND end_snapshot IS NULL)
+
+query II
+SELECT record_count, file_size_bytes = getvariable('live_size') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('merged_id')
+----
+300	true
+
+# drops the merged file and keeps the last insert
+query I
+DELETE FROM ducklake.merged WHERE id <= 200
+----
+200
+
+query II
+SELECT COUNT(*), SUM(id) FROM ducklake.merged
+----
+100	25050
+
+statement ok
+SET VARIABLE live_size = (SELECT SUM(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('merged_id') AND end_snapshot IS NULL)
+
+query II
+SELECT record_count, file_size_bytes = getvariable('live_size') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('merged_id')
+----
+100	true
+
+# only the first file is rewritten, so the second keeps its delete
+statement ok
+CREATE TABLE ducklake.rewritten (id BIGINT)
+
+statement ok
+INSERT INTO ducklake.rewritten SELECT i FROM range(100) r(i)
+
+statement ok
+INSERT INTO ducklake.rewritten SELECT i FROM range(100, 200) r(i)
+
+query I
+DELETE FROM ducklake.rewritten WHERE id < 60 OR id = 150
+----
+61
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'rewritten', delete_threshold => 0.5)
+
+statement ok
+SET VARIABLE rewritten_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'rewritten')
+
+statement ok
+SET VARIABLE live_size = (SELECT SUM(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('rewritten_id') AND end_snapshot IS NULL)
+
+query I
+SELECT file_size_bytes = getvariable('live_size') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('rewritten_id')
+----
+true
+
+# drops the rewritten file
+query I
+DELETE FROM ducklake.rewritten WHERE id < 100
+----
+40
+
+query II
+SELECT COUNT(*), SUM(id) FROM ducklake.rewritten
+----
+99	14800
+
+statement ok
+SET VARIABLE live_size = (SELECT SUM(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('rewritten_id') AND end_snapshot IS NULL)
+
+query I
+SELECT file_size_bytes = getvariable('live_size') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('rewritten_id')
+----
+true
+
+# the rewrite removes a fully deleted file without writing a new one
+statement ok
+CREATE TABLE ducklake.emptied (id BIGINT)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 100, table_name => 'emptied')
+
+statement ok
+INSERT INTO ducklake.emptied SELECT i FROM range(20) r(i)
+
+statement ok
+DELETE FROM ducklake.emptied
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'emptied')
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0, table_name => 'emptied')
+
+statement ok
+INSERT INTO ducklake.emptied SELECT i FROM range(100, 200) r(i)
+
+query I
+DELETE FROM ducklake.emptied WHERE id = 150
+----
+1
+
+query II
+SELECT files_processed, files_created FROM ducklake_rewrite_data_files('ducklake', 'emptied', delete_threshold => 0.5)
+----
+1	0
+
+statement ok
+SET VARIABLE emptied_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'emptied')
+
+statement ok
+SET VARIABLE live_size = (SELECT SUM(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('emptied_id') AND end_snapshot IS NULL)
+
+query I
+SELECT file_size_bytes = getvariable('live_size') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('emptied_id')
+----
+true
+
+# the insert starts from the stored size, not from the stats cached before the rewrite
+statement ok
+INSERT INTO ducklake.emptied VALUES (1000)
+
+statement ok
+SET VARIABLE live_size = (SELECT SUM(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('emptied_id') AND end_snapshot IS NULL)
+
+query I
+SELECT file_size_bytes = getvariable('live_size') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('emptied_id')
+----
+true

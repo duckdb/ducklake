@@ -5,6 +5,7 @@
 #include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_variant_stats.hpp"
 #include "duckdb/common/types/string.hpp"
+#include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 #include "duckdb/common/helper.hpp"
@@ -193,15 +194,35 @@ bool DuckLakeColumnStats::BoundsSurviveTypePromotion(const LogicalType &source, 
 	return source.id() == LogicalTypeId::DECIMAL && target.id() == LogicalTypeId::DECIMAL;
 }
 
-static int32_t CompareBounds(const LogicalType &type, const string &left, const string &right) {
+optional<Value> TryCastStatsBound(const string &bound, const LogicalType &type) {
+	if (StatsBoundsRequireOffset(type)) {
+		timestamp_t result;
+		bool has_offset;
+		string_t time_zone;
+		auto cast_result =
+		    Timestamp::TryConvertTimestampTZ(bound.c_str(), bound.size(), result, true, has_offset, time_zone);
+		if (cast_result != TimestampCastResult::SUCCESS || (!has_offset && result.IsFinite())) {
+			return nullopt;
+		}
+	}
+	return Value(bound).DefaultTryCastAs(type);
+}
+
+//! Returns false when either bound is unknown
+static bool TryCompareBounds(const LogicalType &type, const string &left, const string &right, int32_t &result) {
 	if (!RequiresValueComparison(type)) {
 		// for other types we can compare the strings directly
-		return left < right ? -1 : (left == right ? 0 : 1);
+		result = left < right ? -1 : (left == right ? 0 : 1);
+		return true;
 	}
 	// for numerics/temporals we need to parse the stats
-	auto left_value = Value(left).DefaultCastAs(type);
-	auto right_value = Value(right).DefaultCastAs(type);
-	return left_value < right_value ? -1 : (left_value == right_value ? 0 : 1);
+	auto left_value = TryCastStatsBound(left, type);
+	auto right_value = TryCastStatsBound(right, type);
+	if (!left_value || !right_value) {
+		return false;
+	}
+	result = *left_value < *right_value ? -1 : (*left_value == *right_value ? 0 : 1);
+	return true;
 }
 
 void DuckLakeColumnStats::MergeBound(const DuckLakeColumnStats &new_stats, bool is_min) {
@@ -218,7 +239,11 @@ void DuckLakeColumnStats::MergeBound(const DuckLakeColumnStats &new_stats, bool 
 	if (!has_bound) {
 		return;
 	}
-	auto comparison = CompareBounds(type, new_bound, bound);
+	int32_t comparison;
+	if (!TryCompareBounds(type, new_bound, bound, comparison)) {
+		has_bound = false;
+		return;
+	}
 	if (comparison == 0) {
 		bound_is_exact = bound_is_exact && new_bound_is_exact;
 	} else if ((comparison < 0) == is_min) {
@@ -337,14 +362,14 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {
 	}
 	auto stats = NumericStats::CreateEmpty(type);
 	if (has_min) {
-		auto min_value = Value(min).DefaultTryCastAs(type);
+		auto min_value = TryCastStatsBound(min, type);
 		if (!min_value) {
 			return nullptr;
 		}
 		NumericStats::SetMin(stats, *min_value);
 	}
 	if (has_max) {
-		auto max_value = Value(max).DefaultTryCastAs(type);
+		auto max_value = TryCastStatsBound(max, type);
 		if (!max_value) {
 			return nullptr;
 		}
@@ -410,14 +435,22 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 		return CreateNumericStats();
 	case LogicalTypeId::FLOAT:
 	case LogicalTypeId::DOUBLE: {
-		// we only create stats if we know there are no NaN values
-		// FIXME: we can just set Max to NaN instead
-		if (has_contains_nan && !contains_nan) {
+		if (!has_contains_nan) {
+			// we only create stats if we know whether there are NaN values
+			auto stats = NumericStats::CreateEmpty(type);
+			SetValidity(stats);
+			return stats.ToUnique();
+		}
+		if (!contains_nan) {
 			return CreateNumericStats();
 		}
-		auto stats = NumericStats::CreateEmpty(type);
-		SetValidity(stats);
-		return stats.ToUnique();
+		// NaN is greater than every other value, so it is the max
+		auto stats = has_min ? CreateNumericStats() : NumericStats::CreateUnknown(type).ToUnique();
+		if (stats) {
+			NumericStats::SetMax(*stats, Value::DOUBLE(std::numeric_limits<double>::quiet_NaN()).DefaultCastAs(type));
+			SetValidity(*stats);
+		}
+		return stats;
 	}
 	case LogicalTypeId::VARCHAR:
 		return CreateStringStats();

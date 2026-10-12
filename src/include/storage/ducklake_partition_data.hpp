@@ -68,19 +68,11 @@ struct DuckLakePartitionUtils {
 	                                  case_insensitive_set_t &used_names);
 	static vector<string> GetPartitionKeyNames(const DuckLakePartition &partition, const DuckLakeFieldData &field_data);
 
-	//! Get a SQL expression string for a partition field (e.g., "col" for identity, "year(col)" for year transform)
-	static string GetPartitionSQLExpression(const DuckLakeTransform &transform, const string &col_name,
-	                                        const LogicalType &source_type);
-
 	//! Whether the transform is an Iceberg-style epoch transform (units since 1970-01-01)
 	static bool IsEpochTransform(DuckLakeTransformType transform_type);
 
 	//! Returns Logical Type for a given partition key
 	static LogicalType GetPartitionKeyType(DuckLakeTransformType transform_type, const LogicalType &source_type);
-
-	//! Build a SQL WHERE filter matching the given partition values (e.g., "region = 'east' AND year(ts) = 2020")
-	static string BuildPartitionFilter(const vector<string> &partition_sql_exprs,
-	                                   const vector<Value> &partition_values);
 
 	//! Build a relative Hive partition path from the table partition spec and values (e.g., "region=east/year=2020/")
 	static string BuildHivePartitionPath(DuckLakeTableEntry &table, const vector<Value> &partition_values,

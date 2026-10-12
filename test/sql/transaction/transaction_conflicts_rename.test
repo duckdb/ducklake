@@ -98,3 +98,96 @@ statement error con1
 COMMIT
 ----
 attempting to rename view
+
+statement ok
+CREATE TABLE ducklake.r AS SELECT 42 AS i
+
+statement ok
+CREATE VIEW ducklake.w AS SELECT 42 AS j
+
+# two concurrent renames of a table conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+ALTER TABLE ducklake.r RENAME TO r_a
+
+statement ok con2
+ALTER TABLE ducklake.r RENAME TO r_b
+
+statement ok con2
+COMMIT
+
+statement error con1
+COMMIT
+----
+attempting to rename table
+
+query I
+SELECT * FROM ducklake.r_b
+----
+42
+
+statement error
+SELECT * FROM ducklake.r_a
+----
+does not exist
+
+# two concurrent renames of a view conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+ALTER VIEW ducklake.w RENAME TO w_a
+
+statement ok con2
+ALTER VIEW ducklake.w RENAME TO w_b
+
+statement ok con2
+COMMIT
+
+statement error con1
+COMMIT
+----
+attempting to rename view
+
+query I
+SELECT * FROM ducklake.w_b
+----
+42
+
+statement error
+SELECT * FROM ducklake.w_a
+----
+does not exist
+
+# an insert into a table that another transaction renames still commits
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.r_b VALUES (43)
+
+statement ok con2
+ALTER TABLE ducklake.r_b RENAME TO r_c
+
+statement ok con2
+COMMIT
+
+statement ok con1
+COMMIT
+
+query I
+SELECT * FROM ducklake.r_c ORDER BY ALL
+----
+42
+43

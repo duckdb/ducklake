@@ -6,7 +6,6 @@
 
 #include "duckdb/common/local_file_system.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
-#include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/main/client_data.hpp"
@@ -57,10 +56,22 @@ static optional_idx FindColumnByFieldId(const vector<MultiFileColumnDefinition> 
 
 //! Add a snapshot filter to the reader's filter set
 static void AddSnapshotFilter(BaseFileReader &reader, const ColumnIndex &col_idx, const LogicalType &col_type,
-                              idx_t snapshot_value, ExpressionType comparison_type) {
+                              idx_t snapshot_value, ExpressionType comparison_type,
+                              MultiFileGlobalIndex filter_identity) {
 	auto constant = Value::UBIGINT(snapshot_value).DefaultCastAs(col_type);
 	auto filter = ExpressionFilter::CreateComparisonFilter(comparison_type, std::move(constant));
-	reader.filters->PushFilter(ProjectionIndex(col_idx.GetPrimaryIndex()), std::move(filter));
+	ProjectionIndex filter_idx(col_idx.GetPrimaryIndex());
+	if (!reader.filters->HasFilter(filter_idx)) {
+		// the adaptive filter cache expects one global index per filter, in column order
+		idx_t filter_pos = 0;
+		for (auto &entry : *reader.filters) {
+			if (entry.GetIndex() < filter_idx) {
+				filter_pos++;
+			}
+		}
+		reader.filter_global_indices.insert(reader.filter_global_indices.begin() + filter_pos, filter_identity);
+	}
+	reader.filters->PushFilter(filter_idx, std::move(filter));
 }
 
 // recursively normalize LIST child names from legacy formats blame legacy Avro/Parquet formats
@@ -75,20 +86,6 @@ static void NormalizeListChildNames(vector<MultiFileColumnDefinition> &columns, 
 			NormalizeListChildNames(col.children, is_list);
 		}
 	}
-}
-
-static optional<Value> TryCastStatsBound(const string &bound, const LogicalType &type) {
-	if (StatsBoundsRequireOffset(type)) {
-		timestamp_t result;
-		bool has_offset;
-		string_t time_zone;
-		auto cast_result =
-		    Timestamp::TryConvertTimestampTZ(bound.c_str(), bound.size(), result, true, has_offset, time_zone);
-		if (cast_result != TimestampCastResult::SUCCESS || (!has_offset && result.IsFinite())) {
-			return nullopt;
-		}
-	}
-	return Value(bound).DefaultTryCastAs(type);
 }
 
 static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column_stats,
@@ -117,6 +114,10 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column
 	case ExpressionType::COMPARE_GREATERTHAN:
 	case ExpressionType::COMPARE_GREATERTHANOREQUALTO: {
 		if (!column_stats.has_max) {
+			return false;
+		}
+		// the max leaves out NaN, which orders above every other value
+		if (column_filter.column_type.IsFloating() && !(column_stats.has_contains_nan && !column_stats.contains_nan)) {
 			return false;
 		}
 		auto file_max = TryCastStatsBound(column_stats.max, column_filter.column_type);
@@ -386,17 +387,19 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			reader.filters = make_uniq<TableFilterSet>();
 		}
 		ColumnIndex snapshot_col_idx(snapshot_local_id.GetIndex());
+		// no global column has this index
+		MultiFileGlobalIndex snapshot_filter_identity(global_column_ids.size());
 
 		// Add _ducklake_internal_snapshot_id <= snapshot_filter_max
 		if (file_entry.snapshot_filter_max.IsValid()) {
 			AddSnapshotFilter(reader, snapshot_col_idx, snapshot_col_type, file_entry.snapshot_filter_max.GetIndex(),
-			                  ExpressionType::COMPARE_LESSTHANOREQUALTO);
+			                  ExpressionType::COMPARE_LESSTHANOREQUALTO, snapshot_filter_identity);
 		}
 
 		// Add _ducklake_internal_snapshot_id >= snapshot_filter_min
 		if (file_entry.snapshot_filter_min.IsValid()) {
 			AddSnapshotFilter(reader, snapshot_col_idx, snapshot_col_type, file_entry.snapshot_filter_min.GetIndex(),
-			                  ExpressionType::COMPARE_GREATERTHANOREQUALTO);
+			                  ExpressionType::COMPARE_GREATERTHANOREQUALTO, snapshot_filter_identity);
 		}
 	}
 	return result;
@@ -414,6 +417,10 @@ shared_ptr<BaseFileReader> DuckLakeMultiFileReader::TryCreateInlinedDataReader(c
 			throw InternalException("No transaction local data");
 		}
 		auto columns = DuckLakeMultiFileReader::ColumnsFromFieldData(read_info.table.GetFieldData(), true);
+		if (transaction_local_data->HasPreservedRowIds()) {
+			// expose the preserved row ids as a row id column, so file row numbers stay positions
+			columns.push_back(*row_id_column);
+		}
 		return make_shared_ptr<DuckLakeInlinedDataReader>(read_info, file, transaction_local_data, std::move(columns));
 	}
 	idx_t schema_version;

@@ -10,6 +10,7 @@
 
 #include "storage/ducklake_extra_stats.hpp"
 #include "duckdb/common/optional_ptr.hpp"
+#include "duckdb/common/types/value.hpp"
 
 #include <functional>
 
@@ -27,6 +28,9 @@ inline bool RequiresValueComparison(const LogicalType &type) {
 inline bool StatsBoundsRequireOffset(const LogicalType &type) {
 	return type.id() == LogicalTypeId::TIMESTAMP_TZ || type.id() == LogicalTypeId::TIMESTAMP_TZ_NS;
 }
+
+//! Bounds that cannot be cast are unknown
+optional<Value> TryCastStatsBound(const string &bound, const LogicalType &type);
 
 struct DuckLakeColumnStats;
 struct DuckLakeGlobalColumnStatsInfo;

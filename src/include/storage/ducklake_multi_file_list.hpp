@@ -104,8 +104,6 @@ private:
 	//! A tree is not a promise that it prunes - that is decided when the SQL is generated.
 	unique_ptr<DuckLakeFilterNode> BuildFilterTree(ClientContext &context, MultiFilePushdownInfo &info,
 	                                               const Expression &expr, FilterTreeState &state) const;
-	//! Get the row_id_start for transaction-local inlined data.
-	idx_t GetTransactionLocalRowIdStart(idx_t transaction_row_start) const;
 
 private:
 	mutable mutex file_lock;

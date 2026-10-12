@@ -20,6 +20,8 @@ class DuckLakeSchemaEntry;
 class DuckLakeTableEntry;
 
 using ducklake_entries_map_t = case_insensitive_map_t<unique_ptr<CatalogEntry>>;
+//! The oid of an entry by its type and id
+using ducklake_entry_oids_t = map<pair<CatalogType, idx_t>, idx_t>;
 
 //! The DuckLakeCatalogSet contains a set of catalog entries for a given schema version of the DuckLake
 //! Note that we don't need any locks to access this - the catalog set is constant for a given snapshot

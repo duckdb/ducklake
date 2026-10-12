@@ -1,0 +1,51 @@
+# name: test/sql/stats/nan_column_stats_missing_min.test
+# description: a FLOAT or DOUBLE column with NaN and no stored min keeps its min unknown
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/nan_column_stats_missing_min.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nan_column_stats_missing_min')
+
+foreach type FLOAT DOUBLE
+
+foreach inlining 10 0
+
+statement ok
+CREATE TABLE dl.t (x {type}) WITH (data_inlining_row_limit = {inlining})
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), ('nan')
+
+statement ok
+UPDATE __ducklake_metadata_dl.ducklake_table_column_stats SET min_value = NULL
+WHERE table_id = (SELECT table_id FROM ducklake_table_info('dl') WHERE table_name = 't')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nan_column_stats_missing_min')
+
+query III
+SELECT (stats(x)).min IS NULL, (stats(x)).has_null, (stats(x)).has_no_null FROM dl.t LIMIT 1
+----
+true	false	true
+
+query II
+SELECT count(*) FILTER (x < 10), count(*) FILTER (x > 10) FROM dl.t
+----
+2	1
+
+statement ok
+DROP TABLE dl.t
+
+endloop
+
+endloop

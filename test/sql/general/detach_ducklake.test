@@ -27,4 +27,4 @@ DETACH ducklake_metadata
 statement error
 CREATE TABLE ducklake.tbl(i INTEGER)
 ----
-Catalog "ducklake_metadata" does not exist!
+ducklake_metadata

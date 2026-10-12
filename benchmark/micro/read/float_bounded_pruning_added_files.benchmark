@@ -1,0 +1,66 @@
+# name: benchmark/micro/read/float_bounded_pruning_added_files.benchmark
+# description: Run 26 bounded DOUBLE range queries over ~1024 added files whose NaN status is unknown
+# group: [read]
+
+name Float Bounded Pruning Added Files
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+cache_file float_added_files_ready.marker
+
+# Added files have no NaN statistics, the upper bound of each range excludes NaN
+load
+COPY (SELECT i // 2048 AS b, (i * 0.25)::DOUBLE AS c FROM range(1024 * 2048) t(i))
+TO '${BENCHMARK_DIR}/float_added_files_source'
+(FORMAT PARQUET, PARTITION_BY (b), WRITE_PARTITION_COLUMNS true, OVERWRITE);
+@create float_added_files
+@attach float_added_files AS lake (DATA_PATH '${BENCHMARK_DIR}/float_added_files_data')
+CREATE TABLE lake.f (b BIGINT, c DOUBLE);
+CALL ducklake_add_data_files('lake', 'f', '${BENCHMARK_DIR}/float_added_files_source/**/*.parquet',
+hive_partitioning => false);
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 'f')) < 1000
+THEN error('f must consist of ~1024 added files') END;
+DETACH lake;
+@seal float_added_files
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/float_added_files_ready.marker' (FORMAT CSV);
+@attach float_added_files AS lake (READ_ONLY)
+
+reload
+@attach float_added_files AS lake (READ_ONLY)
+
+run
+SELECT sum(cnt) AS cnt FROM (
+SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 9216.0 AND 9226.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 18432.0 AND 18442.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 27648.0 AND 27658.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 36864.0 AND 36874.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 46080.0 AND 46090.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 55296.0 AND 55306.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 64512.0 AND 64522.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 73728.0 AND 73738.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 82944.0 AND 82954.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 92160.0 AND 92170.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 101376.0 AND 101386.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 110592.0 AND 110602.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 119808.0 AND 119818.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 129024.0 AND 129034.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 138240.0 AND 138250.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 147456.0 AND 147466.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 156672.0 AND 156682.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 165888.0 AND 165898.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 175104.0 AND 175114.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 184320.0 AND 184330.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 193536.0 AND 193546.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 202752.0 AND 202762.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 211968.0 AND 211978.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 221184.0 AND 221194.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 230400.0 AND 230410.0
+UNION ALL SELECT count(*) AS cnt FROM lake.f WHERE c BETWEEN 239616.0 AND 239626.0
+)
+
+result I
+1066

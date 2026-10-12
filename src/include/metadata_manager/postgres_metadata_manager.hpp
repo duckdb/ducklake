@@ -27,6 +27,9 @@ public:
 	idx_t MaxIdentifierLength() const override {
 		return 63;
 	}
+	idx_t MaxColumnCount() const override {
+		return 1600;
+	}
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
 	bool InlinedDeletionTableExists(const string &table_name) override;

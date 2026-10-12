@@ -1,0 +1,173 @@
+# name: test/sql/compaction/compaction_twice_in_transaction.test
+# description: a second compaction in the same transaction skips the files the first one compacted
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/compaction_twice_in_transaction', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t1 (id INTEGER)
+
+statement ok
+INSERT INTO ducklake.t1 VALUES (1)
+
+statement ok
+INSERT INTO ducklake.t1 VALUES (2)
+
+statement ok
+INSERT INTO ducklake.t1 VALUES (3)
+
+# merge adjacent files twice
+statement ok
+BEGIN
+
+query I
+SELECT files_processed FROM ducklake_merge_adjacent_files('ducklake', 't1')
+----
+3
+
+query I
+SELECT count(*) FROM ducklake_merge_adjacent_files('ducklake', 't1')
+----
+0
+
+query I
+SELECT count(*) FROM ducklake_merge_adjacent_files('ducklake')
+----
+0
+
+statement ok
+COMMIT
+
+query I
+SELECT list(id ORDER BY id) FROM ducklake.t1
+----
+[1, 2, 3]
+
+query I
+SELECT list(id ORDER BY id) FROM ducklake.t1 AT (VERSION => 3)
+----
+[1, 2]
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't1')
+----
+1
+
+# rewrite data files twice
+statement ok
+CREATE TABLE ducklake.t2 (id INTEGER)
+
+statement ok
+INSERT INTO ducklake.t2 VALUES (1), (2), (3), (4)
+
+statement ok
+DELETE FROM ducklake.t2 WHERE id = 1
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 't2', delete_threshold => 0.0)
+
+query I
+SELECT count(*) FROM ducklake_rewrite_data_files('ducklake', 't2', delete_threshold => 0.0)
+----
+0
+
+statement ok
+COMMIT
+
+query I
+SELECT list(id ORDER BY id) FROM ducklake.t2
+----
+[2, 3, 4]
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't2')
+----
+1
+
+# two compactions of the same files in one statement
+statement ok
+CREATE TABLE ducklake.t3 (id INTEGER)
+
+statement ok
+INSERT INTO ducklake.t3 VALUES (1)
+
+statement ok
+INSERT INTO ducklake.t3 VALUES (2)
+
+query I
+SELECT count(*) FROM (
+	SELECT * FROM ducklake_merge_adjacent_files('ducklake', 't3')
+	UNION ALL
+	SELECT * FROM ducklake_merge_adjacent_files('ducklake', 't3')
+)
+----
+1
+
+query I
+SELECT list(id ORDER BY id) FROM ducklake.t3
+----
+[1, 2]
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't3')
+----
+1
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/compaction_twice_in_transaction/**/*.parquet') WHERE file LIKE '%/t3/%'
+----
+3
+
+# a second merge with other options still merges the files the first one left
+statement ok
+CREATE TABLE ducklake.t4 (id INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO ducklake.t4 SELECT i, 'small' FROM range(10) t(i)
+
+statement ok
+INSERT INTO ducklake.t4 SELECT i + 10, 'small' FROM range(10) t(i)
+
+statement ok
+INSERT INTO ducklake.t4 SELECT i + 100, repeat('medium', 100) FROM range(100) t(i)
+
+statement ok
+INSERT INTO ducklake.t4 SELECT i + 200, repeat('medium', 100) FROM range(100) t(i)
+
+statement ok
+BEGIN
+
+query I
+SELECT files_processed FROM ducklake_merge_adjacent_files('ducklake', 't4', max_file_size => 1000)
+----
+2
+
+query I
+SELECT files_processed FROM ducklake_merge_adjacent_files('ducklake', 't4')
+----
+2
+
+statement ok
+COMMIT
+
+query II
+SELECT count(*), count(DISTINCT id) FROM ducklake.t4
+----
+220	220
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't4')
+----
+2

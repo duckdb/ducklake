@@ -98,7 +98,7 @@ ALTER TABLE ducklake.test DROP COLUMN IF EXISTS col1.i
 statement error
 ALTER TABLE ducklake.test DROP COLUMN col1.j.x
 ----
-does not exist
+not a nested type
 
 statement ok
 INSERT INTO ducklake.test VALUES ({'j': 150, 'k': 1000}), ({'j': 151, 'k': 1001})

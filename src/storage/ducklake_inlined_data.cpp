@@ -16,13 +16,6 @@ bool DuckLakeInlinedData::HasPreservedRowIds() const {
 	return !row_ids.empty();
 }
 
-idx_t DuckLakeInlinedData::GetRowId(idx_t position) const {
-	if (HasPreservedRowIds()) {
-		return NumericCast<idx_t>(row_ids[position]);
-	}
-	return position;
-}
-
 int64_t DuckLakeInlinedData::GetOutputRowId(idx_t position) const {
 	if (HasPreservedRowIds()) {
 		return row_ids[position];

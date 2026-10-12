@@ -405,6 +405,8 @@ struct DuckLakeFileColumnStats {
 	string max;
 	bool has_min = false;
 	bool has_max = false;
+	bool contains_nan = false;
+	bool has_contains_nan = false;
 };
 
 struct DuckLakeFileListEntry {

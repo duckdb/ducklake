@@ -50,6 +50,8 @@ enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND };
 struct DuckLakeInlinedColNames {
 	//! Column name prefix reserved for DuckLake internal use
 	static constexpr const char *PREFIX = "_ducklake_";
+	//! Number of metadata columns an inlined data table adds
+	static constexpr idx_t COLUMN_COUNT = 3;
 
 	explicit DuckLakeInlinedColNames(bool prefixed_inlined_columns) {
 		if (prefixed_inlined_columns) {
@@ -237,9 +239,15 @@ public:
 	virtual idx_t MaxIdentifierLength() const {
 		return NumericLimits<idx_t>::Maximum();
 	}
+	//! Maximum number of columns of a table supported by this backend
+	virtual idx_t MaxColumnCount() const {
+		return NumericLimits<idx_t>::Maximum();
+	}
 
 	//! Check whether a table with the given columns can be inlined
 	bool CanInlineColumns(const ColumnList &columns);
+	//! Whether the inlined data table of a table with this many columns fits the backend
+	bool InlinedTableFits(idx_t column_count) const;
 	bool CanInlineColumns(const vector<DuckLakeColumnInfo> &columns);
 
 	virtual string GetColumnTypeInternal(const LogicalType &column_type);
@@ -448,6 +456,9 @@ public:
 	static string DropDataFiles(const set<DataFileIndex> &dropped_files);
 	//! Selects the given data files that are still in the metadata
 	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
+	//! Selects the given tables or views renamed after the snapshot
+	static string GetRenamedAfterSnapshotSql(const string &metadata_table_name, const string &id_name,
+	                                         const set<TableIndex> &ids);
 	//! Caller supplies one resolved path per overwritten file, in the same order.
 	static string DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverwrittenDeleteFile> &overwritten_files,
 	                                           const vector<DuckLakePath> &resolved_paths);
@@ -473,6 +484,8 @@ public:
 	                                      const DuckLakeSnapshotCommit &commit_info);
 	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
 	static string InsertTableColumnStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
+	//! Set the stored table sizes to the size of the live data files
+	static string RefreshTableSizesSql(const set<TableIndex> &table_ids);
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor,
@@ -528,6 +541,8 @@ public:
 	virtual void MigrateV10(bool allow_failures = false);
 	//! Logs development migration failures during attach
 	virtual void MigrateV10Dev();
+	//! Whether the catalog already has every metadata table and column of v1.1-dev1
+	bool HasV1_1Dev1Additions();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
 	//! Rewrites inlined tables whose columns were created with the storage types of an older DuckLake version

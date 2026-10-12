@@ -156,7 +156,11 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 			auto &column_id = column_indexes[i];
 			auto col_id = column_id.GetPrimaryIndex();
 			if (col_id >= types.size()) {
-				virtual_columns.emplace_back(InlinedVirtualColumn::COLUMN_ROW_ID);
+				auto &identifier = columns[col_id].identifier;
+				auto is_row_id =
+				    !identifier.IsNull() && IntegerValue::Get(identifier) == MultiFileReader::ROW_ID_FIELD_ID;
+				virtual_columns.emplace_back(is_row_id ? InlinedVirtualColumn::COLUMN_ROW_ID
+				                                       : InlinedVirtualColumn::COLUMN_FILE_ROW_NUMBER);
 				continue;
 			}
 			scan_types.push_back(types[col_id]);
@@ -224,9 +228,10 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 				}
 				break;
 			}
-			case InlinedVirtualColumn::COLUMN_ROW_ID: {
+			case InlinedVirtualColumn::COLUMN_ROW_ID:
+			case InlinedVirtualColumn::COLUMN_FILE_ROW_NUMBER: {
 				Vector ordinal_vector(LogicalType::BIGINT);
-				if (data->HasPreservedRowIds()) {
+				if (virtual_columns[c] == InlinedVirtualColumn::COLUMN_ROW_ID) {
 					// use preserved row_ids from update inlining
 					auto ordinal_data = FlatVector::GetDataMutable<int64_t>(ordinal_vector);
 					for (idx_t r = 0; r < scan_chunk.size(); r++) {

@@ -215,6 +215,10 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::RemoveField(const vector<Identifier
 			                       Identifier(name));
 		}
 		if (depth + 1 >= column_path.size()) {
+			if (type.id() == LogicalTypeId::STRUCT && children.size() == 1) {
+				throw CatalogException("Cannot drop field %s from column %s - it is the last field of the struct",
+				                       column_path.back().GetIdentifierName(), column_path.front().GetIdentifierName());
+			}
 			return nullptr;
 		}
 		return child.RemoveField(column_path, depth + 1);

@@ -210,6 +210,22 @@ void ConflictCheck(const case_insensitive_map_t<reference_set_t<CatalogEntry>> &
 
 } // namespace
 
+static set<TableIndex> GetRenamedAfterSnapshot(const string &metadata_table_name, const string &id_name,
+                                               const set<TableIndex> &ids, const DuckLakeCommitContext &context) {
+	set<TableIndex> result;
+	if (ids.empty()) {
+		return result;
+	}
+	auto query_result = context.conflict_query_executor(
+	    DuckLakeMetadataManager::GetRenamedAfterSnapshotSql(metadata_table_name, id_name, ids));
+	query_result->ThrowIfError("Failed to commit DuckLake transaction - failed to get renamed tables and views for "
+	                           "conflict resolution:");
+	for (auto &row : *query_result) {
+		result.insert(TableIndex(row.GetValue<idx_t>(0)));
+	}
+	return result;
+}
+
 void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformation &changes,
                                                  const SnapshotChangeInformation &other_changes,
                                                  DuckLakeSnapshot transaction_snapshot,
@@ -324,13 +340,18 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(view_id, other_changes.dropped_views, "alter view", "dropped it");
 		ConflictCheck(view_id, other_changes.altered_views, "alter view", "altered it");
 	}
+	// the snapshot changes record a rename only by its new name
+	auto tables_renamed_by_others = GetRenamedAfterSnapshot("ducklake_table", "table_id", renamed_tables, context);
 	for (auto &table_id : renamed_tables) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "rename table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "rename table", "altered it");
+		ConflictCheck(table_id, tables_renamed_by_others, "rename table", "renamed it");
 	}
+	auto views_renamed_by_others = GetRenamedAfterSnapshot("ducklake_view", "view_id", renamed_views, context);
 	for (auto &view_id : renamed_views) {
 		ConflictCheck(view_id, other_changes.dropped_views, "rename view", "dropped it");
 		ConflictCheck(view_id, other_changes.altered_views, "rename view", "altered it");
+		ConflictCheck(view_id, views_renamed_by_others, "rename view", "renamed it");
 	}
 }
 
@@ -486,6 +507,7 @@ void GetNewMacroInfo(DuckLakeCommitState &commit_state, reference<CatalogEntry> 
 	auto &ducklake_schema = macro_entry.schema.Cast<DuckLakeSchemaEntry>();
 
 	new_macro_info.macro_id = MacroIndex(commit_state.commit_snapshot.next_catalog_id++);
+	commit_state.AddNewEntry(macro_entry, new_macro_info.macro_id.index);
 	new_macro_info.macro_name = macro_entry.name.GetIdentifierName();
 	new_macro_info.schema_id = commit_state.GetSchemaId(ducklake_schema);
 	// Let's do the implementations
@@ -1129,7 +1151,12 @@ bool DuckLakeTransactionState::ApplyDroppedFileStats(
 	}
 	bool live_rows_remain = stats.record_count_unknown || stats.record_count > 0;
 	if (live_rows_remain) {
-		stats.table_size_bytes = SubtractDroppedFileStat(stats.table_size_bytes, dropped_stats.file_size_bytes);
+		if (dropped_stats.file_size_bytes > stats.table_size_bytes) {
+			// a stale stored size is read back from the live data files
+			refreshed_table_sizes.insert(table_id);
+		} else {
+			stats.table_size_bytes -= dropped_stats.file_size_bytes;
+		}
 	} else {
 		stats.table_size_bytes = 0;
 		for (auto &column_stats : stats.column_stats) {
@@ -1748,6 +1775,7 @@ vector<DuckLakeSchemaInfo> DuckLakeTransactionState::GetNewSchemas(DuckLakeCommi
 		auto old_id = schema_entry.GetSchemaId();
 		DuckLakeSchemaInfo schema_info;
 		schema_info.id = SchemaIndex(commit_state.commit_snapshot.next_catalog_id++);
+		commit_state.AddNewEntry(schema_entry, schema_info.id.index);
 		auto parent = schema_entry.ParentDuckLakeSchema();
 		if (parent) {
 			schema_info.parent_id = commit_state.GetSchemaId(*parent);
@@ -1818,6 +1846,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
                                                map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats) {
 	committed_table_options.clear();
 	added_field_stats.clear();
+	refreshed_table_sizes.clear();
 	auto &commit_snapshot = commit_state.commit_snapshot;
 
 	EnsureCommitInfoProvided(commit_info);
@@ -2041,7 +2070,12 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 				                                 compaction_rewrite_delete_changes, table_entry.second, context);
 			}
 		}
+
+		// compacted files differ in size from their sources
+		auto compacted_tables = local_changes.GetCompactedTables();
+		refreshed_table_sizes.insert(compacted_tables.begin(), compacted_tables.end());
 	}
+	batch_queries += DuckLakeMetadataManager::RefreshTableSizesSql(refreshed_table_sizes);
 
 	// delete the flushed inlined rows and inlined file deletions after the deletes of the transaction
 	batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(
@@ -2162,11 +2196,7 @@ void DuckLakeTransactionState::CheckFileConflicts(const TransactionChangeInforma
 				files_against_inlined_deletes.insert(DataFileIndex(file_entry.first));
 			}
 		}
-		for (auto &compaction : table_changes.compactions) {
-			for (auto &source : compaction.source_files) {
-				compacted_files.insert(source.file.id);
-			}
-		}
+		compacted_files.insert(table_changes.compacted_files.begin(), table_changes.compacted_files.end());
 	}
 	for (auto &file : dropped_files) {
 		deleted_from_files.insert(file.second);
@@ -2326,6 +2356,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	auto &commit_snapshot = commit_stats_snapshot.snapshot;
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
 	bool flushed_inlined = false;
+	ducklake_entry_oids_t new_entry_oids;
 	for (idx_t i = 0; i < retry_config.max_retry_count + 1; i++) {
 		bool can_retry;
 		bool retryable_metadata_error = false;
@@ -2362,6 +2393,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			flushed_inlined = !flushed_inlined_tables.empty();
 			context.flush_cache_if_pending();
 			context.commit_connection();
+			new_entry_oids = std::move(commit_state.new_entry_oids);
 			break;
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
@@ -2404,10 +2436,15 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		}
 	}
 	// If we got here, this snapshot was successful
+	context.set_entry_oids(new_entry_oids);
 	context.set_committed_snapshot_id(commit_snapshot.snapshot_id);
 	context.set_table_options(committed_table_options);
 	for (auto &entry : dropped_file_stats) {
 		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);
+	}
+	// a compaction without new files keeps the next file id of the cached stats
+	for (auto &table_id : local_changes.GetCompactedTables()) {
+		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, table_id);
 	}
 	if (flushed_inlined && !context.skip_drop_empty_inlined) {
 		try {

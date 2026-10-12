@@ -24,6 +24,7 @@ public:
 	void RollbackTransaction(Transaction &transaction) override;
 
 	void Checkpoint(ClientContext &context, bool force = false) override;
+	void GetWrittenFiles(vector<string> &result);
 
 private:
 	DuckLakeCatalog &ducklake_catalog;
