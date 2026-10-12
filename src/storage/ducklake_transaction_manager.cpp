@@ -27,14 +27,16 @@ Transaction &DuckLakeTransactionManager::StartTransaction(ClientContext &context
 
 ErrorData DuckLakeTransactionManager::CommitTransaction(ClientContext &context, Transaction &transaction) {
 	auto &ducklake_transaction = transaction.Cast<DuckLakeTransaction>();
+	ErrorData error;
 	try {
 		ducklake_transaction.Commit();
 	} catch (std::exception &ex) {
-		return ErrorData(ex);
+		error = ErrorData(ex);
 	}
+	// a transaction whose commit failed is not rolled back afterwards, so it is done either way
 	lock_guard<mutex> l(transaction_lock);
 	transactions.erase(transaction);
-	return ErrorData();
+	return error;
 }
 
 void DuckLakeTransactionManager::GetWrittenFiles(vector<string> &result) {

@@ -53,6 +53,12 @@ SELECT count(*) FROM glob('{DATA_PATH}/commit_failure_keeps_files/**/*.parquet')
 ----
 1
 
+# the failed transaction is over, so orphan cleanup no longer protects its file
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('dl', cleanup_all => true, dry_run => true)
+----
+1
+
 statement ok
 CALL postgres_execute('pg', 'DROP TRIGGER refuse_commit ON commit_failure_keeps_files.ducklake_data_file')
 
