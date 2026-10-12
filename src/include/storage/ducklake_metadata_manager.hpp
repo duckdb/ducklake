@@ -218,6 +218,10 @@ public:
 	virtual bool IsRetryableCommitError(const string &) const {
 		return false;
 	}
+	//! Whether a failed COMMIT of the metadata connection can still have committed, as on a remote server
+	virtual bool CommitCanFailAfterCommitting() const {
+		return false;
+	}
 
 	//! Run the commit retry loop with the metadata server handling retries.
 	virtual void FlushChangesServerSide(DuckLakeTransaction &transaction, DuckLakeSnapshot transaction_snapshot,

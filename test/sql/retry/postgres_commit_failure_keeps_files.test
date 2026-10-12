@@ -1,0 +1,76 @@
+# name: test/sql/retry/postgres_commit_failure_keeps_files.test
+# description: a failed COMMIT of a Postgres catalog keeps the files, which a committed snapshot can reference
+# group: [retry]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS commit_failure_keeps_files CASCADE')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/commit_failure_keeps_files', METADATA_SCHEMA 'commit_failure_keeps_files',
+DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+# a deferred trigger makes Postgres fail the COMMIT of the next data file
+statement ok
+CALL postgres_execute('pg', 'CREATE FUNCTION commit_failure_keeps_files.refuse_commit() RETURNS trigger
+LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION ''commit refused''; END $$')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE CONSTRAINT TRIGGER refuse_commit AFTER INSERT
+ON commit_failure_keeps_files.ducklake_data_file DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION commit_failure_keeps_files.refuse_commit()')
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement error
+COMMIT
+----
+<REGEX>:.*it may have been committed and its files are kept.*commit refused.*
+
+# the file stays, a lost reply to a COMMIT that did commit must not delete the files of the snapshot
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/commit_failure_keeps_files/**/*.parquet')
+----
+1
+
+statement ok
+CALL postgres_execute('pg', 'DROP TRIGGER refuse_commit ON commit_failure_keeps_files.ducklake_data_file')
+
+query I
+SELECT count(*) FROM dl.t
+----
+0
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+query I
+SELECT * FROM dl.t
+----
+2
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA commit_failure_keeps_files CASCADE')

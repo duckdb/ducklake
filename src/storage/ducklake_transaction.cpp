@@ -1469,6 +1469,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.commit_connection = [&]() {
 		connection->Commit();
 	};
+	context.commit_can_fail_after_committing = [&]() {
+		return metadata_manager->CommitCanFailAfterCommitting();
+	};
 	context.try_rollback = [&]() {
 		if (connection->context->transaction.HasActiveTransaction()) {
 			connection->Rollback();

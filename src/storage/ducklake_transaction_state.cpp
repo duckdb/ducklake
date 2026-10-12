@@ -2351,6 +2351,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	for (idx_t i = 0; i < retry_config.max_retry_count + 1; i++) {
 		bool can_retry;
 		bool retryable_metadata_error = false;
+		bool committing = false;
 		auto attempt_changes = transaction_changes;
 		auto attempt_dropped_file_stats = dropped_file_stats;
 		try {
@@ -2383,6 +2384,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			}
 			flushed_inlined = !flushed_inlined_tables.empty();
 			context.flush_cache_if_pending();
+			committing = true;
 			context.commit_connection();
 			new_entry_oids = std::move(commit_state.new_entry_oids);
 			break;
@@ -2392,6 +2394,11 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			try {
 				context.try_rollback();
 			} catch (std::exception &) { // NOLINT
+			}
+			if (committing && context.commit_can_fail_after_committing()) {
+				// the catalog can have committed before the error, so the snapshot may reference the files
+				error.Throw(
+				    "Failed to commit DuckLake transaction, it may have been committed and its files are kept.\n");
 			}
 			retryable_metadata_error = retryable_metadata_error || context.is_retryable_metadata_error(error.Message());
 			bool retry_on_error =

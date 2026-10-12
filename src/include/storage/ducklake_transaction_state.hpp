@@ -46,6 +46,10 @@ struct DuckLakeCommitContext {
 	//! Commits the underlying metadata connection.
 	std::function<void()> commit_connection = []() {
 	};
+	//! Whether a failed commit of the metadata connection can still have committed.
+	std::function<bool()> commit_can_fail_after_committing = []() {
+		return false;
+	};
 	//! Rolls back the metadata connection if a transaction is active.
 	std::function<void()> try_rollback = []() {
 	};
