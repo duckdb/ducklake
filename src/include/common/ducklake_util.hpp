@@ -62,10 +62,10 @@ public:
 	//! that sub-expression, or nullptr when the filter reads none or several.
 	static optional_ptr<const Expression> GetFilterSubject(const Expression &expr);
 
-	//! Create the data path directory if it does not yet exist, and sync the directories holding the new ones
-	static void EnsureDirectoryExists(ClientContext &context, const string &data_path);
-	//! Syncs local files, and the directories holding them up to the data path, to stable storage
-	static void SyncLocalFiles(ClientContext &context, const vector<string> &paths, const string &data_path);
+	//! Create the data path directory if it does not yet exist
+	static void EnsureDirectoryExists(FileSystem &fs, const string &data_path);
+	//! Syncs local files, and the directories holding them up to the root, to stable storage
+	static void SyncLocalFiles(ClientContext &context, const vector<string> &paths);
 
 	//! Replace occurrences of `from` with `to`, skipping content inside
 	//! single-quoted string literals and double-quoted identifiers.

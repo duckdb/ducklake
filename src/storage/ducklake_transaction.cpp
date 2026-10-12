@@ -792,7 +792,7 @@ void DuckLakeTransaction::SyncWrittenFiles() {
 	try {
 		vector<string> written_files;
 		state->local_changes.GetWrittenFiles(written_files, false);
-		DuckLakeUtil::SyncLocalFiles(*context.lock(), written_files, ducklake_catalog.DataPath());
+		DuckLakeUtil::SyncLocalFiles(*context.lock(), written_files);
 	} catch (...) {
 		Rollback();
 		throw;
