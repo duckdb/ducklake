@@ -23,11 +23,13 @@
 #include "duckdb/function/scalar/struct_utils.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/common/opener_file_system.hpp"
+#include "duckdb/common/local_file_system.hpp"
 #include "duckdb/common/path.hpp"
 #include "duckdb/main/settings.hpp"
 #include "duckdb/common/enums/file_sync_mode.hpp"
 
 #ifndef _WIN32
+#include <cerrno>
 #include <unistd.h>
 #endif
 #include "duckdb/common/type_visitor.hpp"
@@ -246,6 +248,7 @@ void DuckLakeUtil::SyncLocalFiles(ClientContext &context, const vector<string> &
 		return;
 	}
 	auto &fs = FileSystem::GetFileSystem(context);
+	auto &client_fs = fs.Cast<OpenerFileSystem>();
 	set<string> directories;
 	for (auto &path : paths) {
 		if (!Path::FromString(path).IsLocal()) {
@@ -260,25 +263,20 @@ void DuckLakeUtil::SyncLocalFiles(ClientContext &context, const vector<string> &
 				directory = directory.Parent();
 			} while (directories.insert(directory.ToString()).second);
 		};
-		auto logical_path = Path::FromString(fs.ExpandPath(path));
-		if (!logical_path.IsAbsolute()) {
-			logical_path = Path::FromString(FileSystem::GetWorkingDirectory()).Join(logical_path);
-		}
-		add_ancestors(logical_path);
+		add_ancestors(Path::FromString(LocalFileSystem().MakePathAbsolute(path, client_fs.GetOpener())));
 		// the target of a symbolic link has ancestors of its own
 		add_ancestors(Path::FromString(fs.CanonicalizePath(path)));
 #endif
 	}
 #ifndef _WIN32
 	auto &config = DBConfig::GetConfig(context);
-	auto &client_fs = fs.Cast<OpenerFileSystem>();
 	for (auto &directory : directories) {
 		// the client file system checks a directory as a file, so check it as a directory instead
 		if (!config.CanAccessFile(directory, FileType::FILE_TYPE_DIR)) {
 			continue;
 		}
 		// a directory without read permission cannot be opened to sync it
-		if (access(directory.c_str(), R_OK) != 0) {
+		if (access(directory.c_str(), R_OK) != 0 && (errno == EACCES || errno == EPERM)) {
 			continue;
 		}
 		client_fs.GetFileSystem().OpenFile(directory, FileFlags::FILE_FLAGS_READ, client_fs.GetOpener())->Sync();
