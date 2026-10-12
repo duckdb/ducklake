@@ -26,6 +26,10 @@
 #include "duckdb/common/path.hpp"
 #include "duckdb/main/settings.hpp"
 #include "duckdb/common/enums/file_sync_mode.hpp"
+
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 #include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "duckdb/main/database.hpp"
@@ -251,13 +255,18 @@ void DuckLakeUtil::SyncLocalFiles(ClientContext &context, const vector<string> &
 		fs.OpenFile(path, FileFlags::FILE_FLAGS_WRITE)->Sync();
 #ifndef _WIN32
 		// the names of new files and directories are durable once the directories holding them are synced
-		auto directory = Path::FromString(fs.ExpandPath(path));
-		if (!directory.IsAbsolute()) {
-			directory = Path::FromString(FileSystem::GetWorkingDirectory()).Join(directory);
+		auto add_ancestors = [&](Path directory) {
+			do {
+				directory = directory.Parent();
+			} while (directories.insert(directory.ToString()).second);
+		};
+		auto logical_path = Path::FromString(fs.ExpandPath(path));
+		if (!logical_path.IsAbsolute()) {
+			logical_path = Path::FromString(FileSystem::GetWorkingDirectory()).Join(logical_path);
 		}
-		do {
-			directory = directory.Parent();
-		} while (directories.insert(directory.ToString()).second);
+		add_ancestors(logical_path);
+		// the target of a symbolic link has ancestors of its own
+		add_ancestors(Path::FromString(fs.CanonicalizePath(path)));
 #endif
 	}
 #ifndef _WIN32
@@ -268,14 +277,11 @@ void DuckLakeUtil::SyncLocalFiles(ClientContext &context, const vector<string> &
 		if (!config.CanAccessFile(directory, FileType::FILE_TYPE_DIR)) {
 			continue;
 		}
-		unique_ptr<FileHandle> handle;
-		try {
-			handle = client_fs.GetFileSystem().OpenFile(directory, FileFlags::FILE_FLAGS_READ, client_fs.GetOpener());
-		} catch (std::exception &) {
-			// a directory without read permission cannot be synced
+		// a directory without read permission cannot be opened to sync it
+		if (access(directory.c_str(), R_OK) != 0) {
 			continue;
 		}
-		handle->Sync();
+		client_fs.GetFileSystem().OpenFile(directory, FileFlags::FILE_FLAGS_READ, client_fs.GetOpener())->Sync();
 	}
 #endif
 }

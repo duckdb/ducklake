@@ -22,7 +22,7 @@ ALTER TABLE ducklake.t SET PARTITIONED BY (p)
 foreach mode standard full none
 
 statement ok
-SET fsync_mode = '${mode}'
+SET fsync_mode = '{mode}'
 
 # data files in new partition directories
 statement ok
