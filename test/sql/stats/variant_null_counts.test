@@ -1,0 +1,103 @@
+# name: test/sql/stats/variant_null_counts.test
+# description: NULL tests on VARIANT columns, whose file statistics do not count NULL values
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/variant_null_counts', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (id INTEGER, v VARIANT)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 1::VARIANT), (2, NULL), (3, 'abc'::VARIANT)
+
+query II
+SELECT (SELECT count(*) FROM dl.t WHERE v IS NULL), (SELECT count(*) FROM dl.t WHERE v IS NOT NULL)
+----
+1	2
+
+# the counts are unknown rather than zero
+query II
+SELECT value_count IS NULL, null_count IS NULL FROM __ducklake_metadata_dl.ducklake_file_column_stats
+WHERE column_id = 2
+----
+true	true
+
+statement error
+ALTER TABLE dl.t ALTER v SET NOT NULL
+----
+the column has NULL values
+
+# only NULL values
+statement ok
+CREATE TABLE dl.n (v VARIANT)
+
+statement ok
+INSERT INTO dl.n VALUES (NULL), (NULL)
+
+query II
+SELECT (SELECT count(*) FROM dl.n WHERE v IS NULL), (SELECT count(*) FROM dl.n WHERE v IS NOT NULL)
+----
+2	0
+
+# rows written in the same transaction
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.n VALUES (NULL), (2::VARIANT)
+
+query II
+SELECT (SELECT count(*) FROM dl.n WHERE v IS NULL), (SELECT count(*) FROM dl.n WHERE v IS NOT NULL)
+----
+3	1
+
+statement ok
+COMMIT
+
+# flushed inlined rows
+statement ok
+CREATE TABLE dl.f (id INTEGER, v VARIANT)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10, table_name => 'f')
+
+statement ok
+INSERT INTO dl.f VALUES (1, 1::VARIANT), (2, NULL)
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'f')
+
+query II
+SELECT (SELECT count(*) FROM dl.f WHERE v IS NULL), (SELECT count(*) FROM dl.f WHERE v IS NOT NULL)
+----
+1	1
+
+# written by DuckDB 1.5.6, whose file statistics count no NULL values in VARIANT columns
+unzip data/old_ducklake/variant_null_counts.db.gz {TEST_DIR}/variant_null_counts_legacy.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/variant_null_counts_legacy.db' AS legacy (DATA_PATH 'data/old_ducklake/variant_null_counts/', OVERRIDE_DATA_PATH TRUE, READ_ONLY)
+
+query II
+SELECT (SELECT count(*) FROM legacy.t WHERE v IS NULL), (SELECT count(*) FROM legacy.t WHERE v IS NOT NULL)
+----
+1	1
+
+unzip data/old_ducklake/variant_null_counts.db.gz {TEST_DIR}/variant_null_counts_alter.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/variant_null_counts_alter.db' AS alter_legacy (DATA_PATH 'data/old_ducklake/variant_null_counts/', OVERRIDE_DATA_PATH TRUE)
+
+statement error
+ALTER TABLE alter_legacy.t ALTER v SET NOT NULL
+----
+the column has NULL values
