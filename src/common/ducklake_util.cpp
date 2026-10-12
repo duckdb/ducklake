@@ -22,6 +22,10 @@
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/function/scalar/struct_utils.hpp"
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/common/opener_file_system.hpp"
+#include "duckdb/common/path.hpp"
+#include "duckdb/main/settings.hpp"
+#include "duckdb/common/enums/file_sync_mode.hpp"
 #include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "duckdb/main/database.hpp"
@@ -224,12 +228,86 @@ string DuckLakeUtil::ValueToSQL(DuckLakeMetadataManager &metadata_manager, Clien
 	return SQLString::ToString(result);
 }
 
-void DuckLakeUtil::EnsureDirectoryExists(FileSystem &fs, const string &data_path) {
-	if (!fs.IsRemoteFile(data_path)) {
-		try {
-			fs.CreateDirectoriesRecursive(data_path);
-		} catch (...) {
+static bool SyncDisabled(ClientContext &context) {
+	return Settings::Get<FsyncModeSetting>(context) == FileSyncMode::NONE;
+}
+
+static void SyncDirectory(ClientContext &context, const string &directory) {
+#ifndef _WIN32
+	// the client file system checks a directory as a file, so check it as a directory instead
+	if (!DBConfig::GetConfig(context).CanAccessFile(directory, FileType::FILE_TYPE_DIR)) {
+		return;
+	}
+	auto &client_fs = FileSystem::GetFileSystem(context).Cast<OpenerFileSystem>();
+	client_fs.GetFileSystem().OpenFile(directory, FileFlags::FILE_FLAGS_READ, client_fs.GetOpener())->Sync();
+#endif
+}
+
+//! The absolute path, without resolving symbolic links
+static Path AbsolutePath(FileSystem &fs, const string &path) {
+	auto result = Path::FromString(fs.ExpandPath(path));
+	if (!result.IsAbsolute()) {
+		result = Path::FromString(FileSystem::GetWorkingDirectory()).Join(result);
+	}
+	return result;
+}
+
+void DuckLakeUtil::EnsureDirectoryExists(ClientContext &context, const string &data_path) {
+	auto &fs = FileSystem::GetFileSystem(context);
+	if (fs.IsRemoteFile(data_path)) {
+		return;
+	}
+	vector<Path> missing_directories;
+	auto directory = AbsolutePath(fs, data_path);
+	while (!fs.DirectoryExists(directory.ToString())) {
+		missing_directories.push_back(directory);
+		auto parent = directory.Parent();
+		if (parent.ToString() == directory.ToString()) {
+			break;
 		}
+		directory = parent;
+	}
+	if (missing_directories.empty()) {
+		return;
+	}
+	try {
+		fs.CreateDirectoriesRecursive(data_path);
+	} catch (...) {
+		return;
+	}
+	if (SyncDisabled(context)) {
+		return;
+	}
+	// a new directory name is durable once the directory holding it is synced
+	for (auto &missing_directory : missing_directories) {
+		SyncDirectory(context, missing_directory.Parent().ToString());
+	}
+}
+
+void DuckLakeUtil::SyncLocalFiles(ClientContext &context, const vector<string> &paths, const string &data_path) {
+	if (SyncDisabled(context)) {
+		return;
+	}
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto data_root = AbsolutePath(fs, data_path).ToString();
+	StringUtil::RTrim(data_root, "/\\");
+	auto separator = fs.PathSeparator(data_root);
+	set<string> directories;
+	for (auto &path : paths) {
+		if (!Path::FromString(path).IsLocal()) {
+			continue;
+		}
+		// Windows only flushes a file opened for writing
+		fs.OpenFile(path, FileFlags::FILE_FLAGS_WRITE)->Sync();
+		// the directories up to the data path hold the names of the new files and partition directories
+		auto directory = AbsolutePath(fs, path).Parent();
+		while (directories.insert(directory.ToString()).second &&
+		       StringUtil::StartsWith(directory.ToString(), data_root + separator)) {
+			directory = directory.Parent();
+		}
+	}
+	for (auto &directory : directories) {
+		SyncDirectory(context, directory);
 	}
 }
 

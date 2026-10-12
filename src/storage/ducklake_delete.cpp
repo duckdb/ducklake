@@ -65,7 +65,7 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 		types_to_write.push_back(LogicalType::BIGINT);
 	}
 
-	DuckLakeUtil::EnsureDirectoryExists(input.fs, input.data_path);
+	DuckLakeUtil::EnsureDirectoryExists(input.context, input.data_path);
 
 	auto function_data = copy_fun.function.copy_to_bind(input.context, bind_input, names_to_write, types_to_write);
 	// the delete file columns never hold NULL, so they are written as required
@@ -169,7 +169,7 @@ static DuckLakeDeleteFile WritePuffinDeleteFile(InputType &input,
 	auto delete_file_uuid = "ducklake-" + input.transaction.GenerateUUID() + "-delete.puffin";
 	string delete_file_path = DuckLakeUtil::JoinPath(input.fs, input.data_path, delete_file_uuid);
 
-	DuckLakeUtil::EnsureDirectoryExists(input.fs, input.data_path);
+	DuckLakeUtil::EnsureDirectoryExists(input.context, input.data_path);
 	auto result = DuckLakePuffinWriter::Write(input.fs, delete_file_path, input.data_file_path, blobs);
 
 	DuckLakeDeleteFile delete_file;
@@ -268,6 +268,13 @@ void DuckLakeDeleteFileWriter::SetCommitSnapshot(ClientContext &context, DuckLak
 	                                         delete_file.source};
 	MergeDeletesWithSnapshots(deletes, 0, input.positions);
 	auto written_file = Write(context, input, delete_file.format == DeleteFileFormat::PUFFIN);
+	// sync the new file before it replaces the old one, so a retry after a failed sync writes it again
+	try {
+		DuckLakeUtil::SyncLocalFiles(context, {written_file.file_name}, transaction.GetCatalog().DataPath());
+	} catch (...) {
+		fs.TryRemoveFile(written_file.file_name);
+		throw;
+	}
 	fs.TryRemoveFile(file_name);
 
 	written_file.data_file_id = delete_file.data_file_id;

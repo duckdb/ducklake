@@ -130,10 +130,10 @@ optional_ptr<const LocalTableDataChanges> LocalTableChanges::Find(TableIndex tab
 	return entry->second;
 }
 
-void LocalTableChanges::GetWrittenFiles(vector<string> &result) const {
+void LocalTableChanges::GetWrittenFiles(vector<string> &result, bool include_added_files) const {
 	lock_guard<mutex> guard(lock);
 	for (auto &entry : changes) {
-		entry.second.AddWrittenFiles(result, result, true);
+		entry.second.AddWrittenFiles(result, result, include_added_files);
 	}
 }
 
@@ -767,6 +767,7 @@ void DuckLakeTransaction::Commit() {
 	}
 	try {
 		if (ChangesMade()) {
+			SyncWrittenFiles();
 			FlushChanges();
 		} else if (connection) {
 			connection->Commit();
@@ -785,6 +786,17 @@ void DuckLakeTransaction::Commit() {
 	config_option_undo.clear();
 	SetRequiresNewInlinedTable(false);
 	ClearSchemaCachePins();
+}
+
+void DuckLakeTransaction::SyncWrittenFiles() {
+	try {
+		vector<string> written_files;
+		state->local_changes.GetWrittenFiles(written_files, false);
+		DuckLakeUtil::SyncLocalFiles(*context.lock(), written_files, ducklake_catalog.DataPath());
+	} catch (...) {
+		Rollback();
+		throw;
+	}
 }
 
 void DuckLakeTransaction::Rollback() {
@@ -1737,7 +1749,7 @@ bool DuckLakeTransaction::HasTransactionInlinedData(TableIndex table_id) const {
 }
 
 void DuckLakeTransaction::GetWrittenFiles(vector<string> &result) const {
-	state->local_changes.GetWrittenFiles(result);
+	state->local_changes.GetWrittenFiles(result, true);
 }
 
 vector<DuckLakeDataFile> DuckLakeTransaction::GetTransactionLocalFiles(TableIndex table_id) const {

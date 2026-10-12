@@ -1,0 +1,77 @@
+# name: test/sql/transaction/commit_syncs_written_files.test
+# description: a commit syncs the files it wrote and their directories, unless fsync_mode is none
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/commit_syncs_written_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t (p INTEGER, id INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (p)
+
+foreach mode standard full none
+
+statement ok
+SET fsync_mode = '${mode}'
+
+# data files in new partition directories
+statement ok
+INSERT INTO ducklake.t SELECT i % 3, i FROM range(30) t(i)
+
+# delete files
+statement ok
+DELETE FROM ducklake.t WHERE id % 10 = 0
+
+endloop
+
+statement ok
+RESET fsync_mode
+
+query II
+SELECT count(*), count(DISTINCT id) FROM ducklake.t
+----
+81	27
+
+# compaction outputs
+query I
+SELECT sum(files_created) FROM ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0.0)
+----
+3
+
+# files written by a flush of inlined data
+statement ok
+CREATE TABLE ducklake.t2 (id INTEGER)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 't2')
+
+statement ok
+INSERT INTO ducklake.t2 VALUES (1), (2)
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't2')
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't2')
+----
+1
+
+query II
+SELECT count(*), count(DISTINCT id) FROM ducklake.t
+----
+81	27
+
+query I
+SELECT list(id ORDER BY id) FROM ducklake.t2
+----
+[1, 2]

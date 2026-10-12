@@ -1,0 +1,40 @@
+# name: test/sql/transaction/commit_syncs_written_files_allowed_directories.test
+# description: syncing written files skips the directories outside the allowed directories
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/sync_allowed_directories.db' AS ducklake (DATA_PATH '{TEST_DIR}/sync_allowed_directories/data', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t (p INTEGER, id INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (p)
+
+# create the data path before access is restricted to it
+statement ok
+INSERT INTO ducklake.t VALUES (0, 100)
+
+statement ok
+SET allowed_directories = ['{TEST_DIR}/sync_allowed_directories/data/']
+
+statement ok
+SET allowed_paths = ['{TEST_DIR}/sync_allowed_directories.db', '{TEST_DIR}/sync_allowed_directories.db.wal']
+
+statement ok
+SET enable_external_access = false
+
+statement ok
+INSERT INTO ducklake.t SELECT i % 3, i FROM range(10) t(i)
+
+statement ok
+DELETE FROM ducklake.t WHERE id < 2
+
+query II
+SELECT count(*), sum(id) FROM ducklake.t
+----
+9	144

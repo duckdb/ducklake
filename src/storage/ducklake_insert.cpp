@@ -540,8 +540,7 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	// Get Parquet Copy function
 	auto &copy_fun = DuckLakeFunctions::GetCopyFunction(context, "parquet");
 
-	auto &fs = FileSystem::GetFileSystem(context);
-	DuckLakeUtil::EnsureDirectoryExists(fs, copy_input.data_path);
+	DuckLakeUtil::EnsureDirectoryExists(context, copy_input.data_path);
 
 	// Bind Copy Function
 	CopyFunctionBindInput bind_input(*info);
