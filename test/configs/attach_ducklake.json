@@ -293,12 +293,7 @@
         "test/sql/catalog/view/recursive_view_with_dependencies.test",
         "test/sql/catalog/view/test_view_sql_with_dependencies.test",
         "test/sql/catalog/view/test_view_schema_change.test",
-        "test/sql/catalog/test_standard_schema.test"
-      ]
-    },
-    {
-      "reason": "FIXME: View Columns",
-      "paths": [
+        "test/sql/catalog/test_standard_schema.test",
         "test/sql/storage/wal/wal_view_storage.test"
       ]
     },
@@ -420,10 +415,12 @@
       ]
     },
     {
-      "reason": "FIXME: Immediate transaction mode not respected",
+      "reason": "DuckLake detects transaction conflicts at COMMIT, these tests expect them at the statement",
       "paths": [
         "test/sql/update/test_update_many_updaters_nulls.test",
-        "test/sql/update/test_update_many_updaters.test"
+        "test/sql/update/test_update_many_updaters.test",
+        "test/sql/transactions/test_from_update_conflict.test",
+        "test/sql/alter/rename_table/test_rename_table_collision.test"
       ]
     },
     {
@@ -434,7 +431,7 @@
       ]
     },
     {
-      "reason": "FIXME: BUGS? Uncaught/Weird exception",
+      "reason": "Concurrent deletes from the same data file conflict in DuckLake, also when they delete different rows",
       "paths": [
         "test/sql/delete/test_segment_deletes.test"
       ]
@@ -446,21 +443,9 @@
       ]
     },
     {
-      "reason": "FIXME: Bugs? Cannot commit transaction local files",
+      "reason": "The test sets a 1000 KB memory limit, under which DuckLake metadata queries can run out of memory",
       "paths": [
         "test/sql/logging/file_system_logging_attach_deadlock.test"
-      ]
-    },
-    {
-      "reason": "FIXME: BUGS? Incorrect rename + re-create behavior",
-      "paths": [
-        "test/sql/alter/rename_table/test_rename_table_collision.test"
-      ]
-    },
-    {
-      "reason": "FIXME: Transaction Conflict Error",
-      "paths": [
-        "test/sql/transactions/test_from_update_conflict.test"
       ]
     },
     {
@@ -562,7 +547,7 @@
       ]
     },
     {
-      "reason": "FIXME: CI Deadlock?",
+      "reason": "INSERTs conflict with concurrent DELETEs in DuckLake, the final count of the test assumes they all commit",
       "paths": [
         "test/sql/update/test_stress_update_issue_19688.test"
       ]
@@ -588,10 +573,7 @@
     {
       "reason": "FIXME: GEOMETRY limitations (stats are different in DuckLake, shredding is not supported)",
       "paths": [
-        "test/sql/types/geo/geometry_stats.test",
-        "test/sql/types/geo/geometry_shred_limit.test",
-        "test/sql/types/geo/geometry_crs.test",
-        "test/sql/types/geo/geometry_shred.test"
+        "test/sql/types/geo/geometry_crs.test"
       ]
     },
     {
@@ -599,12 +581,6 @@
       "paths": [
         "test/sql/pivot/pivot_star.test",
         "test/sql/types/geo/geometry_update.test"
-      ]
-    },
-    {
-      "reason": "FIXME: Variant Bugs?",
-      "paths": [
-        "test/sql/storage/types/variant/variant_shredding_omit_untyped.test"
       ]
     },
     {
@@ -749,7 +725,10 @@
         "test/sql/storage/compression/uncompressed/validity_corrupt_offset.test",
         "test/sql/storage/corrupt/row_group_count_mismatch.test",
         "test/sql/storage/overflow_strings/null_overflow_string_memory.test",
-        "test/sql/storage/compression/constant/constant_negative_zero.test"
+        "test/sql/storage/compression/constant/constant_negative_zero.test",
+        "test/sql/types/geo/geometry_shred_limit.test",
+        "test/sql/types/geo/geometry_shred.test",
+        "test/sql/storage/types/variant/variant_shredding_omit_untyped.test"
       ]
     },
     {
@@ -781,7 +760,8 @@
       "paths": [
         "test/sql/types/geo/geometry_from_wkb_stats.test",
         "test/sql/types/geo/geometry_vertex_extract.test",
-        "test/sql/types/geo/geometry_stats_prune_null.test"
+        "test/sql/types/geo/geometry_stats_prune_null.test",
+        "test/sql/types/geo/geometry_stats.test"
       ]
     },
     {

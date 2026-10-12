@@ -29,6 +29,11 @@ inline bool StatsBoundsRequireOffset(const LogicalType &type) {
 	return type.id() == LogicalTypeId::TIMESTAMP_TZ || type.id() == LogicalTypeId::TIMESTAMP_TZ_NS;
 }
 
+//! The file statistics of a nested column are per field, and the Parquet writer collects none for INTERVAL
+inline bool FileStatsShowNulls(const LogicalType &type) {
+	return !type.IsNested() && type.id() != LogicalTypeId::INTERVAL;
+}
+
 //! Bounds that cannot be cast are unknown
 optional<Value> TryCastStatsBound(const string &bound, const LogicalType &type);
 

@@ -1,0 +1,9 @@
+/usr*
+/opt/*
+/Library/*
+/Applications/*
+*/duckdb/*
+*/build/*
+*/vcpkg/*
+*/vcpkg_installed/*
+*/.cache/*

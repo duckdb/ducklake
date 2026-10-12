@@ -164,7 +164,7 @@
       ]
     },
     {
-      "reason": "FIXME: server-side quack commits serialize, so concurrent commits never exhaust the client retry budget these tests assert on.",
+      "reason": "Server-side quack commits serialize, so concurrent commits never exhaust the client retry budget these tests assert on.",
       "paths": [
         "test/sql/retry/commit_failure.test",
         "test/sql/settings/max_retry_count.test"

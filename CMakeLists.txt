@@ -34,11 +34,30 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
   add_compile_options(-Wreturn-std-move)
 endif()
 
+# Instruments only the DuckLake sources, DuckDB itself is built as usual
+option(DUCKLAKE_COVERAGE
+       "Enable clang source-based code coverage instrumentation of DuckLake."
+       FALSE)
+if(DUCKLAKE_COVERAGE)
+  if(NOT "${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang$")
+    message(
+      FATAL_ERROR "DUCKLAKE_COVERAGE=1 requires a clang-compatible compiler")
+  endif()
+  add_compile_options(-fprofile-instr-generate -fcoverage-mapping)
+endif()
+
 add_subdirectory(src)
 set(EXTENSION_SOURCES ${ALL_OBJECT_FILES})
 
 build_static_extension(${TARGET_NAME} ${EXTENSION_SOURCES})
 build_loadable_extension(${TARGET_NAME} " " ${EXTENSION_SOURCES})
+
+if(DUCKLAKE_COVERAGE)
+  # Every binary that links the instrumented objects needs the profile runtime
+  target_link_options(${EXTENSION_NAME} INTERFACE -fprofile-instr-generate)
+  target_link_options(${LOADABLE_EXTENSION_NAME} PRIVATE
+                      -fprofile-instr-generate)
+endif()
 
 if(TARGET roaring::roaring-headers)
   target_link_libraries(${EXTENSION_NAME} roaring::roaring

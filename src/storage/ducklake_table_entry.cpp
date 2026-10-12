@@ -731,7 +731,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 
 	// Unknown stats or previously deleted NULLs require checking the live rows.
 	auto &col_stats = column_stats->second;
-	if (!col_stats.has_null_count || col_stats.null_count > 0) {
+	if (!col_stats.has_null_count || col_stats.null_count > 0 || !FileStatsShowNulls(col.Type())) {
 		VerifyNoNullValues(context, transaction, *this, col);
 	}
 

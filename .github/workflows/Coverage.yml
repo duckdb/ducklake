@@ -1,0 +1,153 @@
+#
+# Measures the coverage of the DuckLake sources by the tests of every metadata catalog with clang's source-based code
+# coverage, like the codecov job of DuckDB. The report is the coverage-ducklake artifact, and a pull request fails
+# when it lowers the line coverage of the latest report of main.
+#
+name: Code Coverage
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
+  cancel-in-progress: true
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  codecov:
+    name: Code Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      VCPKG_TARGET_TRIPLET: x64-linux
+      GEN: ninja
+      VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
+      ENABLE_SQLITE_SCANNER: ON
+      ENABLE_POSTGRES_SCANNER: ON
+      ENABLE_QUACK: ON
+      BUILD_EXTENSION_TEST_DEPS: full
+      CC: clang
+      CXX: clang++
+      DUCKDB_TPCH_ANSWERS_DIR: ${{ github.workspace }}/duckdb/extension/tpch/dbgen/answers
+      # Every test run below adds its counts to the same profiles
+      PROFILES: ${{ github.workspace }}/build/codecov/profiles
+
+    steps:
+    - name: Install required ubuntu packages
+      run: |
+        sudo apt-get update -y -qq
+        sudo apt-get install -y -qq build-essential clang llvm lcov cmake ninja-build ccache python3
+
+    - name: Setup PostgreSQL for Linux/macOS/Windows
+      uses: ikalnytskyi/action-setup-postgres@v7
+      with:
+        postgres-version: '15'
+        username: 'postgres'
+        password: 'postgres'
+        database: 'postgres'
+        port: '5432'
+        ssl: true
+
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        submodules: 'true'
+
+    - name: Checkout DuckDB to version
+      run: |
+        cd duckdb
+        git checkout $(cat ../.github/duckdb-version)
+
+    - name: Setup Ccache
+      uses: hendrikmuhs/ccache-action@main
+      with:
+        key: ${{ github.job }}
+        save: ${{ github.ref == 'refs/heads/main' || github.repository != 'duckdb/ducklake' }}
+
+    - name: Setup vcpkg
+      uses: lukka/run-vcpkg@v11.1
+      with:
+        vcpkgGitCommitId: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
+
+    - name: Build extension
+      run: |
+        make codecov
+
+    # Without DUCKLAKE_CI, like the default tests in the distribution pipeline, which skips the PostgreSQL tests
+    - name: Test DuckDB
+      env:
+        LLVM_PROFILE_FILE: ${{ env.PROFILES }}/ducklake-%m.profraw
+      run: |
+        python3 duckdb/scripts/ci/run_tests.py build/codecov/test/unittest --retry 2 "test/*"
+
+    - name: Test SQLite
+      env:
+        LLVM_PROFILE_FILE: ${{ env.PROFILES }}/ducklake-%m.profraw
+        DUCKLAKE_CI: 1
+      run: |
+        python3 duckdb/scripts/ci/run_tests.py build/codecov/test/unittest --retry 2 \
+          --test-config test/configs/sqlite.json "test/sql/*"
+
+    # The tests share one PostgreSQL database, so they run one at a time
+    - name: Test Postgres
+      env:
+        LLVM_PROFILE_FILE: ${{ env.PROFILES }}/ducklake-%m.profraw
+        DUCKLAKE_CI: 1
+        PGSERVICE: postgres
+        LOCAL_EXTENSION_REPO: ${{ github.workspace }}/build/codecov/repository
+      run: |
+        createdb ducklakedb
+        python3 duckdb/scripts/ci/run_tests.py build/codecov/test/unittest --retry 2 --workers 1 \
+          --test-config test/configs/postgres.json "test/sql/*"
+
+    - name: Test Quack
+      env:
+        LLVM_PROFILE_FILE: ${{ env.PROFILES }}/ducklake-%m.profraw
+        DUCKLAKE_CI: 1
+      run: |
+        python3 scripts/run_quack_tests.py --timeout 300 --build-dir build/codecov
+
+    - name: Generate coverage report
+      run: |
+        python3 .github/coverage/report.py render --profiles "$PROFILES" --output build/codecov/coverage/ducklake
+
+    - name: Upload coverage report
+      id: upload
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-ducklake
+        path: build/codecov/coverage/ducklake
+        if-no-files-found: error
+
+    - name: Test the coverage scripts
+      working-directory: .github/coverage
+      run: |
+        python3 -m unittest -v
+
+    # The baseline is the report of the latest coverage run on main of this repository
+    - name: Download baseline report
+      if: github.event_name == 'pull_request'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        # A main branch of a fork does not count
+        LATEST: >-
+          [.artifacts[] | select(.workflow_run.head_branch == "main" and (.expired | not)
+          and .workflow_run.head_repository_id == .workflow_run.repository_id)][0].archive_download_url // empty
+      run: |
+        url=$(gh api "repos/${{ github.repository }}/actions/artifacts?name=coverage-ducklake&per_page=100" --jq "$LATEST")
+        if [[ -n "$url" ]]; then
+          gh api "$url" > baseline.zip
+          unzip -q baseline.zip -d baseline
+        fi
+
+    - name: Check coverage
+      env:
+        DIFF_BASE: ${{ github.event.pull_request.base.sha }}
+      run: |
+        echo "[Coverage report](${{ steps.upload.outputs.artifact-url }})" >> "$GITHUB_STEP_SUMMARY"
+        python3 .github/coverage/report.py check --report build/codecov/coverage/ducklake --baseline baseline \
+          ${DIFF_BASE:+--diff-base "$DIFF_BASE"} --summary "$GITHUB_STEP_SUMMARY"
