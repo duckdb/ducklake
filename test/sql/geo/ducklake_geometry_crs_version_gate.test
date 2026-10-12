@@ -81,6 +81,13 @@ ALTER TABLE legacy.geo ADD COLUMN d GEOMETRY('OGC:CRS84');
 statement ok
 CREATE TABLE legacy.crs (g GEOMETRY('OGC:CRS84'));
 
+# macro parameters keep the CRS, also as a nested type
+statement ok
+CREATE MACRO legacy.crs_type(g GEOMETRY('OGC:CRS84')) AS typeof(g);
+
+statement ok
+CREATE MACRO legacy.crs_list_type(l GEOMETRY('OGC:CRS84')[]) AS typeof(l);
+
 statement ok
 DETACH legacy
 
@@ -102,3 +109,23 @@ statement error
 INSERT INTO legacy.crs SELECT 'POINT(7 8)'::GEOMETRY('OGC:CRS83');
 ----
 Cannot cast GEOMETRY with CRS 'OGC:CRS83' to GEOMETRY with different CRS 'OGC:CRS84'
+
+query II
+SELECT legacy.crs_type('POINT(1 2)'::GEOMETRY('OGC:CRS84')), legacy.crs_list_type(['POINT(1 2)'::GEOMETRY('OGC:CRS84')])
+----
+GEOMETRY('OGC:CRS84')	GEOMETRY('OGC:CRS84')[]
+
+# a column type that is not a single string literal is rejected
+statement ok
+UPDATE legacy_meta.ducklake_column SET column_type = 'geometry(''OGC:CRS84''junk'')' WHERE column_type = 'geometry(''OGC:CRS84'')'
+
+statement ok
+DETACH legacy
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_geometry.db' AS legacy (DATA_PATH 'data/old_ducklake/v10_geometry/', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'legacy_meta')
+
+statement error
+SELECT * FROM legacy.crs
+----
+Invalid GEOMETRY type - expected a quoted CRS

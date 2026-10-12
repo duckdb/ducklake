@@ -102,12 +102,13 @@ LogicalType DuckLakeTypes::FromString(const string &type) {
 		return LogicalType::DECIMAL(width, scale);
 	}
 	if (StringUtil::StartsWith(type, "geometry(") && StringUtil::EndsWith(type, ")")) {
-		// geometry with a CRS, written as a string literal
-		auto crs = type.substr(9, type.size() - 10);
-		if (crs.size() < 2 || crs.front() != '\'' || crs.back() != '\'') {
+		auto crs_literal = type.substr(9, type.size() - 10);
+		idx_t pos = 0;
+		string crs;
+		if (!StringUtil::TryParseQuotedString(crs_literal, pos, crs, '\'') || pos != crs_literal.size()) {
 			throw InvalidInputException("Invalid GEOMETRY type - expected a quoted CRS");
 		}
-		return LogicalType::GEOMETRY(StringUtil::Replace(crs.substr(1, crs.size() - 2), "''", "'"));
+		return LogicalType::GEOMETRY(crs);
 	}
 	return ParseBaseType(type);
 }
