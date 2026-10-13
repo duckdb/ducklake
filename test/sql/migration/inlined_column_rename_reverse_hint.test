@@ -15,27 +15,15 @@ CREATE TABLE dl.t(i INTEGER, j INTEGER);
 statement ok
 INSERT INTO dl.t VALUES (1, 2), (3, 4);
 
+# rename the inlined columns underneath the v1.0 session, as a migration on another connection does
 statement ok
-DETACH dl
+ALTER TABLE __ducklake_metadata_dl.ducklake_inlined_data_1_1 RENAME COLUMN row_id TO _ducklake_row_id
 
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/reverse_hint.db' AS dl (DATA_PATH '{TEST_DIR}/reverse_hint_files', AUTOMATIC_MIGRATION TRUE)
+ALTER TABLE __ducklake_metadata_dl.ducklake_inlined_data_1_1 RENAME COLUMN begin_snapshot TO _ducklake_begin_snapshot
 
 statement ok
-DETACH dl
-
-# simulate a session that attached at v1.0 before the catalog was migrated underneath it
-statement ok
-ATTACH '{TEST_DIR}/reverse_hint.db' AS meta;
-
-statement ok
-UPDATE meta.ducklake_metadata SET value = '1.0' WHERE key = 'version';
-
-statement ok
-DETACH meta
-
-statement ok
-ATTACH 'ducklake:{TEST_DIR}/reverse_hint.db' AS dl (DATA_PATH '{TEST_DIR}/reverse_hint_files')
+ALTER TABLE __ducklake_metadata_dl.ducklake_inlined_data_1_1 RENAME COLUMN end_snapshot TO _ducklake_end_snapshot
 
 # reading the migrated inlined table from the v1.0 session hints at reattaching
 statement error
@@ -46,18 +34,9 @@ migrated by another connection
 statement ok
 DETACH dl
 
-# a reattach at the migrated version reads the data
+# a reattach that migrates the catalog reads the data
 statement ok
-ATTACH '{TEST_DIR}/reverse_hint.db' AS meta;
-
-statement ok
-UPDATE meta.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
-
-statement ok
-DETACH meta
-
-statement ok
-ATTACH 'ducklake:{TEST_DIR}/reverse_hint.db' AS dl (DATA_PATH '{TEST_DIR}/reverse_hint_files')
+ATTACH 'ducklake:{TEST_DIR}/reverse_hint.db' AS dl (DATA_PATH '{TEST_DIR}/reverse_hint_files', AUTOMATIC_MIGRATION TRUE)
 
 query II
 SELECT * FROM dl.t ORDER BY i

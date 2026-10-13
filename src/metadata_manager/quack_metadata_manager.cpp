@@ -31,6 +31,12 @@ unique_ptr<QueryResult> QuackMetadataManager::Query(string &query) {
 	return result;
 }
 
+string QuackMetadataManager::QualifiedMetadataTableName(const string &table_name) {
+	// the server runs the queries in the metadata database itself
+	return SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()) + "." +
+	       SQLQuotedIdentifier::ToString(table_name);
+}
+
 unique_ptr<QueryResult> QuackMetadataManager::AttachMetadata(const string &attach_query) {
 	auto query = attach_query;
 	SubstituteCatalogPlaceholders(query);

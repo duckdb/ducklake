@@ -572,6 +572,8 @@ public:
 	virtual LogicalType StoredMetadataType(const LogicalType &type) {
 		return type;
 	}
+	//! The name of a metadata table as the queries of this backend address it
+	virtual string QualifiedMetadataTableName(const string &table_name);
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
 	//! Rewrites inlined tables whose columns were created with the storage types of an older DuckLake version

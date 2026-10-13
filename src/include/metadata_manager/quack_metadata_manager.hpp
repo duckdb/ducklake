@@ -27,6 +27,7 @@ public:
 		return true;
 	}
 	void ProbeServerCapabilities() override;
+	string QualifiedMetadataTableName(const string &table_name) override;
 	bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const override;
 	void FlushChangesServerSide(DuckLakeTransaction &transaction, DuckLakeSnapshot transaction_snapshot,
 	                            const TransactionChangeInformation &transaction_changes,

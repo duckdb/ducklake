@@ -490,26 +490,31 @@ static bool IsV1_1Dev1Addition(const string &table, const string &column) {
 	return false;
 }
 
+string DuckLakeMetadataManager::QualifiedMetadataTableName(const string &table_name) {
+	auto &catalog = transaction.GetCatalog();
+	return SQLQuotedIdentifier::ToString(catalog.MetadataDatabaseName()) + "." +
+	       SQLQuotedIdentifier::ToString(catalog.MetadataSchemaName()) + "." +
+	       SQLQuotedIdentifier::ToString(table_name);
+}
+
 void DuckLakeMetadataManager::ValidateMetadataTables(bool allow_missing_v1_1_dev1_additions) {
 	auto parser = Parser::GetBuiltinParser();
 	parser.ParseQuery(StringUtil::Replace(GetCreateTableStatements(), "{METADATA_CATALOG}.", ""));
-	auto &catalog = transaction.GetCatalog();
-	auto metadata_schema = SQLQuotedIdentifier::ToString(catalog.MetadataDatabaseName()) + "." +
-	                       SQLQuotedIdentifier::ToString(catalog.MetadataSchemaName()) + ".";
 	map<string, reference<const ColumnList>> expected_tables;
 	string query;
 	for (auto &statement : parser.statements) {
 		auto &info = statement->Cast<CreateStatement>().info->Cast<CreateTableInfo>();
 		auto table_name = info.GetTableName().GetIdentifierName();
 		expected_tables.emplace(table_name, info.columns);
-		if (allow_missing_v1_1_dev1_additions && table_name == "ducklake_view_column_tag") {
+		if (allow_missing_v1_1_dev1_additions && table_name == "ducklake_view_column_tag" &&
+		    Query("SELECT 1 FROM {METADATA_CATALOG}.ducklake_view_column_tag LIMIT 0")->HasError()) {
 			continue;
 		}
 		if (!query.empty()) {
 			query += " UNION ALL ";
 		}
 		query += StringUtil::Format("SELECT %s, cid, name, type FROM pragma_table_info(%s)", SQLString(table_name),
-		                            SQLString(metadata_schema + SQLQuotedIdentifier::ToString(table_name)));
+		                            SQLString(QualifiedMetadataTableName(table_name)));
 	}
 	auto result = Query(query + " ORDER BY 1, 2");
 	if (result->HasError()) {

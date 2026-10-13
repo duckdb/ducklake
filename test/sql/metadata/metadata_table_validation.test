@@ -223,3 +223,27 @@ statement error
 ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_7.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
 ----
 the metadata has no data path
+
+# a catalog that lacks a later v1.1-dev1 addition still has its other tables checked
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_dev.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation', DUCKLAKE_VERSION '1.1-dev1')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH '{TEST_DIR}/metadata_table_validation_dev.db' AS meta
+
+statement ok
+ALTER TABLE meta.ducklake_schema DROP COLUMN parent_schema_id
+
+statement ok
+ALTER TABLE meta.ducklake_view_column_tag DROP COLUMN value
+
+statement ok
+DETACH meta
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_dev.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation', DUCKLAKE_VERSION '1.1-dev1', READ_ONLY)
+----
+metadata table "ducklake_view_column_tag" has no column "value"
