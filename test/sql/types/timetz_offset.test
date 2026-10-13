@@ -124,7 +124,7 @@ statement ok
 SET VARIABLE data_file = (SELECT data_file FROM ducklake_list_files('ducklake', 'f') ORDER BY data_file LIMIT 1);
 
 query III
-SELECT name, type, logical_type LIKE 'TimeType(isAdjustedToUTC=1%' FROM parquet_schema(getvariable('data_file')) WHERE name IN ('x', 'time', 'offset') ORDER BY name
+SELECT name, type, logical_type LIKE 'TimeType(isAdjustedToUTC=0%' FROM parquet_schema(getvariable('data_file')) WHERE name IN ('x', 'time', 'offset') ORDER BY name
 ----
 offset	INT32	NULL
 time	INT64	true
@@ -187,6 +187,65 @@ SELECT id, x::VARCHAR FROM ducklake.s
 1	01:00:00+05
 3	12:00:00+00
 2	23:00:00-05
+
+# values whose UTC time is the end of the day keep it in files written by an insert or a flush
+statement ok
+CREATE TABLE ducklake.e (id INTEGER, x TIMETZ);
+
+statement ok
+INSERT INTO ducklake.e VALUES (1, TIMETZ '24:00:00+00'), (2, TIMETZ '23:00:00-01');
+
+statement ok
+CREATE TABLE ducklake.ei (id INTEGER, x TIMETZ) WITH (data_inlining_row_limit = 10);
+
+statement ok
+INSERT INTO ducklake.ei VALUES (1, TIMETZ '24:00:00+00'), (2, TIMETZ '23:00:00-01');
+
+statement ok
+SET VARIABLE ei_snapshot = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake'));
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'ei')
+
+foreach table e ei
+
+query II
+SELECT id, x::VARCHAR FROM ducklake.{table} ORDER BY id
+----
+1	24:00:00+00
+2	23:00:00-01
+
+query I
+SELECT id FROM ducklake.{table} WHERE x = TIMETZ '24:00:00+00'
+----
+1
+
+query I
+SELECT id FROM ducklake.{table} WHERE x = TIMETZ '23:00:00-01'
+----
+2
+
+statement ok
+SET VARIABLE end_file = (SELECT data_file FROM ducklake_list_files('ducklake', '{table}'));
+
+query II
+SELECT x.time::VARCHAR, x.offset FROM read_parquet(getvariable('end_file')) ORDER BY id
+----
+24:00:00	0
+24:00:00	-3600
+
+query II
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_file_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_column c USING (table_id, column_id) JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = '{table}' AND c.column_name = 'x'
+----
+24:00:00+00	08:00:01-15:59:59
+
+endloop
+
+query II
+SELECT id, x::VARCHAR FROM ducklake.ei AT (VERSION => getvariable('ei_snapshot')) ORDER BY id
+----
+1	24:00:00+00
+2	23:00:00-01
 
 statement ok
 CREATE TABLE ducklake.nn (x TIMETZ NOT NULL);
