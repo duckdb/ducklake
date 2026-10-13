@@ -280,8 +280,11 @@ void CheckStoredValues(ClientContext &context, Vector &values, idx_t count, cons
 	case LogicalTypeId::LIST:
 	case LogicalTypeId::MAP: {
 		// the child vector also holds the entries of rows the scan filtered out
+		auto child_count = ListVector::GetConsecutiveChildListInfo(values, 0, count).child_list_info.length;
+		SelectionVector child_sel(child_count);
+		ListVector::GetConsecutiveChildSelVector(values, child_sel, 0, count);
 		Vector child(Vector::Ref(ListVector::GetChildMutable(values)));
-		auto child_count = ListVector::GetConsecutiveChildList(values, child, 0, count);
+		child.Slice(child_sel, child_count);
 		if (source.Type().id() == LogicalTypeId::LIST) {
 			CheckStoredValues(context, child, child_count, *children[0], *target.Children()[0], checked_fields);
 			break;
@@ -1319,9 +1322,15 @@ bool DuckLakeTableEntry::CheckPromotedValues(ClientContext &context, DuckLakeTra
 	}
 	if (!bounded_fields.empty()) {
 		if (!duckdb::IsTransactionLocal(GetTableId())) {
+			// files deleted as a whole by the transaction are not read again
+			::duckdb::set<DataFileIndex> dropped_files;
+			for (auto &entry : transaction.GetDroppedFiles()) {
+				dropped_files.insert(entry.second);
+			}
 			auto &metadata_manager = transaction.GetMetadataManager();
-			for (auto &bounds :
-			     metadata_manager.GetLiveFileBounds(GetTableId(), bounded_fields, transaction.GetSnapshot())) {
+			auto file_bounds = metadata_manager.GetLiveFileBounds(GetTableId(), bounded_fields, dropped_files,
+			                                                      transaction.GetSnapshot());
+			for (auto &bounds : file_bounds) {
 				CheckFileBounds(context, checked_fields.at(bounds.column_id), bounds.min_value, bounds.max_value);
 			}
 		}

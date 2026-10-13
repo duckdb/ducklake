@@ -270,3 +270,41 @@ query I
 SELECT l FROM ducklake.lists
 ----
 [0.5]
+
+statement ok
+CREATE TABLE ducklake.lists2 (l DECIMAL(4,1)[]);
+
+statement ok
+INSERT INTO ducklake.lists2 VALUES ([0.5]), ([1.1]);
+
+statement ok
+DELETE FROM ducklake.lists2 WHERE l[1] = 0.5;
+
+statement error
+ALTER TABLE ducklake.lists2 ALTER l SET DATA TYPE FLOAT[];
+----
+holds the value 1.1, which FLOAT cannot hold exactly
+
+# a file the transaction deleted as a whole is not read again
+statement ok
+CREATE TABLE ducklake.dropped (d DATE);
+
+statement ok
+INSERT INTO ducklake.dropped VALUES (DATE '5000000-01-01');
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM ducklake.dropped;
+
+statement ok
+ALTER TABLE ducklake.dropped ALTER d SET DATA TYPE TIMESTAMP;
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.dropped
+----
+0

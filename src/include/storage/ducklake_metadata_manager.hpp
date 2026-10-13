@@ -367,8 +367,9 @@ public:
 	DuckLakeTableSchemaVersions GetTableSchemaVersions(TableIndex table_id, DuckLakeSnapshot snapshot);
 	//! The net row count of the data files that were committed before the snapshot's next file id
 	virtual idx_t GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot);
-	//! The distinct known bounds of columns in the live data files of a table
+	//! The distinct known bounds of columns in the live data files of a table, without the excluded files
 	vector<DuckLakeFileColumnBounds> GetLiveFileBounds(TableIndex table_id, const set<FieldIndex> &column_ids,
+	                                                   const set<DataFileIndex> &excluded_files,
 	                                                   DuckLakeSnapshot snapshot);
 	optional_idx GetNetDataFileRowCountForStats(TableIndex table_id, DuckLakeSnapshot snapshot);
 	virtual idx_t GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot);
