@@ -1,0 +1,126 @@
+# name: test/sql/delete/delete_partition_metadata_imported.test
+# description: Imported partition values use the row-delete fallback after type promotion
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/hive_promotion', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(id INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO lake.t VALUES (1, 5)
+
+statement ok
+COPY (SELECT 42 AS id, '1.1' AS p) TO '{DATA_PATH}/hive_promotion_src' (FORMAT parquet, PARTITION_BY (p))
+
+statement ok
+CALL ducklake_add_data_files('lake', 't', '{DATA_PATH}/hive_promotion_src/**/*.parquet', hive_partitioning => true)
+
+statement ok
+ALTER TABLE lake.t ALTER COLUMN p TYPE DECIMAL(18,1)
+
+query I
+DELETE FROM lake.t WHERE p = 1.0
+----
+0
+
+query II
+SELECT id, p FROM lake.t ORDER BY id
+----
+1	5.0
+42	1.1
+
+statement ok
+CREATE TABLE lake.local_promotion(id INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE lake.local_promotion SET PARTITIONED BY (p)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_add_data_files('lake', 'local_promotion', '{DATA_PATH}/hive_promotion_src/**/*.parquet', hive_partitioning => true)
+
+statement ok
+ALTER TABLE lake.local_promotion ALTER COLUMN p TYPE DECIMAL(18,1)
+
+query I
+DELETE FROM lake.local_promotion WHERE p = 1.0
+----
+0
+
+query II
+SELECT id, p FROM lake.local_promotion
+----
+42	1.1
+
+statement ok
+ROLLBACK
+
+statement ok
+COPY (SELECT 42 AS id, 7 AS p) TO '{DATA_PATH}/hive_exact_src' (FORMAT parquet, PARTITION_BY (p))
+
+# Matching committed imports must still be deleted through the fallback.
+statement ok
+CREATE TABLE lake.import_committed(id INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE lake.import_committed SET PARTITIONED BY (p)
+
+statement ok
+CALL ducklake_add_data_files('lake', 'import_committed', '{DATA_PATH}/hive_exact_src/**/*.parquet', hive_partitioning => true)
+
+statement ok
+BEGIN
+
+query I
+DELETE FROM lake.import_committed WHERE p = 7
+----
+1
+
+query I
+SELECT count(*) FROM lake.import_committed
+----
+0
+
+statement ok
+ROLLBACK
+
+# Matching local imports must still be deleted through the fallback.
+statement ok
+CREATE TABLE lake.import_local(id INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE lake.import_local SET PARTITIONED BY (p)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_add_data_files('lake', 'import_local', '{DATA_PATH}/hive_exact_src/**/*.parquet', hive_partitioning => true)
+
+query I
+DELETE FROM lake.import_local WHERE p = 7
+----
+1
+
+query I
+SELECT count(*) FROM lake.import_local
+----
+0
+
+statement ok
+ROLLBACK

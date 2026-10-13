@@ -629,6 +629,8 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended(bo
 			file_entry.delete_file_begin_snapshot = file.delete_files.back().begin_snapshot;
 		}
 		file_entry.row_id_start = transaction_row_start;
+		file_entry.mapping_id = file.mapping_id;
+		file_entry.max_partial_file_snapshot = file.max_partial_file_snapshot;
 		file_entry.partition_id = file.partition_id;
 		for (auto &part_val : file.partition_values) {
 			DuckLakeFilePartitionInfo partition_value;

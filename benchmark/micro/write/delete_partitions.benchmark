@@ -1,0 +1,27 @@
+# name: benchmark/micro/write/delete_partitions.benchmark
+# description: Delete 50 identity partitions from a freshly attached lake, including commit
+# group: [write]
+
+name Delete Partitions
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work delete_partitions_work
+
+include benchmark/micro/fixtures/partitioned_compaction.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+DELETE FROM lake.events WHERE part < 50;
+
+result_query III
+SELECT Count, (SELECT count(*) FROM lake.events),
+(SELECT count(*) FROM __ducklake_metadata_lake.ducklake_data_file WHERE end_snapshot IS NULL)
+FROM __answer
+----
+307200	307200	150
