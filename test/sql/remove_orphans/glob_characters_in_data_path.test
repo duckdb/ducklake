@@ -35,7 +35,7 @@ INSERT INTO lake.t VALUES (5)
 statement ok
 COPY (SELECT 2 AS i) TO '{DATA_PATH}/glob_characters/d=a[1]*?b/main/t/stray.parquet'
 
-query I
+query T
 SELECT parse_filename(path) FROM ducklake_delete_orphaned_files('lake', cleanup_all => true, dry_run => true)
 ----
 stray.parquet

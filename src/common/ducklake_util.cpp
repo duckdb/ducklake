@@ -13,6 +13,7 @@
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/path.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
@@ -241,12 +242,9 @@ string DuckLakeUtil::PathSeparator(FileSystem &fs, const string &path) {
 }
 
 string DuckLakeUtil::EscapeGlob(const string &path) {
-	// the ? of a Windows extended-length prefix is part of the prefix
-	const string extended_prefix = R"(\\?\)";
-	idx_t start = StringUtil::StartsWith(path, extended_prefix) ? extended_prefix.size() : 0;
+	auto start = MinValue<idx_t>(Path::FromString(path).GetBase().size(), path.size());
 	string result = path.substr(0, start);
-	for (idx_t i = start; i < path.size(); i++) {
-		auto c = path[i];
+	for (auto c : path.substr(start)) {
 		if (c == '*' || c == '?' || c == '[') {
 			// a bracket expression with a single character matches it literally
 			result += '[';

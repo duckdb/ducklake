@@ -5081,7 +5081,6 @@ vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup
 		known_files.insert(canonical_path(row.GetValue<string>(0)));
 	}
 
-	// glob characters in the data path must not select files outside of it
 	auto data_path_glob = DuckLakeUtil::EscapeGlob(transaction.GetCatalog().DataPath()) + "**";
 	auto query = StringUtil::Format(R"(SELECT filename
 FROM read_blob(%s) files

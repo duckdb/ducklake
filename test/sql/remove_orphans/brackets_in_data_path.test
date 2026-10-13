@@ -1,0 +1,40 @@
+# name: test/sql/remove_orphans/brackets_in_data_path.test
+# description: orphan cleanup matches literal brackets in data paths
+# group: [remove_orphans]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+foreach directory a[1]b a[!1]b a[1-3]b a[b a]b a[[1]]b a[1]''b
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/brackets_{directory}.db' AS lake (DATA_PATH '{DATA_PATH}/literal_brackets/{directory}/', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t AS SELECT 42 AS i
+
+statement ok
+COPY (SELECT 1 AS i) TO '{DATA_PATH}/literal_brackets/{directory}/stray.parquet'
+
+query T
+SELECT parse_filename(path) FROM ducklake_delete_orphaned_files('lake', cleanup_all => true)
+----
+stray.parquet
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('lake', cleanup_all => true, dry_run => true)
+----
+0
+
+query I
+SELECT i FROM lake.t
+----
+42
+
+statement ok
+DETACH lake
+
+endloop
