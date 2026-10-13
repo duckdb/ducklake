@@ -697,8 +697,10 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 				case CompactionType::MERGE_ADJACENT_TABLES: {
 					// track the max partial snapshot across all source files
 					optional_idx merged_max_partial_snapshot;
+					// a merge of a sorted table can list a newer file first
 					idx_t first_begin_snapshot = compaction.source_files[0].file.begin_snapshot;
 					for (auto &compacted_file : compaction.source_files) {
+						first_begin_snapshot = MinValue(first_begin_snapshot, compacted_file.file.begin_snapshot);
 						idx_t file_max_snapshot = compacted_file.max_partial_file_snapshot.IsValid()
 						                              ? compacted_file.max_partial_file_snapshot.GetIndex()
 						                              : compacted_file.file.begin_snapshot;

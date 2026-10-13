@@ -84,6 +84,9 @@ PhysicalOperator &DuckLakeLogicalCompaction::CreatePlan(ClientContext &context, 
 		}
 		transaction.ReleaseMetadataTransaction();
 	}
+	if (ordered_input && child.type == PhysicalOperatorType::COPY_TO_FILE) {
+		DuckLakeInsert::PreserveSortedOrder(child.Cast<PhysicalCopyToFile>());
+	}
 	return planner.Make<DuckLakeCompaction>(types, table, std::move(source_files), std::move(encryption_key),
 	                                        partition_id, std::move(partition_values), row_id_start, child, type);
 }
@@ -249,6 +252,59 @@ template <typename T>
 using compaction_map_t =
     unordered_map<DuckLakeCompactionGroup, T, DuckLakeCompactionGroupHash, DuckLakeCompactionGroupEquality>;
 
+//! Orders the candidate files of each group by the bounds of the first sort key, so that merged files cover narrow
+//! ranges of it
+static void OrderCandidatesBySortKey(DuckLakeMetadataManager &metadata_manager, DuckLakeSnapshot snapshot,
+                                     DuckLakeTableEntry &latest_table, const vector<DuckLakeCompactionFileEntry> &files,
+                                     compaction_map_t<DuckLakeCompactionCandidates> &candidates) {
+	auto sort_data = latest_table.GetSortData();
+	if (!sort_data || sort_data->fields.empty() || sort_data->fields[0].dialect != "duckdb") {
+		return;
+	}
+	auto &first_key = sort_data->fields[0];
+	auto expressions = Parser::GetBuiltinParser().ParseExpressionList(first_key.expression);
+	if (expressions.size() != 1 || expressions[0]->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
+		return;
+	}
+	auto &column_ref = expressions[0]->Cast<ColumnRefExpression>();
+	auto &columns = latest_table.GetColumns();
+	if (column_ref.IsQualified() || !columns.ColumnExists(column_ref.GetColumnName())) {
+		return;
+	}
+	auto &column = columns.GetColumn(column_ref.GetColumnName());
+	auto &field_id = latest_table.GetFieldId(column.Physical());
+	map<DataFileIndex, pair<Value, Value>> file_bounds;
+	for (auto &entry :
+	     metadata_manager.GetFileColumnBounds(latest_table.GetTableId(), field_id.GetFieldIndex(), snapshot)) {
+		auto min = TryCastStatsBound(entry.second.first, column.Type());
+		auto max = TryCastStatsBound(entry.second.second, column.Type());
+		if (min && max) {
+			file_bounds.emplace(entry.first, make_pair(std::move(*min), std::move(*max)));
+		}
+	}
+	if (file_bounds.empty()) {
+		return;
+	}
+	bool descending = first_key.sort_direction == OrderType::DESCENDING;
+	for (auto &group : candidates) {
+		auto &candidate_files = group.second.candidate_files;
+		// files without bounds keep their order after the others
+		std::stable_sort(candidate_files.begin(), candidate_files.end(), [&](idx_t left, idx_t right) {
+			auto left_bounds = file_bounds.find(files[left].file.id);
+			auto right_bounds = file_bounds.find(files[right].file.id);
+			if (left_bounds == file_bounds.end() || right_bounds == file_bounds.end()) {
+				return left_bounds != file_bounds.end() && right_bounds == file_bounds.end();
+			}
+			auto &l = left_bounds->second;
+			auto &r = right_bounds->second;
+			if (descending) {
+				return l.second > r.second || (l.second == r.second && l.first > r.first);
+			}
+			return l.first < r.first || (l.first == r.first && l.second < r.second);
+		});
+	}
+}
+
 //! Returns true if every field in `older_fields` still exists in `latest` with an identical field id, name and type.
 //! New fields in `latest` (ADD COLUMN) are allowed; a dropped, renamed, retyped or nested-changed field is not.
 static bool FieldsPreservedInLatest(const vector<unique_ptr<DuckLakeFieldId>> &older_fields,
@@ -279,8 +335,6 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	idx_t target_file_size = catalog.GetTargetFileSize(context, table);
 
 	DuckLakeFileSizeOptions filter_options(options, target_file_size);
-	// FIXME: pass in the sort_data so that list of files is approximately sorted in the same way
-	// (sorted by the min/max metadata)
 	auto files = metadata_manager.GetFilesForCompaction(table, type, delete_threshold, snapshot, filter_options);
 	auto files_compacted_in_transaction = transaction.GetCompactedFiles(table_id);
 
@@ -342,6 +396,8 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 
 		candidates[group].candidate_files.push_back(file_idx);
 	}
+
+	OrderCandidatesBySortKey(metadata_manager, snapshot, latest_table, files, candidates);
 
 	// we have gathered all the candidate files per compaction group
 	// iterate over them to generate actual compaction commands
@@ -717,8 +773,11 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 
 	auto &latest_table = GetLatestTableEntry(catalog, transaction, table);
 	auto sort_data = latest_table.GetSortData();
+	bool sorted = false;
 	if (sort_data) {
+		auto unsorted_root = root.get();
 		root = DuckLakeCompactor::InsertSort(binder, root, table, latest_table, sort_data);
+		sorted = root.get() != unsorted_root;
 	}
 
 	// adjacent files are merged into one file that starts at the first file's row_id_start
@@ -746,6 +805,8 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	auto compaction = make_uniq<DuckLakeLogicalCompaction>(
 	    binder.GenerateTableIndex(), table, std::move(actionable_source_files), std::move(copy_input.encryption_key),
 	    partition_id, std::move(partition_values), target_row_id_start, type);
+	// a merge of files that are not adjacent rotates files, which the batch copy that keeps the order cannot
+	compaction->ordered_input = sorted && !merge_in_order;
 	compaction->children.push_back(std::move(copy));
 	return std::move(compaction);
 }

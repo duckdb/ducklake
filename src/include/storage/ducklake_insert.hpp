@@ -133,6 +133,8 @@ public:
 	                                                 idx_t data_inlining_row_limit);
 	static PhysicalOperator &PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                           DuckLakeCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
+	//! Makes a copy that rotates files write its sorted input in order
+	static void PreserveSortedOrder(PhysicalCopyToFile &physical_copy);
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                    DuckLakeTableEntry &table, string encryption_key);
 	static void RemoveEmptyFiles(ClientContext &context, DuckLakeInsertGlobalState &gstate);

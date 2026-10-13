@@ -1,0 +1,192 @@
+# name: test/sql/sorted_table/merge_adjacent_sort_key_order.test
+# description: merges of a sorted table combine files in the order of their sort key, and keep the rows sorted
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/merge_adjacent_sort_key_order', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CALL lake.set_option('target_file_size', '1500KB');
+
+statement ok
+CREATE TABLE lake.t (k BIGINT, v VARCHAR);
+
+statement ok
+ALTER TABLE lake.t SET SORTED BY (k);
+
+# blocks of narrow key ranges arrive out of key order
+statement ok
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(0, 10000) r(i);
+
+statement ok
+SET VARIABLE first_insert = (SELECT max(snapshot_id) FROM lake.snapshots())
+
+statement ok
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(50000, 60000) r(i);
+
+statement ok
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(100000, 110000) r(i);
+
+statement ok
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(150000, 160000) r(i);
+
+statement ok
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(40000, 50000) r(i);
+
+statement ok
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(90000, 100000) r(i);
+
+statement ok
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(140000, 150000) r(i);
+
+statement ok
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(30000, 40000) r(i);
+
+statement ok
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(80000, 90000) r(i);
+
+statement ok
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(130000, 140000) r(i);
+
+statement ok
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(20000, 30000) r(i);
+
+statement ok
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(70000, 80000) r(i);
+
+statement ok
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(120000, 130000) r(i);
+
+statement ok
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(10000, 20000) r(i);
+
+statement ok
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(60000, 70000) r(i);
+
+statement ok
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(110000, 120000) r(i);
+
+statement ok
+CREATE TEMPORARY TABLE before_merge AS SELECT rowid AS rid, k, v FROM lake.t
+
+statement ok
+CALL ducklake_merge_adjacent_files('lake', 't');
+
+query I
+SELECT count(*) < 16 FROM ducklake_list_files('lake', 't')
+----
+true
+
+# the key ranges of the merged files do not overlap, so a selective filter finds one file
+query I
+SELECT count(*) FROM (
+SELECT min(k) AS lo, max(k) AS hi FROM lake.t GROUP BY filename) a, (
+SELECT min(k) AS lo, max(k) AS hi FROM lake.t GROUP BY filename) b
+WHERE a.lo < b.lo AND a.hi >= b.lo
+----
+0
+
+query I
+SELECT count(DISTINCT filename) FROM lake.t WHERE k BETWEEN 55000 AND 55010
+----
+1
+
+query I
+SELECT count(*) FROM (SELECT k < lag(k) OVER (PARTITION BY filename ORDER BY file_row_number) AS out_of_order FROM lake.t) WHERE out_of_order
+----
+0
+
+query I
+SELECT count(*) FROM (SELECT rowid AS rid, k, v FROM lake.t EXCEPT ALL SELECT * FROM before_merge)
+----
+0
+
+# a merged file that starts with a newer file still holds the rows of the older snapshots
+query II
+SELECT count(*), max(k) FROM lake.t AT (VERSION => getvariable('first_insert'))
+----
+10000	9999
+
+# a descending sort orders the files by their largest key
+statement ok
+CREATE TABLE lake.d (k BIGINT, v VARCHAR);
+
+statement ok
+ALTER TABLE lake.d SET SORTED BY (k DESC);
+
+statement ok
+INSERT INTO lake.d SELECT i, md5(i::VARCHAR) FROM range(0, 10000) r(i);
+
+statement ok
+INSERT INTO lake.d SELECT i, md5(i::VARCHAR) FROM range(50000, 60000) r(i);
+
+statement ok
+INSERT INTO lake.d SELECT i, md5(i::VARCHAR) FROM range(100000, 110000) r(i);
+
+statement ok
+INSERT INTO lake.d SELECT i, md5(i::VARCHAR) FROM range(150000, 160000) r(i);
+
+statement ok
+INSERT INTO lake.d SELECT i, md5(i::VARCHAR) FROM range(40000, 50000) r(i);
+
+statement ok
+INSERT INTO lake.d SELECT i, md5(i::VARCHAR) FROM range(90000, 100000) r(i);
+
+statement ok
+INSERT INTO lake.d SELECT i, md5(i::VARCHAR) FROM range(140000, 150000) r(i);
+
+statement ok
+INSERT INTO lake.d SELECT i, md5(i::VARCHAR) FROM range(30000, 40000) r(i);
+
+statement ok
+INSERT INTO lake.d SELECT i, md5(i::VARCHAR) FROM range(80000, 90000) r(i);
+
+statement ok
+INSERT INTO lake.d SELECT i, md5(i::VARCHAR) FROM range(130000, 140000) r(i);
+
+statement ok
+INSERT INTO lake.d SELECT i, md5(i::VARCHAR) FROM range(20000, 30000) r(i);
+
+statement ok
+INSERT INTO lake.d SELECT i, md5(i::VARCHAR) FROM range(70000, 80000) r(i);
+
+statement ok
+INSERT INTO lake.d SELECT i, md5(i::VARCHAR) FROM range(120000, 130000) r(i);
+
+statement ok
+INSERT INTO lake.d SELECT i, md5(i::VARCHAR) FROM range(10000, 20000) r(i);
+
+statement ok
+INSERT INTO lake.d SELECT i, md5(i::VARCHAR) FROM range(60000, 70000) r(i);
+
+statement ok
+INSERT INTO lake.d SELECT i, md5(i::VARCHAR) FROM range(110000, 120000) r(i);
+
+statement ok
+CALL ducklake_merge_adjacent_files('lake', 'd');
+
+query I
+SELECT count(*) FROM (
+SELECT min(k) AS lo, max(k) AS hi FROM lake.d GROUP BY filename) a, (
+SELECT min(k) AS lo, max(k) AS hi FROM lake.d GROUP BY filename) b
+WHERE a.lo < b.lo AND a.hi >= b.lo
+----
+0
+
+query I
+SELECT count(*) FROM (SELECT k > lag(k) OVER (PARTITION BY filename ORDER BY file_row_number) AS out_of_order FROM lake.d) WHERE out_of_order
+----
+0
+
+query II
+SELECT count(*), sum(k) FROM lake.d
+----
+160000	12799920000
