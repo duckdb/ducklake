@@ -64,6 +64,17 @@ SELECT id, x::VARCHAR FROM ducklake.f ORDER BY id
 3	12:00:00+00
 4	NULL
 
+# NULL filters on the files find the NULL values
+query I
+SELECT id FROM ducklake.f WHERE x IS NULL
+----
+4
+
+query I
+SELECT count(*) FROM ducklake.f WHERE x IS NOT NULL
+----
+3
+
 # the bounds of a file hold the instants of its values
 query I
 SELECT id FROM ducklake.f WHERE x < TIMETZ '00:00:00+00'
@@ -141,6 +152,32 @@ SELECT id, x::VARCHAR FROM ducklake.p ORDER BY id
 ----
 1	01:00:00+05
 2	13:00:00-01
+
+# a merge of a table sorted by a TIMETZ column sorts by the instants of the values
+statement ok
+CREATE TABLE ducklake.s (id INTEGER, x TIMETZ);
+
+statement ok
+ALTER TABLE ducklake.s SET SORTED BY (x);
+
+statement ok
+INSERT INTO ducklake.s VALUES (1, TIMETZ '01:00:00+05');
+
+statement ok
+INSERT INTO ducklake.s VALUES (2, TIMETZ '23:00:00-05');
+
+statement ok
+INSERT INTO ducklake.s VALUES (3, TIMETZ '12:00:00+00');
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 's');
+
+query II
+SELECT id, x::VARCHAR FROM ducklake.s
+----
+1	01:00:00+05
+3	12:00:00+00
+2	23:00:00-05
 
 statement ok
 CREATE TABLE ducklake.nn (x TIMETZ NOT NULL);

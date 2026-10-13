@@ -478,7 +478,10 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
                                                           DuckLakeTableEntry &table,
                                                           const DuckLakeTableEntry &latest_table,
                                                           optional_ptr<DuckLakeSort> sort_data) {
-	auto bindings = plan->GetColumnBindings();
+	// the projection that converts the columns for the copy stays above the sort, which reads the scan
+	bool has_copy_projection = plan->type == LogicalOperatorType::LOGICAL_PROJECTION;
+	auto &input = has_copy_projection ? plan->children[0] : plan;
+	auto bindings = input->GetColumnBindings();
 	D_ASSERT(!bindings.empty());
 	auto scan_index = bindings[0].table_index;
 	auto sort_orders = ParseSortOrders(*sort_data);
@@ -505,12 +508,13 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::InsertSort(Binder &binder, unique
 		}
 	}
 
-	// Resolve types for the input plan (could be LogicalGet or LogicalProjection)
-	plan->ResolveOperatorTypes();
-
-	// Create the LogicalOrder operator
+	input->ResolveOperatorTypes();
 	auto order = make_uniq<LogicalOrder>(std::move(orders));
-	order->children.push_back(std::move(plan));
+	order->children.push_back(std::move(input));
+	if (has_copy_projection) {
+		plan->children[0] = std::move(order);
+		return std::move(plan);
+	}
 	return LogicalProjection::CreateIdentity(binder.GenerateTableIndex(), std::move(order));
 }
 

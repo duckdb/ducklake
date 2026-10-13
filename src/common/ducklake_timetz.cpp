@@ -2,9 +2,11 @@
 #include "duckdb/common/types/datetime.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/function/function_binder.hpp"
+#include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "storage/ducklake_stats.hpp"
 
@@ -30,7 +32,7 @@ unique_ptr<Expression> DuckLakeTimeTZ::ToStorage(ClientContext &context, unique_
 	utc_children.push_back(expr->Copy());
 	auto utc_time = BindFunction(context, "timezone", std::move(utc_children));
 	vector<unique_ptr<Expression>> offset_children;
-	offset_children.push_back(std::move(expr));
+	offset_children.push_back(expr->Copy());
 	auto offset = BoundCastExpression::AddCastToType(
 	    context, BindFunction(context, "timezone", std::move(offset_children)), LogicalType::INTEGER);
 	utc_time->SetAlias(Identifier(TIME_FIELD));
@@ -38,7 +40,11 @@ unique_ptr<Expression> DuckLakeTimeTZ::ToStorage(ClientContext &context, unique_
 	vector<unique_ptr<Expression>> fields;
 	fields.push_back(std::move(utc_time));
 	fields.push_back(std::move(offset));
-	return BindFunction(context, "struct_pack", std::move(fields));
+	// a NULL TIMETZ is a NULL struct, so that NULL filters on the file see it
+	auto is_null = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NULL, LogicalType::BOOLEAN);
+	is_null->GetChildrenMutable().push_back(std::move(expr));
+	return make_uniq<BoundCaseExpression>(std::move(is_null), make_uniq<BoundConstantExpression>(Value(StorageType())),
+	                                      BindFunction(context, "struct_pack", std::move(fields)));
 }
 
 static unique_ptr<Expression> ExtractField(ClientContext &context, unique_ptr<Expression> expr, const char *field) {
