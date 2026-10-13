@@ -46,6 +46,8 @@ struct FlushedInlinedTableInfo;
 
 enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND };
 
+enum class DuckLakeCommitOutcome : uint8_t { NOT_COMMITTED, COMMITTED, UNKNOWN };
+
 //! Metadata column names inside ducklake_inlined_data_<table_id>_<schema_version> tables.
 struct DuckLakeInlinedColNames {
 	//! Column name prefix reserved for DuckLake internal use
@@ -218,9 +220,13 @@ public:
 	virtual bool IsRetryableCommitError(const string &) const {
 		return false;
 	}
-	//! Whether a failed COMMIT of the metadata connection can still have committed, as on a remote server
-	virtual bool CommitCanFailAfterCommitting() const {
-		return false;
+	//! The id of the open metadata transaction, to learn the outcome of its COMMIT if that fails
+	virtual optional_idx GetCommitTransactionId() {
+		return optional_idx();
+	}
+	//! Whether a metadata transaction whose COMMIT failed was committed, as a remote server can still commit it
+	virtual DuckLakeCommitOutcome GetCommitOutcome(optional_idx, const DuckLakeRetryConfig &) {
+		return DuckLakeCommitOutcome::NOT_COMMITTED;
 	}
 
 	//! Run the commit retry loop with the metadata server handling retries.

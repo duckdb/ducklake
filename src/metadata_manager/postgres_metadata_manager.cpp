@@ -1,5 +1,6 @@
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "common/ducklake_util.hpp"
+#include "duckdb/common/thread.hpp"
 #include "duckdb/main/database.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -241,6 +242,57 @@ bool PostgresMetadataManager::IsRetryableCommitError(const string &message) cons
 		}
 	}
 	return false;
+}
+
+optional_idx PostgresMetadataManager::GetCommitTransactionId() {
+	auto result = DuckLakeMetadataManager::Query(
+	    "SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, 'SELECT txid_current()')");
+	result->ThrowIfError("Failed to read the PostgreSQL transaction id: ");
+	auto chunk = result->Fetch();
+	if (!chunk || chunk->size() == 0) {
+		return optional_idx();
+	}
+	return chunk->GetValue(0, 0).GetValue<idx_t>();
+}
+
+DuckLakeCommitOutcome PostgresMetadataManager::GetCommitOutcome(optional_idx transaction_id,
+                                                                const DuckLakeRetryConfig &retry_config) {
+	// wait for a COMMIT that the server is still processing
+	static constexpr idx_t MAX_WAIT_MS = 3000;
+	if (!transaction_id.IsValid()) {
+		return DuckLakeCommitOutcome::UNKNOWN;
+	}
+	auto context = transaction.context.lock();
+	idx_t waited_ms = 0;
+	try {
+		for (idx_t attempt = 0;; attempt++) {
+			// the failed transaction is over, so this runs in a new one
+			auto result = DuckLakeMetadataManager::Query(StringUtil::Format(
+			    "SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, 'SELECT txid_status(%d)')",
+			    transaction_id.GetIndex()));
+			if (result->HasError()) {
+				return DuckLakeCommitOutcome::UNKNOWN;
+			}
+			auto chunk = result->Fetch();
+			auto status = chunk && chunk->size() > 0 ? chunk->GetValue(0, 0).ToString() : string();
+			if (status == "committed") {
+				return DuckLakeCommitOutcome::COMMITTED;
+			}
+			if (status == "aborted") {
+				return DuckLakeCommitOutcome::NOT_COMMITTED;
+			}
+			if (status != "in progress" || waited_ms >= MAX_WAIT_MS || attempt >= retry_config.max_retry_count) {
+				return DuckLakeCommitOutcome::UNKNOWN;
+			}
+			auto wait_ms = retry_config.WaitMs(attempt, MAX_WAIT_MS - waited_ms);
+#ifndef DUCKDB_NO_THREADS
+			ThreadUtil::SleepMs(wait_ms, context.get());
+#endif
+			waited_ms += wait_ms;
+		}
+	} catch (std::exception &) { // NOLINT
+		return DuckLakeCommitOutcome::UNKNOWN;
+	}
 }
 
 bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_name) {
