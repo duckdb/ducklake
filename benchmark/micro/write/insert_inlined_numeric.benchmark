@@ -1,0 +1,25 @@
+# name: benchmark/micro/write/insert_inlined_numeric.benchmark
+# description: INSERT of 100K inlined rows of numeric and temporal columns in a transaction that is rolled back
+# group: [write]
+
+name Insert Inlined Numeric
+group micro
+subgroup write
+
+require ducklake
+
+argument work inlined_numeric_work
+
+argument warm_table lake.num
+
+include benchmark/micro/fixtures/inlined_numeric.benchmark.in
+
+run benchmark/micro/queries/insert_inlined_numeric.sql
+
+include benchmark/micro/fixtures/restore_cleanup_warm.benchmark.in
+
+# The run fails when the rows were not inlined, and the rollback leaves the table empty
+result_query I
+SELECT count(*) FROM lake.num
+----
+0

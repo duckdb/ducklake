@@ -164,7 +164,7 @@ struct StatsNumericFallbackOperator {
 	static bool GreaterThan(const LogicalType &type, string_t left, string_t right) {
 		return Value(left).DefaultCastAs(type) > Value(right).DefaultCastAs(type);
 	}
-	static string GetFinalStats(string_t input) {
+	static string GetFinalStats(Vector &input_vec, idx_t row, string_t input) {
 		return input.GetString();
 	}
 };
@@ -176,8 +176,38 @@ struct StatsFallbackOperator {
 	static bool GreaterThan(const LogicalType &type, string_t left, string_t right) {
 		return left > right;
 	}
-	static string GetFinalStats(string_t input) {
+	static string GetFinalStats(Vector &input_vec, idx_t row, string_t input) {
 		return input.GetString();
+	}
+};
+
+//! Compares the values in their own type and only renders the bounds as text
+struct StatsTypedOperator {
+	template <class T>
+	static bool SmallerThan(const LogicalType &type, T left, T right) {
+		return LessThan::Operation(left, right);
+	}
+	template <class T>
+	static bool GreaterThan(const LogicalType &type, T left, T right) {
+		return duckdb::GreaterThan::Operation(left, right);
+	}
+	template <class T>
+	static string GetFinalStats(Vector &input_vec, idx_t row, T input) {
+		return input_vec.GetValue(row).ToString();
+	}
+};
+
+//! Renders the bounds of a BLOB in hexadecimal, as the Parquet writer does
+struct StatsBlobOperator : public StatsFallbackOperator {
+	static string GetFinalStats(Vector &input_vec, idx_t row, string_t input) {
+		auto data = const_data_ptr_cast(input.GetData());
+		string result;
+		result.reserve(input.GetSize() * 2);
+		for (idx_t i = 0; i < input.GetSize(); i++) {
+			result += Blob::HEX_TABLE[data[i] >> 4];
+			result += Blob::HEX_TABLE[data[i] & 0x0F];
+		}
+		return result;
 	}
 };
 
@@ -191,6 +221,8 @@ DuckLakeColumnStats TemplatedUpdateStats(Vector &input_vec, const LogicalType &t
 	DuckLakeColumnStats result(type);
 	result.any_valid = false;
 	result.has_null_count = true;
+	optional_idx min_row;
+	optional_idx max_row;
 	optional_idx min_idx;
 	optional_idx max_idx;
 
@@ -201,27 +233,115 @@ DuckLakeColumnStats TemplatedUpdateStats(Vector &input_vec, const LogicalType &t
 			continue;
 		}
 		auto &val = data[idx];
-		if (!min_idx.IsValid()) {
+		if (!min_idx.IsValid() || OP::SmallerThan(type, val, data[min_idx.GetIndex()])) {
 			min_idx = idx;
-		} else if (OP::SmallerThan(type, val, data[min_idx.GetIndex()])) {
-			min_idx = idx;
+			min_row = i;
 		}
-		if (!max_idx.IsValid()) {
+		if (!max_idx.IsValid() || OP::GreaterThan(type, val, data[max_idx.GetIndex()])) {
 			max_idx = idx;
-		} else if (OP::GreaterThan(type, val, data[max_idx.GetIndex()])) {
-			max_idx = idx;
+			max_row = i;
 		}
 		result.any_valid = true;
 	}
 	if (min_idx.IsValid()) {
 		result.has_min = true;
 		result.has_max = true;
-		result.min = OP::GetFinalStats(data[min_idx.GetIndex()]);
-		result.max = OP::GetFinalStats(data[max_idx.GetIndex()]);
+		result.min = OP::GetFinalStats(input_vec, min_row.GetIndex(), data[min_idx.GetIndex()]);
+		result.max = OP::GetFinalStats(input_vec, max_row.GetIndex(), data[max_idx.GetIndex()]);
 		result.min_is_exact = true;
 		result.max_is_exact = true;
 	}
 	return result;
+}
+
+//! The stats of a type whose physical values sort like its values, or nothing for other types
+static bool TryGetTypedStats(Vector &input_vec, idx_t row_count, DuckLakeColumnStats &result) {
+	auto &type = input_vec.GetType();
+	switch (type.id()) {
+	case LogicalTypeId::BLOB:
+		result = TemplatedUpdateStats<string_t, StatsBlobOperator>(input_vec, type, row_count);
+		return true;
+	case LogicalTypeId::TIME_TZ:
+		result = TemplatedUpdateStats<dtime_tz_t, StatsTypedOperator>(input_vec, type, row_count);
+		return true;
+	case LogicalTypeId::BOOLEAN:
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::HUGEINT:
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+	case LogicalTypeId::UINTEGER:
+	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::UHUGEINT:
+	case LogicalTypeId::FLOAT:
+	case LogicalTypeId::DOUBLE:
+	case LogicalTypeId::DECIMAL:
+	case LogicalTypeId::DATE:
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIME_NS:
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_SEC:
+	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_TZ_NS:
+	case LogicalTypeId::INTERVAL:
+	case LogicalTypeId::VARCHAR:
+		break;
+	default:
+		return false;
+	}
+	switch (type.InternalType()) {
+	case PhysicalType::BOOL:
+		result = TemplatedUpdateStats<bool, StatsTypedOperator>(input_vec, type, row_count);
+		return true;
+	case PhysicalType::INT8:
+		result = TemplatedUpdateStats<int8_t, StatsTypedOperator>(input_vec, type, row_count);
+		return true;
+	case PhysicalType::INT16:
+		result = TemplatedUpdateStats<int16_t, StatsTypedOperator>(input_vec, type, row_count);
+		return true;
+	case PhysicalType::INT32:
+		result = TemplatedUpdateStats<int32_t, StatsTypedOperator>(input_vec, type, row_count);
+		return true;
+	case PhysicalType::INT64:
+		result = TemplatedUpdateStats<int64_t, StatsTypedOperator>(input_vec, type, row_count);
+		return true;
+	case PhysicalType::INT128:
+		result = TemplatedUpdateStats<hugeint_t, StatsTypedOperator>(input_vec, type, row_count);
+		return true;
+	case PhysicalType::UINT8:
+		result = TemplatedUpdateStats<uint8_t, StatsTypedOperator>(input_vec, type, row_count);
+		return true;
+	case PhysicalType::UINT16:
+		result = TemplatedUpdateStats<uint16_t, StatsTypedOperator>(input_vec, type, row_count);
+		return true;
+	case PhysicalType::UINT32:
+		result = TemplatedUpdateStats<uint32_t, StatsTypedOperator>(input_vec, type, row_count);
+		return true;
+	case PhysicalType::UINT64:
+		result = TemplatedUpdateStats<uint64_t, StatsTypedOperator>(input_vec, type, row_count);
+		return true;
+	case PhysicalType::UINT128:
+		result = TemplatedUpdateStats<uhugeint_t, StatsTypedOperator>(input_vec, type, row_count);
+		return true;
+	case PhysicalType::FLOAT:
+		result = TemplatedUpdateStats<float, StatsTypedOperator>(input_vec, type, row_count);
+		return true;
+	case PhysicalType::DOUBLE:
+		result = TemplatedUpdateStats<double, StatsTypedOperator>(input_vec, type, row_count);
+		return true;
+	case PhysicalType::INTERVAL:
+		result = TemplatedUpdateStats<interval_t, StatsTypedOperator>(input_vec, type, row_count);
+		return true;
+	case PhysicalType::VARCHAR:
+		result = TemplatedUpdateStats<string_t, StatsFallbackOperator>(input_vec, type, row_count);
+		return true;
+	default:
+		return false;
+	}
 }
 
 template <class T>
@@ -240,14 +360,15 @@ static bool VectorContainsNaN(Vector &input_vec, idx_t row_count) {
 
 DuckLakeColumnStats GetVectorStats(Vector &input_vec, idx_t row_count) {
 	auto &type = input_vec.GetType();
-	Vector str_vector(LogicalType::VARCHAR, row_count);
-	VectorOperations::DefaultCast(input_vec, str_vector, row_count);
-	// FIXME: we can be more efficient here by templating on other types (numerics...)
 	DuckLakeColumnStats result(type);
-	if (RequiresValueComparison(type)) {
-		result = TemplatedUpdateStats<string_t, StatsNumericFallbackOperator>(str_vector, type, row_count);
-	} else {
-		result = TemplatedUpdateStats<string_t, StatsFallbackOperator>(str_vector, type, row_count);
+	if (!TryGetTypedStats(input_vec, row_count, result)) {
+		Vector str_vector(LogicalType::VARCHAR, row_count);
+		VectorOperations::DefaultCast(input_vec, str_vector, row_count);
+		if (RequiresValueComparison(type)) {
+			result = TemplatedUpdateStats<string_t, StatsNumericFallbackOperator>(str_vector, type, row_count);
+		} else {
+			result = TemplatedUpdateStats<string_t, StatsFallbackOperator>(str_vector, type, row_count);
+		}
 	}
 	if (type.id() == LogicalTypeId::FLOAT) {
 		result.has_contains_nan = true;
