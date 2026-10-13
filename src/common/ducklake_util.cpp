@@ -607,7 +607,7 @@ static string ParseRowGroupSize(ClientContext &, const string &, const Value &va
 }
 
 static string ParseRowGroupSizeBytes(ClientContext &, const string &, const Value &val) {
-	auto row_group_size_bytes = DBConfig::ParseMemoryLimit(val.ToString());
+	auto row_group_size_bytes = DBConfig::ParseMemoryLimitOrMaximum(val.ToString());
 	if (row_group_size_bytes == 0) {
 		throw NotImplementedException("Row group size bytes cannot be 0");
 	}
@@ -615,7 +615,7 @@ static string ParseRowGroupSizeBytes(ClientContext &, const string &, const Valu
 }
 
 static string ParseMemorySize(ClientContext &, const string &, const Value &val) {
-	return to_string(DBConfig::ParseMemoryLimit(val.ToString()));
+	return to_string(DBConfig::ParseMemoryLimitOrMaximum(val.ToString()));
 }
 
 static string ParseBooleanLiteral(ClientContext &, const string &, const Value &val) {
