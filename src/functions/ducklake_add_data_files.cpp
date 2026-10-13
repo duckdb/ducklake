@@ -908,34 +908,46 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFil
 	return result;
 }
 
-//! Whether a number converts to an integer or decimal value without rounding
-static bool NumberConvertsExactly(ClientContext &context, const string &value, const Value &imported) {
-	// compare at the largest scale that holds the number, since no promotion keeps more digits
-	for (idx_t scale = Decimal::MAX_WIDTH_DECIMAL + 1; scale > 0; scale--) {
-		auto wide_type = LogicalType::DECIMAL(Decimal::MAX_WIDTH_DECIMAL, NumericCast<uint8_t>(scale - 1));
-		auto parsed = Value(value).TryCastAs(context, wide_type);
+//! Whether the value equals the hive string parsed with the first of the types that parses it
+static bool EqualsAsFirstParsed(ClientContext &context, const string &value, const Value &imported,
+                                const vector<LogicalType> &types) {
+	for (auto &type : types) {
+		auto parsed = Value(value).TryCastAs(context, type);
 		if (parsed) {
-			auto widened = imported.TryCastAs(context, wide_type);
+			auto widened = imported.TryCastAs(context, type);
 			return widened && *parsed == *widened;
 		}
 	}
-	// spellings a decimal does not parse, such as hexadecimal integers
-	return Value(value).TryCastAs(context, imported.type(), nullptr, true).has_value();
+	return true;
 }
 
-//! The finest type of the family of a temporal type, which a promotion can read a hive value with
-static LogicalType FinestTemporalType(const LogicalType &type) {
+//! Whether a number converts to an integer or decimal value without rounding
+static bool NumberConvertsExactly(ClientContext &context, const string &value, const Value &imported) {
+	// the largest scale that holds the number comes first, since no promotion keeps more digits
+	vector<LogicalType> types;
+	for (idx_t scale = Decimal::MAX_WIDTH_DECIMAL + 1; scale > 0; scale--) {
+		types.push_back(LogicalType::DECIMAL(Decimal::MAX_WIDTH_DECIMAL, NumericCast<uint8_t>(scale - 1)));
+	}
+	// numbers beyond the range of a decimal, and spellings a decimal does not parse such as hexadecimal integers
+	types.push_back(LogicalType::DOUBLE);
+	types.push_back(imported.type());
+	return EqualsAsFirstParsed(context, value, imported, types);
+}
+
+//! The finer types of the family of a temporal type, which a promotion can read a hive value with
+static vector<LogicalType> FinerTemporalTypes(const LogicalType &type) {
 	switch (type.id()) {
-	case LogicalTypeId::TIME:
-		return LogicalType::TIME_NS;
+	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIMESTAMP_SEC:
 	case LogicalTypeId::TIMESTAMP_MS:
 	case LogicalTypeId::TIMESTAMP:
-		return LogicalType::TIMESTAMP_NS;
+		return {LogicalType::TIMESTAMP_NS, LogicalType::TIMESTAMP};
+	case LogicalTypeId::TIME:
+		return {LogicalType::TIME_NS};
 	case LogicalTypeId::TIMESTAMP_TZ:
-		return LogicalType::TIMESTAMP_TZ_NS;
+		return {LogicalType::TIMESTAMP_TZ_NS, LogicalType::TIMESTAMP_TZ};
 	default:
-		return type;
+		return {};
 	}
 }
 
@@ -951,13 +963,7 @@ static void CheckHiveValueIsExact(ClientContext &context, const DuckLakeFieldId 
 	if (type.IsIntegral() || type.id() == LogicalTypeId::DECIMAL) {
 		exact = NumberConvertsExactly(context, value, hive_value);
 	} else if (type.IsTemporal()) {
-		exact = Value(value).TryCastAs(context, type, nullptr, true).has_value();
-		auto finest_type = FinestTemporalType(type);
-		auto parsed = Value(value).TryCastAs(context, finest_type);
-		if (exact && parsed) {
-			auto widened = hive_value.TryCastAs(context, finest_type);
-			exact = widened && *parsed == *widened;
-		}
+		exact = EqualsAsFirstParsed(context, value, hive_value, FinerTemporalTypes(type));
 	} else {
 		return;
 	}
