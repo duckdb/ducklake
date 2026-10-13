@@ -66,3 +66,28 @@ query I
 SELECT count(*) FROM lake.d
 ----
 0
+
+# exponents, hexadecimal integers and digit separators follow the number grammar of DuckDB
+statement ok
+CREATE TABLE lake.n (id INTEGER, p INTEGER);
+
+statement ok
+COPY (SELECT * FROM (VALUES (1, '1e2'), (2, '0x10'), (3, '1_000')) v(id, p)) TO '{DATA_PATH}/add_files_hive_inexact_value_src5' (FORMAT parquet, PARTITION_BY (p));
+
+statement ok
+CALL ducklake_add_data_files('lake', 'n', '{DATA_PATH}/add_files_hive_inexact_value_src5/**/*.parquet', hive_partitioning => true);
+
+query II
+SELECT id, p FROM lake.n ORDER BY id
+----
+1	100
+2	16
+3	1000
+
+statement ok
+COPY (SELECT 4 AS id, '1.0_1' AS p) TO '{DATA_PATH}/add_files_hive_inexact_value_src6' (FORMAT parquet, PARTITION_BY (p));
+
+statement error
+CALL ducklake_add_data_files('lake', 'n', '{DATA_PATH}/add_files_hive_inexact_value_src6/**/*.parquet', hive_partitioning => true);
+----
+does not convert exactly to the column type "INTEGER"

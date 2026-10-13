@@ -907,20 +907,37 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFil
 	return result;
 }
 
-//! The digits after the decimal point, without trailing zeros
-static idx_t FractionDigits(const string &value) {
+//! Whether a number that casts to an integer or decimal type has more fraction digits than the scale
+static bool HasDigitsBeyondScale(const string &value, idx_t scale) {
+	idx_t pos = 0;
+	if (pos < value.size() && (value[pos] == '+' || value[pos] == '-')) {
+		pos++;
+	}
+	if (pos + 1 < value.size() && value[pos] == '0' && StringUtil::CharacterIsAlpha(value[pos + 1])) {
+		// hexadecimal and binary integers
+		return false;
+	}
 	auto point = value.find('.');
-	if (point == string::npos) {
-		return 0;
+	auto exponent_pos = value.find_first_of("eE");
+	int64_t fraction_digits = 0;
+	if (point != string::npos) {
+		auto end = exponent_pos == string::npos ? value.size() : exponent_pos;
+		int64_t digits = 0;
+		for (idx_t i = point + 1; i < end; i++) {
+			if (StringUtil::CharacterIsDigit(value[i])) {
+				digits++;
+				if (value[i] != '0') {
+					fraction_digits = digits;
+				}
+			}
+		}
 	}
-	idx_t end = point + 1;
-	while (end < value.size() && StringUtil::CharacterIsDigit(value[end])) {
-		end++;
+	int64_t exponent = 0;
+	if (exponent_pos != string::npos &&
+	    !TryCast::Operation<string_t, int64_t>(string_t(value.substr(exponent_pos + 1)), exponent, true)) {
+		return true;
 	}
-	while (end > point + 1 && value[end - 1] == '0') {
-		end--;
-	}
-	return end - point - 1;
+	return fraction_digits - exponent > NumericCast<int64_t>(scale);
 }
 
 //! Scans parse a hive value again with the type the column has then, so it must convert exactly
@@ -933,9 +950,9 @@ static void CheckHiveValueIsExact(ClientContext &context, const DuckLakeFieldId 
 	auto value = HivePartitioning::Unescape(hive_string);
 	bool exact;
 	if (type.IsIntegral() || type.id() == LogicalTypeId::DECIMAL) {
-		// casts to these types round the digits beyond the scale, also strict ones
+		// the import rounds the digits beyond the scale
 		auto scale = type.id() == LogicalTypeId::DECIMAL ? DecimalType::GetScale(type) : 0;
-		exact = value.find_first_of("eE") == string::npos && FractionDigits(value) <= scale;
+		exact = !HasDigitsBeyondScale(value, scale);
 	} else if (type.IsTemporal()) {
 		exact = Value(value).TryCastAs(context, type, nullptr, true).has_value();
 	} else {
