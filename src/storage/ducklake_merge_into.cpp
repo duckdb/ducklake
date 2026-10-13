@@ -11,7 +11,6 @@
 
 namespace duckdb {
 
-//! The condition of an action for the rows whose row id compares to the first one of the transaction
 static unique_ptr<Expression> RowIdCondition(LogicalMergeInto &op, ExpressionType comparison,
                                              const unique_ptr<Expression> &condition) {
 	// the barrier keeps the row id comparison in front of the condition, so a volatile condition runs once per row

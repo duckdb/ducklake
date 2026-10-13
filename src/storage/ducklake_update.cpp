@@ -59,17 +59,18 @@ public:
 
 unique_ptr<GlobalOperatorState> DuckLakeUpdate::GetGlobalOperatorState(ClientContext &context) const {
 	auto result = make_uniq<DuckLakeUpdateGlobalState>(context);
-	if (shared_delete) {
-		lock_guard<mutex> guard(shared_delete->lock);
-		auto query = context.transaction.GetActiveQuery();
-		if (shared_delete->query == query) {
-			return std::move(result);
-		}
-		shared_delete->query = query;
-		shared_delete->finalized_count = 0;
+	if (!shared_delete) {
+		// init delete_op sink state
+		delete_op.sink_state = delete_op.GetGlobalSinkState(context);
+		return std::move(result);
 	}
-	// init delete_op sink state
-	delete_op.sink_state = delete_op.GetGlobalSinkState(context);
+	lock_guard<mutex> guard(shared_delete->lock);
+	auto query = context.transaction.GetActiveQuery();
+	if (shared_delete->query != query) {
+		delete_op.sink_state = delete_op.GetGlobalSinkState(context);
+		shared_delete->finalized_count = 0;
+		shared_delete->query = query;
+	}
 	return std::move(result);
 }
 
@@ -239,7 +240,6 @@ unique_ptr<Expression> DuckLakeUpdate::CompareToLocalRowIds(ExpressionType compa
 	                                             DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START))));
 }
 
-//! References to the columns of the plan in front of its row id
 static vector<unique_ptr<Expression>> ColumnsWithoutRowId(PhysicalOperator &plan, idx_t row_id_index) {
 	vector<unique_ptr<Expression>> result;
 	for (idx_t col_idx = 0; col_idx < row_id_index; col_idx++) {
