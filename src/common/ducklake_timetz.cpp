@@ -108,6 +108,8 @@ void DuckLakeTimeTZ::SetBounds(DuckLakeColumnStats &time_stats, const DuckLakeCo
 	auto high = dtime_tz_t(dtime_t(highest + high_offset * SECOND), static_cast<int32_t>(high_offset));
 	time_stats.min = Value::TIMETZ(low).ToString();
 	time_stats.max = Value::TIMETZ(high).ToString();
+	time_stats.min_is_exact = false;
+	time_stats.max_is_exact = false;
 }
 
 } // namespace duckdb

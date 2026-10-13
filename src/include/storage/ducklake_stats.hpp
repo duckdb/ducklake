@@ -73,12 +73,15 @@ struct DuckLakeColumnStats {
 		}
 		return any_valid;
 	}
-	//! Strings can have truncated min/max stats, other types are always exact
+	//! Strings can have truncated min/max stats and TIMETZ files bounds that are not values, other types are exact
 	bool EffectiveMinIsExact() const {
-		return has_min && (min_is_exact || RequiresValueComparison(type));
+		return has_min && (min_is_exact || BoundsAreAlwaysExact());
 	}
 	bool EffectiveMaxIsExact() const {
-		return has_max && (max_is_exact || RequiresValueComparison(type));
+		return has_max && (max_is_exact || BoundsAreAlwaysExact());
+	}
+	bool BoundsAreAlwaysExact() const {
+		return RequiresValueComparison(type) && type.id() != LogicalTypeId::TIME_TZ;
 	}
 
 	unique_ptr<DuckLakeColumnExtraStats> extra_stats;
