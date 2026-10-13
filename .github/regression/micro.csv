@@ -22,6 +22,7 @@ benchmark/micro/write/insert_commits_table_stats.benchmark
 benchmark/micro/write/wide_table_insert_commits.benchmark
 benchmark/micro/write/wide_table_null_first_transaction.benchmark
 benchmark/micro/write/ctas_lineitem.benchmark
+benchmark/micro/write/insert_timetz.benchmark
 benchmark/micro/write/delete_lineitem.benchmark
 benchmark/micro/write/delete_commits_retry.benchmark
 benchmark/micro/write/delete_commits_inlined_retry.benchmark

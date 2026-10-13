@@ -1,0 +1,32 @@
+# name: benchmark/micro/write/insert_timetz.benchmark
+# description: INSERT of TPC-H lineitem SF0.5 (3M rows) with a TIMETZ column of several offsets, and a filter on it
+# group: [write]
+
+name Insert TIMETZ
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+require tpch
+
+argument lake ctas
+
+argument work timetz_work
+
+include benchmark/micro/fixtures/tpch05.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+CREATE TABLE lake.times (k BIGINT, x TIMETZ);
+INSERT INTO lake.times SELECT l_orderkey, timezone(INTERVAL (l_orderkey % 13 - 6) HOUR, (TIME '00:00:00' + INTERVAL (l_orderkey % 86400) SECOND)::TIMETZ) FROM src.lineitem;
+SELECT count(*) AS n FROM lake.times WHERE x > TIMETZ '12:00:00.5+00';
+
+# A missed reset makes the CREATE TABLE fail because lake.times already exists, the filter compares instants
+result_query II
+SELECT n > 0, (SELECT count(*) FROM lake.times) = (SELECT count(*) FROM src.lineitem) FROM __answer
+----
+true	true
