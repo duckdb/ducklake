@@ -17,6 +17,7 @@ benchmark/micro/read/warm_small_queries.benchmark
 benchmark/micro/read/file_pruning_many_files.benchmark
 benchmark/micro/read/big_lake_cold_listing.benchmark
 benchmark/micro/read/big_lake_cold_inlined_reads.benchmark
+benchmark/micro/read/inlined_large_values.benchmark
 benchmark/micro/read/sorted_probes.benchmark
 benchmark/micro/write/insert_commits_inlined.benchmark
 benchmark/micro/write/update_inlined_transaction.benchmark

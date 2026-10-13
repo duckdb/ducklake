@@ -1,0 +1,42 @@
+# name: benchmark/micro/read/inlined_large_values.benchmark
+# description: Read 64 inlined rows of 1 MiB values, which the scan reads in pages that each hold one row
+# group: [read]
+
+name Inlined Large Values
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+cache_file inlined_large_values_ready.marker
+
+load
+@create inlined_large_values
+@attach inlined_large_values AS lake (DATA_PATH '${BENCHMARK_DIR}/inlined_large_values_files', DATA_INLINING_ROW_LIMIT 10)
+CREATE TABLE lake.t (id INTEGER, c VARCHAR);
+INSERT INTO lake.t SELECT i, repeat('A', 1048576) FROM range(0, 8) t(i);
+INSERT INTO lake.t SELECT i, repeat('A', 1048576) FROM range(8, 16) t(i);
+INSERT INTO lake.t SELECT i, repeat('A', 1048576) FROM range(16, 24) t(i);
+INSERT INTO lake.t SELECT i, repeat('A', 1048576) FROM range(24, 32) t(i);
+INSERT INTO lake.t SELECT i, repeat('A', 1048576) FROM range(32, 40) t(i);
+INSERT INTO lake.t SELECT i, repeat('A', 1048576) FROM range(40, 48) t(i);
+INSERT INTO lake.t SELECT i, repeat('A', 1048576) FROM range(48, 56) t(i);
+INSERT INTO lake.t SELECT i, repeat('A', 1048576) FROM range(56, 64) t(i);
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 't')) > 0 THEN error('the rows must be inlined') END;
+DETACH lake;
+@seal inlined_large_values
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/inlined_large_values_ready.marker' (FORMAT CSV);
+@attach inlined_large_values AS lake (READ_ONLY)
+
+reload
+@attach inlined_large_values AS lake (READ_ONLY)
+
+run
+SELECT count(*), sum(length(c)) FROM lake.t;
+
+result_query II
+SELECT * FROM __answer
+----
+64	67108864
