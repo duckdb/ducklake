@@ -1,0 +1,33 @@
+# name: benchmark/micro/write/alter_bigint_to_float.benchmark
+# description: Retype a BIGINT column stored in ~1024 files to FLOAT, whose statistics show that its values stay exact
+# group: [write]
+
+name Alter Bigint To Float
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work bigint_to_float_work
+
+include benchmark/micro/fixtures/float_files.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# Every run starts from the pristine BIGINT column
+assert III
+SELECT (SELECT data_type FROM duckdb_columns() WHERE database_name = 'lake' AND column_name = 'id'),
+(SELECT count(*) FROM lake.events), (SELECT max(snapshot_id) FROM lake.snapshots())
+----
+BIGINT	2097152	2
+
+run
+ALTER TABLE lake.events ALTER COLUMN id TYPE FLOAT;
+
+result_query III
+SELECT (SELECT data_type FROM duckdb_columns() WHERE database_name = 'lake' AND column_name = 'id'),
+(SELECT count(*) FROM lake.events), (SELECT max(snapshot_id) FROM lake.snapshots())
+----
+FLOAT	2097152	3
