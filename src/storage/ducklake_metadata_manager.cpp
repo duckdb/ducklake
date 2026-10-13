@@ -5088,7 +5088,6 @@ FROM read_blob(%s) files
 WHERE (suffix(filename, '.parquet') OR suffix(filename, '.puffin'))
 %s)",
 	                                SQLString::ToString(data_path_glob), filter);
-	SubstituteCatalogPlaceholders(query);
 	auto res = transaction.ExecuteRaw(query);
 	res->ThrowIfError("Failed to get files scheduled for deletion from DuckLake: ");
 	transaction_manager.GetWrittenFiles(written_files);

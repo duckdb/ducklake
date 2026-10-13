@@ -241,8 +241,12 @@ string DuckLakeUtil::PathSeparator(FileSystem &fs, const string &path) {
 }
 
 string DuckLakeUtil::EscapeGlob(const string &path) {
-	string result;
-	for (auto c : path) {
+	// the ? of a Windows extended-length prefix is part of the prefix
+	const string extended_prefix = R"(\\?\)";
+	idx_t start = StringUtil::StartsWith(path, extended_prefix) ? extended_prefix.size() : 0;
+	string result = path.substr(0, start);
+	for (idx_t i = start; i < path.size(); i++) {
+		auto c = path[i];
 		if (c == '*' || c == '?' || c == '[') {
 			// a bracket expression with a single character matches it literally
 			result += '[';

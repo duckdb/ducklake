@@ -12,7 +12,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 test-env DATA_PATH {TEST_DIR}
 
-# each data path matches d=a[1]*?b as a glob pattern unless one of its glob characters is matched literally
+# each sibling matches d=a[1]*?b as a glob pattern when one of its glob characters is not escaped
 foreach n,sibling 1,d=a1xyb 2,d=a[1]zz?b 3,d=a[1]*Qb
 
 statement ok
