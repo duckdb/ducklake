@@ -272,12 +272,23 @@ SELECT count(DISTINCT regexp_extract(message, '"path":"([^"]*)"', 1)) FROM duckd
 statement ok
 ROLLBACK
 
-# files written before the column was FLOAT read as DOUBLE without FLOAT rounding
+# a value that FLOAT rounds would read differently once the column is DOUBLE, so it is refused
 statement ok
 CREATE TABLE dl.n (v INTEGER)
 
 statement ok
 INSERT INTO dl.n VALUES (16777219)
+
+statement error
+ALTER TABLE dl.n ALTER COLUMN v TYPE FLOAT
+----
+FLOAT cannot hold exactly
+
+statement ok
+DELETE FROM dl.n
+
+statement ok
+INSERT INTO dl.n VALUES (16777216)
 
 statement ok
 ALTER TABLE dl.n ALTER COLUMN v TYPE FLOAT
@@ -296,7 +307,7 @@ SELECT count(*) FROM dl.n WHERE v < 16777219.5
 query II
 SELECT min(v), max(v) FROM dl.n
 ----
-0.5	16777219.0
+0.5	16777216.0
 
 # several fields widened in one commit
 statement ok

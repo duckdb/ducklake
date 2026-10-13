@@ -30,6 +30,8 @@ struct TransactionChangeInformation {
 	set<TableIndex> altered_tables_with_schema_version_changes;
 	//! Tables that got a NOT NULL constraint, which a concurrent insert can violate
 	set<TableIndex> tables_set_not_null;
+	//! Tables whose stored values a type change checked, which a concurrent insert can add to
+	set<TableIndex> tables_with_checked_values;
 	set<TableIndex> altered_views;
 	set<TableIndex> dropped_tables;
 	set<TableIndex> dropped_views;

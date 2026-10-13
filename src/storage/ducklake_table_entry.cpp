@@ -15,6 +15,8 @@
 #include "duckdb/storage/table_storage_info.hpp"
 #include "duckdb/function/table_function.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
+#include "duckdb/common/vector/list_vector.hpp"
+#include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/execution/execution_context.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/parallel/thread_context.hpp"
@@ -90,6 +92,200 @@ void VerifyNoNullValues(ClientContext &context, DuckLakeTransaction &transaction
 		if (VectorOperations::HasNull(chunk.data[0])) {
 			throw CatalogException("Cannot SET NOT NULL on column %s - the column has NULL values", col.GetName());
 		}
+	}
+}
+
+//! Whether a promotion reads a stored integer or decimal through FLOAT, which a later promotion to DOUBLE skips
+bool ReadsThroughFloat(const LogicalType &source, const LogicalType &target) {
+	return target.id() == LogicalTypeId::FLOAT && (source.IsIntegral() || source.id() == LogicalTypeId::DECIMAL);
+}
+
+//! Whether a stored value converts to the promoted type, and reads the same after a later promotion
+bool ValueConverts(ClientContext &context, const Value &value, const LogicalType &target) {
+	auto converted = value.TryCastAs(context, target);
+	if (!converted) {
+		return false;
+	}
+	if (!ReadsThroughFloat(value.type(), target)) {
+		return true;
+	}
+	return converted->DefaultCastAs(LogicalType::DOUBLE) == value.DefaultCastAs(LogicalType::DOUBLE);
+}
+
+//! A promoted field whose stored values have to be checked
+struct CheckedField {
+	CheckedField(const DuckLakeFieldId &source, LogicalType target_p, bool can_overflow_p)
+	    : source(source), target(std::move(target_p)), can_overflow(can_overflow_p) {
+	}
+	reference<const DuckLakeFieldId> source;
+	LogicalType target;
+	//! Whether some value of the source type is out of range for the target, so that file bounds can be too
+	bool can_overflow;
+};
+using CheckedFields = map<FieldIndex, CheckedField>;
+
+//! Whether the smallest and the largest value of a type convert, which holds for every value between them
+bool LimitsConvert(const LogicalType &source, const std::function<bool(const Value &)> &converts) {
+	return converts(Value::MinimumValue(source)) && converts(Value::MaximumValue(source));
+}
+
+//! Whether the bounds of a field show that its values convert, a decimal with a scale has inexact values between them
+bool BoundsShowValuesConvert(ClientContext &context, const DuckLakeColumnStats &stats, const CheckedField &field) {
+	auto &source = field.source.get().Type();
+	if (stats.bounds_unknown || !stats.has_min || !stats.has_max) {
+		return false;
+	}
+	if (ReadsThroughFloat(source, field.target) && source.id() == LogicalTypeId::DECIMAL &&
+	    DecimalType::GetScale(source) > 0) {
+		return false;
+	}
+	for (auto &bound : {stats.min, stats.max}) {
+		auto value = TryCastStatsBound(bound, stats.type);
+		if (!value || !ValueConverts(context, *value, field.target)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+optional_ptr<const DuckLakeFieldId> FindChildField(const DuckLakeFieldId &field_id, FieldIndex child_index) {
+	for (auto &child : field_id.Children()) {
+		if (child->GetFieldIndex() == child_index) {
+			return child.get();
+		}
+	}
+	return nullptr;
+}
+
+void CollectCheckedFields(ClientContext &context, const DuckLakeFieldId &source, const DuckLakeFieldId &target,
+                          CheckedFields &result) {
+	if (source.Children().empty()) {
+		auto &source_type = source.Type();
+		auto &target_type = target.Type();
+		if (source_type == target_type || (!source_type.IsNumeric() && !source_type.IsTemporal())) {
+			return;
+		}
+		auto in_range = [&](const Value &value) {
+			return bool(value.TryCastAs(context, target_type));
+		};
+		auto converts = [&](const Value &value) {
+			return ValueConverts(context, value, target_type);
+		};
+		if (!LimitsConvert(source_type, converts)) {
+			result.emplace(source.GetFieldIndex(),
+			               CheckedField(source, target_type, !LimitsConvert(source_type, in_range)));
+		}
+		return;
+	}
+	for (auto &child : source.Children()) {
+		auto target_child = FindChildField(target, child->GetFieldIndex());
+		if (target_child) {
+			CollectCheckedFields(context, *child, *target_child, result);
+		}
+	}
+}
+
+[[noreturn]] void ThrowOutOfRange(const CheckedField &field, const string &value, const char *holder) {
+	auto &source = field.source.get();
+	throw CatalogException("Cannot change type of column %s from %s to %s - %s holds the value %s, which is out of "
+	                       "range for %s",
+	                       source.Name(), source.Type(), field.target, holder, value, field.target);
+}
+
+//! Throws unless the known bounds of the files convert, since filters on the files read them in the new type
+void CheckFileBounds(ClientContext &context, const CheckedField &field, const Value &min_value,
+                     const Value &max_value) {
+	for (auto &bound : {min_value, max_value}) {
+		if (bound.IsNull()) {
+			continue;
+		}
+		auto value = TryCastStatsBound(StringValue::Get(bound), field.source.get().Type());
+		if (!value || !value->TryCastAs(context, field.target)) {
+			ThrowOutOfRange(field, StringValue::Get(bound), "a data file of the column");
+		}
+	}
+}
+
+void CheckLeafValues(ClientContext &context, const CheckedField &field, Vector &values, idx_t count) {
+	auto &source = field.source.get();
+	auto &target = field.target;
+	Vector converted(target, count);
+	string error;
+	if (VectorOperations::TryCast(context, values, converted, count, &error)) {
+		if (!ReadsThroughFloat(source.Type(), target)) {
+			return;
+		}
+		Vector direct(LogicalType::DOUBLE, count);
+		Vector through_float(LogicalType::DOUBLE, count);
+		VectorOperations::Cast(context, values, direct, count);
+		VectorOperations::Cast(context, converted, through_float, count);
+		direct.Flatten();
+		through_float.Flatten();
+		auto direct_data = FlatVector::GetData<double>(direct);
+		auto through_float_data = FlatVector::GetData<double>(through_float);
+		auto &validity = FlatVector::Validity(direct);
+		bool same = true;
+		for (idx_t i = 0; i < count && same; i++) {
+			same = !validity.RowIsValid(i) || direct_data[i] == through_float_data[i];
+		}
+		if (same) {
+			return;
+		}
+	}
+	for (idx_t i = 0; i < count; i++) {
+		auto value = values.GetValue(i);
+		if (value.IsNull() || ValueConverts(context, value, target)) {
+			continue;
+		}
+		if (!value.TryCastAs(context, target)) {
+			ThrowOutOfRange(field, value.ToString(), "the column");
+		}
+		throw CatalogException("Cannot change type of column %s from %s to %s - the column holds the value %s, which "
+		                       "%s cannot hold exactly",
+		                       source.Name(), source.Type(), target, value.ToString(), target);
+	}
+}
+
+//! Throws unless the stored values of the checked fields convert to their promoted types
+void CheckStoredValues(ClientContext &context, Vector &values, idx_t count, const DuckLakeFieldId &source,
+                       const DuckLakeFieldId &target, const CheckedFields &checked_fields) {
+	if (count == 0) {
+		return;
+	}
+	if (source.Children().empty()) {
+		auto field = checked_fields.find(source.GetFieldIndex());
+		if (field != checked_fields.end()) {
+			CheckLeafValues(context, field->second, values, count);
+		}
+		return;
+	}
+	values.Flatten();
+	auto &children = source.Children();
+	switch (source.Type().id()) {
+	case LogicalTypeId::STRUCT: {
+		auto &entries = StructVector::GetEntries(values);
+		for (idx_t i = 0; i < children.size(); i++) {
+			auto target_child = FindChildField(target, children[i]->GetFieldIndex());
+			if (target_child) {
+				CheckStoredValues(context, entries[i], count, *children[i], *target_child, checked_fields);
+			}
+		}
+		break;
+	}
+	case LogicalTypeId::LIST:
+		CheckStoredValues(context, ListVector::GetChildMutable(values), ListVector::GetListSize(values), *children[0],
+		                  *target.Children()[0], checked_fields);
+		break;
+	case LogicalTypeId::MAP: {
+		auto &entries = StructVector::GetEntries(ListVector::GetChildMutable(values));
+		auto entry_count = ListVector::GetListSize(values);
+		for (idx_t i = 0; i < children.size(); i++) {
+			CheckStoredValues(context, entries[i], entry_count, *children[i], *target.Children()[i], checked_fields);
+		}
+		break;
+	}
+	default:
+		break;
 	}
 }
 
@@ -1085,7 +1281,64 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 	return make_uniq<DuckLakeFieldId>(std::move(column_data), source_id.Name(), target);
 }
 
-unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &transaction, ChangeColumnTypeInfo &info) {
+bool DuckLakeTableEntry::CheckPromotedValues(ClientContext &context, DuckLakeTransaction &transaction,
+                                             const ColumnDefinition &col, const DuckLakeFieldId &source,
+                                             const DuckLakeFieldId &target) {
+	CheckedFields checked_fields;
+	CollectCheckedFields(context, source, target, checked_fields);
+	if (checked_fields.empty()) {
+		return false;
+	}
+	auto stats = GetTableStats(transaction);
+	for (auto it = checked_fields.begin(); stats && it != checked_fields.end();) {
+		auto column_stats = stats->column_stats.find(it->first);
+		if (column_stats != stats->column_stats.end() &&
+		    BoundsShowValuesConvert(context, column_stats->second, it->second)) {
+			it = checked_fields.erase(it);
+		} else {
+			++it;
+		}
+	}
+	if (checked_fields.empty()) {
+		return true;
+	}
+	::duckdb::set<FieldIndex> bounded_fields;
+	for (auto &entry : checked_fields) {
+		if (entry.second.can_overflow) {
+			bounded_fields.insert(entry.first);
+		}
+	}
+	if (!bounded_fields.empty()) {
+		if (!IsTransactionLocal()) {
+			auto &metadata_manager = transaction.GetMetadataManager();
+			for (auto &bounds :
+			     metadata_manager.GetLiveFileBounds(GetTableId(), bounded_fields, transaction.GetSnapshot())) {
+				CheckFileBounds(context, checked_fields.at(bounds.column_id), bounds.min_value, bounds.max_value);
+			}
+		}
+		for (auto &file : transaction.GetTransactionLocalFiles(GetTableId())) {
+			for (auto &field_index : bounded_fields) {
+				auto file_stats = file.column_stats.find(field_index);
+				if (file_stats == file.column_stats.end()) {
+					continue;
+				}
+				auto &bounds = file_stats->second;
+				CheckFileBounds(context, checked_fields.at(field_index), bounds.has_min ? Value(bounds.min) : Value(),
+				                bounds.has_max ? Value(bounds.max) : Value());
+			}
+		}
+	}
+	DuckLakeColumnScan scan(context, transaction, *this, col);
+	DataChunk chunk;
+	chunk.Initialize(context, {col.Type()});
+	while (scan.Scan(context, chunk)) {
+		CheckStoredValues(context, chunk.data[0], chunk.size(), source, target, checked_fields);
+	}
+	return true;
+}
+
+unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
+                                                        ChangeColumnTypeInfo &info) {
 	if (info.column_path.size() > 1) {
 		throw NotImplementedException("Changing the type of a nested field is not yet supported");
 	}
@@ -1102,6 +1355,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	}
 	auto new_field_id = TypePromotion(field_id, info.target_type, *change_info, optional_idx());
 	ValidateAddedFieldsCanSkipStats(field_id, *new_field_id);
+	auto checked_values = CheckPromotedValues(context, transaction, col, field_id, *new_field_id);
 	col.SetType(new_field_id->Type());
 	auto new_default = new_field_id->GetDefault();
 	if (new_default) {
@@ -1110,7 +1364,9 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 	table_info.columns.SetAllowDuplicates(false);
 
 	auto new_field_ids = DuckLakeFieldData::ReplaceRootField(*field_data, col.Physical(), std::move(new_field_id));
-	return AlterColumnType(transaction, table_info, std::move(change_info), std::move(new_field_ids));
+	auto result = AlterColumnType(transaction, table_info, std::move(change_info), std::move(new_field_ids));
+	result->Cast<DuckLakeTableEntry>().local_change.checked_values = checked_values;
+	return result;
 }
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterColumnType(DuckLakeTransaction &transaction, CreateTableInfo &info,
@@ -1447,7 +1703,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(ClientContext &context, DuckL
 	case AlterTableType::REMOVE_COLUMN:
 		return AlterTable(transaction, info.Cast<RemoveColumnInfo>());
 	case AlterTableType::ALTER_COLUMN_TYPE:
-		return AlterTable(transaction, info.Cast<ChangeColumnTypeInfo>());
+		return AlterTable(context, transaction, info.Cast<ChangeColumnTypeInfo>());
 	case AlterTableType::ADD_FIELD:
 		return AlterTable(transaction, info.Cast<AddFieldInfo>());
 	case AlterTableType::REMOVE_FIELD:

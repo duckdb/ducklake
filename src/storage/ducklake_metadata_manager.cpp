@@ -865,6 +865,29 @@ idx_t DuckLakeMetadataManager::GetNetDataFileRowCount(TableIndex table_id, DuckL
 	return 0;
 }
 
+vector<DuckLakeFileColumnBounds> DuckLakeMetadataManager::GetLiveFileBounds(TableIndex table_id,
+                                                                            const set<FieldIndex> &column_ids,
+                                                                            DuckLakeSnapshot snapshot) {
+	auto query = StringUtil::Format(R"(
+SELECT DISTINCT s.column_id, s.min_value, s.max_value
+FROM {METADATA_CATALOG}.ducklake_file_column_stats s
+JOIN {METADATA_CATALOG}.ducklake_data_file f ON f.data_file_id = s.data_file_id
+WHERE s.table_id = %d AND s.column_id IN (%s) AND (s.min_value IS NOT NULL OR s.max_value IS NOT NULL)
+  AND {SNAPSHOT_ID} >= f.begin_snapshot AND ({SNAPSHOT_ID} < f.end_snapshot OR f.end_snapshot IS NULL))",
+	                                table_id.index, GenerateIDList(column_ids));
+	auto result = Query(snapshot, query);
+	result->ThrowIfError("Failed to get the file statistics of a table from DuckLake: ");
+	vector<DuckLakeFileColumnBounds> bounds;
+	for (auto &row : *result) {
+		DuckLakeFileColumnBounds entry;
+		entry.column_id = FieldIndex(row.GetValue<idx_t>(0));
+		entry.min_value = row.IsNull(1) ? Value() : Value(row.GetValue<string>(1));
+		entry.max_value = row.IsNull(2) ? Value() : Value(row.GetValue<string>(2));
+		bounds.push_back(std::move(entry));
+	}
+	return bounds;
+}
+
 optional_idx DuckLakeMetadataManager::GetNetDataFileRowCountForStats(TableIndex table_id, DuckLakeSnapshot snapshot) {
 	auto query = GetNetDataFileRowCountSql(table_id, GetInlinedDeletionTableName(table_id, snapshot), true);
 	auto result = Query(snapshot, query);

@@ -209,7 +209,11 @@ private:
 	                                    RenameColumnInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(ClientContext &context, DuckLakeTransaction &transaction, AddColumnInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RemoveColumnInfo &info);
-	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, ChangeColumnTypeInfo &info);
+	unique_ptr<CatalogEntry> AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
+	                                    ChangeColumnTypeInfo &info);
+	//! Throws unless the stored values of the promoted fields convert, returns whether any had to be checked
+	bool CheckPromotedValues(ClientContext &context, DuckLakeTransaction &transaction, const ColumnDefinition &col,
+	                         const DuckLakeFieldId &source, const DuckLakeFieldId &target);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, AddFieldInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RemoveFieldInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RenameFieldInfo &info);

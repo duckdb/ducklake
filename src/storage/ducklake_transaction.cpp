@@ -943,6 +943,9 @@ void GetTransactionTableChanges(reference<CatalogEntry> table_entry, Transaction
 				if (table.GetLocalChange().type == LocalChangeType::SET_NULL) {
 					changes.tables_set_not_null.insert(table_id);
 				}
+				if (table.GetLocalChange().checked_values) {
+					changes.tables_with_checked_values.insert(table_id);
+				}
 			}
 			break;
 		}

@@ -40,6 +40,8 @@ struct LocalChange {
 	FieldIndex field_index;
 	//! For SET_COLUMN_COMMENT on views
 	string view_column_comment_name;
+	//! For CHANGE_COLUMN_TYPE, whether the stored values were checked to convert
+	bool checked_values = false;
 
 	static LocalChange SetColumnComment(FieldIndex field_idx) {
 		LocalChange result(LocalChangeType::SET_COLUMN_COMMENT);
