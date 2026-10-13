@@ -104,6 +104,12 @@
       "paths": [
         "test/sql/issues/issue_1146_column_insert_batches.test"
       ]
+    },
+    {
+      "reason": "Postgres has no TIME_NS type for the column of an inlined data table, so creating the table fails",
+      "paths": [
+        "test/sql/data_inlining/inlined_stats_typed_bounds_ns.test"
+      ]
     }
   ]
 }

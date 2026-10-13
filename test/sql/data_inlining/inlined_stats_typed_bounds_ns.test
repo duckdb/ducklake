@@ -1,0 +1,29 @@
+# name: test/sql/data_inlining/inlined_stats_typed_bounds_ns.test
+# description: the bounds of inlined rows of the nanosecond time types
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/inlined_stats_typed_bounds_ns', DATA_INLINING_ROW_LIMIT 1000)
+
+statement ok
+CREATE TABLE lake.t (tn TIME_NS, tzn TIMESTAMPTZ_NS);
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 1000, table_name => 't')
+
+statement ok
+INSERT INTO lake.t VALUES (TIME_NS '23:59:59.999999999', TIMESTAMPTZ_NS '2262-04-11 00:00:00.123456789+00'), (TIME_NS '00:00:00', TIMESTAMPTZ_NS '1677-09-22 00:00:00+00'), (NULL, NULL);
+
+query III
+SELECT c.column_name, s.min_value, s.max_value FROM __ducklake_metadata_lake.ducklake_table_column_stats s JOIN __ducklake_metadata_lake.ducklake_column c ON c.column_id = s.column_id AND c.table_id = s.table_id ORDER BY s.column_id
+----
+tn	00:00:00	23:59:59.999999999
+tzn	1677-09-22 00:00:00+00	2262-04-11 00:00:00.123456789+00

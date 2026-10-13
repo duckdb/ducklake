@@ -233,7 +233,8 @@ DuckLakeColumnStats TemplatedUpdateStats(Vector &input_vec, const LogicalType &t
 		result.has_min = true;
 		result.has_max = true;
 		result.min = OP::GetFinalStats(input_vec, min_row.GetIndex(), data[min_idx.GetIndex()]);
-		result.max = OP::GetFinalStats(input_vec, max_row.GetIndex(), data[max_idx.GetIndex()]);
+		result.max = min_row == max_row ? result.min
+		                                : OP::GetFinalStats(input_vec, max_row.GetIndex(), data[max_idx.GetIndex()]);
 		result.min_is_exact = true;
 		result.max_is_exact = true;
 	}
@@ -243,33 +244,8 @@ DuckLakeColumnStats TemplatedUpdateStats(Vector &input_vec, const LogicalType &t
 //! The stats of a type whose physical values sort like its values, or nothing for other types
 static bool TryGetTypedStats(Vector &input_vec, idx_t row_count, DuckLakeColumnStats &result) {
 	auto &type = input_vec.GetType();
-	switch (type.id()) {
-	case LogicalTypeId::BOOLEAN:
-	case LogicalTypeId::TINYINT:
-	case LogicalTypeId::SMALLINT:
-	case LogicalTypeId::INTEGER:
-	case LogicalTypeId::BIGINT:
-	case LogicalTypeId::HUGEINT:
-	case LogicalTypeId::UTINYINT:
-	case LogicalTypeId::USMALLINT:
-	case LogicalTypeId::UINTEGER:
-	case LogicalTypeId::UBIGINT:
-	case LogicalTypeId::UHUGEINT:
-	case LogicalTypeId::FLOAT:
-	case LogicalTypeId::DOUBLE:
-	case LogicalTypeId::DECIMAL:
-	case LogicalTypeId::DATE:
-	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIME_NS:
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	case LogicalTypeId::VARCHAR:
-		break;
-	default:
+	if (type.id() != LogicalTypeId::VARCHAR &&
+	    (!RequiresValueComparison(type) || type.id() == LogicalTypeId::TIME_TZ)) {
 		return false;
 	}
 	switch (type.InternalType()) {
