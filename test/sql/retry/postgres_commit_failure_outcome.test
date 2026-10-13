@@ -74,6 +74,45 @@ SELECT count(*) FROM glob('{DATA_PATH}/commit_failure_outcome/**/*.parquet')
 ----
 0
 
+# a status check that gets no connection leaves the outcome unknown, so the file stays
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO lake.t VALUES (1)
+
+# the only connection the pool allows stays with another transaction
+statement ok con2
+BEGIN
+
+statement ok con2
+SELECT count(*) FROM lake.t
+
+statement ok
+FROM postgres_configure_pool(catalog_name := '__ducklake_metadata_lake', acquire_mode := 'try', max_connections := 1)
+
+statement error con1
+COMMIT
+----
+<REGEX>:.*it may have been committed and its files are kept.*connection.*
+
+statement ok con2
+ROLLBACK
+
+statement ok
+FROM postgres_configure_pool(catalog_name := '__ducklake_metadata_lake', acquire_mode := 'force')
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/commit_failure_outcome/**/*.parquet')
+----
+1
+
+# orphan cleanup keeps the file while the catalog is attached, the snapshot can still become visible
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('lake', cleanup_all => true)
+----
+0
+
 statement ok
 CALL postgres_execute('pg', 'DROP TRIGGER refuse_commit ON commit_failure_outcome.ducklake_data_file')
 
@@ -103,11 +142,18 @@ SELECT * FROM lake.t
 ----
 2
 
-# the removed files leave nothing for orphan cleanup
+# after attaching again the file of the commit that did not happen is an orphan
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS lake
+(DATA_PATH '{DATA_PATH}/commit_failure_outcome', METADATA_SCHEMA 'commit_failure_outcome')
+
 query I
 SELECT count(*) FROM ducklake_delete_orphaned_files('lake', cleanup_all => true)
 ----
-0
+1
 
 statement ok
 DETACH lake
