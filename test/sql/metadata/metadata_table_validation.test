@@ -174,7 +174,7 @@ DETACH meta
 statement error
 ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_5.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
 ----
-ducklake_schema_versions does not exist
+the metadata catalog has no table "ducklake_schema_versions"
 
 # a missing version
 statement ok

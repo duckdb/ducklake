@@ -1,0 +1,82 @@
+# name: benchmark/micro/read/reattach_lake.benchmark
+# description: Detach and attach a lake with 510 tables 20 times, and read one table after each attach
+# group: [read]
+
+name Reattach Lake
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+argument work reattach_lake_work
+
+include benchmark/micro/fixtures/commit.benchmark.in
+
+run
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+DETACH lake;
+@attach ${work} AS lake
+SELECT count(*) FROM lake.main.ins_0;
+
+result_query I
+SELECT * FROM __answer
+----
+0

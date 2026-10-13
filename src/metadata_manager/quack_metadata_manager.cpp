@@ -31,10 +31,41 @@ unique_ptr<QueryResult> QuackMetadataManager::Query(string &query) {
 	return result;
 }
 
-string QuackMetadataManager::QualifiedMetadataTableName(const string &table_name) {
-	// the server runs the queries in the metadata database itself
-	return SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()) + "." +
-	       SQLQuotedIdentifier::ToString(table_name);
+map<string, vector<pair<string, string>>>
+QuackMetadataManager::GetMetadataTableColumns(const vector<string> &table_names) {
+	// the catalog lives on the server, which runs the queries in the metadata database
+	auto schema_name = transaction.GetCatalog().MetadataSchemaName().GetIdentifierName();
+	auto tables = Query(StringUtil::Format(
+	    "SELECT table_name FROM duckdb_tables() WHERE database_name = current_database() AND schema_name = %s",
+	    SQLString(schema_name)));
+	tables->ThrowIfError("Failed to list the DuckLake metadata tables: ");
+	unordered_set<string> existing_tables;
+	for (auto &row : *tables) {
+		existing_tables.insert(row.GetValue<string>(0));
+	}
+	string query;
+	for (auto &table_name : table_names) {
+		if (!existing_tables.count(table_name)) {
+			continue;
+		}
+		if (!query.empty()) {
+			query += " UNION ALL ";
+		}
+		auto qualified_name =
+		    SQLQuotedIdentifier::ToString(schema_name) + "." + SQLQuotedIdentifier::ToString(table_name);
+		query += StringUtil::Format("SELECT %s, cid, name, type FROM pragma_table_info(%s)", SQLString(table_name),
+		                            SQLString(qualified_name));
+	}
+	map<string, vector<pair<string, string>>> result;
+	if (query.empty()) {
+		return result;
+	}
+	auto columns = Query(query + " ORDER BY 1, 2");
+	columns->ThrowIfError("Failed to read the columns of the DuckLake metadata tables: ");
+	for (auto &row : *columns) {
+		result[row.GetValue<string>(0)].emplace_back(row.GetValue<string>(2), row.GetValue<string>(3));
+	}
+	return result;
 }
 
 unique_ptr<QueryResult> QuackMetadataManager::AttachMetadata(const string &attach_query) {

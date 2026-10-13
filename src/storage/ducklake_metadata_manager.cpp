@@ -27,6 +27,7 @@
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "storage/ducklake_partition_data.hpp"
+#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/parsed_data/create_table_info.hpp"
 #include "duckdb/parser/statement/create_statement.hpp"
@@ -490,47 +491,49 @@ static bool IsV1_1Dev1Addition(const string &table, const string &column) {
 	return false;
 }
 
-string DuckLakeMetadataManager::QualifiedMetadataTableName(const string &table_name) {
+map<string, vector<pair<string, string>>>
+DuckLakeMetadataManager::GetMetadataTableColumns(const vector<string> &table_names) {
+	auto &context = *transaction.GetConnection().context;
 	auto &catalog = transaction.GetCatalog();
-	return SQLQuotedIdentifier::ToString(catalog.MetadataDatabaseName()) + "." +
-	       SQLQuotedIdentifier::ToString(catalog.MetadataSchemaName()) + "." +
-	       SQLQuotedIdentifier::ToString(table_name);
+	map<string, vector<pair<string, string>>> result;
+	for (auto &table_name : table_names) {
+		QualifiedName name(Identifier(catalog.MetadataDatabaseName()), catalog.MetadataSchemaName(),
+		                   Identifier(table_name));
+		auto table = Catalog::GetEntry<TableCatalogEntry>(context, name, OnEntryNotFound::RETURN_NULL);
+		if (!table) {
+			continue;
+		}
+		auto &columns = result[table_name];
+		for (auto &column : table->GetColumns().Logical()) {
+			columns.emplace_back(column.Name().GetIdentifierName(), column.Type().ToString());
+		}
+	}
+	return result;
 }
 
 void DuckLakeMetadataManager::ValidateMetadataTables(bool allow_missing_v1_1_dev1_additions) {
 	auto parser = Parser::GetBuiltinParser();
 	parser.ParseQuery(StringUtil::Replace(GetCreateTableStatements(), "{METADATA_CATALOG}.", ""));
-	map<string, reference<const ColumnList>> expected_tables;
-	string query;
+	vector<string> table_names;
+	for (auto &statement : parser.statements) {
+		table_names.push_back(
+		    statement->Cast<CreateStatement>().info->Cast<CreateTableInfo>().GetTableName().GetIdentifierName());
+	}
+	auto actual_tables = GetMetadataTableColumns(table_names);
 	for (auto &statement : parser.statements) {
 		auto &info = statement->Cast<CreateStatement>().info->Cast<CreateTableInfo>();
 		auto table_name = info.GetTableName().GetIdentifierName();
-		expected_tables.emplace(table_name, info.columns);
-		if (allow_missing_v1_1_dev1_additions && table_name == "ducklake_view_column_tag" &&
-		    Query("SELECT 1 FROM {METADATA_CATALOG}.ducklake_view_column_tag LIMIT 0")->HasError()) {
-			continue;
+		auto entry = actual_tables.find(table_name);
+		if (entry == actual_tables.end()) {
+			if (allow_missing_v1_1_dev1_additions && table_name == "ducklake_view_column_tag") {
+				continue;
+			}
+			throw InvalidInputException("Failed to load DuckLake: the metadata catalog has no table \"%s\"",
+			                            table_name);
 		}
-		if (!query.empty()) {
-			query += " UNION ALL ";
-		}
-		query += StringUtil::Format("SELECT %s, cid, name, type FROM pragma_table_info(%s)", SQLString(table_name),
-		                            SQLString(QualifiedMetadataTableName(table_name)));
-	}
-	auto result = Query(query + " ORDER BY 1, 2");
-	if (result->HasError()) {
-		throw InvalidInputException("Failed to load DuckLake: the metadata catalog is not a DuckLake %s catalog: %s",
-		                            GetVersionString(), result->GetError());
-	}
-	map<string, vector<pair<string, string>>> actual_tables;
-	for (auto &row : *result) {
-		actual_tables[row.GetValue<string>(0)].emplace_back(row.GetValue<string>(2), row.GetValue<string>(3));
-	}
-	for (auto &entry : actual_tables) {
-		auto &table_name = entry.first;
-		auto &actual_columns = entry.second;
-		auto &expected_columns = expected_tables.find(table_name)->second.get();
+		auto &actual_columns = entry->second;
 		idx_t column_idx = 0;
-		for (auto &expected : expected_columns.Logical()) {
+		for (auto &expected : info.columns.Logical()) {
 			auto expected_name = expected.Name().GetIdentifierName();
 			auto expected_type = StoredMetadataType(UnboundType::TryDefaultBind(expected.Type())).ToString();
 			if (column_idx >= actual_columns.size()) {
