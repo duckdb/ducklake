@@ -332,3 +332,19 @@ statement error
 ALTER TABLE ducklake.huge ALTER b SET DATA TYPE FLOAT;
 ----
 holds the value 1152921504606846977, which FLOAT cannot hold exactly
+
+# a decimal of a large scale that FLOAT holds exactly
+statement ok
+CREATE TABLE ducklake.scaled (d DECIMAL(38,37));
+
+statement ok
+INSERT INTO ducklake.scaled VALUES (0.5), (-0.25);
+
+statement ok
+ALTER TABLE ducklake.scaled ALTER d SET DATA TYPE FLOAT;
+
+query I
+SELECT d FROM ducklake.scaled ORDER BY d
+----
+-0.25
+0.5

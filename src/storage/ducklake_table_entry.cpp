@@ -100,6 +100,9 @@ bool ReadsThroughFloat(const LogicalType &source, const LogicalType &target) {
 	return target.id() == LogicalTypeId::FLOAT && (source.IsIntegral() || source.id() == LogicalTypeId::DECIMAL);
 }
 
+//! Every integer up to this magnitude is exact in FLOAT
+constexpr double FLOAT_EXACT_LIMIT = 16777216.0;
+
 //! Whether a stored value converts to the promoted type, and reads the same after a later promotion
 bool ValueConverts(ClientContext &context, const Value &value, const LogicalType &target) {
 	auto converted = value.TryCastAs(context, target);
@@ -109,10 +112,16 @@ bool ValueConverts(ClientContext &context, const Value &value, const LogicalType
 	if (!ReadsThroughFloat(value.type(), target)) {
 		return true;
 	}
-	// a wide value can round to the same DOUBLE, and a small fraction to the same decimal
+	auto as_double = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+	if (converted->DefaultCastAs(LogicalType::DOUBLE).GetValue<double>() != as_double) {
+		return false;
+	}
+	if (value.type().id() == LogicalTypeId::DECIMAL && std::fabs(as_double) <= FLOAT_EXACT_LIMIT) {
+		return true;
+	}
+	// values beyond 2^24 can round to the same DOUBLE without being equal
 	auto back = converted->TryCastAs(context, value.type());
-	return back && *back == value &&
-	       converted->DefaultCastAs(LogicalType::DOUBLE) == value.DefaultCastAs(LogicalType::DOUBLE);
+	return back && *back == value;
 }
 
 //! Whether a value is an infinity, which converts while the values next to it may not
@@ -137,7 +146,6 @@ bool FloatHoldsValuesBetween(const LogicalType &source, const Value &min, const 
 	if (source.id() == LogicalTypeId::DECIMAL && DecimalType::GetScale(source) > 0) {
 		return false;
 	}
-	static constexpr double FLOAT_EXACT_LIMIT = 16777216.0;
 	for (auto &bound : {min, max}) {
 		if (std::fabs(bound.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>()) > FLOAT_EXACT_LIMIT) {
 			return false;
@@ -219,19 +227,30 @@ void CheckFileBounds(ClientContext &context, const CheckedField &field, const Va
 	}
 }
 
-//! Whether FLOAT values read back as the stored values, both in their own type and as DOUBLE
+//! Whether FLOAT values read back as the stored values, the same rules as ValueConverts for a whole vector
 bool ReadsBackExactly(ClientContext &context, Vector &values, Vector &converted, idx_t count) {
-	Vector back(values.GetType(), count);
-	string error;
-	if (!VectorOperations::TryCast(context, converted, back, count, &error) ||
-	    VectorOperations::NotDistinctFrom(values, back, nullptr, count, nullptr, nullptr) != count) {
-		return false;
-	}
 	Vector direct(LogicalType::DOUBLE, count);
 	Vector through_float(LogicalType::DOUBLE, count);
 	VectorOperations::Cast(context, values, direct, count);
 	VectorOperations::Cast(context, converted, through_float, count);
-	return VectorOperations::NotDistinctFrom(direct, through_float, nullptr, count, nullptr, nullptr) == count;
+	if (VectorOperations::NotDistinctFrom(direct, through_float, nullptr, count, nullptr, nullptr) != count) {
+		return false;
+	}
+	if (values.GetType().id() == LogicalTypeId::DECIMAL) {
+		direct.Flatten();
+		auto data = FlatVector::GetData<double>(direct);
+		auto &validity = FlatVector::Validity(direct);
+		for (idx_t i = 0; i < count; i++) {
+			if (validity.RowIsValid(i) && std::fabs(data[i]) > FLOAT_EXACT_LIMIT) {
+				return false;
+			}
+		}
+		return true;
+	}
+	Vector back(values.GetType(), count);
+	string error;
+	return VectorOperations::TryCast(context, converted, back, count, &error) &&
+	       VectorOperations::NotDistinctFrom(values, back, nullptr, count, nullptr, nullptr) == count;
 }
 
 void CheckLeafValues(ClientContext &context, const CheckedField &field, Vector &values, idx_t count) {
@@ -285,10 +304,20 @@ void CheckStoredValues(ClientContext &context, Vector &values, idx_t count, cons
 	}
 	case LogicalTypeId::LIST:
 	case LogicalTypeId::MAP: {
-		// the child vector also holds the entries of rows the scan filtered out
-		auto child_count = ListVector::GetConsecutiveChildListInfo(values, 0, count).child_list_info.length;
+		// the child vector also holds the entries of rows the scan filtered out, and rows can share entries
+		auto entries_data = FlatVector::GetData<list_entry_t>(values);
+		auto &validity = FlatVector::Validity(values);
+		idx_t child_count = 0;
+		for (idx_t i = 0; i < count; i++) {
+			child_count += validity.RowIsValid(i) ? entries_data[i].length : 0;
+		}
 		SelectionVector child_sel(child_count);
-		ListVector::GetConsecutiveChildSelVector(values, child_sel, 0, count);
+		idx_t child_idx = 0;
+		for (idx_t i = 0; i < count; i++) {
+			for (idx_t k = 0; validity.RowIsValid(i) && k < entries_data[i].length; k++) {
+				child_sel.set_index(child_idx++, entries_data[i].offset + k);
+			}
+		}
 		Vector child(Vector::Ref(ListVector::GetChildMutable(values)));
 		child.Slice(child_sel, child_count);
 		if (source.Type().id() == LogicalTypeId::LIST) {
