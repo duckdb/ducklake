@@ -109,7 +109,15 @@ bool ValueConverts(ClientContext &context, const Value &value, const LogicalType
 	if (!ReadsThroughFloat(value.type(), target)) {
 		return true;
 	}
-	return converted->DefaultCastAs(LogicalType::DOUBLE) == value.DefaultCastAs(LogicalType::DOUBLE);
+	// a wide value can round to the same DOUBLE, and a small fraction to the same decimal
+	auto back = converted->TryCastAs(context, value.type());
+	return back && *back == value &&
+	       converted->DefaultCastAs(LogicalType::DOUBLE) == value.DefaultCastAs(LogicalType::DOUBLE);
+}
+
+//! Whether a value is an infinity, which converts while the values next to it may not
+bool IsInfinite(const Value &value) {
+	return value < Value::MinimumValue(value.type()) || value > Value::MaximumValue(value.type());
 }
 
 //! A promoted field whose stored values have to be checked
@@ -141,7 +149,7 @@ bool FloatHoldsValuesBetween(const LogicalType &source, const Value &min, const 
 //! Whether every value between two bounds converts, which holds when the bounds do
 bool ValuesBetweenConvert(ClientContext &context, const LogicalType &source, const Value &min, const Value &max,
                           const LogicalType &target) {
-	if (!min.TryCastAs(context, target) || !max.TryCastAs(context, target)) {
+	if (IsInfinite(min) || IsInfinite(max) || !min.TryCastAs(context, target) || !max.TryCastAs(context, target)) {
 		return false;
 	}
 	return !ReadsThroughFloat(source, target) || FloatHoldsValuesBetween(source, min, max);
@@ -211,31 +219,29 @@ void CheckFileBounds(ClientContext &context, const CheckedField &field, const Va
 	}
 }
 
+//! Whether FLOAT values read back as the stored values, both in their own type and as DOUBLE
+bool ReadsBackExactly(ClientContext &context, Vector &values, Vector &converted, idx_t count) {
+	Vector back(values.GetType(), count);
+	string error;
+	if (!VectorOperations::TryCast(context, converted, back, count, &error) ||
+	    VectorOperations::NotDistinctFrom(values, back, nullptr, count, nullptr, nullptr) != count) {
+		return false;
+	}
+	Vector direct(LogicalType::DOUBLE, count);
+	Vector through_float(LogicalType::DOUBLE, count);
+	VectorOperations::Cast(context, values, direct, count);
+	VectorOperations::Cast(context, converted, through_float, count);
+	return VectorOperations::NotDistinctFrom(direct, through_float, nullptr, count, nullptr, nullptr) == count;
+}
+
 void CheckLeafValues(ClientContext &context, const CheckedField &field, Vector &values, idx_t count) {
 	auto &source = field.source.get();
 	auto &target = field.target;
 	Vector converted(target, count);
 	string error;
-	if (VectorOperations::TryCast(context, values, converted, count, &error)) {
-		if (!ReadsThroughFloat(source.Type(), target)) {
-			return;
-		}
-		Vector direct(LogicalType::DOUBLE, count);
-		Vector through_float(LogicalType::DOUBLE, count);
-		VectorOperations::Cast(context, values, direct, count);
-		VectorOperations::Cast(context, converted, through_float, count);
-		direct.Flatten();
-		through_float.Flatten();
-		auto direct_data = FlatVector::GetData<double>(direct);
-		auto through_float_data = FlatVector::GetData<double>(through_float);
-		auto &validity = FlatVector::Validity(direct);
-		bool same = true;
-		for (idx_t i = 0; i < count && same; i++) {
-			same = !validity.RowIsValid(i) || direct_data[i] == through_float_data[i];
-		}
-		if (same) {
-			return;
-		}
+	if (VectorOperations::TryCast(context, values, converted, count, &error) &&
+	    (!ReadsThroughFloat(source.Type(), target) || ReadsBackExactly(context, values, converted, count))) {
+		return;
 	}
 	for (idx_t i = 0; i < count; i++) {
 		auto value = values.GetValue(i);

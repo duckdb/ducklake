@@ -308,3 +308,27 @@ query I
 SELECT count(*) FROM ducklake.dropped
 ----
 0
+
+# infinities convert, the values between them need not
+statement ok
+CREATE TABLE ducklake.infinite (d DATE) WITH (data_inlining_row_limit = 10);
+
+statement ok
+INSERT INTO ducklake.infinite VALUES (DATE '-infinity'), (DATE '5000000-01-01'), (DATE 'infinity');
+
+statement error
+ALTER TABLE ducklake.infinite ALTER d SET DATA TYPE TIMESTAMP;
+----
+holds the value 5000000-01-01, which is out of range for TIMESTAMP
+
+# a wide integer that rounds to the same DOUBLE as its FLOAT value
+statement ok
+CREATE TABLE ducklake.huge (b BIGINT);
+
+statement ok
+INSERT INTO ducklake.huge VALUES (1152921504606846977);
+
+statement error
+ALTER TABLE ducklake.huge ALTER b SET DATA TYPE FLOAT;
+----
+holds the value 1152921504606846977, which FLOAT cannot hold exactly
