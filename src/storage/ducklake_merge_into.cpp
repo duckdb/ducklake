@@ -14,14 +14,13 @@ namespace duckdb {
 //! The condition of an action for the rows whose row id compares to the first one of the transaction
 static unique_ptr<Expression> RowIdCondition(LogicalMergeInto &op, ExpressionType comparison,
                                              const unique_ptr<Expression> &condition) {
-	auto result =
-	    DuckLakeUpdate::CompareToLocalRowIds(comparison, op.children[0]->types[op.row_id_start], op.row_id_start);
+	// the barrier keeps the row id comparison in front of the condition, so a volatile condition runs once per row
+	auto result = ExpressionBarrier::Wrap(
+	    DuckLakeUpdate::CompareToLocalRowIds(comparison, op.children[0]->types[op.row_id_start], op.row_id_start));
 	if (!condition) {
 		return result;
 	}
-	// the barrier keeps the row id comparison first, so a volatile condition runs once for every row
-	return make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(result),
-	                                             ExpressionBarrier::Wrap(condition->Copy()));
+	return make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(result), condition->Copy());
 }
 
 //! Split the update action into one for the rows inserted in the transaction and one for the others

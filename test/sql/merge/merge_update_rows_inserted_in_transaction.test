@@ -175,3 +175,33 @@ query III
 SELECT count(*), count(DISTINCT rowid), sum(v) FROM ducklake.vol
 ----
 150000	150000	0
+
+# a condition that relies on its own AND not to evaluate a cast that would fail
+statement ok
+CREATE TABLE ducklake.cmp (id BIGINT, v VARCHAR)
+
+statement ok
+INSERT INTO ducklake.cmp VALUES (1, '1'), (2, 'bad')
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.cmp VALUES (3, '3'), (4, 'bad')
+
+query I
+MERGE INTO ducklake.cmp USING (SELECT i AS id FROM range(5) t(i)) s USING (id)
+WHEN MATCHED AND v <> 'bad' AND CAST(v AS INTEGER) > 0 THEN UPDATE SET v = v || '0'
+----
+2
+
+statement ok
+COMMIT
+
+query III
+SELECT id, v, rowid < 1000000000000000000 FROM ducklake.cmp ORDER BY id
+----
+1	10	true
+2	bad	true
+3	30	true
+4	bad	true
