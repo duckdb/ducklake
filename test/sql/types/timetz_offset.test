@@ -6,12 +6,18 @@ require ducklake
 
 require parquet
 
+require icu
+
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/timetz_offset.db
 
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/timetz_offset', DATA_INLINING_ROW_LIMIT 0)
+
+# the values do not depend on the session time zone
+statement ok
+SET TimeZone = 'Asia/Singapore'
 
 # a flush keeps the offsets of inlined values, also for time travel
 statement ok

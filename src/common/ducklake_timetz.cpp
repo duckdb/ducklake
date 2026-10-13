@@ -25,8 +25,8 @@ static unique_ptr<Expression> BindFunction(ClientContext &context, const string 
 	return binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(name), std::move(children));
 }
 
-//! Wraps a TIMETZ in the collation that compares it by its instant
-static unique_ptr<Expression> ByInstant(ClientContext &context, unique_ptr<Expression> expr) {
+//! Wraps a TIMETZ in the collation that DuckDB compares it with
+static unique_ptr<Expression> CollateTimeTZ(ClientContext &context, unique_ptr<Expression> expr) {
 	ExpressionBinder::PushCollation(context, expr, LogicalType::TIME_TZ);
 	return expr;
 }
@@ -52,8 +52,8 @@ unique_ptr<Expression> DuckLakeTimeTZ::ToStorage(ClientContext &context, unique_
 	    context, BindFunction(context, "timezone", std::move(utc_children)), LogicalType::TIME);
 	// timezone wraps the end of the day to its start, so the values at that instant store the end of the day
 	auto at_end = BoundBetweenExpression::Create(
-	    ByInstant(context, expr->Copy()), ByInstant(context, make_uniq<BoundConstantExpression>(AtEndOfDay(0))),
-	    ByInstant(context, make_uniq<BoundConstantExpression>(AtEndOfDay(dtime_tz_t::MIN_OFFSET))), true, true);
+	    CollateTimeTZ(context, expr->Copy()), CollateTimeTZ(context, make_uniq<BoundConstantExpression>(AtEndOfDay(0))),
+	    CollateTimeTZ(context, make_uniq<BoundConstantExpression>(AtEndOfDay(dtime_tz_t::MIN_OFFSET))), true, true);
 	utc_time = make_uniq<BoundCaseExpression>(
 	    std::move(at_end), make_uniq<BoundConstantExpression>(Value::TIME(dtime_t(DAY))), std::move(utc_time));
 	vector<unique_ptr<Expression>> offset_children;
@@ -86,7 +86,8 @@ unique_ptr<Expression> DuckLakeTimeTZ::FromStorage(ClientContext &context, uniqu
 	interval_children.push_back(BoundCastExpression::AddCastToType(context, offset->Copy(), LogicalType::DOUBLE));
 	vector<unique_ptr<Expression>> children;
 	children.push_back(BindFunction(context, "to_seconds", std::move(interval_children)));
-	children.push_back(BoundCastExpression::AddCastToType(context, utc_time->Copy(), LogicalType::TIME_TZ));
+	// the default cast keeps offset +00, where the cast of ICU takes the session time zone
+	children.push_back(BoundCastExpression::AddDefaultCastToType(utc_time->Copy(), LogicalType::TIME_TZ));
 	auto local_time = BindFunction(context, "timezone", std::move(children));
 	// timezone wraps the end of the day to its start, so a value at offset +00 keeps its UTC time
 	auto at_end = make_uniq<BoundConjunctionExpression>(
