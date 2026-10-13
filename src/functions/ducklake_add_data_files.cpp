@@ -913,7 +913,7 @@ static bool EqualsAsFirstParsed(ClientContext &context, const string &value, con
                                 const vector<LogicalType> &types) {
 	for (auto &type : types) {
 		auto parsed = Value(value).TryCastAs(context, type);
-		if (parsed) {
+		if (parsed && !parsed->IsNull()) {
 			auto widened = imported.TryCastAs(context, type);
 			return widened && *parsed == *widened;
 		}

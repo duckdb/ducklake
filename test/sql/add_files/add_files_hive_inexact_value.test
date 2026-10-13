@@ -6,6 +6,8 @@ require ducklake
 
 require parquet
 
+require icu
+
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 test-env DATA_PATH {TEST_DIR}
@@ -112,18 +114,22 @@ CALL ducklake_add_data_files('lake', 'n', '{DATA_PATH}/add_files_hive_inexact_va
 ----
 does not convert exactly to the column type "INTEGER"
 
-# a midnight timestamp is an exact date, and a number beyond the decimal range an exact HUGEINT
+# a midnight timestamp is an exact date, a number beyond the decimal range an exact HUGEINT
+# and a time stamp beyond the nanosecond range an exact TIMESTAMPTZ
 statement ok
-CREATE TABLE lake.dm (id INTEGER, p DATE, h HUGEINT);
+CREATE TABLE lake.dm (id INTEGER, p DATE, h HUGEINT, tz TIMESTAMPTZ);
 
 statement ok
-COPY (SELECT 1 AS id, '2024-01-01 00:00:00' AS p, '1e38' AS h UNION ALL SELECT 2, '2024-01-01 00:00:00', '109443000000000000000000000000000000000') TO '{DATA_PATH}/add_files_hive_inexact_value_src9' (FORMAT parquet, PARTITION_BY (p, h));
+COPY (SELECT 1 AS id, '2024-01-01 00:00:00' AS p, '1e38' AS h, '9999-12-31 00:00:00+00' AS tz UNION ALL SELECT 2, '2024-01-01 00:00:00', '109443000000000000000000000000000000000', '0001-01-01 00:00:00+00') TO '{DATA_PATH}/add_files_hive_inexact_value_src9' (FORMAT parquet, PARTITION_BY (p, h, tz));
 
 statement ok
 CALL ducklake_add_data_files('lake', 'dm', '{DATA_PATH}/add_files_hive_inexact_value_src9/**/*.parquet', hive_partitioning => true);
 
-query II
-SELECT p, h FROM lake.dm ORDER BY h
+statement ok
+SET TimeZone = 'UTC'
+
+query III
+SELECT p, h, tz FROM lake.dm ORDER BY h
 ----
-2024-01-01	100000000000000000000000000000000000000
-2024-01-01	109443000000000000000000000000000000000
+2024-01-01	100000000000000000000000000000000000000	9999-12-31 00:00:00+00
+2024-01-01	109443000000000000000000000000000000000	0001-01-01 00:00:00+00
