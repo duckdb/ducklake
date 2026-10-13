@@ -348,3 +348,30 @@ SELECT d FROM ducklake.scaled ORDER BY d
 ----
 -0.25
 0.5
+
+# a decimal is exact in FLOAT when it is a fraction over a power of two with a numerator below 2^24
+statement ok
+CREATE TABLE ducklake.close (d DECIMAL(10,9));
+
+statement ok
+INSERT INTO ducklake.close VALUES (0.5), (0.500000001);
+
+statement error
+ALTER TABLE ducklake.close ALTER d SET DATA TYPE FLOAT;
+----
+holds the value 0.500000001, which FLOAT cannot hold exactly
+
+statement ok
+CREATE TABLE ducklake.power (d DECIMAL(38,30));
+
+statement ok
+INSERT INTO ducklake.power VALUES (33554432), (0.375);
+
+statement ok
+ALTER TABLE ducklake.power ALTER d SET DATA TYPE FLOAT;
+
+query I
+SELECT d FROM ducklake.power ORDER BY d
+----
+0.375
+33554432.0

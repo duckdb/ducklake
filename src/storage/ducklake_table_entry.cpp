@@ -103,6 +103,58 @@ bool ReadsThroughFloat(const LogicalType &source, const LogicalType &target) {
 //! Every integer up to this magnitude is exact in FLOAT
 constexpr double FLOAT_EXACT_LIMIT = 16777216.0;
 
+//! Whether a decimal is exactly a FLOAT, an odd numerator below 2^24 over a power of two
+bool DecimalIsExactFloat(hugeint_t unscaled, uint8_t scale) {
+	if (unscaled == 0) {
+		return true;
+	}
+	if (unscaled < 0) {
+		unscaled = -unscaled;
+	}
+	// the factors of 5 of the power of ten of the scale have to cancel
+	for (uint8_t i = 0; i < scale; i++) {
+		if (unscaled % 5 != 0) {
+			return false;
+		}
+		unscaled /= 5;
+	}
+	int64_t exponent = -int64_t(scale);
+	while ((unscaled & 1) == 0) {
+		unscaled >>= 1;
+		exponent++;
+	}
+	static constexpr int64_t FLOAT_MIN_EXPONENT = -149;
+	return unscaled < hugeint_t(FLOAT_EXACT_LIMIT) && exponent >= FLOAT_MIN_EXPONENT;
+}
+
+template <class T>
+bool DecimalsAreExactFloats(Vector &values, idx_t count, uint8_t scale) {
+	UnifiedVectorFormat format;
+	values.ToUnifiedFormat(format);
+	auto data = UnifiedVectorFormat::GetData<T>(format);
+	for (idx_t i = 0; i < count; i++) {
+		auto idx = format.sel->get_index(i);
+		if (format.validity.RowIsValid(idx) && !DecimalIsExactFloat(hugeint_t(data[idx]), scale)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool DecimalsAreExactFloats(Vector &values, idx_t count) {
+	auto scale = DecimalType::GetScale(values.GetType());
+	switch (values.GetType().InternalType()) {
+	case PhysicalType::INT16:
+		return DecimalsAreExactFloats<int16_t>(values, count, scale);
+	case PhysicalType::INT32:
+		return DecimalsAreExactFloats<int32_t>(values, count, scale);
+	case PhysicalType::INT64:
+		return DecimalsAreExactFloats<int64_t>(values, count, scale);
+	default:
+		return DecimalsAreExactFloats<hugeint_t>(values, count, scale);
+	}
+}
+
 //! Whether a stored value converts to the promoted type, and reads the same after a later promotion
 bool ValueConverts(ClientContext &context, const Value &value, const LogicalType &target) {
 	auto converted = value.TryCastAs(context, target);
@@ -112,14 +164,11 @@ bool ValueConverts(ClientContext &context, const Value &value, const LogicalType
 	if (!ReadsThroughFloat(value.type(), target)) {
 		return true;
 	}
-	auto as_double = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-	if (converted->DefaultCastAs(LogicalType::DOUBLE).GetValue<double>() != as_double) {
-		return false;
+	if (value.type().id() == LogicalTypeId::DECIMAL) {
+		Vector values(value, count_t(1));
+		return DecimalsAreExactFloats(values, 1);
 	}
-	if (value.type().id() == LogicalTypeId::DECIMAL && std::fabs(as_double) <= FLOAT_EXACT_LIMIT) {
-		return true;
-	}
-	// values beyond 2^24 can round to the same DOUBLE without being equal
+	// an integer is exact when it reads back from FLOAT
 	auto back = converted->TryCastAs(context, value.type());
 	return back && *back == value;
 }
@@ -227,25 +276,10 @@ void CheckFileBounds(ClientContext &context, const CheckedField &field, const Va
 	}
 }
 
-//! Whether FLOAT values read back as the stored values, the same rules as ValueConverts for a whole vector
+//! Whether the stored values are exact in FLOAT, the rules of ValueConverts for a whole vector
 bool ReadsBackExactly(ClientContext &context, Vector &values, Vector &converted, idx_t count) {
-	Vector direct(LogicalType::DOUBLE, count);
-	Vector through_float(LogicalType::DOUBLE, count);
-	VectorOperations::Cast(context, values, direct, count);
-	VectorOperations::Cast(context, converted, through_float, count);
-	if (VectorOperations::NotDistinctFrom(direct, through_float, nullptr, count, nullptr, nullptr) != count) {
-		return false;
-	}
 	if (values.GetType().id() == LogicalTypeId::DECIMAL) {
-		direct.Flatten();
-		auto data = FlatVector::GetData<double>(direct);
-		auto &validity = FlatVector::Validity(direct);
-		for (idx_t i = 0; i < count; i++) {
-			if (validity.RowIsValid(i) && std::fabs(data[i]) > FLOAT_EXACT_LIMIT) {
-				return false;
-			}
-		}
-		return true;
+		return DecimalsAreExactFloats(values, count);
 	}
 	Vector back(values.GetType(), count);
 	string error;
