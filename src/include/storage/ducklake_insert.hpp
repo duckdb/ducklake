@@ -133,6 +133,9 @@ public:
 	                                                 idx_t data_inlining_row_limit);
 	static PhysicalOperator &PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                           DuckLakeCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
+	//! Put a projection of the expressions on top of the plan
+	static void GenerateProjection(PhysicalPlanGenerator &planner, vector<unique_ptr<Expression>> &expressions,
+	                               optional_ptr<PhysicalOperator> &plan);
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                    DuckLakeTableEntry &table, string encryption_key);
 	static void RemoveEmptyFiles(ClientContext &context, DuckLakeInsertGlobalState &gstate);

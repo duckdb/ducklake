@@ -9,9 +9,33 @@
 #pragma once
 
 #include "storage/ducklake_insert.hpp"
+#include "duckdb/common/mutex.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
+#include "duckdb/main/client_context_state.hpp"
 
 namespace duckdb {
+
+//! The delete that the update operators of one MERGE share, set up by the first and finalized by the last
+struct DuckLakeSharedDelete {
+	explicit DuckLakeSharedDelete(idx_t operator_count) : operator_count(operator_count) {
+	}
+
+	mutex lock;
+	idx_t operator_count;
+	//! The query the delete state is set up for
+	idx_t query = DConstants::INVALID_INDEX;
+	idx_t finalized_count = 0;
+};
+
+//! Set while DuckLake plans a MERGE whose update action is split by row id
+class DuckLakeMergeUpdateSplit : public ClientContextState {
+public:
+	static constexpr const char *KEY = "ducklake_merge_update_split";
+
+	//! The delete of the first half, which the second half shares
+	optional_ptr<PhysicalOperator> delete_op;
+	shared_ptr<DuckLakeSharedDelete> shared_delete = make_shared_ptr<DuckLakeSharedDelete>(2);
+};
 
 class DuckLakeUpdate : public PhysicalOperator {
 public:
@@ -27,6 +51,8 @@ public:
 	//! The row-id-index
 	idx_t row_id_index;
 	vector<unique_ptr<Expression>> expressions;
+	//! Set when the delete operator is shared with other update operators
+	shared_ptr<DuckLakeSharedDelete> shared_delete;
 
 	static constexpr uint8_t DELETION_INFO_SIZE = 3;
 
@@ -57,7 +83,8 @@ public:
 	InsertionOrderPreservingMap<string> ParamsToString() const override;
 
 	static DuckLakeUpdate &PlanUpdateOperator(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
-	                                          PhysicalOperator &child_plan, DuckLakeCopyInput &copy_input);
+	                                          PhysicalOperator &child_plan, DuckLakeCopyInput &copy_input,
+	                                          optional_ptr<PhysicalOperator> delete_op = nullptr);
 };
 
 } // namespace duckdb

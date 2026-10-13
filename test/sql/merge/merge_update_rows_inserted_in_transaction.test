@@ -1,0 +1,142 @@
+# name: test/sql/merge/merge_update_rows_inserted_in_transaction.test
+# description: rows that a MERGE updates in the transaction that inserted them get fresh row ids at commit
+# group: [merge]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_update_rows_inserted_in_transaction', DATA_INLINING_ROW_LIMIT 0)
+
+# two transactions each insert two rows and update one of them
+statement ok
+CREATE TABLE ducklake.t (id BIGINT, v INTEGER)
+
+foreach first 1 3
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t VALUES ({first}, 0), ({first} + 1, 0)
+
+query I
+MERGE INTO ducklake.t USING (SELECT {first} AS id) s USING (id) WHEN MATCHED THEN UPDATE SET v = 1
+----
+1
+
+statement ok
+COMMIT
+
+endloop
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid) < 1000000000000000000, sum(v) FROM ducklake.t
+----
+4	4	true	2
+
+# committed and new rows updated with a condition next to an insert, and updated by source, twice
+statement ok
+CREATE TABLE ducklake.mixed (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO ducklake.mixed SELECT i, 0 FROM range(4) t(i)
+
+statement ok
+CREATE TABLE committed_ids AS SELECT id, rowid AS committed_rowid FROM ducklake.mixed
+
+foreach round 1 2
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.mixed SELECT {round} * 10 + i, 0 FROM range(4) t(i)
+
+query I
+MERGE INTO ducklake.mixed USING (SELECT unnest([0, {round} * 10, {round} * 10 + 2, 99]) AS id) s USING (id)
+WHEN MATCHED AND id % 10 <> 2 THEN UPDATE SET v = v + 1
+WHEN NOT MATCHED THEN INSERT VALUES (s.id + {round}, 100)
+----
+3
+
+statement ok
+MERGE INTO ducklake.mixed USING (SELECT 0 AS id) s USING (id)
+WHEN NOT MATCHED BY SOURCE AND id % 10 = 3 THEN UPDATE SET v = v - 1
+
+statement ok
+COMMIT
+
+endloop
+
+query II
+SELECT count(*), count(DISTINCT rowid) FROM ducklake.mixed WHERE rowid < 1000000000000000000
+----
+14	14
+
+query I
+SELECT count(*) FROM ducklake.mixed m JOIN committed_ids USING (id) WHERE m.rowid <> committed_rowid
+----
+0
+
+query II
+SELECT id, v FROM ducklake.mixed ORDER BY id
+----
+0	2
+1	0
+2	0
+3	-2
+10	1
+11	0
+12	0
+13	-2
+20	1
+21	0
+22	0
+23	-1
+100	100
+101	100
+
+# rows inserted in the transaction are inlined while committed rows are in a file, none of them get lost
+statement ok
+CREATE TABLE ducklake.inl (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO ducklake.inl SELECT i, 0 FROM range(4) t(i)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 100, table_name => 'inl')
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.inl SELECT i, 0 FROM range(10, 14) t(i)
+
+statement ok
+MERGE INTO ducklake.inl USING (SELECT i AS id FROM range(20) t(i) WHERE i % 2 = 0) s USING (id) WHEN MATCHED THEN UPDATE SET v = v + 1
+
+query II
+SELECT id, v FROM ducklake.inl ORDER BY id
+----
+0	1
+1	0
+2	1
+3	0
+10	1
+11	0
+12	1
+13	0
+
+statement ok
+COMMIT
+
+query IIII
+SELECT count(*), count(DISTINCT rowid), max(rowid) < 1000000000000000000, sum(v) FROM ducklake.inl
+----
+8	8	true	4

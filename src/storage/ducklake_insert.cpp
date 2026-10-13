@@ -601,9 +601,8 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	return result;
 }
 
-static void GenerateProjection(ClientContext &context, PhysicalPlanGenerator &planner,
-                               vector<unique_ptr<Expression>> &expressions, optional_ptr<PhysicalOperator> &plan) {
-	// push the projection
+void DuckLakeInsert::GenerateProjection(PhysicalPlanGenerator &planner, vector<unique_ptr<Expression>> &expressions,
+                                        optional_ptr<PhysicalOperator> &plan) {
 	vector<LogicalType> types;
 	for (auto &expr : expressions) {
 		types.push_back(expr->GetReturnType());
@@ -621,7 +620,7 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
 	auto &copy = *copy_options.copy;
 	if (!copy_options.projection_list.empty()) {
 		// generate a projection
-		GenerateProjection(context, planner, copy_options.projection_list, plan);
+		GenerateProjection(planner, copy_options.projection_list, plan);
 	}
 
 	string row_group_size_bytes;
