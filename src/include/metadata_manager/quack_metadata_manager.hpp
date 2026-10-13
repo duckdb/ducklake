@@ -23,6 +23,9 @@ public:
 	bool SupportsAppender() const override {
 		return false;
 	}
+	bool ReadsInlinedDataInPages() const override {
+		return false;
+	}
 	bool CommitsEachStatement() const override {
 		return true;
 	}

@@ -239,6 +239,10 @@ public:
 	virtual bool SupportsAppender() const {
 		return true;
 	}
+	//! Whether a scan of the catalog applies the filters of a page of inlined rows before reading their values
+	virtual bool ReadsInlinedDataInPages() const {
+		return true;
+	}
 
 	//! Whether the metadata catalog commits each statement on its own, so a rollback cannot undo them
 	virtual bool CommitsEachStatement() const {

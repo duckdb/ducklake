@@ -20,6 +20,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "Inlined data is read in pages only from DuckDB catalogs, whose scans apply the filters of a page before reading values",
+      "paths": [
+        "test/sql/data_inlining/inlined_data_paged_reads_memory.test"
+      ]
+    },
+    {
       "reason": "Bespoke test starts and stops its own quack server",
       "paths": [
         "test/sql/quack/quack_basic.test"

@@ -1,7 +1,7 @@
 #include "storage/ducklake_inlined_data_reader.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "storage/ducklake_transaction.hpp"
-#include "storage/ducklake_catalog.hpp"
+#include "duckdb/storage/buffer_manager.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/storage/table/column_segment.hpp"
@@ -245,49 +245,41 @@ bool DuckLakeInlinedDataReader::LoadNextPage(ClientContext &context) {
 	if (read_all_pages) {
 		return false;
 	}
-	// a page holds about 16 MiB, so a vector of the rows of a page fits it up to this row size
-	static constexpr idx_t PAGE_BYTES = 16ULL * 1024ULL * 1024ULL;
-	static constexpr idx_t SMALL_ROW_BYTES = PAGE_BYTES / STANDARD_VECTOR_SIZE;
+	// a page holds a sixteenth of the memory, rows up to the size where a vector of them fits a page are read
+	// in ranges, larger ones one row at a time
+	static constexpr idx_t MIN_PAGE_BYTES = 1ULL << 20ULL;
 	static constexpr idx_t PAGE_GROWTH = 16;
-	auto &catalog = read_info.table.ParentCatalog().Cast<DuckLakeCatalog>();
-	auto row_bytes_key = table_name + ":" + StringUtil::Join(columns_to_read, ",");
+	auto page_bytes = MaxValue<idx_t>(MIN_PAGE_BYTES, BufferManager::GetBufferManager(context).GetMaxMemory() / 16);
+	auto small_row_bytes = page_bytes / STANDARD_VECTOR_SIZE;
+	auto &metadata_manager = read_info.GetTransaction()->GetMetadataManager();
 	bool constant_size = true;
 	idx_t constant_row_bytes = 0;
 	for (auto &type : expected_types) {
 		constant_size = constant_size && TypeIsConstantSize(type.InternalType());
 		constant_row_bytes += constant_size ? GetTypeIdSize(type.InternalType()) : 0;
 	}
+	// the catalog query sorts the rows of a sorted flush, so each page would sort every row again
+	bool single_page =
+	    !metadata_manager.ReadsInlinedDataInPages() ||
+	    (read_info.scan_type == DuckLakeScanType::SCAN_FOR_FLUSH && !read_info.flush_sort_order_sql.empty());
 	if (!page_type_set) {
 		page_type_set = true;
-		auto cached_row_bytes = catalog.GetInlinedRowBytes(row_bytes_key);
 		if (constant_size) {
 			row_bytes = constant_row_bytes;
-		} else if (cached_row_bytes.IsValid() && cached_row_bytes.GetIndex() <= SMALL_ROW_BYTES) {
-			row_bytes = cached_row_bytes.GetIndex();
-		} else {
+		} else if (!single_page) {
 			// the size of the rows is unknown, a first page of one row measures it
 			read_by_keys = true;
 		}
 	}
-	if (!read_by_keys && row_bytes > SMALL_ROW_BYTES) {
-		// a vector of rows larger than measured before can exceed the page, read the next rows by their keys
-		read_by_keys = true;
-		key_page.after_row_id = page.after_row_id;
-		key_page.after_begin_snapshot = page.after_begin_snapshot;
-		key_page.offset = page.offset;
-	}
 	idx_t limit;
-	if (!read_by_keys) {
-		limit = MaxValue<idx_t>(1, PAGE_BYTES / MaxValue<idx_t>(1, row_bytes));
-	} else if (row_bytes == 0 || row_bytes > SMALL_ROW_BYTES) {
+	if (single_page) {
+		limit = 0;
+	} else if (!read_by_keys) {
+		limit = MaxValue<idx_t>(1, page_bytes / MaxValue<idx_t>(1, row_bytes));
+	} else if (row_bytes == 0 || row_bytes > small_row_bytes) {
 		limit = 1;
 	} else {
-		limit = MinValue<idx_t>(page.limit * PAGE_GROWTH, PAGE_BYTES / row_bytes);
-	}
-	if (read_info.scan_type == DuckLakeScanType::SCAN_FOR_FLUSH && !read_info.flush_sort_order_sql.empty()) {
-		// the catalog query sorts the rows of a sorted flush, so a page would sort every row again
-		read_by_keys = false;
-		limit = 0;
+		limit = MinValue<idx_t>(page.limit * PAGE_GROWTH, page_bytes / row_bytes);
 	}
 	page.limit = limit;
 
@@ -313,7 +305,6 @@ bool DuckLakeInlinedDataReader::LoadNextPage(ClientContext &context) {
 		key_position = page_end;
 		query_result = ReadPage(rows_page);
 	}
-	auto &metadata_manager = read_info.GetTransaction()->GetMetadataManager();
 	data = metadata_manager.TransformInlinedData(*query_result, expected_types, table_name);
 	query_result.reset();
 	if (read_by_keys && !rows_page.order_listed_rows) {
@@ -336,15 +327,14 @@ bool DuckLakeInlinedDataReader::LoadNextPage(ClientContext &context) {
 	page.after_begin_snapshot =
 	    NumericCast<idx_t>(last_chunk.data[key_column + 1].GetValue(last_row).GetValue<int64_t>());
 	if (!constant_size) {
-		idx_t page_bytes = 0;
+		idx_t measured_bytes = 0;
 		for (auto &chunk : data->data->Chunks()) {
 			for (auto &vector : chunk.data) {
-				page_bytes += ValueBytes(vector, chunk.size());
+				measured_bytes += ValueBytes(vector, chunk.size());
 			}
 		}
 		// a large row weighs on the next pages until rows of the measured size follow
-		row_bytes = MaxValue<idx_t>(MaxValue<idx_t>(1, page_bytes / row_count), row_bytes / PAGE_GROWTH);
-		catalog.SetInlinedRowBytes(row_bytes_key, row_bytes);
+		row_bytes = MaxValue<idx_t>(MaxValue<idx_t>(1, measured_bytes / row_count), row_bytes / PAGE_GROWTH);
 	}
 	MapDeletedRows();
 	page.offset += row_count;
