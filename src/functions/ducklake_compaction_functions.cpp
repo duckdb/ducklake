@@ -405,7 +405,8 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 		candidates[group].candidate_files.push_back(file_idx);
 	}
 
-	OrderCandidatesBySortKey(metadata_manager, latest_table, files, candidates);
+	// the sort of the merges follows the table in the transaction, which can have changed it
+	OrderCandidatesBySortKey(metadata_manager, GetLatestTableEntry(catalog, transaction, table), files, candidates);
 
 	// we have gathered all the candidate files per compaction group
 	// iterate over them to generate actual compaction commands
