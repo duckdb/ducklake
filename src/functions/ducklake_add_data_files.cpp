@@ -7,6 +7,7 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_insert.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "duckdb/common/types/decimal.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/hive_partitioning.hpp"
@@ -907,37 +908,23 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFil
 	return result;
 }
 
-//! Whether a number that casts to an integer or decimal type has more fraction digits than the scale
-static bool HasDigitsBeyondScale(const string &value, idx_t scale) {
-	idx_t pos = 0;
-	if (pos < value.size() && (value[pos] == '+' || value[pos] == '-')) {
-		pos++;
-	}
-	if (pos + 1 < value.size() && value[pos] == '0' && StringUtil::CharacterIsAlpha(value[pos + 1])) {
-		// hexadecimal and binary integers
-		return false;
-	}
-	auto point = value.find('.');
-	auto exponent_pos = value.find_first_of("eE");
-	int64_t fraction_digits = 0;
-	if (point != string::npos) {
-		auto end = exponent_pos == string::npos ? value.size() : exponent_pos;
-		int64_t digits = 0;
-		for (idx_t i = point + 1; i < end; i++) {
-			if (StringUtil::CharacterIsDigit(value[i])) {
-				digits++;
-				if (value[i] != '0') {
-					fraction_digits = digits;
-				}
-			}
-		}
-	}
-	int64_t exponent = 0;
-	if (exponent_pos != string::npos &&
-	    !TryCast::Operation<string_t, int64_t>(string_t(value.substr(exponent_pos + 1)), exponent, true)) {
+//! Whether a number converts to an integer or decimal value without rounding
+static bool NumberConvertsExactly(ClientContext &context, const string &value, const Value &imported) {
+	auto integer_part = StringUtil::Split(imported.ToString(), '.')[0];
+	idx_t integer_digits = integer_part.size() - (StringUtil::StartsWith(integer_part, "-") ? 1 : 0);
+	if (integer_digits > Decimal::MAX_WIDTH_DECIMAL) {
 		return true;
 	}
-	return fraction_digits - exponent > NumericCast<int64_t>(scale);
+	// no type the column can be promoted to holds more digits than this decimal
+	auto wide_type = LogicalType::DECIMAL(Decimal::MAX_WIDTH_DECIMAL,
+	                                      NumericCast<uint8_t>(Decimal::MAX_WIDTH_DECIMAL - integer_digits));
+	auto parsed = Value(value).TryCastAs(context, wide_type);
+	if (!parsed) {
+		// spellings a decimal does not parse, such as hexadecimal integers
+		return Value(value).TryCastAs(context, imported.type(), nullptr, true).has_value();
+	}
+	auto widened = imported.TryCastAs(context, wide_type);
+	return widened && *parsed == *widened;
 }
 
 //! Scans parse a hive value again with the type the column has then, so it must convert exactly
@@ -950,9 +937,7 @@ static void CheckHiveValueIsExact(ClientContext &context, const DuckLakeFieldId 
 	auto value = HivePartitioning::Unescape(hive_string);
 	bool exact;
 	if (type.IsIntegral() || type.id() == LogicalTypeId::DECIMAL) {
-		// the import rounds the digits beyond the scale
-		auto scale = type.id() == LogicalTypeId::DECIMAL ? DecimalType::GetScale(type) : 0;
-		exact = !HasDigitsBeyondScale(value, scale);
+		exact = NumberConvertsExactly(context, value, hive_value);
 	} else if (type.IsTemporal()) {
 		exact = Value(value).TryCastAs(context, type, nullptr, true).has_value();
 	} else {
