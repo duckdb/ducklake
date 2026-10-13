@@ -229,7 +229,8 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 			}
 
 			if (column_names.size() == 2) {
-				auto &parent = table.GetFieldId(StringsToIdentifiers({column_names[0]}));
+				optional_idx parent_offset;
+				auto &parent = table.GetFieldId(StringsToIdentifiers({column_names[0]}), &parent_offset);
 				if (parent.Type().id() == LogicalTypeId::TIME_TZ) {
 					if (column_names[1] == DuckLakeTimeTZ::TIME_FIELD) {
 						timetz_times.emplace(parent.GetFieldIndex(),
