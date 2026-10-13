@@ -41,7 +41,8 @@ public:
 	unique_ptr<NodeStatistics> GetCardinality(ClientContext &context) const override;
 	DuckLakeTableEntry &GetTable();
 	unique_ptr<MultiFileList> Copy() const override;
-	vector<DuckLakeFileListExtendedEntry> GetFilesExtended(bool include_partition_values = false) const;
+	vector<DuckLakeFileListExtendedEntry> GetFilesExtended(bool include_partition_values = false,
+	                                                       const vector<idx_t> &stats_columns = {}) const;
 	const vector<DuckLakeFileListEntry> &GetFiles() const;
 	const DuckLakeFileListEntry &GetFileEntry(idx_t file_idx) const;
 	optional_ptr<const FilterPushdownInfo> GetFilterInfo() const {

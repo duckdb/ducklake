@@ -2165,7 +2165,8 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
                                                       FileListType file_list_type,
                                                       const string &metadata_table_prefix) {
 	D_ASSERT(file_list_type == FileListType::SCAN || dynamic_filters.empty());
-	D_ASSERT(file_list_type == FileListType::SCAN || runtime_filter_stats_columns.empty());
+	D_ASSERT(file_list_type == FileListType::SCAN || file_list_type == FileListType::EXTENDED_WITH_PARTITIONS ||
+	         runtime_filter_stats_columns.empty());
 	FilterSQLResult filter_result;
 	if (filter_info && !filter_info->Empty()) {
 		filter_result = ConvertFilterPushdownToSQL(*filter_info);
@@ -2188,6 +2189,9 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 		entry->second.referenced_stats.insert("min_value");
 		entry->second.referenced_stats.insert("max_value");
 		entry->second.referenced_stats.insert("contains_nan");
+		if (file_list_type == FileListType::EXTENDED_WITH_PARTITIONS) {
+			entry->second.referenced_stats.insert("null_count");
+		}
 	}
 	string query = GenerateCTESectionFromRequirements(filter_result.required_ctes, table_id, metadata_table_prefix);
 	// one join per column serves both the filter conditions and the runtime stats below
@@ -2200,6 +2204,10 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 		stats_select_list += StringUtil::Format(
 		    ", %s AS %s_min_value, %s AS %s_max_value, %s AS %s_contains_nan", StatsColumn(cte_name, "min_value"),
 		    cte_name, StatsColumn(cte_name, "max_value"), cte_name, StatsColumn(cte_name, "contains_nan"), cte_name);
+		if (file_list_type == FileListType::EXTENDED_WITH_PARTITIONS) {
+			stats_select_list +=
+			    StringUtil::Format(", %s AS %s_null_count", StatsColumn(cte_name, "null_count"), cte_name);
+		}
 	}
 
 	for (const auto &dynamic_filter : dynamic_filters) {
@@ -2253,7 +2261,7 @@ LEFT JOIN (
 	if (file_list_type != FileListType::SCAN) {
 		select_list = "data.data_file_id, del.delete_file_id, data.record_count" + partition_select + ", " +
 		              GetDataFileSelectList("data") + ", data.row_id_start, data.mapping_id, " +
-		              GetDeleteFileSelectList("del") + ", del.begin_snapshot";
+		              GetDeleteFileSelectList("del") + ", del.begin_snapshot" + stats_select_list;
 	} else {
 		select_list = "data.data_file_id, " + GetDataFileSelectList("data") +
 		              ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
@@ -2280,6 +2288,14 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 		query += "\nAND " + filter_result.where_conditions;
 	}
 	return query + order_by_clause;
+}
+
+static DuckLakeFileColumnStats ReadFileColumnStats(const QueryResultRow &row, idx_t &col_idx) {
+	DuckLakeFileColumnStats stats;
+	stats.has_min = TryReadValue(row, col_idx++, stats.min);
+	stats.has_max = TryReadValue(row, col_idx++, stats.max);
+	stats.has_contains_nan = TryReadValue(row, col_idx++, stats.contains_nan);
+	return stats;
 }
 
 vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table,
@@ -2339,11 +2355,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 		col_idx++;
 		file_entry.delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
 		for (auto &column_field_index : runtime_filter_stats_columns) {
-			DuckLakeFileColumnStats column_stats;
-			column_stats.has_min = TryReadValue(row, col_idx++, column_stats.min);
-			column_stats.has_max = TryReadValue(row, col_idx++, column_stats.max);
-			column_stats.has_contains_nan = TryReadValue(row, col_idx++, column_stats.contains_nan);
-			file_entry.column_min_max.emplace(column_field_index, std::move(column_stats));
+			file_entry.column_min_max.emplace(column_field_index, ReadFileColumnStats(row, col_idx));
 		}
 
 		// Populate inlined file deletions for this file
@@ -2638,10 +2650,10 @@ WHERE begin_snapshot < %d AND file_id IN (%s)
 
 vector<DuckLakeFileListExtendedEntry>
 DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
-                                                  const FilterPushdownInfo *filter_info,
-                                                  bool include_partition_values) {
+                                                  const FilterPushdownInfo *filter_info, bool include_partition_values,
+                                                  const vector<idx_t> &stats_columns) {
 	auto file_list_type = include_partition_values ? FileListType::EXTENDED_WITH_PARTITIONS : FileListType::EXTENDED;
-	auto query = GenerateFileListQuery(table, snapshot, filter_info, {}, {}, file_list_type);
+	auto query = GenerateFileListQuery(table, snapshot, filter_info, {}, stats_columns, file_list_type);
 	auto result = Query(snapshot, query);
 	result->ThrowIfError("Failed to get extended data file list from DuckLake: ");
 	vector<DuckLakeFileListExtendedEntry> files;
@@ -2685,6 +2697,11 @@ DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, Duc
 		col_idx++;
 		file_entry.delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
 		file_entry.delete_file_begin_snapshot = OptIdx(row, col_idx++);
+		for (auto &field_index : stats_columns) {
+			auto stats = ReadFileColumnStats(row, col_idx);
+			stats.null_count = OptIdx(row, col_idx++);
+			file_entry.column_min_max.emplace(field_index, std::move(stats));
+		}
 		files.push_back(std::move(file_entry));
 	}
 	return files;

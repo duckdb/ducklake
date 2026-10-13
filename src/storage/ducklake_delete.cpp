@@ -1,6 +1,7 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_puffin.hpp"
 #include "duckdb/common/algorithm.hpp"
+#include "duckdb/common/encryption_state.hpp"
 #include "duckdb/common/map.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -889,6 +890,7 @@ static bool CollectMetadataDeleteFilters(DuckLakeTableEntry &table, PhysicalTabl
 
 struct MetadataPartitionExpression {
 	idx_t key_index;
+	FieldIndex field_index;
 	unique_ptr<Expression> expression;
 };
 
@@ -937,13 +939,13 @@ static vector<MetadataPartitionExpression> GetMetadataPartitionExpressions(Clien
 		}
 		auto reference = make_uniq<BoundReferenceExpression>(field_id->Type(), field.field_id.index);
 		auto expression = DuckLakePartitionUtils::ApplyPartitionTransform(context, std::move(reference), field);
-		result.push_back({field.partition_key_index, std::move(expression)});
+		result.push_back({field.partition_key_index, field.field_id, std::move(expression)});
 	}
 	return result;
 }
 
 static bool GetFilePartitionValue(DuckLakeTableEntry &table, const DuckLakeFileListExtendedEntry &file,
-                                  idx_t partition_key_index, Value &partition_value) {
+                                  const MetadataPartitionExpression &partition, Value &partition_value) {
 	auto partition_data = table.GetPartitionData();
 	// Only values of the current partition_id count, since specs can reuse a partition_key_index.
 	if (!partition_data || file.partition_id != partition_data->partition_id) {
@@ -951,7 +953,7 @@ static bool GetFilePartitionValue(DuckLakeTableEntry &table, const DuckLakeFileL
 	}
 	optional_ptr<const DuckLakeFilePartitionInfo> matching_partition;
 	for (auto &file_partition : file.partition_values) {
-		if (file_partition.partition_column_idx != partition_key_index) {
+		if (file_partition.partition_column_idx != partition.key_index) {
 			continue;
 		}
 		if (matching_partition) {
@@ -962,17 +964,35 @@ static bool GetFilePartitionValue(DuckLakeTableEntry &table, const DuckLakeFileL
 	if (!matching_partition) {
 		return false;
 	}
+	auto entry = file.column_min_max.find(partition.field_index.index);
+	if (entry == file.column_min_max.end() || !entry->second.null_count.IsValid()) {
+		return false;
+	}
+	auto &stats = entry->second;
 	auto partition_type = partition_value.type();
 	if (matching_partition->partition_value.IsNull()) {
 		partition_value = Value(partition_type);
-		return true;
+		return stats.null_count.GetIndex() == file.row_count;
+	}
+	if (stats.null_count.GetIndex() != 0 || !stats.has_min || !stats.has_max) {
+		return false;
 	}
 	auto cast_value = matching_partition->partition_value.DefaultTryCastAs(partition_type, nullptr, true);
 	if (!cast_value) {
 		return false;
 	}
 	partition_value = std::move(*cast_value);
-	return true;
+	// Compacted imports lose their mapping id but can retain an outdated partition value.
+	if (partition_type.id() == LogicalTypeId::BLOB) {
+		// Parquet stores BLOB statistics as hex rather than the escaped partition value.
+		auto &bytes = StringValue::Get(partition_value);
+		string hex(bytes.size() * 2, '\0');
+		CryptoHash::ToHex(const_data_ptr_cast(bytes.data()), bytes.size(), &hex[0]);
+		return StringUtil::CIEquals(stats.min, hex) && StringUtil::CIEquals(stats.max, hex);
+	}
+	auto min = TryCastStatsBound(stats.min, partition_type);
+	auto max = TryCastStatsBound(stats.max, partition_type);
+	return min && max && *min == partition_value && *max == partition_value;
 }
 
 enum class MetadataDeleteFileMatch { MATCH, NO_MATCH, UNKNOWN };
@@ -986,7 +1006,7 @@ static bool ReplaceMetadataPartitionExpressions(DuckLakeTableEntry &table,
 			continue;
 		}
 		Value value(partition.expression->GetReturnType());
-		if (file && !GetFilePartitionValue(table, *file, partition.key_index, value)) {
+		if (file && !GetFilePartitionValue(table, *file, partition, value)) {
 			return false;
 		}
 		expr = make_uniq<BoundConstantExpression>(std::move(value));
@@ -1065,7 +1085,11 @@ static bool CanUseMetadataDelete(ClientContext &context, DuckLakeTableEntry &tab
 		return false;
 	}
 
-	files = make_uniq<vector<DuckLakeFileListExtendedEntry>>(file_list.GetFilesExtended(true));
+	vector<idx_t> stats_columns;
+	for (auto &partition : partitions) {
+		stats_columns.push_back(partition.field_index.index);
+	}
+	files = make_uniq<vector<DuckLakeFileListExtendedEntry>>(file_list.GetFilesExtended(true, stats_columns));
 	vector<idx_t> matching_file_indexes;
 	optional_idx inlined_row_count;
 	for (idx_t file_idx = 0; file_idx < files->size(); file_idx++) {

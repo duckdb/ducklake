@@ -349,7 +349,8 @@ public:
 	                                                          bool include_local_changes = true);
 	virtual vector<DuckLakeFileListExtendedEntry>
 	GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
-	                         const FilterPushdownInfo *filter_info = nullptr, bool include_partition_values = false);
+	                         const FilterPushdownInfo *filter_info = nullptr, bool include_partition_values = false,
+	                         const vector<idx_t> &stats_columns = {});
 	virtual vector<DuckLakeCompactionFileEntry> GetFilesForCompaction(DuckLakeTableEntry &table, CompactionType type,
 	                                                                  double deletion_threshold,
 	                                                                  DuckLakeSnapshot snapshot,
