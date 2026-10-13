@@ -1,0 +1,87 @@
+# name: test/sql/compaction/merge_adjacent_empty_tables.test
+# description: Merging adjacent files reads the file list only of the tables with live data files
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_adjacent_empty_tables', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t (p INTEGER, v INTEGER);
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (p);
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 1);
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 2);
+
+statement ok
+CREATE TABLE ducklake.empty (x VARCHAR);
+
+# deleting the rows of its only file drops the file
+statement ok
+CREATE TABLE ducklake.emptied (x VARCHAR);
+
+statement ok
+INSERT INTO ducklake.emptied VALUES ('a');
+
+statement ok
+DELETE FROM ducklake.emptied;
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake')
+----
+2	1
+
+statement ok
+CALL disable_logging()
+
+# the one compaction file list query filters the partition values by its table
+query II
+SELECT count(*), count(*) FILTER (WHERE query LIKE '%ducklake_file_partition_value where table_id=%')
+FROM (SELECT lower(regexp_replace(query, '\s+', ' ', 'g')) AS query FROM duckdb_logs_parsed('DuckLakeMetadata'))
+WHERE query LIKE '%array_agg(partition_value%'
+----
+1	1
+
+query II
+SELECT p, v FROM ducklake.t ORDER BY v
+----
+1	1
+1	2
+
+# a table with a delete file is rewritten by a call for the whole catalog
+statement ok
+DELETE FROM ducklake.t WHERE v = 1;
+
+query I
+SELECT files_processed FROM ducklake_rewrite_data_files('ducklake', delete_threshold => 0)
+----
+1
+
+query II
+SELECT p, v FROM ducklake.t
+----
+1	2
+
+# the options are checked also when no table has live data files
+statement ok
+DROP TABLE ducklake.t;
+
+statement error
+CALL ducklake_rewrite_data_files('ducklake', delete_threshold => -1);
+----
+The delete_threshold option must be between 0 and 1

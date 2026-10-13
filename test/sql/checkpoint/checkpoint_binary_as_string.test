@@ -1,0 +1,77 @@
+# name: test/sql/checkpoint/checkpoint_binary_as_string.test
+# description: CHECKPOINT reads BLOB columns as BLOB when binary_as_string is set
+# group: [checkpoint]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/checkpoint_binary_as_string', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t (b BLOB)
+
+statement ok
+INSERT INTO lake.t VALUES ('\x5Cx41'::BLOB)
+
+statement ok
+INSERT INTO lake.t VALUES ('\xFF\xFE'::BLOB)
+
+statement ok
+SET binary_as_string = true
+
+statement ok
+CHECKPOINT lake
+
+query I
+SELECT current_setting('binary_as_string')
+----
+true
+
+statement ok
+SET binary_as_string = false
+
+query I
+SELECT count(*) FROM ducklake_list_files('lake', 't')
+----
+1
+
+query II
+SELECT b, octet_length(b) FROM lake.t ORDER BY b
+----
+\x5Cx41	4
+\xFF\xFE	2
+
+statement ok
+INSERT INTO lake.t VALUES ('\x5Cx42'::BLOB)
+
+statement ok
+SET GLOBAL binary_as_string = true
+
+statement ok global_connection
+CHECKPOINT lake
+
+query I global_connection
+SELECT current_setting('binary_as_string')
+----
+true
+
+statement ok
+SET GLOBAL binary_as_string = false
+
+query I
+SELECT count(*) FROM ducklake_list_files('lake', 't')
+----
+1
+
+query II
+SELECT b, octet_length(b) FROM lake.t ORDER BY b
+----
+\x5Cx41	4
+\x5Cx42	4
+\xFF\xFE	2

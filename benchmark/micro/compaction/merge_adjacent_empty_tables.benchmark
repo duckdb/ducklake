@@ -1,0 +1,54 @@
+# name: benchmark/micro/compaction/merge_adjacent_empty_tables.benchmark
+# description: Twenty merge calls that find nothing to merge on a lake of 300 partitioned files and eight empty tables
+# group: [compaction]
+
+name Merge Adjacent Empty Tables
+group micro
+subgroup compaction
+
+require ducklake
+
+require parquet
+
+argument work partitioned_empty_tables_work
+
+include benchmark/micro/fixtures/partitioned_compaction.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# The files are larger than max_file_size, so the calls only read the file lists of the tables
+run
+CREATE TABLE lake.empty_1 (x VARCHAR);
+CREATE TABLE lake.empty_2 (x VARCHAR);
+CREATE TABLE lake.empty_3 (x VARCHAR);
+CREATE TABLE lake.empty_4 (x VARCHAR);
+CREATE TABLE lake.empty_5 (x VARCHAR);
+CREATE TABLE lake.empty_6 (x VARCHAR);
+CREATE TABLE lake.empty_7 (x VARCHAR);
+CREATE TABLE lake.empty_8 (x VARCHAR);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake', max_file_size => 1000);
+
+# A missed reset fails the CREATE TABLE because the empty tables already exist
+result_query II
+SELECT merges, (SELECT count(*) FROM ducklake_list_files('lake', 'events')) FROM __answer;
+----
+0	300

@@ -1,0 +1,58 @@
+# name: test/sql/delete/deletion_vector_replaced_twice.test
+# description: A transaction that updates twice a file with a committed deletion vector schedules that deletion vector
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/deletion_vector_replaced_twice', DATA_INLINING_ROW_LIMIT 0, WRITE_DELETION_VECTORS true)
+
+statement ok
+CREATE TABLE lake.t (id INTEGER)
+
+statement ok
+INSERT INTO lake.t SELECT i FROM range(10) t(i)
+
+statement ok
+DELETE FROM lake.t WHERE id = 9
+
+statement ok
+BEGIN
+
+statement ok
+UPDATE lake.t SET id = 101 WHERE id = 1
+
+statement ok
+UPDATE lake.t SET id = 103 WHERE id = 3
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('lake', cleanup_all => true, dry_run => true)
+----
+0
+
+statement ok
+CALL ducklake_cleanup_old_files('lake', cleanup_all => true)
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/deletion_vector_replaced_twice/main/t/*-delete.puffin')
+----
+1
+
+query I
+SELECT list(id ORDER BY id) FROM lake.t
+----
+[0, 2, 4, 5, 6, 7, 8, 101, 103]
+
+query I
+SELECT list(id ORDER BY id) FROM lake.t AT (VERSION => 3)
+----
+[0, 1, 2, 3, 4, 5, 6, 7, 8]

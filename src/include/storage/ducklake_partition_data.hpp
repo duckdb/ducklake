@@ -89,6 +89,9 @@ struct DuckLakePartitionUtils {
 	//! Apply the appropriate partition transform to a column expression based on the field's transform type
 	static unique_ptr<Expression> ApplyPartitionTransform(ClientContext &context, unique_ptr<Expression> column_expr,
 	                                                      const DuckLakePartitionField &field);
+
+	//! Whether changing the type of a value can change its bucket
+	static bool BucketChangesWithType(const LogicalType &source_type, const LogicalType &target_type);
 };
 
 } // namespace duckdb

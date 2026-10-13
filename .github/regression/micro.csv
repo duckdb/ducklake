@@ -1,6 +1,7 @@
 benchmark/micro/show_all_tables.benchmark
 benchmark/micro/compaction/merge_adjacent_small_files.benchmark
 benchmark/micro/compaction/merge_adjacent_partitioned.benchmark
+benchmark/micro/compaction/merge_adjacent_empty_tables.benchmark
 benchmark/micro/compaction/merge_adjacent_old_partition_spec.benchmark
 benchmark/micro/compaction/rewrite_data_files_deletes.benchmark
 benchmark/micro/compaction/merge_adjacent_sorted.benchmark
@@ -18,6 +19,7 @@ benchmark/micro/read/big_lake_cold_listing.benchmark
 benchmark/micro/read/big_lake_cold_inlined_reads.benchmark
 benchmark/micro/read/sorted_probes.benchmark
 benchmark/micro/write/insert_commits_inlined.benchmark
+benchmark/micro/write/update_inlined_transaction.benchmark
 benchmark/micro/write/insert_commits_table_stats.benchmark
 benchmark/micro/write/wide_table_insert_commits.benchmark
 benchmark/micro/write/wide_table_null_first_transaction.benchmark
@@ -57,3 +59,5 @@ benchmark/micro/compaction/rewrite_data_files_timestamptz.benchmark
 benchmark/micro/write/delete_commits_v10_history.benchmark
 benchmark/micro/maintenance/expire_one_snapshot.benchmark
 benchmark/micro/read/topn_float_many_files.benchmark
+benchmark/micro/read/null_first_column_pruning.benchmark
+benchmark/micro/write/insert_commits_retyped_column.benchmark

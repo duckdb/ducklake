@@ -91,11 +91,11 @@ SELECT id FROM t WHERE s.x = 'three'
 statement ok
 UPDATE t SET n = 10 WHERE id = 1
 
-# bounds stay unknown after promotion, filters stay exact
+# bounds after promotion are unknown or cover the live values, filters stay exact
 query II
-SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 't' AND end_snapshot IS NULL) AND column_id = 2
+SELECT min_value IS NULL OR min_value::INTEGER <= 10, max_value IS NULL OR max_value::INTEGER >= 40 FROM ducklake_meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 't' AND end_snapshot IS NULL) AND column_id = 2
 ----
-NULL	NULL
+true	true
 
 query I
 SELECT id FROM t WHERE n < 20

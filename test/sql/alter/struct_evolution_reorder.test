@@ -1,0 +1,105 @@
+# name: test/sql/alter/struct_evolution_reorder.test
+# description: a type change that lists the fields of a struct in another order keeps the order of the catalog
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/struct_evolution_reorder', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE lake
+
+statement ok
+CREATE TABLE t (c STRUCT(a INTEGER, b INTEGER));
+
+statement ok
+INSERT INTO t VALUES ({'a': 1, 'b': 2});
+
+statement ok
+ALTER TABLE t ALTER c TYPE STRUCT(b INTEGER, a INTEGER);
+
+query I
+SELECT c FROM t
+----
+{'a': 1, 'b': 2}
+
+query I
+SELECT column_type FROM (DESCRIBE t)
+----
+STRUCT(a INTEGER, b INTEGER)
+
+# widened and reordered, with rows before and after the change in one transaction
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE w (c STRUCT(a INTEGER, b INTEGER));
+
+statement ok
+INSERT INTO w VALUES ({'a': 1, 'b': 2});
+
+statement ok
+ALTER TABLE w ALTER c TYPE STRUCT(b BIGINT, a INTEGER);
+
+statement ok
+INSERT INTO w VALUES ({'b': 4, 'a': 3});
+
+query I
+SELECT column_type FROM (DESCRIBE w)
+----
+STRUCT(a INTEGER, b BIGINT)
+
+statement ok
+COMMIT
+
+query I
+SELECT c FROM w ORDER BY c.a
+----
+{'a': 1, 'b': 2}
+{'a': 3, 'b': 4}
+
+# a new field goes after the existing ones, also in a list
+statement ok
+CREATE TABLE l (l STRUCT(a INTEGER, b INTEGER)[]);
+
+statement ok
+INSERT INTO l VALUES ([{'a': 1, 'b': 2}]);
+
+statement ok
+ALTER TABLE l ALTER l TYPE STRUCT(b INTEGER, x VARCHAR, a INTEGER)[];
+
+statement ok
+INSERT INTO l VALUES ([{'b': 5, 'x': 'y', 'a': 6}]);
+
+query I
+SELECT column_type FROM (DESCRIBE l)
+----
+STRUCT(a INTEGER, b INTEGER, x VARCHAR)[]
+
+query I
+SELECT l FROM l ORDER BY l[1].a
+----
+[{'a': 1, 'b': 2, 'x': NULL}]
+[{'a': 6, 'b': 5, 'x': y}]
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+query I
+SELECT l FROM l ORDER BY l[1].a
+----
+[{'a': 1, 'b': 2, 'x': NULL}]
+[{'a': 6, 'b': 5, 'x': y}]
+
+query I
+SELECT c FROM w ORDER BY c.a
+----
+{'a': 1, 'b': 2}
+{'a': 3, 'b': 4}

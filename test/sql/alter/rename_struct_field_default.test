@@ -1,0 +1,60 @@
+# name: test/sql/alter/rename_struct_field_default.test
+# description: Renaming a struct field that was added with a default keeps the default of the existing rows
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/rename_struct_field_default.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/rename_struct_field_default')
+
+statement ok
+CREATE TABLE dl.t(s STRUCT(a INT))
+
+statement ok
+INSERT INTO dl.t VALUES ({'a': 1})
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN s.f INT DEFAULT 5
+
+statement ok
+ALTER TABLE dl.t RENAME s.f TO g
+
+query I
+SELECT s FROM dl.t
+----
+{'a': 1, 'g': 5}
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/rename_struct_field_default')
+
+query I
+SELECT s FROM dl.t
+----
+{'a': 1, 'g': 5}
+
+# a rename in the same transaction as the addition
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN s.m INT DEFAULT 7
+
+statement ok
+ALTER TABLE dl.t RENAME s.m TO n
+
+statement ok
+COMMIT
+
+query I
+SELECT s.n FROM dl.t
+----
+7

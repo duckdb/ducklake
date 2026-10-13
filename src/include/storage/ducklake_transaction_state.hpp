@@ -89,6 +89,12 @@ struct DuckLakeCommitContext {
 	    [](const vector<DuckLakeInlinedFileDeletionInfo> &) {
 		    return string();
 	    };
+	//! Whether an earlier commit found values of a column at the snapshot
+	std::function<bool(TableIndex, FieldIndex, idx_t)> column_holds_values = [](TableIndex, FieldIndex, idx_t) {
+		return false;
+	};
+	std::function<void(TableIndex, FieldIndex, idx_t)> set_column_holds_values = [](TableIndex, FieldIndex, idx_t) {
+	};
 	//! Returns the current global table stats for a single table id (first-attempt path).
 	std::function<shared_ptr<DuckLakeTableStats>(TableIndex)> get_table_stats;
 	//! Top-level columns of a table at the commit snapshot — needed by stats-refresh to iterate
@@ -193,6 +199,13 @@ public:
 	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
 	                            const DuckLakeCommitContext &context,
 	                            map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);
+	//! Removes the columns that the live data of the table may hold values of
+	void RemoveColumnsWithValues(TableIndex table_id, set<FieldIndex> &columns,
+	                             const DuckLakeCommitContext &context) const;
+	//! Lets new values set the unknown bounds of the columns whose live values are all NULL
+	void ResolveNullOnlyBounds(TableIndex table_id, const LocalTableDataChanges &table_changes,
+	                           DuckLakeTableStats &stats, idx_t snapshot_id,
+	                           const DuckLakeCommitContext &context) const;
 	//! Decrement table-level stats for files dropped this commit; returns true if live rows remain.
 	bool ApplyDroppedFileStats(TableIndex table_id, DuckLakeNewGlobalStats &new_stats,
 	                           map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats);

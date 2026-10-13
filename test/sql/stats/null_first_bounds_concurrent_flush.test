@@ -1,0 +1,161 @@
+# name: test/sql/stats/null_first_bounds_concurrent_flush.test
+# description: A flush does not set table bounds from its files when rows were inlined after its snapshot
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/null_first_bounds_concurrent_flush.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/null_first_bounds_concurrent_flush', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t (c FLOAT);
+
+statement ok
+INSERT INTO ducklake.t VALUES (NULL);
+
+statement ok
+INSERT INTO ducklake.t VALUES (0.2);
+
+# the inlined rows hold a value while the bounds are unknown
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 't')
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/null_first_bounds_concurrent_flush')
+
+query II
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 't'
+----
+NULL	NULL
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't')
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (100);
+
+statement ok con1
+COMMIT
+
+query I
+SELECT s.min_value IS NULL OR s.max_value::DOUBLE >= 100 FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 't'
+----
+true
+
+query I
+SELECT count(*) FROM ducklake.t WHERE c > 10
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+3
+
+# flushed rows without statistics of the column hold its default
+
+statement ok
+CREATE TABLE ducklake.d (i INTEGER);
+
+statement ok
+INSERT INTO ducklake.d VALUES (1);
+
+statement ok
+ALTER TABLE ducklake.d ADD COLUMN a INTEGER DEFAULT 100;
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', ['a'], table_name => 'd')
+
+statement ok
+INSERT INTO ducklake.d VALUES (2, 5);
+
+statement ok
+CALL ducklake.set_option('skip_stats_columns', [], table_name => 'd')
+
+# flushed rows written before a column was widened hold values of the older type
+
+statement ok
+CREATE TABLE ducklake.g (a FLOAT DEFAULT 0.2);
+
+statement ok
+INSERT INTO ducklake.g VALUES (100.2);
+
+statement ok
+ALTER TABLE ducklake.g ALTER a TYPE DOUBLE;
+
+statement ok
+CREATE TABLE ducklake.h (i INTEGER);
+
+statement ok
+INSERT INTO ducklake.h VALUES (1);
+
+statement ok
+ALTER TABLE ducklake.h ADD COLUMN a FLOAT DEFAULT 100.2;
+
+statement ok
+ALTER TABLE ducklake.h ALTER a TYPE DOUBLE;
+
+statement ok
+INSERT INTO ducklake.h VALUES (2, 5);
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok con2
+INSERT INTO ducklake.d VALUES (3, NULL);
+
+statement ok con2
+INSERT INTO ducklake.g VALUES (NULL);
+
+statement ok con2
+INSERT INTO ducklake.h VALUES (3, NULL);
+
+statement ok con1
+COMMIT
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/null_first_bounds_concurrent_flush')
+
+query II
+SELECT i, a FROM ducklake.d ORDER BY i
+----
+1	100
+2	5
+3	NULL
+
+query I
+SELECT count(*) FROM ducklake.d WHERE a > 10
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.h WHERE a > 10
+----
+1
+
+query II
+SELECT t.table_name, s.min_value IS NULL OR s.min_value::DOUBLE <= 100.19999694824219 AND s.max_value::DOUBLE >= 100.19999694824219
+FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id)
+WHERE t.table_name IN ('g', 'h') AND t.end_snapshot IS NULL AND s.column_id = (SELECT max(column_id) FROM __ducklake_metadata_ducklake.ducklake_column c WHERE c.table_id = t.table_id)
+ORDER BY ALL
+----
+g	true
+h	true

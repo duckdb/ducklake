@@ -3,6 +3,7 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "duckdb/common/hive_partitioning.hpp"
 #include "duckdb/common/types/date.hpp"
+#include "duckdb/common/types/decimal.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression.hpp"
@@ -181,6 +182,39 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyBucketTransform(ClientContex
 	                             make_uniq<BoundConstantExpression>(Value::INTEGER(NumericLimits<int32_t>::Maximum())));
 	return BindBinaryOp(context, "%", std::move(and_expr),
 	                    make_uniq<BoundConstantExpression>(Value::INTEGER(NumericCast<int32_t>(bucket_count))));
+}
+
+//! Types with the same bucket hash type give every value the same murmur3_32 hash
+static LogicalType GetBucketHashType(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::SMALLINT:
+	case LogicalTypeId::INTEGER:
+	case LogicalTypeId::BIGINT:
+		// hashed as a BIGINT like the unscaled value of a DECIMAL up to 18 digits
+		return LogicalType::DECIMAL(Decimal::MAX_WIDTH_INT64, 0);
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::USMALLINT:
+	case LogicalTypeId::UINTEGER:
+	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::HUGEINT:
+	case LogicalTypeId::UHUGEINT:
+		// hashed as their text like a wider DECIMAL
+		return LogicalType::DECIMAL(Decimal::MAX_WIDTH_DECIMAL, 0);
+	case LogicalTypeId::DECIMAL: {
+		auto width = DecimalType::GetWidth(type) <= Decimal::MAX_WIDTH_INT64 ? Decimal::MAX_WIDTH_INT64
+		                                                                     : Decimal::MAX_WIDTH_DECIMAL;
+		return LogicalType::DECIMAL(width, DecimalType::GetScale(type));
+	}
+	case LogicalTypeId::FLOAT:
+		return LogicalType::DOUBLE;
+	default:
+		return type;
+	}
+}
+
+bool DuckLakePartitionUtils::BucketChangesWithType(const LogicalType &source_type, const LogicalType &target_type) {
+	return GetBucketHashType(source_type) != GetBucketHashType(target_type);
 }
 
 static unique_ptr<Expression> FloorNanosToMicros(ClientContext &context, unique_ptr<Expression> column_expr) {

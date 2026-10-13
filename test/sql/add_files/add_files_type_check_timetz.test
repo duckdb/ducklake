@@ -1,0 +1,62 @@
+# name: test/sql/add_files/add_files_type_check_timetz.test
+# description: Adding Parquet files with a TIME WITH TIME ZONE column
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_add_files_type_timetz')
+
+statement ok
+COPY (SELECT * FROM (VALUES (TIMETZ '12:00:00+00'), (TIMETZ '12:00:00+02'), (NULL)) t(col1)) TO '{DATA_PATH}/timetz.parquet'
+
+statement ok
+COPY (SELECT TIME '20:12:24' AS col1) TO '{DATA_PATH}/time_for_timetz.parquet'
+
+statement ok
+CREATE TABLE ducklake.test(col1 TIMETZ)
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/time_for_timetz.parquet')
+----
+Expected TIME WITH TIME ZONE, found type TIME
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'test', '{DATA_PATH}/timetz.parquet')
+
+# Parquet stores TIMETZ values in UTC
+query I
+SELECT col1 FROM ducklake.test ORDER BY col1 NULLS LAST
+----
+10:00:00+00
+12:00:00+00
+NULL
+
+query I
+SELECT count(*) FROM ducklake.test t JOIN read_parquet('{DATA_PATH}/timetz.parquet') p ON t.col1 = p.col1
+----
+2
+
+query I
+SELECT count(*) FROM ducklake.test WHERE col1 > TIMETZ '11:00:00+00'
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.test WHERE col1 < TIMETZ '09:00:00+00'
+----
+0
+
+statement ok
+CREATE TABLE ducklake.test_time(col1 TIME)
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'test_time', '{DATA_PATH}/timetz.parquet')
+----
+Expected TIME, found type TIME WITH TIME ZONE

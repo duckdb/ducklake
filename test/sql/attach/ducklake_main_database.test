@@ -1,0 +1,38 @@
+# name: test/sql/attach/ducklake_main_database.test
+# description: A DuckLake opens as the main database
+# group: [attach]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_main_database.ducklake' AS dl (DATA_PATH '{TEST_DIR}/ducklake_main_database_files')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 1 AS i
+
+statement ok
+DETACH dl
+
+load ducklake:{TEST_DIR}/ducklake_main_database.ducklake
+
+query II
+SELECT current_database(), i FROM t
+----
+ducklake_main_database	1
+
+statement ok
+INSERT INTO t VALUES (2)
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/ducklake_main_database_other.ducklake' AS ducklake_main_database (DATA_PATH '{TEST_DIR}/ducklake_main_database_other_files')
+----
+database with name "ducklake_main_database" already exists
+
+load ducklake:{TEST_DIR}/ducklake_main_database.ducklake
+
+query I
+SELECT sum(i) FROM t
+----
+3

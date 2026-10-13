@@ -1,0 +1,115 @@
+# name: test/sql/transaction/options_in_transaction.test
+# description: ducklake_options() shows the tables and schemas as the transaction sees them
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/options_in_transaction')
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER);
+
+statement ok
+CREATE SCHEMA ducklake.s;
+
+statement ok
+CALL ducklake.set_option('parquet_row_group_size', '1000', table_name => 't')
+
+statement ok
+CALL ducklake.set_option('parquet_row_group_size', '2000', schema => 's')
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t RENAME TO t2
+
+query II
+SELECT scope, scope_entry FROM ducklake_options('ducklake') WHERE scope IN ('SCHEMA', 'TABLE') ORDER BY scope
+----
+SCHEMA	s
+TABLE	main.t2
+
+statement ok
+ALTER TABLE ducklake.t2 RENAME TO t3
+
+# a new table with the old name does not take the option
+statement ok
+CREATE TABLE ducklake.t(j INTEGER);
+
+statement ok
+CREATE VIEW ducklake.v AS SELECT 42 AS k
+
+query I
+SELECT scope_entry FROM ducklake_options('ducklake') WHERE scope = 'TABLE'
+----
+main.t3
+
+statement ok
+ROLLBACK
+
+query I
+SELECT scope_entry FROM ducklake_options('ducklake') WHERE scope = 'TABLE'
+----
+main.t
+
+# dropped entries show no name, as after the commit
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t RENAME TO t2
+
+statement ok
+DROP TABLE ducklake.t2
+
+statement ok
+DROP SCHEMA ducklake.s
+
+query II
+SELECT scope, scope_entry FROM ducklake_options('ducklake') WHERE scope IN ('SCHEMA', 'TABLE') ORDER BY scope
+----
+SCHEMA	NULL
+TABLE	NULL
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t RENAME TO t2
+
+statement ok
+COMMIT
+
+query I
+SELECT scope_entry FROM ducklake_options('ducklake') WHERE scope = 'TABLE'
+----
+main.t2
+
+statement ok
+BEGIN
+
+statement ok
+DROP TABLE ducklake.t2
+
+statement ok
+DROP SCHEMA ducklake.s
+
+statement ok
+COMMIT
+
+query II
+SELECT scope, scope_entry FROM ducklake_options('ducklake') WHERE scope IN ('SCHEMA', 'TABLE') ORDER BY scope
+----
+SCHEMA	NULL
+TABLE	NULL

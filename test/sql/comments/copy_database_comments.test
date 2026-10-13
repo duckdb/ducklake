@@ -1,0 +1,97 @@
+# name: test/sql/comments/copy_database_comments.test
+# description: The comments of tables and views created by COPY FROM DATABASE are kept after the commit
+# group: [comments]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/copy_database_comments.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{TEST_DIR}/copy_database_comments_src.db' AS src
+
+statement ok
+CREATE TABLE src.t (id INTEGER, v VARCHAR)
+
+statement ok
+COMMENT ON TABLE src.t IS 'table comment'
+
+statement ok
+COMMENT ON COLUMN src.t.v IS 'column comment'
+
+statement ok
+CREATE VIEW src.vw AS SELECT id, v FROM src.t
+
+statement ok
+COMMENT ON VIEW src.vw IS 'view comment'
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/copy_database_comments')
+
+statement ok
+COPY FROM DATABASE src TO lake
+
+# a comment set later in the same transaction replaces the one the table was created with
+statement ok
+ATTACH '{TEST_DIR}/copy_database_comments_src2.db' AS src2
+
+statement ok
+CREATE TABLE src2.t3 (id INTEGER, v VARCHAR)
+
+statement ok
+COMMENT ON TABLE src2.t3 IS 'old table comment'
+
+statement ok
+COMMENT ON COLUMN src2.t3.v IS 'old column comment'
+
+statement ok
+BEGIN
+
+statement ok
+COPY FROM DATABASE src2 TO lake
+
+statement ok
+COMMENT ON TABLE lake.t3 IS 'new table comment'
+
+statement ok
+COMMENT ON COLUMN lake.t3.v IS 'new column comment'
+
+statement ok
+COMMIT
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake
+
+query II
+SELECT table_name, comment FROM duckdb_tables() WHERE database_name = 'lake' ORDER BY 1
+----
+t	table comment
+t3	new table comment
+
+query II
+SELECT view_name, comment FROM duckdb_views() WHERE database_name = 'lake'
+----
+vw	view comment
+
+query III
+SELECT table_name, column_name, comment FROM duckdb_columns() WHERE database_name = 'lake' AND comment IS NOT NULL ORDER BY 1, 2
+----
+t	v	column comment
+t3	v	new column comment
+
+# one comment per entry
+query II
+SELECT count(*), count(DISTINCT object_id) FROM __ducklake_metadata_lake.ducklake_tag WHERE key = 'comment' AND end_snapshot IS NULL
+----
+3	3
+
+query II
+SELECT count(*), count(DISTINCT (table_id, column_id)) FROM __ducklake_metadata_lake.ducklake_column_tag WHERE key = 'comment' AND end_snapshot IS NULL
+----
+2	2
