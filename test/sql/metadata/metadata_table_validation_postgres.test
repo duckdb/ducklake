@@ -1,0 +1,54 @@
+# name: test/sql/metadata/metadata_table_validation_postgres.test
+# description: ATTACH refuses Postgres metadata tables whose column types do not match the catalog version
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
+
+foreach version 1.0 1.1-dev1
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS metadata_validation CASCADE')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/metadata_validation', METADATA_SCHEMA 'metadata_validation', DUCKLAKE_VERSION '{version}')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_SCHEMA 'metadata_validation')
+
+query I
+SELECT i FROM dl.t
+----
+42
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE metadata_validation.ducklake_snapshot ALTER COLUMN next_file_id TYPE INTEGER')
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_SCHEMA 'metadata_validation')
+----
+expected "next_file_id" of type BIGINT
+
+endloop
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA metadata_validation CASCADE')

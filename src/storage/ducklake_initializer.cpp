@@ -82,7 +82,6 @@ void DuckLakeInitializer::Initialize() {
 	// check if we are loading an existing DuckLake or creating a new one
 	// directly query a known ducklake metadata table to avoid scanning all attached catalogs via duckdb_tables()
 	// this prevents a corrupted ducklake catalog from blocking initialization of unrelated ducklake databases
-	// FIXME: verify that all ducklake tables are in the correct format
 	if (transaction.GetMetadataManager().MetadataExists()) {
 		LoadExistingDuckLakeWithRetries(transaction);
 	} else {
@@ -335,16 +334,8 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction,
 		                            resolved_version == DuckLakeVersion::UNSET ? "version" : "data path");
 	}
 	SetVersionedMetadataManager(transaction, resolved_version);
-	auto &versioned_manager = transaction.GetMetadataManager();
-	try {
-		versioned_manager.ValidateMetadataTables(false);
-	} catch (InvalidInputException &) {
-		// a v1.1-dev1 catalog that could not be migrated on attach works without the later additions
-		if (resolved_version != DuckLakeVersion::V1_1_DEV_1) {
-			throw;
-		}
-		versioned_manager.ValidateMetadataTables(true);
-	}
+	// a v1.1-dev1 catalog that could not be migrated on attach works without the later additions
+	transaction.GetMetadataManager().ValidateMetadataTables(resolved_version == DuckLakeVersion::V1_1_DEV_1);
 }
 
 DuckLakeVersion DuckLakeInitializer::ResolveTargetVersion(DuckLakeVersion catalog_version,

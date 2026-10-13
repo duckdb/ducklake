@@ -544,7 +544,7 @@ void DuckLakeMetadataManager::ValidateMetadataTables(bool allow_missing_v1_1_dev
 				                            table_name, expected_name);
 			}
 			auto &actual = actual_columns[column_idx++];
-			if (actual.first != expected_name || actual.second != expected_type) {
+			if (!StringUtil::CIEquals(actual.first, expected_name) || actual.second != expected_type) {
 				throw InvalidInputException("Failed to load DuckLake: column %d of metadata table \"%s\" is \"%s\" of "
 				                            "type %s, expected \"%s\" of type %s",
 				                            column_idx, table_name, actual.first, actual.second, expected_name,

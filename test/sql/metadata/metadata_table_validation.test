@@ -26,6 +26,31 @@ SELECT i FROM dl.t
 statement ok
 DETACH dl
 
+# column names differ only in case
+statement ok
+ATTACH '{TEST_DIR}/metadata_table_validation_clean.db' AS meta
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot RENAME COLUMN next_file_id TO NEXT_FILE_ID
+
+statement ok
+DETACH meta
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_clean.db' AS dl
+
+statement ok
+INSERT INTO dl.t VALUES (43)
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+42
+43
+
+statement ok
+DETACH dl
+
 # reordered columns
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_0.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')

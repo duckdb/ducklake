@@ -1,0 +1,48 @@
+# name: test/sql/quack/metadata_table_validation.test
+# description: ATTACH checks the metadata tables of a Quack server, whose names may differ in case
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION
+
+require quack
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/quack_metadata_table_validation')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+CALL quack_query_by_name('__ducklake_metadata_dl', 'ALTER TABLE ducklake_snapshot RENAME COLUMN next_file_id TO NEXT_FILE_ID; ALTER TABLE ducklake_snapshot RENAME TO DUCKLAKE_SNAPSHOT')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+
+statement ok
+INSERT INTO dl.t VALUES (43)
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+42
+43
+
+statement ok
+CALL quack_query_by_name('__ducklake_metadata_dl', 'ALTER TABLE ducklake_snapshot ADD COLUMN extra BIGINT')
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+----
+metadata table "ducklake_snapshot" has an unexpected column "extra"

@@ -243,24 +243,10 @@ bool PostgresMetadataManager::IsRetryableCommitError(const string &message) cons
 	return false;
 }
 
-//! The DuckDB name of a type in information_schema.columns, for the types of the metadata tables
+//! The DuckDB name of a type in information_schema.columns
 static string MetadataColumnType(const string &postgres_type) {
-	if (postgres_type == "bigint") {
-		return LogicalType(LogicalTypeId::BIGINT).ToString();
-	}
-	if (postgres_type == "boolean") {
-		return LogicalType(LogicalTypeId::BOOLEAN).ToString();
-	}
-	if (postgres_type == "character varying" || postgres_type == "text") {
-		return LogicalType(LogicalTypeId::VARCHAR).ToString();
-	}
-	if (postgres_type == "uuid") {
-		return LogicalType(LogicalTypeId::UUID).ToString();
-	}
-	if (postgres_type == "timestamp with time zone") {
-		return LogicalType(LogicalTypeId::TIMESTAMP_TZ).ToString();
-	}
-	return postgres_type;
+	auto type_id = TransformStringToLogicalTypeId(postgres_type == "character varying" ? "varchar" : postgres_type);
+	return type_id == LogicalTypeId::UNBOUND ? postgres_type : LogicalType(type_id).ToString();
 }
 
 map<string, vector<pair<string, string>>>
