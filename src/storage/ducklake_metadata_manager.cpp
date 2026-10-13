@@ -5081,11 +5081,13 @@ vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup
 		known_files.insert(canonical_path(row.GetValue<string>(0)));
 	}
 
+	// glob characters in the data path must not select files outside of it
+	auto data_path_glob = DuckLakeUtil::EscapeGlob(transaction.GetCatalog().DataPath()) + "**";
 	auto query = StringUtil::Format(R"(SELECT filename
-FROM read_blob({DATA_PATH} || '**') files
+FROM read_blob(%s) files
 WHERE (suffix(filename, '.parquet') OR suffix(filename, '.puffin'))
 %s)",
-	                                filter);
+	                                SQLString::ToString(data_path_glob), filter);
 	SubstituteCatalogPlaceholders(query);
 	auto res = transaction.ExecuteRaw(query);
 	res->ThrowIfError("Failed to get files scheduled for deletion from DuckLake: ");

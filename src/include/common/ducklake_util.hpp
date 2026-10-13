@@ -55,6 +55,8 @@ public:
 	static string JoinPath(FileSystem &fs, const string &a, const string &b);
 	//! The separator of a path, always '/' for a remote path, also before its file system is loaded
 	static string PathSeparator(FileSystem &fs, const string &path);
+	//! A glob pattern that matches the path literally
+	static string EscapeGlob(const string &path);
 
 	//! Combine two filter expressions - both must hold, so AND their conjuncts and drop duplicates
 	static unique_ptr<Expression> MergeFilterExpressions(unique_ptr<Expression> left, unique_ptr<Expression> right);

@@ -240,6 +240,21 @@ string DuckLakeUtil::PathSeparator(FileSystem &fs, const string &path) {
 	return fs.PathSeparator(path);
 }
 
+string DuckLakeUtil::EscapeGlob(const string &path) {
+	string result;
+	for (auto c : path) {
+		if (c == '*' || c == '?' || c == '[') {
+			// a bracket expression with a single character matches it literally
+			result += '[';
+			result += c;
+			result += ']';
+		} else {
+			result += c;
+		}
+	}
+	return result;
+}
+
 string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) {
 	auto sep = PathSeparator(fs, a);
 	if (StringUtil::EndsWith(a, sep)) {

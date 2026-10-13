@@ -1,0 +1,59 @@
+# name: test/sql/remove_orphans/glob_characters_in_data_path.test
+# description: orphan cleanup matches a data path with glob characters literally
+# group: [remove_orphans]
+
+require ducklake
+
+require parquet
+
+require notwindows
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# each data path matches d=a[1]*?b as a glob pattern unless one of its glob characters is matched literally
+foreach n,sibling 1,d=a1xyb 2,d=a[1]zz?b 3,d=a[1]*Qb
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/glob_characters_sibling_{n}.db' AS s{n} (DATA_PATH '{DATA_PATH}/glob_characters/{sibling}/', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE s{n}.t AS SELECT {n} AS i
+
+endloop
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/glob_characters/d=a[1]*?b/', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t (i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (5)
+
+statement ok
+COPY (SELECT 2 AS i) TO '{DATA_PATH}/glob_characters/d=a[1]*?b/main/t/stray.parquet'
+
+query I
+SELECT parse_filename(path) FROM ducklake_delete_orphaned_files('lake', cleanup_all => true, dry_run => true)
+----
+stray.parquet
+
+statement ok
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true)
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('lake', cleanup_all => true, dry_run => true)
+----
+0
+
+query I
+SELECT i FROM lake.t
+----
+5
+
+query III
+SELECT (SELECT i FROM s1.t), (SELECT i FROM s2.t), (SELECT i FROM s3.t)
+----
+1	2	3
