@@ -557,6 +557,10 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 			if (!s_ele.scale.IsValid() || !s_ele.precision.IsValid()) {
 				throw InvalidInputException("DECIMAL requires valid precision/scale");
 			}
+			if (s_ele.precision.GetIndex() > DecimalType::MaxWidth()) {
+				// DuckDB reads decimals wider than it supports as DOUBLE
+				return LogicalType::DOUBLE;
+			}
 			return LogicalType::DECIMAL(s_ele.precision.GetIndex(), s_ele.scale.GetIndex());
 		} else if (s_ele.converted_type == "UTF8") {
 			return LogicalType::VARCHAR;
