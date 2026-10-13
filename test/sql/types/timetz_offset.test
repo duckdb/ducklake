@@ -109,7 +109,10 @@ SELECT DISTINCT s.min_is_exact::BOOLEAN, s.max_is_exact::BOOLEAN FROM __ducklake
 false	false
 
 statement ok
-SET VARIABLE b_bounds = (SELECT {'min': s.min_value::TIMETZ, 'max': s.max_value::TIMETZ} FROM __ducklake_metadata_ducklake.ducklake_file_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 'b')
+SET VARIABLE b_table = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'b')
+
+statement ok
+SET VARIABLE b_bounds = (SELECT {'min': min_value::TIMETZ, 'max': max_value::TIMETZ} FROM __ducklake_metadata_ducklake.ducklake_file_column_stats WHERE table_id = getvariable('b_table'))
 
 query I
 SELECT bool_and(x BETWEEN getvariable('b_bounds').min AND getvariable('b_bounds').max) FROM ducklake.b
