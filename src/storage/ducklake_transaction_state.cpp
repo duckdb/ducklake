@@ -956,24 +956,16 @@ static set<FieldIndex> ReadSkippedStatsFields(TableIndex table_id, const DuckLak
 	return result;
 }
 
-bool DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_query, TableIndex table_id,
-                                                                DuckLakeSnapshot snapshot,
-                                                                const CompactionInformation &rewrite_changes,
-                                                                const set<DataFileIndex> &removed_source_ids,
-                                                                const DuckLakeCommitContext &context) {
+bool DuckLakeTransactionState::TryRecomputeGlobalStats(
+    TableIndex table_id, DuckLakeSnapshot snapshot, const vector<DuckLakeFileInfo> &new_files,
+    const vector<DuckLakeInlinedDataInfo> &new_inlined_data, const set<DataFileIndex> &removed_source_ids,
+    idx_t expected_data_file_rows, const DuckLakeCommitContext &context, DuckLakeTableStats &new_stats) {
 	if (tables_changed_by_others.find(table_id) != tables_changed_by_others.end()) {
 		return false; // the stats below are read at the transaction snapshot, which misses the other commits
 	}
 	auto columns = context.get_table_column_schema(table_id);
 	if (columns.empty()) {
 		// no schema visible at the commit snapshot
-		// LCOV_EXCL_START
-		return false;
-		// LCOV_EXCL_STOP
-	}
-	auto current_stats = context.get_table_stats(table_id);
-	if (!current_stats) {
-		// no committed stats row exists yet - the UPDATE path of UpdateGlobalTableStats only refreshes existing rows
 		// LCOV_EXCL_START
 		return false;
 		// LCOV_EXCL_STOP
@@ -987,8 +979,6 @@ bool DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 		type_by_field.insert(make_pair(col.field_index, col.column_type));
 	}
 
-	DuckLakeTableStats new_stats;
-	new_stats.next_row_id = current_stats->next_row_id; // monotonic - carried forward, never recomputed
 	idx_t parquet_gross_rows = 0;
 
 	// 1. Merge the per-file stats of the post-rewrite parquet files = (pre-commit visible files - removed) + new files.
@@ -1003,6 +993,9 @@ bool DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 		auto data_file_id = static_cast<idx_t>(row.GetValue<int64_t>(0));
 		if (removed_source_ids.find(DataFileIndex(data_file_id)) != removed_source_ids.end()) {
 			continue; // this file is being rewritten away
+		}
+		if (row.IsNull(1) || row.IsNull(2)) {
+			return false;
 		}
 		if (file_count == 0 || data_file_id != last_file_id) {
 			last_file_id = data_file_id;
@@ -1052,7 +1045,7 @@ bool DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	}
 
 	// add the new (rewritten, delete-free) files - their stats are available in memory
-	for (auto &file : rewrite_changes.new_files) {
+	for (auto &file : new_files) {
 		if (file.table_id != table_id) {
 			continue;
 		}
@@ -1069,7 +1062,7 @@ bool DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	// 2. Delete-free gate: the merged parquet stats are exact only if no deletions remain on the table's data files.
 	//    That holds iff the gross row count of the post-rewrite files equals the net (delete-adjusted) data-file count.
 	//    (Covers partial rewrites with delete_threshold > 0, leftover delete files, and inlined file deletions.)
-	if (parquet_gross_rows != context.get_net_data_file_row_count(table_id)) {
+	if (parquet_gross_rows != expected_data_file_rows) {
 		return false;
 	}
 	// deleted inlined rows stay stored, and flushing them later does not count them again
@@ -1095,6 +1088,15 @@ bool DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 			return false; // cannot account for inlined data exactly - keep the existing stats and the scan fallback
 		}
 		new_stats.record_count += net_inlined;
+	}
+	for (auto &inlined : new_inlined_data) {
+		if (inlined.table_id != table_id) {
+			continue;
+		}
+		new_stats.record_count += inlined.data->Count();
+		for (auto &entry : inlined.data->column_stats) {
+			new_stats.MergeStats(entry.first, entry.second);
+		}
 	}
 	for (auto &entry : new_stats.column_stats) {
 		if (files_with_stats[entry.first] != file_count) {
@@ -1124,6 +1126,24 @@ bool DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 		}
 	}
 
+	return true;
+}
+
+bool DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_query, TableIndex table_id,
+                                                                DuckLakeSnapshot snapshot,
+                                                                const CompactionInformation &rewrite_changes,
+                                                                const set<DataFileIndex> &removed_source_ids,
+                                                                const DuckLakeCommitContext &context) {
+	auto current_stats = context.get_table_stats(table_id);
+	if (!current_stats) {
+		return false;
+	}
+	DuckLakeTableStats new_stats;
+	new_stats.next_row_id = current_stats->next_row_id;
+	if (!TryRecomputeGlobalStats(table_id, snapshot, rewrite_changes.new_files, {}, removed_source_ids,
+	                             context.get_net_data_file_row_count(table_id), context, new_stats)) {
+		return false;
+	}
 	DuckLakeNewGlobalStats new_globals;
 	new_globals.initialized = true;
 	new_globals.stats = std::move(new_stats);
@@ -1202,6 +1222,59 @@ bool DuckLakeTransactionState::ApplyDroppedFileStats(
 	}
 	attempt_dropped_file_stats.erase(entry);
 	return live_rows_remain;
+}
+
+void DuckLakeTransactionState::RecomputeColumnStatsAfterFileDrop(string &batch_query, TableIndex table_id,
+                                                                 const DroppedDataFileStats &dropped_stats,
+                                                                 const NewDataInfo &new_data,
+                                                                 const DuckLakeCommitContext &context) {
+	if (SchemaChangesMade() || !flushed_inlined_tables.empty() || tables_changed_by_others.count(table_id)) {
+		return;
+	}
+	for (auto &entry : local_changes.Changes()) {
+		if (entry.first != table_id) {
+			continue;
+		}
+		auto &changes = entry.second;
+		if (!changes.new_delete_files.empty() || !changes.new_inlined_data_deletes.empty() ||
+		    (changes.new_inlined_file_deletes && !changes.new_inlined_file_deletes->file_deletes.empty())) {
+			return;
+		}
+		for (auto &file : changes.new_data_files) {
+			if (!file.delete_files.empty() || file.max_partial_file_snapshot.IsValid()) {
+				return;
+			}
+		}
+	}
+	auto expected_rows = context.get_net_data_file_row_count(table_id);
+	if (dropped_stats.live_row_count > expected_rows) {
+		return;
+	}
+	expected_rows -= dropped_stats.live_row_count;
+	for (auto &file : new_data.new_files) {
+		if (file.table_id == table_id) {
+			expected_rows += file.row_count;
+		}
+	}
+	DuckLakeTableStats new_stats;
+	if (!TryRecomputeGlobalStats(table_id, context.get_snapshot(), new_data.new_files, new_data.new_inlined_data,
+	                             dropped_stats.data_file_ids, expected_rows, context, new_stats)) {
+		return;
+	}
+	// Nested containers have no file bounds, only their leaves have statistics.
+	for (auto entry = new_stats.column_stats.begin(); entry != new_stats.column_stats.end();) {
+		if (DuckLakeTypes::IsNested(entry->second.type)) {
+			entry = new_stats.column_stats.erase(entry);
+		} else {
+			++entry;
+		}
+	}
+	DuckLakeNewGlobalStats new_globals;
+	new_globals.initialized = true;
+	new_globals.stats = std::move(new_stats);
+	batch_query += DeleteTableColumnStatsSql(table_id);
+	batch_query += DuckLakeMetadataManager::InsertTableColumnStatsSql(
+	    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals), context.supports_v1_1_metadata);
 }
 
 void DuckLakeTransactionState::InitializeGlobalStats(TableIndex table_id, const DuckLakeTableStats &current_stats,
@@ -2350,6 +2423,10 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		    context.supports_v1_1_metadata, context.inlined_file_deletion_table_exists(table_id));
 	}
 
+	for (auto &entry : dropped_file_stats) {
+		RecomputeColumnStatsAfterFileDrop(batch_queries, entry.first, entry.second, new_data, context);
+	}
+
 	// Tracking for tables that had schema changes
 	set<TableIndex> tables_with_schema_changes;
 	for (auto &table_id : transaction_changes.altered_tables) {
@@ -2637,12 +2714,13 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			} else {
 				commit_stats_snapshot.snapshot = context.get_snapshot();
 			}
+			can_retry = true;
+			context.set_attempt_snapshot(commit_snapshot);
 			commit_snapshot.snapshot_id++;
 			if (SchemaChangesMade()) {
 				// we changed the schema - need to get a new schema version
 				commit_snapshot.schema_version++;
 			}
-			can_retry = true;
 			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
 			DuckLakeCommitState commit_state(commit_snapshot);
 			// write the new snapshot
@@ -2705,13 +2783,6 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	context.set_entry_oids(new_entry_oids);
 	context.set_committed_snapshot_id(commit_snapshot.snapshot_id);
 	context.set_table_options(committed_table_options);
-	for (auto &entry : dropped_file_stats) {
-		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);
-	}
-	// a compaction without new files keeps the next file id of the cached stats
-	for (auto &table_id : local_changes.GetCompactedTables()) {
-		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, table_id);
-	}
 	if (flushed_inlined && !context.skip_drop_empty_inlined) {
 		try {
 			DropEmptySupersededInlinedTables(context);
