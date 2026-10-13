@@ -929,7 +929,6 @@ static bool NumberConvertsExactly(ClientContext &context, const string &value, c
 		types.push_back(LogicalType::DECIMAL(Decimal::MAX_WIDTH_DECIMAL, NumericCast<uint8_t>(scale - 1)));
 	}
 	// numbers beyond the range of a decimal, and spellings a decimal does not parse such as hexadecimal integers
-	types.push_back(LogicalType::DOUBLE);
 	types.push_back(imported.type());
 	return EqualsAsFirstParsed(context, value, imported, types);
 }

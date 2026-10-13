@@ -117,12 +117,13 @@ statement ok
 CREATE TABLE lake.dm (id INTEGER, p DATE, h HUGEINT);
 
 statement ok
-COPY (SELECT 1 AS id, '2024-01-01 00:00:00' AS p, '1e38' AS h) TO '{DATA_PATH}/add_files_hive_inexact_value_src9' (FORMAT parquet, PARTITION_BY (p, h));
+COPY (SELECT 1 AS id, '2024-01-01 00:00:00' AS p, '1e38' AS h UNION ALL SELECT 2, '2024-01-01 00:00:00', '109443000000000000000000000000000000000') TO '{DATA_PATH}/add_files_hive_inexact_value_src9' (FORMAT parquet, PARTITION_BY (p, h));
 
 statement ok
 CALL ducklake_add_data_files('lake', 'dm', '{DATA_PATH}/add_files_hive_inexact_value_src9/**/*.parquet', hive_partitioning => true);
 
 query II
-SELECT p, h FROM lake.dm
+SELECT p, h FROM lake.dm ORDER BY h
 ----
 2024-01-01	100000000000000000000000000000000000000
+2024-01-01	109443000000000000000000000000000000000
