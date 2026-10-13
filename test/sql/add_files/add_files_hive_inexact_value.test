@@ -163,3 +163,29 @@ SELECT id, (p = TIMESTAMPTZ '2024-01-01 05:00:00+00')::BOOLEAN FROM lake.ts ORDE
 ----
 1	true
 2	true
+
+# without time zone casts a date still imports, while an offset cannot be checked
+statement ok
+SET disable_timestamptz_casts = true
+
+statement ok
+CREATE TABLE lake.dc (id INTEGER, d DATE);
+
+statement ok
+COPY (SELECT 1 AS id, '2024-01-01' AS d) TO '{DATA_PATH}/add_files_hive_inexact_value_src12' (FORMAT parquet, PARTITION_BY (d));
+
+statement ok
+CALL ducklake_add_data_files('lake', 'dc', '{DATA_PATH}/add_files_hive_inexact_value_src12/**/*.parquet', hive_partitioning => true);
+
+statement ok
+COPY (SELECT 2 AS id, '2024-01-01 00:00:00-05' AS d) TO '{DATA_PATH}/add_files_hive_inexact_value_src13' (FORMAT parquet, PARTITION_BY (d));
+
+statement error
+CALL ducklake_add_data_files('lake', 'dc', '{DATA_PATH}/add_files_hive_inexact_value_src13/**/*.parquet', hive_partitioning => true);
+----
+does not convert exactly to the column type "DATE"
+
+query II
+SELECT id, d FROM lake.dc
+----
+1	2024-01-01

@@ -8,6 +8,8 @@
 #include "storage/ducklake_insert.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "duckdb/common/types/decimal.hpp"
+#include "duckdb/common/types/timestamp.hpp"
+#include "duckdb/main/settings.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/hive_partitioning.hpp"
@@ -950,12 +952,23 @@ static vector<LogicalType> FinerTemporalTypes(const LogicalType &type) {
 	}
 }
 
+//! Whether a time stamp names an offset or a time zone
+static bool NamesTimeZone(const string &value) {
+	timestamp_t result;
+	bool has_offset = false;
+	string_t time_zone(nullptr, 0);
+	auto cast = Timestamp::TryConvertTimestampTZ(value.c_str(), value.size(), result, false, has_offset, time_zone);
+	return cast == TimestampCastResult::SUCCESS && (has_offset || time_zone.GetSize() > 0);
+}
+
 //! A promotion to a time stamp with time zone reads the offset of the hive value, which the other types ignore
 static bool TemporalConvertsExactly(ClientContext &context, const string &value, const Value &imported) {
 	auto &type = imported.type();
-	if (TypePromotionIsAllowed(type, LogicalType::TIMESTAMP_TZ) &&
-	    !EqualsAsFirstParsed(context, value, imported, {LogicalType::TIMESTAMP_TZ})) {
-		return false;
+	if (TypePromotionIsAllowed(type, LogicalType::TIMESTAMP_TZ) && NamesTimeZone(value)) {
+		if (Settings::Get<DisableTimestamptzCastsSetting>(context) ||
+		    !EqualsAsFirstParsed(context, value, imported, {LogicalType::TIMESTAMP_TZ})) {
+			return false;
+		}
 	}
 	return EqualsAsFirstParsed(context, value, imported, FinerTemporalTypes(type));
 }
