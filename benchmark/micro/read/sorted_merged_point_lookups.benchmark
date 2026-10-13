@@ -1,0 +1,120 @@
+# name: benchmark/micro/read/sorted_merged_point_lookups.benchmark
+# description: Point lookups on a SORTED BY table merged from 64 blocks of keys that arrived out of key order
+# group: [read]
+
+name Sorted Merged Point Lookups
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+cache_file sorted_merged_lookups_ready.marker
+
+load
+@create sorted_merged_lookups
+@attach sorted_merged_lookups AS lake (DATA_PATH '${BENCHMARK_DIR}/sorted_merged_lookups_files', DATA_INLINING_ROW_LIMIT 0)
+CALL lake.set_option('target_file_size', '1500KB');
+CREATE TABLE lake.t (k BIGINT, v VARCHAR);
+ALTER TABLE lake.t SET SORTED BY (k);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(0, 10000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(50000, 60000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(100000, 110000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(150000, 160000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(200000, 210000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(250000, 260000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(300000, 310000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(350000, 360000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(400000, 410000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(450000, 460000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(500000, 510000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(550000, 560000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(600000, 610000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(10000, 20000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(60000, 70000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(110000, 120000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(160000, 170000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(210000, 220000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(260000, 270000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(310000, 320000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(360000, 370000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(410000, 420000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(460000, 470000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(510000, 520000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(560000, 570000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(610000, 620000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(20000, 30000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(70000, 80000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(120000, 130000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(170000, 180000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(220000, 230000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(270000, 280000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(320000, 330000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(370000, 380000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(420000, 430000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(470000, 480000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(520000, 530000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(570000, 580000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(620000, 630000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(30000, 40000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(80000, 90000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(130000, 140000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(180000, 190000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(230000, 240000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(280000, 290000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(330000, 340000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(380000, 390000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(430000, 440000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(480000, 490000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(530000, 540000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(580000, 590000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(630000, 640000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(40000, 50000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(90000, 100000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(140000, 150000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(190000, 200000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(240000, 250000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(290000, 300000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(340000, 350000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(390000, 400000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(440000, 450000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(490000, 500000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(540000, 550000) r(i);
+INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(590000, 600000) r(i);
+CALL ducklake_merge_adjacent_files('lake', 't');
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 't')) NOT BETWEEN 2 AND 32 THEN error('the blocks must be merged into a few files') END;
+DETACH lake;
+@seal sorted_merged_lookups
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/sorted_merged_lookups_ready.marker' (FORMAT CSV);
+@attach sorted_merged_lookups AS lake (READ_ONLY)
+
+reload
+@attach sorted_merged_lookups AS lake (READ_ONLY)
+
+run
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 5000 AND 5010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 37000 AND 37010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 69000 AND 69010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 101000 AND 101010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 133000 AND 133010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 165000 AND 165010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 197000 AND 197010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 229000 AND 229010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 261000 AND 261010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 293000 AND 293010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 325000 AND 325010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 357000 AND 357010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 389000 AND 389010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 421000 AND 421010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 453000 AND 453010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 485000 AND 485010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 517000 AND 517010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 549000 AND 549010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 581000 AND 581010;
+SELECT count(*) AS c FROM lake.t WHERE k BETWEEN 613000 AND 613010;
+
+result_query I
+SELECT * FROM __answer
+----
+11
