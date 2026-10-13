@@ -37,6 +37,7 @@ benchmark/micro/write/big_lake_ddl_commits.benchmark
 benchmark/micro/write/big_lake_create_tables.benchmark
 benchmark/ingest/add_files_small_files.benchmark
 benchmark/micro/ingest/add_files_not_null.benchmark
+benchmark/micro/ingest/add_files_hive.benchmark
 benchmark/tpch/q09.benchmark
 benchmark/micro/read/added_column_pruning.benchmark
 benchmark/micro/read/tz_pruning_many_files.benchmark
