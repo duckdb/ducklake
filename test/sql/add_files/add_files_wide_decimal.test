@@ -24,10 +24,12 @@ CREATE TABLE ducklake.{file} (x DOUBLE)
 statement ok
 CALL ducklake_add_data_files('ducklake', '{file}', '{DATA_PATH}/add_files_wide_decimal_{file}.parquet')
 
-query I
-SELECT count(*) FROM (SELECT x FROM ducklake.{file} EXCEPT ALL SELECT x FROM '{DATA_PATH}/add_files_wide_decimal_{file}.parquet')
+query II
+SELECT
+  (SELECT count(*) FROM (SELECT x FROM ducklake.{file} EXCEPT ALL SELECT x FROM '{DATA_PATH}/add_files_wide_decimal_{file}.parquet')),
+  (SELECT count(*) FROM (SELECT x FROM '{DATA_PATH}/add_files_wide_decimal_{file}.parquet' EXCEPT ALL SELECT x FROM ducklake.{file}))
 ----
-0
+0	0
 
 query I
 SELECT count(*) = (SELECT count(*) FROM '{DATA_PATH}/add_files_wide_decimal_{file}.parquet' WHERE x > 1) FROM ducklake.{file} WHERE x > 1
