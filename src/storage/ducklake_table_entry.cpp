@@ -339,21 +339,17 @@ void CheckStoredValues(ClientContext &context, Vector &values, idx_t count, cons
 	case LogicalTypeId::LIST:
 	case LogicalTypeId::MAP: {
 		// the child vector also holds the entries of rows the scan filtered out, and rows can share entries
-		auto entries_data = FlatVector::GetData<list_entry_t>(values);
-		auto &validity = FlatVector::Validity(values);
-		idx_t child_count = 0;
-		for (idx_t i = 0; i < count; i++) {
-			child_count += validity.RowIsValid(i) ? entries_data[i].length : 0;
+		auto info = ListVector::GetConsecutiveChildListInfo(values, 0, count);
+		auto child_count = info.child_list_info.length;
+		auto &all_children = ListVector::GetChildMutable(values);
+		Vector child(Vector::Ref(all_children));
+		if (info.needs_slicing) {
+			SelectionVector child_sel(child_count);
+			ListVector::GetConsecutiveChildSelVector(values, child_sel, 0, count);
+			child.Slice(child_sel, child_count);
+		} else {
+			child.Slice(all_children, info.child_list_info.offset, info.child_list_info.offset + child_count);
 		}
-		SelectionVector child_sel(child_count);
-		idx_t child_idx = 0;
-		for (idx_t i = 0; i < count; i++) {
-			for (idx_t k = 0; validity.RowIsValid(i) && k < entries_data[i].length; k++) {
-				child_sel.set_index(child_idx++, entries_data[i].offset + k);
-			}
-		}
-		Vector child(Vector::Ref(ListVector::GetChildMutable(values)));
-		child.Slice(child_sel, child_count);
 		if (source.Type().id() == LogicalTypeId::LIST) {
 			CheckStoredValues(context, child, child_count, *children[0], *target.Children()[0], checked_fields);
 			break;
