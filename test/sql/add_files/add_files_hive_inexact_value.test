@@ -1,0 +1,68 @@
+# name: test/sql/add_files/add_files_hive_inexact_value.test
+# description: hive values must convert exactly to the column type, since scans parse them again after a type change
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/add_files_hive_inexact_value', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t (id INTEGER, p INTEGER);
+
+statement ok
+COPY (SELECT 42 AS id, '1.1' AS p) TO '{DATA_PATH}/add_files_hive_inexact_value_src1' (FORMAT parquet, PARTITION_BY (p));
+
+statement error
+CALL ducklake_add_data_files('lake', 't', '{DATA_PATH}/add_files_hive_inexact_value_src1/**/*.parquet', hive_partitioning => true);
+----
+does not convert exactly to the column type "INTEGER"
+
+# a leading zero or a zero fraction converts exactly
+statement ok
+COPY (SELECT * FROM (VALUES (1, '01'), (2, '2.0')) v(id, p)) TO '{DATA_PATH}/add_files_hive_inexact_value_src2' (FORMAT parquet, PARTITION_BY (p));
+
+statement ok
+CALL ducklake_add_data_files('lake', 't', '{DATA_PATH}/add_files_hive_inexact_value_src2/**/*.parquet', hive_partitioning => true);
+
+statement ok
+ALTER TABLE lake.t ALTER COLUMN p TYPE DECIMAL(18,1);
+
+query II
+SELECT id, p FROM lake.t WHERE p = 1.0 OR p = 2.0 ORDER BY id
+----
+1	1.0
+2	2.0
+
+statement ok
+CREATE TABLE lake.d (id INTEGER, p DECIMAL(4,1));
+
+statement ok
+COPY (SELECT 1 AS id, '1.15' AS p) TO '{DATA_PATH}/add_files_hive_inexact_value_src3' (FORMAT parquet, PARTITION_BY (p));
+
+statement error
+CALL ducklake_add_data_files('lake', 'd', '{DATA_PATH}/add_files_hive_inexact_value_src3/**/*.parquet', hive_partitioning => true);
+----
+does not convert exactly to the column type "DECIMAL(4,1)"
+
+statement ok
+CREATE TABLE lake.dt (id INTEGER, p DATE);
+
+statement ok
+COPY (SELECT 1 AS id, '2024-01-01 12:00:00' AS p) TO '{DATA_PATH}/add_files_hive_inexact_value_src4' (FORMAT parquet, PARTITION_BY (p));
+
+statement error
+CALL ducklake_add_data_files('lake', 'dt', '{DATA_PATH}/add_files_hive_inexact_value_src4/**/*.parquet', hive_partitioning => true);
+----
+does not convert exactly to the column type "DATE"
+
+query I
+SELECT count(*) FROM lake.d
+----
+0

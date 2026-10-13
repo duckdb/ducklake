@@ -907,6 +907,47 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFil
 	return result;
 }
 
+//! The digits after the decimal point, without trailing zeros
+static idx_t FractionDigits(const string &value) {
+	auto point = value.find('.');
+	if (point == string::npos) {
+		return 0;
+	}
+	idx_t end = point + 1;
+	while (end < value.size() && StringUtil::CharacterIsDigit(value[end])) {
+		end++;
+	}
+	while (end > point + 1 && value[end - 1] == '0') {
+		end--;
+	}
+	return end - point - 1;
+}
+
+//! Scans parse a hive value again with the type the column has then, so it must convert exactly
+static void CheckHiveValueIsExact(ClientContext &context, const DuckLakeFieldId &field_id, const string &hive_string,
+                                  const Value &hive_value) {
+	auto &type = field_id.Type();
+	if (hive_value.IsNull()) {
+		return;
+	}
+	auto value = HivePartitioning::Unescape(hive_string);
+	bool exact;
+	if (type.IsIntegral() || type.id() == LogicalTypeId::DECIMAL) {
+		// casts to these types round the digits beyond the scale, also strict ones
+		auto scale = type.id() == LogicalTypeId::DECIMAL ? DecimalType::GetScale(type) : 0;
+		exact = value.find_first_of("eE") == string::npos && FractionDigits(value) <= scale;
+	} else if (type.IsTemporal()) {
+		exact = Value(value).TryCastAs(context, type, nullptr, true).has_value();
+	} else {
+		return;
+	}
+	if (!exact) {
+		throw InvalidInputException("Column \"%s\" exists as a hive partition with value \"%s\", but this value does "
+		                            "not convert exactly to the column type \"%s\"",
+		                            field_id.Name(), value, type);
+	}
+}
+
 bool DuckLakeFileProcessor::TryMapHiveColumn(ParquetFileMetadata &file_metadata, const string &name,
                                              const DuckLakeFieldId &field_id,
                                              vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps) {
@@ -917,6 +958,7 @@ bool DuckLakeFileProcessor::TryMapHiveColumn(ParquetFileMetadata &file_metadata,
 		return false;
 	}
 	auto hive_value = HivePartitioning::GetValue(context, hive_key, hive_entry->second, field_id.Type());
+	CheckHiveValueIsExact(context, field_id, hive_entry->second, hive_value);
 	column_maps.push_back(MapHiveColumn(file_metadata, field_id, hive_key, hive_value));
 	return true;
 }
