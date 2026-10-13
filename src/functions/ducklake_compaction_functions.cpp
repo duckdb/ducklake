@@ -254,11 +254,19 @@ using compaction_map_t =
 
 //! Orders the candidate files of each group by the bounds of the first sort key, so that merged files cover narrow
 //! ranges of it
-static void OrderCandidatesBySortKey(DuckLakeMetadataManager &metadata_manager, DuckLakeSnapshot snapshot,
-                                     DuckLakeTableEntry &latest_table, const vector<DuckLakeCompactionFileEntry> &files,
+static void OrderCandidatesBySortKey(DuckLakeMetadataManager &metadata_manager, DuckLakeTableEntry &latest_table,
+                                     const vector<DuckLakeCompactionFileEntry> &files,
                                      compaction_map_t<DuckLakeCompactionCandidates> &candidates) {
+	set<DataFileIndex> ordered_files;
+	for (auto &group : candidates) {
+		if (group.second.candidate_files.size() > 1) {
+			for (auto &file_idx : group.second.candidate_files) {
+				ordered_files.insert(files[file_idx].file.id);
+			}
+		}
+	}
 	auto sort_data = latest_table.GetSortData();
-	if (!sort_data || sort_data->fields.empty() || sort_data->fields[0].dialect != "duckdb") {
+	if (ordered_files.empty() || !sort_data || sort_data->fields.empty() || sort_data->fields[0].dialect != "duckdb") {
 		return;
 	}
 	auto &first_key = sort_data->fields[0];
@@ -275,7 +283,7 @@ static void OrderCandidatesBySortKey(DuckLakeMetadataManager &metadata_manager, 
 	auto &field_id = latest_table.GetFieldId(column.Physical());
 	map<DataFileIndex, pair<Value, Value>> file_bounds;
 	for (auto &entry :
-	     metadata_manager.GetFileColumnBounds(latest_table.GetTableId(), field_id.GetFieldIndex(), snapshot)) {
+	     metadata_manager.GetFileColumnBounds(latest_table.GetTableId(), field_id.GetFieldIndex(), ordered_files)) {
 		auto min = TryCastStatsBound(entry.second.first, column.Type());
 		auto max = TryCastStatsBound(entry.second.second, column.Type());
 		if (min && max) {
@@ -397,7 +405,7 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 		candidates[group].candidate_files.push_back(file_idx);
 	}
 
-	OrderCandidatesBySortKey(metadata_manager, snapshot, latest_table, files, candidates);
+	OrderCandidatesBySortKey(metadata_manager, latest_table, files, candidates);
 
 	// we have gathered all the candidate files per compaction group
 	// iterate over them to generate actual compaction commands
