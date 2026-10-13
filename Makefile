@@ -24,5 +24,12 @@ endif
 # Include the Makefile from extension-ci-tools
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
 
+# Release build with clang source-based coverage of the DuckLake sources only, like `make codecov` in DuckDB
+.PHONY: codecov
+codecov: ${EXTENSION_CONFIG_STEP}
+	mkdir -p build/codecov
+	cmake $(GENERATOR) $(BUILD_FLAGS) $(EXT_RELEASE_FLAGS) $(VCPKG_MANIFEST_FLAGS) -DCMAKE_BUILD_TYPE=Release -DDUCKLAKE_COVERAGE=1 -S $(DUCKDB_SRCDIR) -B build/codecov
+	cmake --build build/codecov --config Release
+
 unittest_relassert:
 	python3 duckdb/scripts/ci/run_tests.py build/relassert/test/unittest --batch-timeout 900 --max-retries 10 $(T)

@@ -1,0 +1,60 @@
+# name: test/sql/alter/struct_evolution_catalog_order.test
+# description: a type change keeps the order of the struct fields in the catalog, which can differ from their ids
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/struct_evolution_catalog_order.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/struct_evolution_catalog_order', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE lake
+
+statement ok
+CREATE TABLE o (c STRUCT(a INTEGER, b INTEGER));
+
+statement ok
+UPDATE __ducklake_metadata_lake.ducklake_column SET column_order = 5 - column_order
+WHERE table_id = (SELECT table_id FROM __ducklake_metadata_lake.ducklake_table WHERE table_name = 'o') AND parent_column IS NOT NULL
+
+statement ok
+USE memory
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/struct_evolution_catalog_order')
+
+statement ok
+USE lake
+
+query I
+SELECT column_type FROM (DESCRIBE o)
+----
+STRUCT(b INTEGER, a INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE o ALTER c TYPE STRUCT(a INTEGER, b INTEGER);
+
+query I
+SELECT column_type FROM (DESCRIBE o)
+----
+STRUCT(b INTEGER, a INTEGER)
+
+statement ok
+COMMIT
+
+query I
+SELECT column_type FROM (DESCRIBE o)
+----
+STRUCT(b INTEGER, a INTEGER)

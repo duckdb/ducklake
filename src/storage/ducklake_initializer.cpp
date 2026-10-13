@@ -1,4 +1,5 @@
 #include "duckdb/main/attached_database.hpp"
+#include "common/ducklake_util.hpp"
 #include "duckdb/common/thread.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/file_system.hpp"
@@ -189,7 +190,7 @@ void DuckLakeInitializer::InitializeDataPath() {
 	ExtensionHelper::AutoLoadExtensionForPath(*context.db, data_path, "Data path");
 
 	auto &fs = FileSystem::GetFileSystem(context);
-	auto separator = fs.PathSeparator(data_path);
+	auto separator = DuckLakeUtil::PathSeparator(fs, data_path);
 	StringUtil::RTrim(data_path, "/\\");
 	// ensure the paths we store always end in a path separator
 	data_path += separator;

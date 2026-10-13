@@ -1349,6 +1349,33 @@ NewMacroInfo DuckLakeTransactionState::GetNewMacros(DuckLakeCommitState &commit_
 	return result;
 }
 
+static DuckLakeTagInfo CommentTag(idx_t id, const Value &comment) {
+	DuckLakeTagInfo comment_info;
+	comment_info.id = id;
+	comment_info.key = "comment";
+	comment_info.value = comment;
+	return comment_info;
+}
+
+static DuckLakeColumnTagInfo ColumnCommentTag(TableIndex table_id, FieldIndex field_index, const Value &comment) {
+	DuckLakeColumnTagInfo comment_info;
+	comment_info.table_id = table_id;
+	comment_info.field_index = field_index;
+	comment_info.key = "comment";
+	comment_info.value = comment;
+	return comment_info;
+}
+
+static DuckLakeViewColumnTagInfo ViewColumnCommentTag(TableIndex view_id, const string &column_name,
+                                                      const Value &comment) {
+	DuckLakeViewColumnTagInfo comment_info;
+	comment_info.view_id = view_id;
+	comment_info.column_name = column_name;
+	comment_info.key = "comment";
+	comment_info.value = comment;
+	return comment_info;
+}
+
 void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,
                                                reference<CatalogEntry> table_entry, NewTableInfo &result,
                                                TransactionChangeInformation &transaction_changes) {
@@ -1431,11 +1458,7 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			if (comment_remaining > 0) {
 				break;
 			}
-			DuckLakeTagInfo comment_info;
-			comment_info.id = commit_state.GetTableId(table).index;
-			comment_info.key = "comment";
-			comment_info.value = table.comment;
-			result.new_tags.push_back(std::move(comment_info));
+			result.new_tags.push_back(CommentTag(commit_state.GetTableId(table).index, table.comment));
 
 			transaction_changes.altered_tables.insert(table_id);
 			break;
@@ -1446,12 +1469,9 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			if (col_comment_rem > 0) {
 				break;
 			}
-			DuckLakeColumnTagInfo comment_info;
-			comment_info.table_id = commit_state.GetTableId(table);
-			comment_info.field_index = local_change.field_index;
-			comment_info.key = "comment";
-			comment_info.value = table.GetColumnByFieldId(local_change.field_index).Comment();
-			result.new_column_tags.push_back(std::move(comment_info));
+			result.new_column_tags.push_back(
+			    ColumnCommentTag(commit_state.GetTableId(table), local_change.field_index,
+			                     table.GetColumnByFieldId(local_change.field_index).Comment()));
 
 			transaction_changes.altered_tables.insert(table_id);
 			break;
@@ -1502,6 +1522,11 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			// note that in case of nested types we might be dropping multiple columns here
 			auto &changed_fields = table.GetChangedFields();
 			HandleChangedFields(commit_state.GetTableId(table), changed_fields, result, txn_added_fields);
+			if (table.StartsPartitionSpec()) {
+				auto partition_key = DuckLakeTransaction::GetNewPartitionKey(commit_state, table);
+				partition_key.replaces_equal_spec = true;
+				result.new_partition_keys.push_back(std::move(partition_key));
+			}
 			for (auto &new_field : changed_fields.new_fields) {
 				auto field_index = new_field.column_info.id;
 				bool retyped = std::find(changed_fields.dropped_fields.begin(), changed_fields.dropped_fields.end(),
@@ -1577,6 +1602,17 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 					config_option.option.value = option.second;
 					config_option.table_id = new_table_id;
 					result.new_table_options.push_back(std::move(config_option));
+				}
+				// the comments the table was created with, unless a later COMMENT ON replaces them
+				if (comment_remaining == 0 && !table.comment.IsNull()) {
+					result.new_tags.push_back(CommentTag(new_table_id.index, table.comment));
+				}
+				for (auto &col : table.GetColumns().Logical()) {
+					auto field_index = table.GetFieldId(col.Physical()).GetFieldIndex();
+					if (col.Comment().IsNull() || column_comment_remaining.count(field_index)) {
+						continue;
+					}
+					result.new_column_tags.push_back(ColumnCommentTag(new_table_id, field_index, col.Comment()));
 				}
 			}
 			break;
@@ -1657,11 +1693,7 @@ void DuckLakeTransactionState::GetNewViewInfo(DuckLakeCommitState &commit_state,
 			if (view_comment_remaining > 0) {
 				break;
 			}
-			DuckLakeTagInfo comment_info;
-			comment_info.id = commit_state.GetViewId(view).index;
-			comment_info.key = "comment";
-			comment_info.value = view.comment;
-			result.new_tags.push_back(std::move(comment_info));
+			result.new_tags.push_back(CommentTag(commit_state.GetViewId(view).index, view.comment));
 
 			transaction_changes.altered_views.insert(view.GetViewId());
 			break;
@@ -1676,15 +1708,12 @@ void DuckLakeTransactionState::GetNewViewInfo(DuckLakeCommitState &commit_state,
 			if (rem > 0) {
 				break;
 			}
-			DuckLakeViewColumnTagInfo comment_info;
-			comment_info.view_id = commit_state.GetViewId(view);
-			comment_info.column_name = local_change.view_column_comment_name;
-			comment_info.key = "comment";
 			auto create_info_ptr = view.GetInfo();
 			auto &view_info = create_info_ptr->Cast<CreateViewInfo>();
 			auto cit = view_info.column_comments_map.find(Identifier(local_change.view_column_comment_name));
-			comment_info.value = cit != view_info.column_comments_map.end() ? cit->second : Value();
-			result.new_view_column_tags.push_back(std::move(comment_info));
+			auto comment = cit != view_info.column_comments_map.end() ? cit->second : Value();
+			result.new_view_column_tags.push_back(
+			    ViewColumnCommentTag(commit_state.GetViewId(view), local_change.view_column_comment_name, comment));
 
 			transaction_changes.altered_views.insert(view.GetViewId());
 			break;
@@ -1708,21 +1737,22 @@ void DuckLakeTransactionState::GetNewViewInfo(DuckLakeCommitState &commit_state,
 
 			// remap the view in the commit state
 			commit_state.committed_tables.emplace(old_view_id, new_view_id);
-			if (view.GetLocalChange().type == LocalChangeType::RENAMED) {
+			auto view_change = view.GetLocalChange().type;
+			if (view_change == LocalChangeType::CREATED || view_change == LocalChangeType::RENAMED) {
 				auto create_info_ptr = view.GetInfo();
 				auto &view_info = create_info_ptr->Cast<CreateViewInfo>();
 				for (auto &entry : view_info.column_comments_map) {
 					auto column_name = entry.first.GetIdentifierName();
-					if (view_column_comment_remaining.find(column_name) != view_column_comment_remaining.end()) {
+					if (entry.second.IsNull() ||
+					    view_column_comment_remaining.find(column_name) != view_column_comment_remaining.end()) {
 						continue;
 					}
-					DuckLakeViewColumnTagInfo comment_info;
-					comment_info.view_id = new_view_id;
-					comment_info.column_name = column_name;
-					comment_info.key = "comment";
-					comment_info.value = entry.second;
-					result.new_view_column_tags.push_back(std::move(comment_info));
+					result.new_view_column_tags.push_back(ViewColumnCommentTag(new_view_id, column_name, entry.second));
 				}
+			}
+			// the comment the view was created with, unless a later COMMENT ON replaces it
+			if (view_change == LocalChangeType::CREATED && view_comment_remaining == 0 && !view.comment.IsNull()) {
+				result.new_tags.push_back(CommentTag(new_view_id.index, view.comment));
 			}
 			break;
 		}

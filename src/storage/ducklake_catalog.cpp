@@ -1413,7 +1413,9 @@ void DuckLakeCatalog::RegisterCatalog() {
 	// these checks run before the metadata database is attached, which replaces any database of the same name
 	auto &name = GetAttached().GetName();
 	bool replace = options.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT;
-	if (!replace && DatabaseManager::Get(GetDatabase()).GetDatabase(name)) {
+	// a main database is registered before it is loaded, so it finds itself
+	auto existing = DatabaseManager::Get(GetDatabase()).GetDatabase(name);
+	if (!replace && existing && existing.get() != &GetAttached()) {
 		throw BinderException("Failed to attach database: database with name \"%s\" already exists",
 		                      name.GetIdentifierName());
 	}

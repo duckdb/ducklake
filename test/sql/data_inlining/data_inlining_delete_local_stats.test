@@ -1,0 +1,225 @@
+# name: test/sql/data_inlining/data_inlining_delete_local_stats.test
+# description: rows inlined and deleted in the same transaction leave no trace in the table stats
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/data_inlining_delete_local_stats', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE t (id INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO t VALUES (1), (6)
+
+statement ok
+DELETE FROM t WHERE id = 1
+
+statement ok
+COMMIT
+
+query III
+SELECT min(id), max(id), count(*) FROM t
+----
+6	6	1
+
+# an update deletes the old row
+statement ok
+CREATE TABLE u (id INTEGER, s VARCHAR)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO u VALUES (1, 'a'), (6, 'b')
+
+statement ok
+UPDATE u SET id = 3, s = 'c' WHERE id = 1
+
+statement ok
+COMMIT
+
+query IIII
+SELECT min(id), max(id), min(s), max(s) FROM u
+----
+3	6	b	c
+
+# a deleted value leaves only NULLs
+statement ok
+CREATE TABLE n (id INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO n VALUES (NULL), (5)
+
+statement ok
+DELETE FROM n WHERE id = 5
+
+statement ok
+COMMIT
+
+query II
+SELECT min(id), max(id) FROM n
+----
+NULL	NULL
+
+# every row deleted, then new rows inserted
+statement ok
+CREATE TABLE a (id INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO a VALUES (1), (2)
+
+statement ok
+DELETE FROM a
+
+statement ok
+INSERT INTO a VALUES (5), (7)
+
+statement ok
+COMMIT
+
+query III
+SELECT min(id), max(id), count(*) FROM a
+----
+5	7	2
+
+# every row deleted
+statement ok
+CREATE TABLE e (id INTEGER)
+
+statement ok
+INSERT INTO e VALUES (4)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO e VALUES (1), (9)
+
+statement ok
+DELETE FROM e WHERE id <> 4
+
+statement ok
+COMMIT
+
+query III
+SELECT min(id), max(id), count(*) FROM e
+----
+4	4	1
+
+# a column added in the same transaction
+statement ok
+CREATE TABLE c (id INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO c VALUES (1), (6)
+
+statement ok
+ALTER TABLE c ADD COLUMN v INTEGER DEFAULT 9
+
+statement ok
+DELETE FROM c WHERE id = 1
+
+statement ok
+INSERT INTO c VALUES (7, 3)
+
+statement ok
+COMMIT
+
+query IIII
+SELECT min(id), max(id), min(v), max(v) FROM c
+----
+6	7	3	9
+
+# a column added after the delete
+statement ok
+CREATE TABLE d (id INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO d VALUES (1), (6)
+
+statement ok
+DELETE FROM d WHERE id = 1
+
+statement ok
+ALTER TABLE d ADD COLUMN v INTEGER DEFAULT 9
+
+statement ok
+COMMIT
+
+query IIII
+SELECT min(id), max(id), min(v), max(v) FROM d
+----
+6	6	9	9
+
+# type changes after the delete, which leave the inlined rows in their old types
+statement ok
+CREATE TABLE s (id INTEGER, c STRUCT(a INTEGER, b INTEGER))
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO s VALUES (1, {'a': 1, 'b': 10}), (2, {'a': 2, 'b': 20})
+
+statement ok
+DELETE FROM s WHERE id = 1
+
+statement ok
+ALTER TABLE s ALTER c TYPE STRUCT(a INTEGER, z INTEGER)
+
+statement ok
+COMMIT
+
+query IIII
+SELECT id, c.a, c.z, (SELECT count(*) FROM s WHERE c.z IS NULL) FROM s
+----
+2	2	NULL	1
+
+statement ok
+CREATE TABLE r (id INTEGER, c STRUCT(a INTEGER, b INTEGER))
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO r VALUES (1, {'a': 1, 'b': 10}), (2, {'a': 2, 'b': 20})
+
+statement ok
+DELETE FROM r WHERE id = 1
+
+statement ok
+ALTER TABLE r ALTER c TYPE STRUCT(b INTEGER)
+
+statement ok
+COMMIT
+
+query III
+SELECT id, c.b, min(c.b) OVER () FROM r
+----
+2	20	20
