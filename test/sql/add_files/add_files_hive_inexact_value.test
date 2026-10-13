@@ -91,3 +91,23 @@ statement error
 CALL ducklake_add_data_files('lake', 'n', '{DATA_PATH}/add_files_hive_inexact_value_src6/**/*.parquet', hive_partitioning => true);
 ----
 does not convert exactly to the column type "INTEGER"
+
+# digits a promotion keeps, beyond the precision of the column type
+statement ok
+CREATE TABLE lake.ms (id INTEGER, p TIMESTAMP_MS);
+
+statement ok
+COPY (SELECT 1 AS id, '2024-01-01 12:00:00.123456' AS p) TO '{DATA_PATH}/add_files_hive_inexact_value_src7' (FORMAT parquet, PARTITION_BY (p));
+
+statement error
+CALL ducklake_add_data_files('lake', 'ms', '{DATA_PATH}/add_files_hive_inexact_value_src7/**/*.parquet', hive_partitioning => true);
+----
+does not convert exactly to the column type "TIMESTAMP_MS"
+
+statement ok
+COPY (SELECT 5 AS id, '9.9999999999999999999999999999999999999' AS p) TO '{DATA_PATH}/add_files_hive_inexact_value_src8' (FORMAT parquet, PARTITION_BY (p));
+
+statement error
+CALL ducklake_add_data_files('lake', 'n', '{DATA_PATH}/add_files_hive_inexact_value_src8/**/*.parquet', hive_partitioning => true);
+----
+does not convert exactly to the column type "INTEGER"

@@ -910,21 +910,33 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFil
 
 //! Whether a number converts to an integer or decimal value without rounding
 static bool NumberConvertsExactly(ClientContext &context, const string &value, const Value &imported) {
-	auto integer_part = StringUtil::Split(imported.ToString(), '.')[0];
-	idx_t integer_digits = integer_part.size() - (StringUtil::StartsWith(integer_part, "-") ? 1 : 0);
-	if (integer_digits > Decimal::MAX_WIDTH_DECIMAL) {
-		return true;
+	// compare at the largest scale that holds the number, since no promotion keeps more digits
+	for (idx_t scale = Decimal::MAX_WIDTH_DECIMAL + 1; scale > 0; scale--) {
+		auto wide_type = LogicalType::DECIMAL(Decimal::MAX_WIDTH_DECIMAL, NumericCast<uint8_t>(scale - 1));
+		auto parsed = Value(value).TryCastAs(context, wide_type);
+		if (parsed) {
+			auto widened = imported.TryCastAs(context, wide_type);
+			return widened && *parsed == *widened;
+		}
 	}
-	// no type the column can be promoted to holds more digits than this decimal
-	auto wide_type = LogicalType::DECIMAL(Decimal::MAX_WIDTH_DECIMAL,
-	                                      NumericCast<uint8_t>(Decimal::MAX_WIDTH_DECIMAL - integer_digits));
-	auto parsed = Value(value).TryCastAs(context, wide_type);
-	if (!parsed) {
-		// spellings a decimal does not parse, such as hexadecimal integers
-		return Value(value).TryCastAs(context, imported.type(), nullptr, true).has_value();
+	// spellings a decimal does not parse, such as hexadecimal integers
+	return Value(value).TryCastAs(context, imported.type(), nullptr, true).has_value();
+}
+
+//! The finest type of the family of a temporal type, which a promotion can read a hive value with
+static LogicalType FinestTemporalType(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::TIME:
+		return LogicalType::TIME_NS;
+	case LogicalTypeId::TIMESTAMP_SEC:
+	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP:
+		return LogicalType::TIMESTAMP_NS;
+	case LogicalTypeId::TIMESTAMP_TZ:
+		return LogicalType::TIMESTAMP_TZ_NS;
+	default:
+		return type;
 	}
-	auto widened = imported.TryCastAs(context, wide_type);
-	return widened && *parsed == *widened;
 }
 
 //! Scans parse a hive value again with the type the column has then, so it must convert exactly
@@ -940,6 +952,12 @@ static void CheckHiveValueIsExact(ClientContext &context, const DuckLakeFieldId 
 		exact = NumberConvertsExactly(context, value, hive_value);
 	} else if (type.IsTemporal()) {
 		exact = Value(value).TryCastAs(context, type, nullptr, true).has_value();
+		auto finest_type = FinestTemporalType(type);
+		auto parsed = Value(value).TryCastAs(context, finest_type);
+		if (exact && parsed) {
+			auto widened = hive_value.TryCastAs(context, finest_type);
+			exact = widened && *parsed == *widened;
+		}
 	} else {
 		return;
 	}
