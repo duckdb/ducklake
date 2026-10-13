@@ -12,6 +12,7 @@
 #include "storage/ducklake_inlined_data.hpp"
 #include "common/ducklake_snapshot.hpp"
 #include "duckdb/execution/expression_executor.hpp"
+#include "storage/ducklake_metadata_manager.hpp"
 
 namespace duckdb {
 class DuckLakeFieldData;
@@ -41,6 +42,15 @@ public:
 private:
 	bool TryEvaluateExpression(ClientContext &context, idx_t virtual_col_idx, Vector &input_vector,
 	                           const LogicalType &input_type, Vector &output_vector);
+	//! Reads the next page of rows from the metadata catalog, false when every row was read
+	bool LoadNextPage(ClientContext &context);
+	//! Maps the deleted row ids of the rows of the page to their ordinals
+	void MapDeletedRows();
+	unique_ptr<QueryResult> ReadPage(const DuckLakeInlinedDataPage &query_page);
+	//! Reads the keys of the next rows, false when there are none
+	bool ReadNextKeys();
+	//! Orders the rows of a page of listed rows like their keys
+	void OrderListedRows(ClientContext &context, const vector<pair<idx_t, idx_t>> &page_keys);
 
 	mutex lock;
 	DuckLakeFunctionInfo &read_info;
@@ -54,6 +64,24 @@ private:
 	DataChunk scan_chunk;
 	//! Expression executors for expression_map entries, keyed by column_t (from column_ids)
 	unordered_map<column_t, unique_ptr<ExpressionExecutor>> expression_executors;
+
+	//! The rows of a table in the metadata catalog are read one page at a time, so memory holds one page
+	vector<string> columns_to_read;
+	vector<LogicalType> expected_types;
+	DuckLakeInlinedDataPage page;
+	bool read_all_pages = false;
+	//! The size of the largest row read so far
+	idx_t max_row_bytes = 0;
+	//! Whether the rows are read by their keys, read ahead of their values, since a row can be large
+	bool read_by_keys = false;
+	bool page_type_set = false;
+	DuckLakeInlinedDataPage key_page;
+	vector<pair<idx_t, idx_t>> keys;
+	idx_t key_position = 0;
+	bool read_all_keys = false;
+	//! The deleted row ids, ascending, and the first one not yet found in a page
+	vector<idx_t> deleted_row_ids;
+	idx_t deleted_row_idx = 0;
 };
 
 } // namespace duckdb

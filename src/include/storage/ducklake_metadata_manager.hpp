@@ -56,6 +56,32 @@ struct DuckLakeInlinedValueCheck {
 	string column_name;
 };
 
+//! What a page query of an inlined data scan reads
+enum class DuckLakeInlinedPageType : uint8_t {
+	//! The next rows of the scan, after the previous page
+	NEXT_ROWS,
+	//! The row id and begin snapshot of the next rows of the scan, after the previous page
+	NEXT_KEYS,
+	//! The rows of the listed keys
+	LISTED_ROWS
+};
+
+//! A page of the rows of an inlined data scan
+struct DuckLakeInlinedDataPage {
+	DuckLakeInlinedPageType type = DuckLakeInlinedPageType::NEXT_ROWS;
+	//! The row id and begin snapshot of the last row of the previous page
+	optional_idx after_row_id;
+	idx_t after_begin_snapshot = 0;
+	//! The rows of the previous pages, skipped by orders that do not follow the row id
+	idx_t offset = 0;
+	//! The rows of the page, every row when zero
+	idx_t limit = 0;
+	//! The row id and begin snapshot of each row of a page of listed rows, in the order of the scan
+	vector<pair<idx_t, idx_t>> keys;
+	//! Whether the query orders the listed rows, a sort of large values takes more memory than the rows
+	bool order_listed_rows = true;
+};
+
 //! Metadata column names inside ducklake_inlined_data_<table_id>_<schema_version> tables.
 struct DuckLakeInlinedColNames {
 	//! Column name prefix reserved for DuckLake internal use
@@ -520,20 +546,22 @@ public:
 
 	virtual idx_t GetNextColumnId(TableIndex table_id);
 	virtual unique_ptr<QueryResult> ReadInlinedData(DuckLakeSnapshot snapshot, const string &inlined_table_name,
-	                                                const vector<string> &columns_to_read);
+	                                                const vector<string> &columns_to_read,
+	                                                const DuckLakeInlinedDataPage &page);
 	virtual unique_ptr<QueryResult> ReadInlinedDataInsertions(DuckLakeSnapshot start_snapshot,
 	                                                          DuckLakeSnapshot end_snapshot,
 	                                                          const string &inlined_table_name,
-	                                                          const vector<string> &columns_to_read);
+	                                                          const vector<string> &columns_to_read,
+	                                                          const DuckLakeInlinedDataPage &page);
 	virtual unique_ptr<QueryResult> ReadInlinedDataDeletions(DuckLakeSnapshot start_snapshot,
 	                                                         DuckLakeSnapshot end_snapshot,
 	                                                         const string &inlined_table_name,
-	                                                         const vector<string> &columns_to_read);
-	virtual unique_ptr<QueryResult> ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
-	                                                           const string &inlined_table_name,
-	                                                           const DuckLakeTableEntry &table,
-	                                                           const string &sort_order_sql,
-	                                                           const vector<string> &columns_to_read);
+	                                                         const vector<string> &columns_to_read,
+	                                                         const DuckLakeInlinedDataPage &page);
+	virtual unique_ptr<QueryResult>
+	ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot, const string &inlined_table_name,
+	                           const DuckLakeTableEntry &table, const string &sort_order_sql,
+	                           const vector<string> &columns_to_read, const DuckLakeInlinedDataPage &page);
 	//! SQL builders for the stats-refresh queries used by DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite.
 	//! Caller substitutes `{METADATA_CATALOG}` / `{SNAPSHOT_ID}` and executes via the commit context's executor.
 	static string ReadInlinedDataAggregatesSql(const string &inlined_table_name, const string &select_list,
@@ -717,8 +745,11 @@ private:
 	                                                    const vector<idx_t> &file_ids);
 	unique_ptr<QueryResult> ReadInlinedDataChanges(DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot,
 	                                               const string &inlined_table_name,
-	                                               const vector<string> &columns_to_read,
-	                                               const string &snapshot_column);
+	                                               const vector<string> &columns_to_read, const string &snapshot_column,
+	                                               const DuckLakeInlinedDataPage &page);
+	//! The query of a page of an inlined data scan, whose rows follow the row id unless a sort order is given
+	string InlinedPageQuery(const vector<string> &columns_to_read, const string &source, const string &condition,
+	                        const string &order, bool row_id_order, const DuckLakeInlinedDataPage &page) const;
 
 	unordered_map<idx_t, string> insert_inlined_table_name_cache;
 	unordered_set<idx_t> delete_inlined_table_cache;

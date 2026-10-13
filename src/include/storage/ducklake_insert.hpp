@@ -131,6 +131,8 @@ public:
 	                                                 const ColumnList &columns, const Identifier &table_name,
 	                                                 optional_ptr<DuckLakeSort> sort_data, bool sort_on_insert,
 	                                                 idx_t data_inlining_row_limit);
+	//! The row group size in bytes that the table options set
+	static optional_idx GetRowGroupSizeBytes(DuckLakeCopyInput &copy_input);
 	static PhysicalOperator &PlanCopyForInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                           DuckLakeCopyInput &copy_input, optional_ptr<PhysicalOperator> plan);
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,

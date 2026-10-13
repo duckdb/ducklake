@@ -10,6 +10,7 @@
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_insert.hpp"
+#include "duckdb/storage/buffer_manager.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_copy_to_file.hpp"
@@ -321,6 +322,11 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 
 	copy->table_index = binder.GenerateTableIndex();
 	copy->batch_size = DEFAULT_ROW_GROUP_SIZE;
+	// a row group of large inlined values is held in memory, so it stays within part of the memory limit
+	copy->batch_size_bytes = DuckLakeInsert::GetRowGroupSizeBytes(copy_input);
+	if (!copy->batch_size_bytes.IsValid()) {
+		copy->batch_size_bytes = BufferManager::GetBufferManager(context).GetMaxMemory() / 8;
+	}
 	copy->children.push_back(std::move(root));
 
 	// followed by the compaction operator (that writes the results back to the

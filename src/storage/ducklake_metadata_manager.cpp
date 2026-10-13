@@ -3745,71 +3745,120 @@ static string GetProjection(const vector<string> &columns_to_read) {
 	return StringUtil::Join(projections, ", ");
 }
 
-unique_ptr<QueryResult> DuckLakeMetadataManager::ReadInlinedData(DuckLakeSnapshot snapshot,
-                                                                 const string &inlined_table_name,
-                                                                 const vector<string> &columns_to_read) {
-	auto projection = GetProjection(columns_to_read);
+string DuckLakeMetadataManager::InlinedPageQuery(const vector<string> &columns_to_read, const string &source,
+                                                 const string &condition, const string &order, bool row_id_order,
+                                                 const DuckLakeInlinedDataPage &page) const {
 	auto col_names = InlinedColNames();
-	auto result = Query(snapshot, StringUtil::Format(R"(
+	auto row_id = "inlined_data." + col_names.row_id;
+	auto begin_snapshot = "inlined_data." + col_names.begin_snapshot;
+	auto projection = GetProjection(columns_to_read);
+	string filter;
+	string limit;
+	switch (page.type) {
+	case DuckLakeInlinedPageType::NEXT_KEYS:
+		projection = GetProjection({row_id, begin_snapshot});
+		DUCKDB_EXPLICIT_FALLTHROUGH;
+	case DuckLakeInlinedPageType::NEXT_ROWS:
+		if (page.limit == 0) {
+			break;
+		}
+		if (!row_id_order) {
+			limit = StringUtil::Format("\nLIMIT %d OFFSET %d", page.limit, page.offset);
+			break;
+		}
+		limit = StringUtil::Format("\nLIMIT %d", page.limit);
+		if (page.after_row_id.IsValid()) {
+			auto after = page.after_row_id.GetIndex();
+			filter = StringUtil::Format(" AND (%s > %d OR (%s = %d AND %s > %d))", row_id, after, row_id, after,
+			                            begin_snapshot, page.after_begin_snapshot);
+		}
+		break;
+	case DuckLakeInlinedPageType::LISTED_ROWS: {
+		// the rows of a page are consecutive in the row id order, a range is a filter the scan applies first
+		D_ASSERT(!page.keys.empty() && row_id_order);
+		auto &first = page.keys.front();
+		auto &last = page.keys.back();
+		auto pushed_filter = StringUtil::Format("%s >= %d AND %s <= %d", row_id, first.first, row_id, last.first);
+		if (!page.order_listed_rows) {
+			// another filter, or projecting the filtered row id, makes the scan read the values of a whole vector
+			D_ASSERT(page.keys.size() == 1);
+			auto row_id_column = SQLIdentifier::ToString(col_names.row_id);
+			vector<string> listed_columns;
+			for (auto &column : columns_to_read) {
+				listed_columns.push_back(column == row_id_column ? StringUtil::Format("CAST(%d AS BIGINT)", first.first)
+				                                                 : column);
+			}
+			return StringUtil::Format("\nSELECT %s\nFROM %s inlined_data\nWHERE %s;", GetProjection(listed_columns),
+			                          source, pushed_filter);
+		}
+		filter = StringUtil::Format(" AND %s AND (%s > %d OR %s >= %d) AND (%s < %d OR %s <= %d)", pushed_filter,
+		                            row_id, first.first, begin_snapshot, first.second, row_id, last.first,
+		                            begin_snapshot, last.second);
+		break;
+	}
+	}
+	return StringUtil::Format(R"(
 SELECT %s
-FROM {METADATA_CATALOG}.%s inlined_data
-WHERE {SNAPSHOT_ID} >= %s AND ({SNAPSHOT_ID} < %s OR %s IS NULL)
-ORDER BY %s;)",
-	                                                 projection, inlined_table_name, col_names.begin_snapshot,
-	                                                 col_names.end_snapshot, col_names.end_snapshot, col_names.row_id));
-	return result;
+FROM %s inlined_data
+WHERE %s%s
+ORDER BY %s%s;)",
+	                          projection, source, condition, filter, order, limit);
 }
 
-unique_ptr<QueryResult> DuckLakeMetadataManager::ReadInlinedDataChanges(DuckLakeSnapshot start_snapshot,
-                                                                        DuckLakeSnapshot end_snapshot,
-                                                                        const string &inlined_table_name,
-                                                                        const vector<string> &columns_to_read,
-                                                                        const string &snapshot_column) {
-	auto projection = GetProjection(columns_to_read);
-	return Query(end_snapshot, StringUtil::Format(R"(
-SELECT %s
-FROM {METADATA_CATALOG}.%s inlined_data
-WHERE inlined_data.%s >= %d AND inlined_data.%s <= {SNAPSHOT_ID};)",
-	                                              projection, inlined_table_name, snapshot_column,
-	                                              start_snapshot.snapshot_id, snapshot_column));
+unique_ptr<QueryResult> DuckLakeMetadataManager::ReadInlinedData(DuckLakeSnapshot snapshot,
+                                                                 const string &inlined_table_name,
+                                                                 const vector<string> &columns_to_read,
+                                                                 const DuckLakeInlinedDataPage &page) {
+	auto col_names = InlinedColNames();
+	auto condition = StringUtil::Format("{SNAPSHOT_ID} >= %s AND ({SNAPSHOT_ID} < %s OR %s IS NULL)",
+	                                    col_names.begin_snapshot, col_names.end_snapshot, col_names.end_snapshot);
+	auto order = col_names.row_id + " ASC, " + col_names.begin_snapshot + " ASC";
+	return Query(snapshot, InlinedPageQuery(columns_to_read, "{METADATA_CATALOG}." + inlined_table_name, condition,
+	                                        order, true, page));
+}
+
+unique_ptr<QueryResult>
+DuckLakeMetadataManager::ReadInlinedDataChanges(DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot,
+                                                const string &inlined_table_name, const vector<string> &columns_to_read,
+                                                const string &snapshot_column, const DuckLakeInlinedDataPage &page) {
+	auto col_names = InlinedColNames();
+	auto condition = StringUtil::Format("inlined_data.%s >= %d AND inlined_data.%s <= {SNAPSHOT_ID}", snapshot_column,
+	                                    start_snapshot.snapshot_id, snapshot_column);
+	auto order = col_names.row_id + " ASC, " + col_names.begin_snapshot + " ASC";
+	return Query(end_snapshot, InlinedPageQuery(columns_to_read, "{METADATA_CATALOG}." + inlined_table_name, condition,
+	                                            order, true, page));
 }
 
 unique_ptr<QueryResult> DuckLakeMetadataManager::ReadInlinedDataInsertions(DuckLakeSnapshot start_snapshot,
                                                                            DuckLakeSnapshot end_snapshot,
                                                                            const string &inlined_table_name,
-                                                                           const vector<string> &columns_to_read) {
+                                                                           const vector<string> &columns_to_read,
+                                                                           const DuckLakeInlinedDataPage &page) {
 	return ReadInlinedDataChanges(start_snapshot, end_snapshot, inlined_table_name, columns_to_read,
-	                              InlinedColNames().begin_snapshot);
+	                              InlinedColNames().begin_snapshot, page);
 }
 
 unique_ptr<QueryResult> DuckLakeMetadataManager::ReadInlinedDataDeletions(DuckLakeSnapshot start_snapshot,
                                                                           DuckLakeSnapshot end_snapshot,
                                                                           const string &inlined_table_name,
-                                                                          const vector<string> &columns_to_read) {
+                                                                          const vector<string> &columns_to_read,
+                                                                          const DuckLakeInlinedDataPage &page) {
 	return ReadInlinedDataChanges(start_snapshot, end_snapshot, inlined_table_name, columns_to_read,
-	                              InlinedColNames().end_snapshot);
+	                              InlinedColNames().end_snapshot, page);
 }
 
-unique_ptr<QueryResult> DuckLakeMetadataManager::ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
-                                                                            const string &inlined_table_name,
-                                                                            const DuckLakeTableEntry &table,
-                                                                            const string &sort_order_sql,
-                                                                            const vector<string> &columns_to_read) {
-	auto projection = GetProjection(columns_to_read);
+unique_ptr<QueryResult> DuckLakeMetadataManager::ReadAllInlinedDataForFlush(
+    DuckLakeSnapshot snapshot, const string &inlined_table_name, const DuckLakeTableEntry &table,
+    const string &sort_order_sql, const vector<string> &columns_to_read, const DuckLakeInlinedDataPage &page) {
 	auto col_names = InlinedColNames();
 	auto order = InlinedFlushOrder(sort_order_sql);
-	auto source = InlinedFlushSource(inlined_table_name, table);
 	if (!sort_order_sql.empty()) {
 		// a window ORDER BY binds the source columns, never the projection aliases
 		order = "ROW_NUMBER() OVER (ORDER BY " + order + ") ASC";
 	}
-	auto result = Query(snapshot, StringUtil::Format(R"(
-SELECT %s
-FROM %s inlined_data
-WHERE {SNAPSHOT_ID} >= %s
-ORDER BY %s;)",
-	                                                 projection, source, col_names.begin_snapshot, order));
-	return result;
+	auto condition = StringUtil::Format("{SNAPSHOT_ID} >= %s", col_names.begin_snapshot);
+	return Query(snapshot, InlinedPageQuery(columns_to_read, InlinedFlushSource(inlined_table_name, table), condition,
+	                                        order, sort_order_sql.empty(), page));
 }
 
 string DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(const string &inlined_table_name,

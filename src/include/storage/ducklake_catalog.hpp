@@ -390,6 +390,9 @@ public:
 	//! The columns found with values stay valid for the snapshot of a commit that directly follows theirs
 	void AdvanceColumnsWithValues(idx_t snapshot_id);
 	void ForgetColumnsWithValues(const set<TableIndex> &table_ids);
+	//! The largest average size of the rows read by a query of inlined data, which sizes the pages of the next reads
+	optional_idx GetInlinedRowBytes(const string &query_key);
+	void SetInlinedRowBytes(const string &query_key, idx_t row_bytes);
 
 	//! Invalidate the cached table stats entry for a given stats cache key.
 	void InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id);
@@ -454,6 +457,8 @@ private:
 	//! version is created and is never updated, so entries are permanent (only committed rows are cached)
 	mutex schema_version_snapshot_lock;
 	map<pair<idx_t, idx_t>, idx_t> schema_version_begin_snapshots;
+	mutex inlined_row_bytes_lock;
+	unordered_map<string, idx_t> inlined_row_bytes;
 	mutex columns_with_values_lock;
 	optional_idx columns_with_values_snapshot;
 	set<pair<idx_t, idx_t>> columns_with_values;

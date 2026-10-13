@@ -1,12 +1,17 @@
 #include "storage/ducklake_inlined_data_reader.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "storage/ducklake_transaction.hpp"
+#include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/storage/table/column_segment.hpp"
 #include "duckdb/planner/table_filter_state.hpp"
 #include "storage/ducklake_delete_filter.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/common/sql_identifier.hpp"
+#include "duckdb/common/vector/array_vector.hpp"
+#include "duckdb/common/vector/struct_vector.hpp"
+#include "duckdb/common/vector/list_vector.hpp"
 
 namespace duckdb {
 
@@ -38,8 +43,6 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 		auto &metadata_manager = transaction->GetMetadataManager();
 		auto col_names = metadata_manager.InlinedColNames();
 		// push the projections directly into the read
-		vector<string> columns_to_read;
-		vector<LogicalType> expected_types;
 		for (auto &column_id : column_indexes) {
 			auto index = column_id.GetPrimaryIndex();
 			auto &col = columns[index];
@@ -76,77 +79,24 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 			columns_to_read.push_back(column_name);
 			expected_types.push_back(col.type);
 		}
-		if (deletion_filter) {
-			// we have a deletion filter - the deletions are on row-ids, not on ordinals
-			// we need to transform from row-ids to ordinals by scanning the ACTUAL row-ids and doing the mapping
-			// set-up the scan to emit the row-id column, but to ignore it in the final result
-			for (idx_t i = 0; i < columns_to_read.size(); i++) {
-				scan_column_ids.push_back(i);
-				virtual_columns.push_back(InlinedVirtualColumn::NONE);
-			}
-			columns_to_read.push_back(SQLIdentifier::ToString(col_names.row_id));
+		// every projected column is copied from the page, the row id and begin snapshot that order the pages follow
+		for (idx_t i = 0; i < columns_to_read.size(); i++) {
+			scan_column_ids.push_back(i);
+			virtual_columns.push_back(InlinedVirtualColumn::NONE);
+		}
+		for (auto &key_column : {col_names.row_id, col_names.begin_snapshot}) {
+			columns_to_read.push_back(SQLIdentifier::ToString(key_column));
 			expected_types.push_back(LogicalType::BIGINT);
 			virtual_columns.emplace_back(InlinedVirtualColumn::COLUMN_EMPTY);
 		}
-		if (columns_to_read.empty()) {
-			// COUNT(*) - read row_id but don't emit
-			columns_to_read.push_back(SQLIdentifier::ToString(col_names.row_id));
-			expected_types.push_back(LogicalType::BIGINT);
-			virtual_columns.emplace_back(InlinedVirtualColumn::COLUMN_EMPTY);
-		}
-		if (!expression_map.empty() && virtual_columns.empty()) {
-			for (idx_t i = 0; i < columns_to_read.size(); i++) {
-				scan_column_ids.push_back(i);
-				virtual_columns.push_back(InlinedVirtualColumn::NONE);
-			}
-		}
-		unique_ptr<QueryResult> query_result;
-		switch (read_info.scan_type) {
-		case DuckLakeScanType::SCAN_TABLE:
-			query_result = metadata_manager.ReadInlinedData(read_info.snapshot, table_name, columns_to_read);
-			break;
-		case DuckLakeScanType::SCAN_INSERTIONS:
-			query_result = metadata_manager.ReadInlinedDataInsertions(*read_info.start_snapshot, read_info.snapshot,
-			                                                          table_name, columns_to_read);
-			break;
-		case DuckLakeScanType::SCAN_DELETIONS:
-			query_result = metadata_manager.ReadInlinedDataDeletions(*read_info.start_snapshot, read_info.snapshot,
-			                                                         table_name, columns_to_read);
-			break;
-		case DuckLakeScanType::SCAN_FOR_FLUSH:
-			query_result = metadata_manager.ReadAllInlinedDataForFlush(read_info.snapshot, table_name, read_info.table,
-			                                                           read_info.flush_sort_order_sql, columns_to_read);
-			break;
-		default:
-			throw InternalException("Unknown DuckLake scan type");
-		}
-		data = metadata_manager.TransformInlinedData(*query_result, expected_types, table_name);
-		if (!virtual_columns.empty()) {
-			auto scan_types = data->data->Types();
-			scan_chunk.Initialize(context, scan_types);
-		}
 		if (deletion_filter) {
-			// map the deleted row-ids to the deleted ordinals to obtain the correct deleted rows
+			// the deletions are on row ids, the pages map them to ordinals as they are read
 			auto &filter = static_cast<DuckLakeDeleteFilter &>(*deletion_filter);
-			vector<idx_t> deleted_ordinals;
-			auto &deleted_row_ids = filter.delete_data->deleted_rows;
-			idx_t current_idx = 0;
-			idx_t ordinal_position = 0;
-			for (auto &chunk : data->data->Chunks()) {
-				auto &row_id_vector = chunk.data.back();
-				auto row_id_data = FlatVector::GetData<int64_t>(row_id_vector);
-				for (idx_t r = 0; r < chunk.size(); r++) {
-					auto row_id = NumericCast<idx_t>(row_id_data[r]);
-					if (current_idx < deleted_row_ids.size() && deleted_row_ids[current_idx] == row_id) {
-						deleted_ordinals.push_back(ordinal_position);
-						current_idx++;
-					}
-					ordinal_position++;
-				}
-			}
-			filter.delete_data->deleted_rows = std::move(deleted_ordinals);
+			deleted_row_ids = std::move(filter.delete_data->deleted_rows);
+			filter.delete_data->deleted_rows.clear();
 		}
-		data->data->InitializeScan(state);
+		scan_chunk.Initialize(context, expected_types);
+		LoadNextPage(context);
 	} else {
 		// scanning from transaction-local data - we already have the data
 		// push the projections into the scan
@@ -206,11 +156,278 @@ bool DuckLakeInlinedDataReader::TryEvaluateExpression(ClientContext &context, id
 	return true;
 }
 
+//! The size of the values of a vector, with the strings they hold
+static idx_t ValueBytes(Vector &vector, idx_t count) {
+	auto &type = vector.GetType();
+	switch (type.InternalType()) {
+	case PhysicalType::VARCHAR: {
+		UnifiedVectorFormat format;
+		vector.ToUnifiedFormat(format);
+		auto strings = UnifiedVectorFormat::GetData<string_t>(format);
+		idx_t bytes = 0;
+		for (idx_t i = 0; i < count; i++) {
+			auto idx = format.sel->get_index(i);
+			bytes += sizeof(string_t) + (format.validity.RowIsValid(idx) ? strings[idx].GetSize() : 0);
+		}
+		return bytes;
+	}
+	case PhysicalType::LIST: {
+		vector.Flatten();
+		return count * sizeof(list_entry_t) +
+		       ValueBytes(ListVector::GetChildMutable(vector), ListVector::GetListSize(vector));
+	}
+	case PhysicalType::STRUCT: {
+		vector.Flatten();
+		idx_t bytes = 0;
+		for (auto &child : StructVector::GetEntries(vector)) {
+			bytes += ValueBytes(child, count);
+		}
+		return bytes;
+	}
+	case PhysicalType::ARRAY: {
+		vector.Flatten();
+		return ValueBytes(ArrayVector::GetChildMutable(vector), count * ArrayType::GetSize(type));
+	}
+	default:
+		return count * GetTypeIdSize(type.InternalType());
+	}
+}
+
+unique_ptr<QueryResult> DuckLakeInlinedDataReader::ReadPage(const DuckLakeInlinedDataPage &query_page) {
+	auto transaction = read_info.GetTransaction();
+	auto &metadata_manager = transaction->GetMetadataManager();
+	switch (read_info.scan_type) {
+	case DuckLakeScanType::SCAN_TABLE:
+		return metadata_manager.ReadInlinedData(read_info.snapshot, table_name, columns_to_read, query_page);
+	case DuckLakeScanType::SCAN_INSERTIONS:
+		return metadata_manager.ReadInlinedDataInsertions(*read_info.start_snapshot, read_info.snapshot, table_name,
+		                                                  columns_to_read, query_page);
+	case DuckLakeScanType::SCAN_DELETIONS:
+		return metadata_manager.ReadInlinedDataDeletions(*read_info.start_snapshot, read_info.snapshot, table_name,
+		                                                 columns_to_read, query_page);
+	case DuckLakeScanType::SCAN_FOR_FLUSH:
+		return metadata_manager.ReadAllInlinedDataForFlush(read_info.snapshot, table_name, read_info.table,
+		                                                   read_info.flush_sort_order_sql, columns_to_read, query_page);
+	default:
+		throw InternalException("Unknown DuckLake scan type");
+	}
+}
+
+bool DuckLakeInlinedDataReader::ReadNextKeys() {
+	static constexpr idx_t KEYS_PER_QUERY = 65536;
+	if (read_all_keys) {
+		return false;
+	}
+	key_page.type = DuckLakeInlinedPageType::NEXT_KEYS;
+	key_page.limit = KEYS_PER_QUERY;
+	auto result = ReadPage(key_page);
+	auto key_data = read_info.GetTransaction()->GetMetadataManager().TransformInlinedData(
+	    *result, {LogicalType::BIGINT, LogicalType::BIGINT}, table_name);
+	keys.clear();
+	key_position = 0;
+	for (auto &chunk : key_data->data->Chunks()) {
+		auto row_ids = FlatVector::GetData<int64_t>(chunk.data[0]);
+		auto begin_snapshots = FlatVector::GetData<int64_t>(chunk.data[1]);
+		for (idx_t r = 0; r < chunk.size(); r++) {
+			keys.emplace_back(NumericCast<idx_t>(row_ids[r]), NumericCast<idx_t>(begin_snapshots[r]));
+		}
+	}
+	read_all_keys = keys.size() < KEYS_PER_QUERY;
+	key_page.offset += keys.size();
+	if (!keys.empty()) {
+		key_page.after_row_id = keys.back().first;
+		key_page.after_begin_snapshot = keys.back().second;
+	}
+	return !keys.empty();
+}
+
+bool DuckLakeInlinedDataReader::LoadNextPage(ClientContext &context) {
+	if (read_all_pages) {
+		return false;
+	}
+	// a page holds about 16 MiB, so a vector of the rows of a page fits it up to this row size
+	static constexpr idx_t PAGE_BYTES = 16ULL * 1024ULL * 1024ULL;
+	static constexpr idx_t SMALL_ROW_BYTES = PAGE_BYTES / STANDARD_VECTOR_SIZE;
+	static constexpr idx_t PAGE_GROWTH = 16;
+	auto &catalog = read_info.table.ParentCatalog().Cast<DuckLakeCatalog>();
+	auto row_bytes_key = table_name + ":" + StringUtil::Join(columns_to_read, ",");
+	bool constant_size = true;
+	idx_t constant_row_bytes = 0;
+	for (auto &type : expected_types) {
+		constant_size = constant_size && TypeIsConstantSize(type.InternalType());
+		constant_row_bytes += constant_size ? GetTypeIdSize(type.InternalType()) : 0;
+	}
+	if (!page_type_set) {
+		page_type_set = true;
+		auto cached_row_bytes = catalog.GetInlinedRowBytes(row_bytes_key);
+		if (constant_size) {
+			max_row_bytes = constant_row_bytes;
+		} else if (cached_row_bytes.IsValid() && cached_row_bytes.GetIndex() <= SMALL_ROW_BYTES) {
+			max_row_bytes = cached_row_bytes.GetIndex();
+		} else {
+			// the size of the rows is unknown, a first page of one row measures it
+			read_by_keys = true;
+		}
+	}
+	if (!read_by_keys && max_row_bytes > SMALL_ROW_BYTES) {
+		// a vector of rows larger than measured before can exceed the page, read the next rows by their keys
+		read_by_keys = true;
+		key_page.after_row_id = page.after_row_id;
+		key_page.after_begin_snapshot = page.after_begin_snapshot;
+		key_page.offset = page.offset;
+	}
+	idx_t limit;
+	if (!read_by_keys) {
+		limit = MaxValue<idx_t>(1, PAGE_BYTES / MaxValue<idx_t>(1, max_row_bytes));
+	} else if (max_row_bytes == 0 || max_row_bytes > SMALL_ROW_BYTES) {
+		limit = 1;
+	} else {
+		limit = MinValue<idx_t>(page.limit * PAGE_GROWTH, PAGE_BYTES / max_row_bytes);
+	}
+	if (read_info.scan_type == DuckLakeScanType::SCAN_FOR_FLUSH && !read_info.flush_sort_order_sql.empty()) {
+		// the catalog query sorts the rows of a sorted flush, so a page would sort every row again
+		read_by_keys = false;
+		limit = 0;
+	}
+	page.limit = limit;
+
+	unique_ptr<QueryResult> query_result;
+	DuckLakeInlinedDataPage rows_page;
+	if (!read_by_keys) {
+		page.type = DuckLakeInlinedPageType::NEXT_ROWS;
+		query_result = ReadPage(page);
+	} else {
+		if (key_position == keys.size() && !ReadNextKeys()) {
+			read_all_pages = true;
+			data = make_shared_ptr<DuckLakeInlinedData>();
+			data->data = make_uniq<ColumnDataCollection>(context, expected_types);
+			data->data->InitializeScan(state);
+			return false;
+		}
+		rows_page.type = DuckLakeInlinedPageType::LISTED_ROWS;
+		// a single large row is read with filters the scan can apply before reading its values
+		rows_page.order_listed_rows = limit > 1;
+		auto page_end = MinValue<idx_t>(keys.size(), key_position + limit);
+		rows_page.keys.assign(keys.begin() + NumericCast<int64_t>(key_position),
+		                      keys.begin() + NumericCast<int64_t>(page_end));
+		key_position = page_end;
+		query_result = ReadPage(rows_page);
+	}
+	auto &metadata_manager = read_info.GetTransaction()->GetMetadataManager();
+	data = metadata_manager.TransformInlinedData(*query_result, expected_types, table_name);
+	query_result.reset();
+	if (read_by_keys && !rows_page.order_listed_rows) {
+		OrderListedRows(context, rows_page.keys);
+	}
+	auto row_count = data->data->Count();
+	if (!read_by_keys) {
+		read_all_pages = limit == 0 || row_count < limit;
+	}
+	data->data->InitializeScan(state);
+	if (row_count == 0) {
+		return read_by_keys ? LoadNextPage(context) : false;
+	}
+	DataChunk last_chunk;
+	data->data->InitializeScanChunk(last_chunk);
+	data->data->FetchChunk(data->data->ChunkCount() - 1, last_chunk);
+	auto last_row = last_chunk.size() - 1;
+	auto key_column = expected_types.size() - 2;
+	page.after_row_id = NumericCast<idx_t>(last_chunk.data[key_column].GetValue(last_row).GetValue<int64_t>());
+	page.after_begin_snapshot =
+	    NumericCast<idx_t>(last_chunk.data[key_column + 1].GetValue(last_row).GetValue<int64_t>());
+	if (!constant_size) {
+		idx_t page_bytes = 0;
+		for (auto &chunk : data->data->Chunks()) {
+			for (auto &vector : chunk.data) {
+				page_bytes += ValueBytes(vector, chunk.size());
+			}
+		}
+		max_row_bytes = MaxValue<idx_t>(max_row_bytes, MaxValue<idx_t>(1, page_bytes / row_count));
+		catalog.SetInlinedRowBytes(row_bytes_key, max_row_bytes);
+	}
+	MapDeletedRows();
+	page.offset += row_count;
+	return true;
+}
+
+void DuckLakeInlinedDataReader::OrderListedRows(ClientContext &context, const vector<pair<idx_t, idx_t>> &page_keys) {
+	// the rows of a page of large values are few, the listed ones are copied one by one in the order of their keys
+	auto key_column = expected_types.size() - 2;
+	vector<unique_ptr<DataChunk>> chunks;
+	map<pair<idx_t, idx_t>, pair<idx_t, idx_t>> row_of_key;
+	bool ordered = true;
+	idx_t row_number = 0;
+	for (auto &chunk : data->data->Chunks()) {
+		chunks.push_back(make_uniq<DataChunk>());
+		auto &stored = *chunks.back();
+		stored.Initialize(context, expected_types, chunk.size());
+		chunk.Copy(stored);
+		for (idx_t r = 0; r < chunk.size(); r++, row_number++) {
+			auto key = make_pair(NumericCast<idx_t>(stored.data[key_column].GetValue(r).GetValue<int64_t>()),
+			                     NumericCast<idx_t>(stored.data[key_column + 1].GetValue(r).GetValue<int64_t>()));
+			ordered = ordered && row_number < page_keys.size() && page_keys[row_number] == key;
+			row_of_key.emplace(key, make_pair(chunks.size() - 1, r));
+		}
+	}
+	if (ordered && row_number == page_keys.size()) {
+		return;
+	}
+	auto ordered_data = make_uniq<ColumnDataCollection>(context, expected_types);
+	DataChunk output;
+	output.Initialize(context, expected_types);
+	for (auto &key : page_keys) {
+		auto entry = row_of_key.find(key);
+		if (entry == row_of_key.end()) {
+			continue;
+		}
+		auto &source = *chunks[entry->second.first];
+		for (idx_t c = 0; c < expected_types.size(); c++) {
+			output.data[c].SetValue(output.size(), source.data[c].GetValue(entry->second.second));
+		}
+		output.SetChildCardinality(output.size() + 1);
+		if (output.size() == STANDARD_VECTOR_SIZE) {
+			ordered_data->Append(output);
+			output.Reset();
+		}
+	}
+	if (output.size() > 0) {
+		ordered_data->Append(output);
+	}
+	data->data = std::move(ordered_data);
+}
+
+void DuckLakeInlinedDataReader::MapDeletedRows() {
+	if (!deletion_filter) {
+		return;
+	}
+	auto &filter = static_cast<DuckLakeDeleteFilter &>(*deletion_filter);
+	auto &deleted_ordinals = filter.delete_data->deleted_rows;
+	auto row_id_column = expected_types.size() - 2;
+	auto ordinal = page.offset;
+	for (auto &chunk : data->data->Chunks()) {
+		auto row_id_data = FlatVector::GetData<int64_t>(chunk.data[row_id_column]);
+		for (idx_t r = 0; r < chunk.size(); r++, ordinal++) {
+			auto row_id = NumericCast<idx_t>(row_id_data[r]);
+			while (deleted_row_idx < deleted_row_ids.size() && deleted_row_ids[deleted_row_idx] < row_id) {
+				deleted_row_idx++;
+			}
+			if (deleted_row_idx < deleted_row_ids.size() && deleted_row_ids[deleted_row_idx] == row_id) {
+				deleted_ordinals.push_back(ordinal);
+				deleted_row_idx++;
+			}
+		}
+	}
+}
+
 AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableFunctionState &global_state,
                                             LocalTableFunctionState &local_state, DataChunk &chunk) {
 	if (!virtual_columns.empty()) {
 		scan_chunk.Reset();
 		data->data->Scan(state, scan_chunk);
+		while (scan_chunk.size() == 0 && !table_name.empty() && LoadNextPage(context)) {
+			scan_chunk.Reset();
+			data->data->Scan(state, scan_chunk);
+		}
 		idx_t source_idx = 0;
 		for (idx_t c = 0; c < virtual_columns.size(); c++) {
 			switch (virtual_columns[c]) {

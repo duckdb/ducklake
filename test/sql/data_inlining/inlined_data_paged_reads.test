@@ -1,0 +1,109 @@
+# name: test/sql/data_inlining/inlined_data_paged_reads.test
+# description: reads and flushes of inlined data hold one page of rows in memory at a time
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_data_paged_reads', DATA_INLINING_ROW_LIMIT 10)
+
+# many rows of small values are read in pages that grow, with deletes, changes and a sorted flush across pages
+statement ok
+CREATE TABLE dl.small (id INTEGER, s VARCHAR) WITH (data_inlining_row_limit = 10000);
+
+statement ok
+INSERT INTO dl.small SELECT i, 'value ' || i FROM range(5000) t(i);
+
+statement ok
+DELETE FROM dl.small WHERE id % 7 = 3;
+
+query III
+SELECT count(*), sum(id), count(DISTINCT s) FROM dl.small
+----
+4286	10713571	4286
+
+query II
+SELECT id, s FROM dl.small WHERE id IN (2, 3, 4999)
+----
+2	value 2
+4999	value 4999
+
+statement ok
+SET VARIABLE last_snapshot = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'))
+
+query I
+SELECT count(*) FROM ducklake_table_deletions('dl', 'main', 'small', 0, getvariable('last_snapshot'))
+----
+714
+
+query I
+SELECT count(*) FROM ducklake_table_insertions('dl', 'main', 'small', 0, getvariable('last_snapshot'))
+----
+5000
+
+statement ok
+ALTER TABLE dl.small SET SORTED BY (s DESC);
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'small');
+
+query III
+SELECT count(*), sum(id), count(DISTINCT s) FROM dl.small
+----
+4286	10713571	4286
+
+query I
+SELECT s FROM dl.small LIMIT 3
+----
+value 999
+value 998
+value 996
+
+# 24 single row inserts of 4 MiB values, 96 MiB in total
+statement ok
+CREATE TABLE dl.large (id INTEGER, c VARCHAR);
+
+loop i 0 24
+
+statement ok
+INSERT INTO dl.large SELECT ${i}, repeat('A', 4194304);
+
+endloop
+
+statement ok
+SET memory_limit = '64MB'
+
+statement ok
+SET threads = 1
+
+query I
+SELECT length(c) FROM dl.large LIMIT 1
+----
+4194304
+
+statement ok
+DELETE FROM dl.large WHERE id = 5;
+
+query III
+SELECT count(*), sum(id), min(length(c)) FROM dl.large
+----
+23	271	4194304
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'large');
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 'large')
+----
+1
+
+query III
+SELECT count(*), sum(id), min(length(c)) FROM dl.large
+----
+23	271	4194304

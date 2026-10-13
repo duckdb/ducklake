@@ -1398,6 +1398,17 @@ void DuckLakeCatalog::AdvanceColumnsWithValues(idx_t snapshot_id) {
 	}
 }
 
+optional_idx DuckLakeCatalog::GetInlinedRowBytes(const string &query_key) {
+	lock_guard<mutex> guard(inlined_row_bytes_lock);
+	auto entry = inlined_row_bytes.find(query_key);
+	return entry == inlined_row_bytes.end() ? optional_idx() : optional_idx(entry->second);
+}
+
+void DuckLakeCatalog::SetInlinedRowBytes(const string &query_key, idx_t row_bytes) {
+	lock_guard<mutex> guard(inlined_row_bytes_lock);
+	inlined_row_bytes[query_key] = row_bytes;
+}
+
 void DuckLakeCatalog::ForgetColumnsWithValues(const set<TableIndex> &table_ids) {
 	lock_guard<mutex> guard(columns_with_values_lock);
 	for (auto &table_id : table_ids) {
