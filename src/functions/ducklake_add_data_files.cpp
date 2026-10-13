@@ -950,6 +950,16 @@ static vector<LogicalType> FinerTemporalTypes(const LogicalType &type) {
 	}
 }
 
+//! A promotion to a time stamp with time zone reads the offset of the hive value, which the other types ignore
+static bool TemporalConvertsExactly(ClientContext &context, const string &value, const Value &imported) {
+	auto &type = imported.type();
+	if (TypePromotionIsAllowed(type, LogicalType::TIMESTAMP_TZ) &&
+	    !EqualsAsFirstParsed(context, value, imported, {LogicalType::TIMESTAMP_TZ})) {
+		return false;
+	}
+	return EqualsAsFirstParsed(context, value, imported, FinerTemporalTypes(type));
+}
+
 //! Scans parse a hive value again with the type the column has then, so it must convert exactly
 static void CheckHiveValueIsExact(ClientContext &context, const DuckLakeFieldId &field_id, const string &hive_string,
                                   const Value &hive_value) {
@@ -962,7 +972,7 @@ static void CheckHiveValueIsExact(ClientContext &context, const DuckLakeFieldId 
 	if (type.IsIntegral() || type.id() == LogicalTypeId::DECIMAL) {
 		exact = NumberConvertsExactly(context, value, hive_value);
 	} else if (type.IsTemporal()) {
-		exact = EqualsAsFirstParsed(context, value, hive_value, FinerTemporalTypes(type));
+		exact = TemporalConvertsExactly(context, value, hive_value);
 	} else {
 		return;
 	}

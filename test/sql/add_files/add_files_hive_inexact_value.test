@@ -133,3 +133,33 @@ SELECT p, h, tz FROM lake.dm ORDER BY h
 ----
 2024-01-01	100000000000000000000000000000000000000	9999-12-31 00:00:00+00
 2024-01-01	109443000000000000000000000000000000000	0001-01-01 00:00:00+00
+
+# a promotion to TIMESTAMPTZ reads the offset that a TIMESTAMP ignores
+statement ok
+SET TimeZone = 'America/New_York'
+
+statement ok
+CREATE TABLE lake.ts (id INTEGER, p TIMESTAMP);
+
+statement ok
+COPY (SELECT * FROM (VALUES (1, '2024-01-01 00:00:00'), (2, '2024-01-01 00:00:00-05')) v(id, p)) TO '{DATA_PATH}/add_files_hive_inexact_value_src10' (FORMAT parquet, PARTITION_BY (p));
+
+statement ok
+CALL ducklake_add_data_files('lake', 'ts', '{DATA_PATH}/add_files_hive_inexact_value_src10/**/*.parquet', hive_partitioning => true);
+
+statement ok
+COPY (SELECT 3 AS id, '2024-01-01T00:00:00+02:00' AS p) TO '{DATA_PATH}/add_files_hive_inexact_value_src11' (FORMAT parquet, PARTITION_BY (p));
+
+statement error
+CALL ducklake_add_data_files('lake', 'ts', '{DATA_PATH}/add_files_hive_inexact_value_src11/**/*.parquet', hive_partitioning => true);
+----
+does not convert exactly to the column type "TIMESTAMP"
+
+statement ok
+ALTER TABLE lake.ts ALTER p TYPE TIMESTAMPTZ
+
+query II
+SELECT id, (p = TIMESTAMPTZ '2024-01-01 05:00:00+00')::BOOLEAN FROM lake.ts ORDER BY id
+----
+1	true
+2	true
