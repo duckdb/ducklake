@@ -6,29 +6,25 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_update.hpp"
-#include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
-#include "duckdb/planner/expression/bound_constant_expression.hpp"
-#include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/expression/expression_barrier.hpp"
 
 namespace duckdb {
 
-//! The condition of an action restricted to rows whose row id compares to the first transaction-local one
+//! The condition of an action for the rows whose row id compares to the first one of the transaction
 static unique_ptr<Expression> RowIdCondition(LogicalMergeInto &op, ExpressionType comparison,
                                              const unique_ptr<Expression> &condition) {
-	auto row_id_type = op.children[0]->types[op.row_id_start];
-	auto result = BoundComparisonExpression::Create(
-	    comparison, make_uniq<BoundReferenceExpression>(row_id_type, op.row_id_start),
-	    make_uniq<BoundConstantExpression>(
-	        Value::BIGINT(NumericCast<int64_t>(DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START))));
+	auto result =
+	    DuckLakeUpdate::CompareToLocalRowIds(comparison, op.children[0]->types[op.row_id_start], op.row_id_start);
 	if (!condition) {
 		return result;
 	}
-	// the row id is compared first, so the condition runs once for every row
-	return make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(result), condition->Copy());
+	// the barrier keeps the row id comparison first, so a volatile condition runs once for every row
+	return make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(result),
+	                                             ExpressionBarrier::Wrap(condition->Copy()));
 }
 
-//! Split the update action into one for the rows inserted in this transaction and one for the other rows
+//! Split the update action into one for the rows inserted in the transaction and one for the others
 static bool SplitUpdateByRowId(LogicalMergeInto &op) {
 	for (auto &entry : op.actions) {
 		auto &actions = entry.second;
@@ -69,7 +65,6 @@ PhysicalOperator &DuckLakeCatalog::PlanMergeInto(ClientContext &context, Physica
 	if (update_delete_count > 1) {
 		throw NotImplementedException("MERGE INTO with DuckLake only supports a single UPDATE/DELETE action currently");
 	}
-	// rows inserted in this transaction get their row ids at commit, so the update writes their new versions apart
 	auto &table = op.table.Cast<DuckLakeTableEntry>();
 	auto &transaction = DuckLakeTransaction::Get(context, *this);
 	bool split = transaction.HasTransactionLocalInserts(table.GetTableId()) && SplitUpdateByRowId(op);

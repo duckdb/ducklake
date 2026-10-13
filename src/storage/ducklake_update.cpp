@@ -232,6 +232,22 @@ DuckLakeUpdate &DuckLakeUpdate::PlanUpdateOperator(ClientContext &context, Physi
 	return update_op;
 }
 
+unique_ptr<Expression> DuckLakeUpdate::CompareToLocalRowIds(ExpressionType comparison, const LogicalType &row_id_type,
+                                                            idx_t row_id_index) {
+	return BoundComparisonExpression::Create(comparison, make_uniq<BoundReferenceExpression>(row_id_type, row_id_index),
+	                                         make_uniq<BoundConstantExpression>(Value::BIGINT(NumericCast<int64_t>(
+	                                             DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START))));
+}
+
+//! References to the columns of the plan in front of its row id
+static vector<unique_ptr<Expression>> ColumnsWithoutRowId(PhysicalOperator &plan, idx_t row_id_index) {
+	vector<unique_ptr<Expression>> result;
+	for (idx_t col_idx = 0; col_idx < row_id_index; col_idx++) {
+		result.push_back(make_uniq<BoundReferenceExpression>(plan.types[col_idx], col_idx));
+	}
+	return result;
+}
+
 //! Whether the plan is the input of a MERGE action, which cannot hold a MERGE of its own
 static bool IsMergeActionInput(PhysicalOperator &plan) {
 	reference<PhysicalOperator> op = plan;
@@ -241,7 +257,7 @@ static bool IsMergeActionInput(PhysicalOperator &plan) {
 	return op.get().type == PhysicalOperatorType::MERGE_ACTION_SOURCE;
 }
 
-//! Plans one of the two halves of a split MERGE update, the first half updates rows inserted in the transaction
+//! Plans a half of a split MERGE update, the first half writes the rows inserted in the transaction without row ids
 static PhysicalOperator &PlanMergeUpdateHalf(DuckLakeCatalog &catalog, ClientContext &context,
                                              PhysicalPlanGenerator &planner, LogicalUpdate &op,
                                              PhysicalOperator &child_plan, DuckLakeMergeUpdateSplit &split) {
@@ -258,11 +274,7 @@ static PhysicalOperator &PlanMergeUpdateHalf(DuckLakeCatalog &catalog, ClientCon
 	if (!local_rows) {
 		return catalog.PlanUpdateInsert(context, planner, table, verified_plan, copy_input);
 	}
-	// rows inserted in this transaction get their row ids at commit, so their new versions are written without them
-	vector<unique_ptr<Expression>> expressions;
-	for (idx_t col_idx = 0; col_idx < update_op.row_id_index; col_idx++) {
-		expressions.push_back(make_uniq<BoundReferenceExpression>(verified_plan.types[col_idx], col_idx));
-	}
+	auto expressions = ColumnsWithoutRowId(verified_plan, update_op.row_id_index);
 	optional_ptr<PhysicalOperator> plan = verified_plan;
 	DuckLakeInsert::GenerateProjection(planner, expressions, plan);
 	return catalog.PlanUpdateInsert(context, planner, table, *plan, copy_input);
@@ -292,14 +304,9 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 	auto row_id_index = update_op.row_id_index;
 	auto local_rows = make_uniq<MergeIntoOperator>();
 	local_rows->action_type = MergeActionType::MERGE_INSERT;
-	local_rows->condition = BoundComparisonExpression::Create(
-	    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-	    make_uniq<BoundReferenceExpression>(LogicalType::BIGINT, row_id_index),
-	    make_uniq<BoundConstantExpression>(
-	        Value::BIGINT(NumericCast<int64_t>(DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START))));
-	for (idx_t col_idx = 0; col_idx < row_id_index; col_idx++) {
-		local_rows->expressions.push_back(make_uniq<BoundReferenceExpression>(verified_plan.types[col_idx], col_idx));
-	}
+	local_rows->condition = DuckLakeUpdate::CompareToLocalRowIds(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+	                                                             LogicalType::BIGINT, row_id_index);
+	local_rows->expressions = ColumnsWithoutRowId(verified_plan, row_id_index);
 	auto &local_input = PlanMergeActionSource(planner, verified_plan, MergeActionCondition::WHEN_MATCHED, *local_rows);
 	DuckLakeCopyInput local_copy_input(context, table);
 	local_rows->op = PlanUpdateInsert(context, planner, table, local_input, local_copy_input);

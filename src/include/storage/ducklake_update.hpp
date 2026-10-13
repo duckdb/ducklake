@@ -82,6 +82,9 @@ public:
 	string GetName() const override;
 	InsertionOrderPreservingMap<string> ParamsToString() const override;
 
+	//! Compares the row id at the index to the first row id of the rows inserted in the transaction
+	static unique_ptr<Expression> CompareToLocalRowIds(ExpressionType comparison, const LogicalType &row_id_type,
+	                                                   idx_t row_id_index);
 	static DuckLakeUpdate &PlanUpdateOperator(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
 	                                          PhysicalOperator &child_plan, DuckLakeCopyInput &copy_input,
 	                                          optional_ptr<PhysicalOperator> delete_op = nullptr);

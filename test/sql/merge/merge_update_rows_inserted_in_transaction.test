@@ -140,3 +140,38 @@ query IIII
 SELECT count(*), count(DISTINCT rowid), max(rowid) < 1000000000000000000, sum(v) FROM ducklake.inl
 ----
 8	8	true	4
+
+# a volatile condition that never holds runs once for every matched row, also once the filter adapts its order
+statement ok
+CALL enable_logging(level := 'info', storage := 'memory')
+
+statement ok
+CREATE TABLE ducklake.vol (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO ducklake.vol SELECT i, 0 FROM range(50000) t(i)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.vol SELECT i, 0 FROM range(50000, 150000) t(i)
+
+query I
+MERGE INTO ducklake.vol USING (SELECT i AS id FROM range(150000) t(i)) s USING (id)
+WHEN MATCHED AND write_log('merge condition', level := 'info', log_type := 'ducklake_test', return_value := false) THEN UPDATE SET v = 1
+----
+0
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE message = 'merge condition'
+----
+150000
+
+query III
+SELECT count(*), count(DISTINCT rowid), sum(v) FROM ducklake.vol
+----
+150000	150000	0
