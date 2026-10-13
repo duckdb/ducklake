@@ -290,6 +290,10 @@ bool PostgresMetadataManager::IsRetryableCommitError(const string &message) cons
 	// the server error follows the failed query, which can contain any text
 	auto server_error_start = message.rfind("\": ");
 	auto server_error = server_error_start == string::npos ? message : message.substr(server_error_start);
+	// Cleanup can hold a registration row while waiting for an inlined table read by this transaction.
+	if (StringUtil::Contains(StringUtil::Lower(server_error), "deadlock detected")) {
+		return true;
+	}
 	// constraint names are not translated, so a conflict on a metadata primary key is found in any language
 	for (auto end = server_error.find("_pkey"); end != string::npos; end = server_error.find("_pkey", end + 1)) {
 		auto start = end;
@@ -302,6 +306,17 @@ bool PostgresMetadataManager::IsRetryableCommitError(const string &message) cons
 		}
 	}
 	return false;
+}
+
+string PostgresMetadataManager::GetInlinedTableNamesForCommitSql(TableIndex table_id) {
+	// Keep registrations until commit: cleanup deletes them before dropping superseded inlined tables.
+	auto &catalog = transaction.GetCatalog();
+	auto remote_query =
+	    StringUtil::Format("SELECT table_name FROM %s.ducklake_inlined_data_tables WHERE table_id = %d FOR KEY SHARE",
+	                       SQLQuotedIdentifier::ToString(catalog.MetadataSchemaName()), table_id.index);
+	return StringUtil::Format(
+	    "SELECT table_name FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
+	    SQLString::ToString(remote_query));
 }
 
 bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_name) {

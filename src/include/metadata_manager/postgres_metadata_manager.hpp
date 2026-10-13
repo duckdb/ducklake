@@ -38,6 +38,7 @@ public:
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
 	bool InlinedDeletionTableExists(const string &table_name) override;
+	string GetInlinedTableNamesForCommitSql(TableIndex table_id) override;
 	void MigrateInlinedDataTypes() override;
 	bool IsRetryableCommitError(const string &message) const override;
 

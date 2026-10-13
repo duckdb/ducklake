@@ -371,6 +371,7 @@ public:
 	static string GetInlinedRowCountsSql(const string &inlined_table_name, const DuckLakeInlinedColNames &col_names);
 	static string GetTableColumnSchemaSql(TableIndex table_id);
 	static string GetInlinedTableNamesSql(TableIndex table_id);
+	virtual string GetInlinedTableNamesForCommitSql(TableIndex table_id);
 	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id);
 	//! The top-level columns of each inlined data table at the schema version of that table
 	static string GetInlinedTableColumnsSql(optional_idx table_id = optional_idx());
@@ -512,6 +513,9 @@ public:
 	static string InsertTableColumnStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
 	//! Set the stored table sizes to the size of the live data files
 	static string RefreshTableSizesSql(const set<TableIndex> &table_ids);
+	static string RefreshTableRowCountSql(TableIndex table_id, const set<string> &inlined_tables,
+	                                      idx_t pending_inlined_rows, const DuckLakeInlinedColNames &col_names,
+	                                      bool include_exactness);
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor,

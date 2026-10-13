@@ -1538,6 +1538,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.query_metadata = [&](string q) {
 		return metadata_manager->Query(q);
 	};
+	context.get_inlined_table_names_for_commit_sql = [&](TableIndex table_id) {
+		return metadata_manager->GetInlinedTableNamesForCommitSql(table_id);
+	};
 	context.execute_in_transaction = [&](string q) {
 		return metadata_manager->ExecuteInTransaction(q);
 	};

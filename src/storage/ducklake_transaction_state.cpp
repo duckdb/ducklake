@@ -2244,10 +2244,11 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 
 	// write new data / data files
 	bool has_table_data_changes = local_changes.HasChanges();
+	NewDataInfo new_data;
 	if (has_table_data_changes) {
-		auto result = GetNewDataFiles(batch_queries, commit_state, stats, context, attempt_dropped_file_stats);
-		batch_queries += write_data_files_sql(result.new_files);
-		batch_queries += context.write_inlined_data(commit_snapshot, result.new_inlined_data, new_tables_result,
+		new_data = GetNewDataFiles(batch_queries, commit_state, stats, context, attempt_dropped_file_stats);
+		batch_queries += write_data_files_sql(new_data.new_files);
+		batch_queries += context.write_inlined_data(commit_snapshot, new_data.new_inlined_data, new_tables_result,
 		                                            new_inlined_data_tables_result);
 	}
 
@@ -2316,6 +2317,30 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	// delete the flushed inlined rows and inlined file deletions after the deletes of the transaction
 	batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(
 	    flushed_inlined_tables, flushed_inlined_file_deletions, context.InlinedColNames());
+
+	auto refreshed_row_counts = local_changes.GetCompactedTables();
+	for (auto &entry : dropped_file_stats) {
+		refreshed_row_counts.insert(entry.first);
+	}
+	for (auto &table_id : refreshed_row_counts) {
+		set<string> inlined_tables;
+		auto names_sql = context.get_inlined_table_names_for_commit_sql
+		                     ? context.get_inlined_table_names_for_commit_sql(table_id)
+		                     : DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id);
+		auto names = context.query_metadata(std::move(names_sql));
+		names->ThrowIfError("Failed to read inlined tables for the table row count: ");
+		for (auto &row : *names) {
+			inlined_tables.insert(row.GetValue<string>(0));
+		}
+		idx_t pending_inlined_rows = 0;
+		for (auto &entry : new_data.new_inlined_data) {
+			if (entry.table_id == table_id) {
+				pending_inlined_rows += entry.data->Count();
+			}
+		}
+		batch_queries += DuckLakeMetadataManager::RefreshTableRowCountSql(
+		    table_id, inlined_tables, pending_inlined_rows, context.InlinedColNames(), context.supports_v1_1_metadata);
+	}
 
 	// Tracking for tables that had schema changes
 	set<TableIndex> tables_with_schema_changes;
