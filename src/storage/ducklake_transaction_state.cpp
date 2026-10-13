@@ -817,6 +817,22 @@ ReadInlinedTableColumns(TableIndex table_id, const DuckLakeCommitContext &contex
 	return result;
 }
 
+static void CountInlinedRows(const vector<string> &inlined_table_names, DuckLakeSnapshot snapshot,
+                             const DuckLakeCommitContext &context, idx_t &stored_rows, idx_t &live_rows) {
+	stored_rows = 0;
+	live_rows = 0;
+	for (auto &inlined_table_name : inlined_table_names) {
+		auto sql = DuckLakeMetadataManager::GetInlinedRowCountsSql(SQLQuotedIdentifier::ToString(inlined_table_name),
+		                                                           context.InlinedColNames());
+		auto result = context.query_metadata_with_snapshot(snapshot, sql);
+		result->ThrowIfError("Failed to read the inlined row counts from DuckLake: ");
+		for (auto &row : *result) {
+			stored_rows += row.GetValue<idx_t>(0);
+			live_rows += row.GetValue<idx_t>(1);
+		}
+	}
+}
+
 bool DuckLakeTransactionState::TryMergeInlinedStats(TableIndex table_id,
                                                     const vector<DuckLakeColumnSchemaEntry> &columns,
                                                     const vector<string> &inlined_table_names,
@@ -1043,11 +1059,18 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	if (parquet_gross_rows != context.get_net_data_file_row_count(table_id)) {
 		return;
 	}
+	// deleted inlined rows stay stored, and flushing them later does not count them again
+	auto inlined_table_names = context.get_inlined_table_names(table_id);
+	idx_t stored_inlined;
+	idx_t net_inlined;
+	CountInlinedRows(inlined_table_names, snapshot, context, stored_inlined, net_inlined);
+	if (stored_inlined != net_inlined) {
+		return;
+	}
 
 	// 3. Fold in committed inlined data (REWRITE_DELETES does not rewrite inlined data). Pass only the top-level
 	//    roots: TryMergeInlinedStats references each column by name against the inlined table and bails on any
 	//    non-scalar root; feeding it nested leaves would emit MIN("<leaf>") against a column that does not exist.
-	idx_t net_inlined = context.get_net_inlined_row_count(table_id);
 	if (net_inlined > 0) {
 		vector<DuckLakeColumnSchemaEntry> root_columns;
 		for (auto &col : columns) {
@@ -1055,7 +1078,6 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 				root_columns.push_back(col);
 			}
 		}
-		auto inlined_table_names = context.get_inlined_table_names(table_id);
 		if (!TryMergeInlinedStats(table_id, root_columns, inlined_table_names, snapshot, new_stats, context)) {
 			return; // cannot account for inlined data exactly - keep the existing stats and the scan fallback
 		}

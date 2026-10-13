@@ -559,9 +559,35 @@ void DuckLakeMetadataManager::ValidateMetadataTables(bool allow_missing_v1_1_dev
 	}
 }
 
+void DuckLakeMetadataManager::MigrateInlinedSchemaVersions() {
+	// the commit of an inlined table is only known while the snapshot before that commit exists
+	auto result = Execute(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions (begin_snapshot, schema_version, table_id)
+SELECT DISTINCT commits.snapshot_id, idt.schema_version, idt.table_id
+FROM (
+	SELECT snapshot_id, schema_version, LAG(snapshot_id) OVER (ORDER BY snapshot_id) AS previous_snapshot_id,
+		LAG(schema_version) OVER (ORDER BY snapshot_id) AS previous_schema_version
+	FROM {METADATA_CATALOG}.ducklake_snapshot
+) commits
+JOIN {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+	ON idt.schema_version > commits.previous_schema_version AND idt.schema_version <= commits.schema_version
+WHERE commits.previous_snapshot_id = commits.snapshot_id - 1
+AND commits.previous_schema_version < commits.schema_version
+AND NOT EXISTS (
+	SELECT 1 FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+	WHERE sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version
+) AND (
+	SELECT COUNT(*) FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+	WHERE sv.table_id = idt.table_id AND sv.begin_snapshot <= commits.snapshot_id
+) > 1;
+)");
+	result->ThrowIfError("Failed to add the schema versions of inlined-data tables while migrating to v1.1-dev1: ");
+}
+
 void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	// rename first so a conflict aborts while the catalog is still at v1.0
 	MigrateInlinedColumnNames(allow_failures);
+	MigrateInlinedSchemaVersions();
 	MigrateInlinedDataTypes();
 	ExecuteMigration(V1_1Dev1MigrationQuery(), allow_failures, "1.0", "1.1-dev1");
 }
@@ -939,6 +965,16 @@ WHERE {SNAPSHOT_ID} >= %s
   AND ({SNAPSHOT_ID} < %s OR %s IS NULL))",
 	                          inlined_table_name, col_names.begin_snapshot, col_names.end_snapshot,
 	                          col_names.end_snapshot);
+}
+
+string DuckLakeMetadataManager::GetInlinedRowCountsSql(const string &inlined_table_name,
+                                                       const DuckLakeInlinedColNames &col_names) {
+	return StringUtil::Format(R"(
+SELECT COUNT(*), COUNT(CASE WHEN {SNAPSHOT_ID} < %s OR %s IS NULL THEN 1 END)
+FROM {METADATA_CATALOG}.%s
+WHERE {SNAPSHOT_ID} >= %s)",
+	                          col_names.end_snapshot, col_names.end_snapshot, inlined_table_name,
+	                          col_names.begin_snapshot);
 }
 
 idx_t DuckLakeMetadataManager::GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot) {

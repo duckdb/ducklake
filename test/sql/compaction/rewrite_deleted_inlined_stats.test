@@ -1,0 +1,98 @@
+# name: test/sql/compaction/rewrite_deleted_inlined_stats.test
+# description: Rewriting data files while deleted inlined rows are still stored keeps MIN and MAX right after a flush
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/rewrite_deleted_inlined_stats', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE lake.t (id INTEGER)
+
+statement ok
+INSERT INTO lake.t SELECT i FROM range(50, 70) t(i)
+
+statement ok
+INSERT INTO lake.t VALUES (4)
+
+statement ok
+DELETE FROM lake.t WHERE id IN (4, 50)
+
+statement ok
+CALL ducklake_rewrite_data_files('lake', 't', delete_threshold => 0.0)
+
+query III
+SELECT min(id), max(id), count(*) FROM lake.t
+----
+51	69	19
+
+# the flush writes the deleted inlined row to a file for time travel
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+query III
+SELECT min(id), max(id), count(*) FROM lake.t
+----
+51	69	19
+
+# live inlined rows next to a deleted one
+statement ok
+CREATE TABLE lake.m (id INTEGER)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 100, table_name => 'm')
+
+statement ok
+INSERT INTO lake.m SELECT i FROM range(1, 201) t(i)
+
+statement ok
+INSERT INTO lake.m SELECT i FROM range(201, 251) t(i)
+
+statement ok
+DELETE FROM lake.m WHERE id IN (1, 250)
+
+statement ok
+CALL ducklake_rewrite_data_files('lake', 'm', delete_threshold => 0.0)
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'm')
+
+query III
+SELECT min(id), max(id), count(*) FROM lake.m
+----
+2	249	248
+
+# with only live inlined rows the rewrite still computes exact statistics
+statement ok
+CREATE TABLE lake.l (id INTEGER)
+
+statement ok
+INSERT INTO lake.l SELECT i FROM range(50, 70) t(i)
+
+statement ok
+INSERT INTO lake.l VALUES (5)
+
+statement ok
+DELETE FROM lake.l WHERE id = 50
+
+statement ok
+CALL ducklake_rewrite_data_files('lake', 'l', delete_threshold => 0.0)
+
+query III
+SELECT min_value, max_value, (SELECT record_count FROM meta.ducklake_table_stats WHERE table_id = c.table_id)
+FROM meta.ducklake_table_column_stats c
+WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'l' AND end_snapshot IS NULL)
+----
+5	69	20
+
+query III
+SELECT min(id), max(id), count(*) FROM lake.l
+----
+5	69	20

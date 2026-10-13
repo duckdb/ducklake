@@ -710,20 +710,6 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		}
 		return 0;
 	};
-	auto inlined_col_names = ctx.InlinedColNames();
-	ctx.get_net_inlined_row_count = [this, inlined_col_names](TableIndex table_id) -> idx_t {
-		idx_t total = 0;
-		for (auto &name : LookupInlinedTableNames(table_id)) {
-			auto sql = SubstitutePlaceholders(
-			    DuckLakeMetadataManager::GetNetInlinedRowCountSql(name, inlined_col_names), transaction_snapshot);
-			auto result = RunQuery(sql, "read net inlined row count");
-			for (auto &row : *result) {
-				total += row.GetValue<idx_t>(0);
-				break;
-			}
-		}
-		return total;
-	};
 	ctx.set_catalog_version = [&committed_schema_version](idx_t v) {
 		committed_schema_version = v;
 	};
