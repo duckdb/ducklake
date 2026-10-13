@@ -214,7 +214,7 @@ unique_ptr<QueryResult> DuckLakeInlinedDataReader::ReadPage(const DuckLakeInline
 }
 
 bool DuckLakeInlinedDataReader::ReadNextKeys() {
-	static constexpr idx_t KEYS_PER_QUERY = 65536;
+	static constexpr idx_t KEYS_PER_QUERY = 1ULL << 20ULL;
 	if (read_all_keys) {
 		return false;
 	}
@@ -271,6 +271,13 @@ bool DuckLakeInlinedDataReader::LoadNextPage(ClientContext &context) {
 			read_by_keys = true;
 		}
 	}
+	if (read_by_keys && key_position == keys.size() && !ReadNextKeys()) {
+		read_all_pages = true;
+		data = make_shared_ptr<DuckLakeInlinedData>();
+		data->data = make_uniq<ColumnDataCollection>(context, expected_types);
+		data->data->InitializeScan(state);
+		return false;
+	}
 	idx_t limit;
 	if (single_page) {
 		limit = 0;
@@ -278,6 +285,9 @@ bool DuckLakeInlinedDataReader::LoadNextPage(ClientContext &context) {
 		limit = MaxValue<idx_t>(1, page_bytes / MaxValue<idx_t>(1, row_bytes));
 	} else if (row_bytes == 0 || row_bytes > small_row_bytes) {
 		limit = 1;
+	} else if ((keys.size() - key_position) * row_bytes <= page_bytes) {
+		// the read keys fit a page, which reads each vector of their values once
+		limit = keys.size() - key_position;
 	} else {
 		limit = MinValue<idx_t>(page.limit * PAGE_GROWTH, page_bytes / row_bytes);
 	}
@@ -289,13 +299,6 @@ bool DuckLakeInlinedDataReader::LoadNextPage(ClientContext &context) {
 		page.type = DuckLakeInlinedPageType::NEXT_ROWS;
 		query_result = ReadPage(page);
 	} else {
-		if (key_position == keys.size() && !ReadNextKeys()) {
-			read_all_pages = true;
-			data = make_shared_ptr<DuckLakeInlinedData>();
-			data->data = make_uniq<ColumnDataCollection>(context, expected_types);
-			data->data->InitializeScan(state);
-			return false;
-		}
 		rows_page.type = DuckLakeInlinedPageType::LISTED_ROWS;
 		// a single large row is read with filters the scan can apply before reading its values
 		rows_page.order_listed_rows = limit > 1;
