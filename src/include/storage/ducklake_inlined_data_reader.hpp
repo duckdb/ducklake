@@ -70,8 +70,8 @@ private:
 	vector<LogicalType> expected_types;
 	DuckLakeInlinedDataPage page;
 	bool read_all_pages = false;
-	//! The size of the largest row read so far
-	idx_t max_row_bytes = 0;
+	//! The estimated size of the next rows, from the rows read so far
+	idx_t row_bytes = 0;
 	//! Whether the rows are read by their keys, read ahead of their values, since a row can be large
 	bool read_by_keys = false;
 	bool page_type_set = false;

@@ -261,15 +261,15 @@ bool DuckLakeInlinedDataReader::LoadNextPage(ClientContext &context) {
 		page_type_set = true;
 		auto cached_row_bytes = catalog.GetInlinedRowBytes(row_bytes_key);
 		if (constant_size) {
-			max_row_bytes = constant_row_bytes;
+			row_bytes = constant_row_bytes;
 		} else if (cached_row_bytes.IsValid() && cached_row_bytes.GetIndex() <= SMALL_ROW_BYTES) {
-			max_row_bytes = cached_row_bytes.GetIndex();
+			row_bytes = cached_row_bytes.GetIndex();
 		} else {
 			// the size of the rows is unknown, a first page of one row measures it
 			read_by_keys = true;
 		}
 	}
-	if (!read_by_keys && max_row_bytes > SMALL_ROW_BYTES) {
+	if (!read_by_keys && row_bytes > SMALL_ROW_BYTES) {
 		// a vector of rows larger than measured before can exceed the page, read the next rows by their keys
 		read_by_keys = true;
 		key_page.after_row_id = page.after_row_id;
@@ -278,11 +278,11 @@ bool DuckLakeInlinedDataReader::LoadNextPage(ClientContext &context) {
 	}
 	idx_t limit;
 	if (!read_by_keys) {
-		limit = MaxValue<idx_t>(1, PAGE_BYTES / MaxValue<idx_t>(1, max_row_bytes));
-	} else if (max_row_bytes == 0 || max_row_bytes > SMALL_ROW_BYTES) {
+		limit = MaxValue<idx_t>(1, PAGE_BYTES / MaxValue<idx_t>(1, row_bytes));
+	} else if (row_bytes == 0 || row_bytes > SMALL_ROW_BYTES) {
 		limit = 1;
 	} else {
-		limit = MinValue<idx_t>(page.limit * PAGE_GROWTH, PAGE_BYTES / max_row_bytes);
+		limit = MinValue<idx_t>(page.limit * PAGE_GROWTH, PAGE_BYTES / row_bytes);
 	}
 	if (read_info.scan_type == DuckLakeScanType::SCAN_FOR_FLUSH && !read_info.flush_sort_order_sql.empty()) {
 		// the catalog query sorts the rows of a sorted flush, so a page would sort every row again
@@ -342,8 +342,9 @@ bool DuckLakeInlinedDataReader::LoadNextPage(ClientContext &context) {
 				page_bytes += ValueBytes(vector, chunk.size());
 			}
 		}
-		max_row_bytes = MaxValue<idx_t>(max_row_bytes, MaxValue<idx_t>(1, page_bytes / row_count));
-		catalog.SetInlinedRowBytes(row_bytes_key, max_row_bytes);
+		// a large row weighs on the next pages until rows of the measured size follow
+		row_bytes = MaxValue<idx_t>(MaxValue<idx_t>(1, page_bytes / row_count), row_bytes / PAGE_GROWTH);
+		catalog.SetInlinedRowBytes(row_bytes_key, row_bytes);
 	}
 	MapDeletedRows();
 	page.offset += row_count;

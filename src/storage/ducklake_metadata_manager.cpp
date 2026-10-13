@@ -3780,16 +3780,22 @@ string DuckLakeMetadataManager::InlinedPageQuery(const vector<string> &columns_t
 		auto &last = page.keys.back();
 		auto pushed_filter = StringUtil::Format("%s >= %d AND %s <= %d", row_id, first.first, row_id, last.first);
 		if (!page.order_listed_rows) {
-			// another filter, or projecting the filtered row id, makes the scan read the values of a whole vector
+			// a filter the scan cannot apply first, or a projected filter column, makes it read a whole vector
 			D_ASSERT(page.keys.size() == 1);
 			auto row_id_column = SQLIdentifier::ToString(col_names.row_id);
+			auto begin_snapshot_column = SQLIdentifier::ToString(col_names.begin_snapshot);
 			vector<string> listed_columns;
 			for (auto &column : columns_to_read) {
-				listed_columns.push_back(column == row_id_column ? StringUtil::Format("CAST(%d AS BIGINT)", first.first)
-				                                                 : column);
+				if (column == row_id_column || column == begin_snapshot_column) {
+					auto key = column == row_id_column ? first.first : first.second;
+					listed_columns.push_back(StringUtil::Format("CAST(%d AS BIGINT)", key));
+				} else {
+					listed_columns.push_back(column);
+				}
 			}
-			return StringUtil::Format("\nSELECT %s\nFROM %s inlined_data\nWHERE %s;", GetProjection(listed_columns),
-			                          source, pushed_filter);
+			return StringUtil::Format("\nSELECT %s\nFROM %s inlined_data\nWHERE %s = %d AND %s = %d;",
+			                          GetProjection(listed_columns), source, row_id, first.first, begin_snapshot,
+			                          first.second);
 		}
 		filter = StringUtil::Format(" AND %s AND (%s > %d OR %s >= %d) AND (%s < %d OR %s <= %d)", pushed_filter,
 		                            row_id, first.first, begin_snapshot, first.second, row_id, last.first,

@@ -76,6 +76,23 @@ INSERT INTO dl.large SELECT ${i}, repeat('A', 4194304);
 
 endloop
 
+# a row updated with large values keeps them as older versions, a read of its live version skips them
+statement ok
+CREATE TABLE dl.versions (id INTEGER, c VARCHAR);
+
+statement ok
+INSERT INTO dl.versions VALUES (1, 'first');
+
+loop i 0 20
+
+statement ok
+UPDATE dl.versions SET c = repeat('B', 4194304);
+
+endloop
+
+statement ok
+UPDATE dl.versions SET c = 'last';
+
 statement ok
 SET memory_limit = '64MB'
 
@@ -107,3 +124,8 @@ query III
 SELECT count(*), sum(id), min(length(c)) FROM dl.large
 ----
 23	271	4194304
+
+query II
+SELECT id, c FROM dl.versions
+----
+1	last
