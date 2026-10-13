@@ -28,6 +28,8 @@
 #include "duckdb/execution/expression_executor.hpp"
 #include "storage/ducklake_partition_data.hpp"
 #include "duckdb/parser/parser.hpp"
+#include "duckdb/parser/parsed_data/create_table_info.hpp"
+#include "duckdb/parser/statement/create_statement.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/statement/insert_statement.hpp"
 #include "duckdb/parser/tableref/column_data_ref.hpp"
@@ -479,6 +481,76 @@ bool DuckLakeMetadataManager::HasV1_1Dev1Additions() {
 	return !Query(probe)->HasError();
 }
 
+static bool IsV1_1Dev1Addition(const string &table, const string &column) {
+	for (auto &added : V1_1_DEV1_ADDED_COLUMNS) {
+		if (table == added.table && column == added.column) {
+			return true;
+		}
+	}
+	return false;
+}
+
+void DuckLakeMetadataManager::ValidateMetadataTables(bool allow_missing_v1_1_dev1_additions) {
+	auto parser = Parser::GetBuiltinParser();
+	parser.ParseQuery(StringUtil::Replace(GetCreateTableStatements(), "{METADATA_CATALOG}.", ""));
+	auto &catalog = transaction.GetCatalog();
+	auto metadata_schema = SQLQuotedIdentifier::ToString(catalog.MetadataDatabaseName()) + "." +
+	                       SQLQuotedIdentifier::ToString(catalog.MetadataSchemaName()) + ".";
+	map<string, reference<const ColumnList>> expected_tables;
+	string query;
+	for (auto &statement : parser.statements) {
+		auto &info = statement->Cast<CreateStatement>().info->Cast<CreateTableInfo>();
+		auto table_name = info.GetTableName().GetIdentifierName();
+		expected_tables.emplace(table_name, info.columns);
+		if (allow_missing_v1_1_dev1_additions && table_name == "ducklake_view_column_tag") {
+			continue;
+		}
+		if (!query.empty()) {
+			query += " UNION ALL ";
+		}
+		query += StringUtil::Format("SELECT %s, cid, name, type FROM pragma_table_info(%s)", SQLString(table_name),
+		                            SQLString(metadata_schema + SQLQuotedIdentifier::ToString(table_name)));
+	}
+	auto result = Query(query + " ORDER BY 1, 2");
+	if (result->HasError()) {
+		throw InvalidInputException("Failed to load DuckLake: the metadata catalog is not a DuckLake %s catalog: %s",
+		                            GetVersionString(), result->GetError());
+	}
+	map<string, vector<pair<string, string>>> actual_tables;
+	for (auto &row : *result) {
+		actual_tables[row.GetValue<string>(0)].emplace_back(row.GetValue<string>(2), row.GetValue<string>(3));
+	}
+	for (auto &entry : actual_tables) {
+		auto &table_name = entry.first;
+		auto &actual_columns = entry.second;
+		auto &expected_columns = expected_tables.find(table_name)->second.get();
+		idx_t column_idx = 0;
+		for (auto &expected : expected_columns.Logical()) {
+			auto expected_name = expected.Name().GetIdentifierName();
+			auto expected_type = StoredMetadataType(UnboundType::TryDefaultBind(expected.Type())).ToString();
+			if (column_idx >= actual_columns.size()) {
+				if (allow_missing_v1_1_dev1_additions && IsV1_1Dev1Addition(table_name, expected_name)) {
+					continue;
+				}
+				throw InvalidInputException("Failed to load DuckLake: metadata table \"%s\" has no column \"%s\"",
+				                            table_name, expected_name);
+			}
+			auto &actual = actual_columns[column_idx++];
+			if (actual.first != expected_name || actual.second != expected_type) {
+				throw InvalidInputException("Failed to load DuckLake: column %d of metadata table \"%s\" is \"%s\" of "
+				                            "type %s, expected \"%s\" of type %s",
+				                            column_idx, table_name, actual.first, actual.second, expected_name,
+				                            expected_type);
+			}
+		}
+		if (column_idx < actual_columns.size()) {
+			throw InvalidInputException(
+			    "Failed to load DuckLake: metadata table \"%s\" has an unexpected column \"%s\"", table_name,
+			    actual_columns[column_idx].first);
+		}
+	}
+}
+
 void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	// rename first so a conflict aborts while the catalog is still at v1.0
 	MigrateInlinedColumnNames(allow_failures);
@@ -694,7 +766,7 @@ vector<DuckLakeInlinedTableInfo> DuckLakeMetadataManager::LoadInlinedDataTables(
 	for (auto &val : ListValue::GetChildren(list)) {
 		auto &struct_children = StructValue::GetChildren(val);
 		DuckLakeInlinedTableInfo inlined_data_table;
-		inlined_data_table.table_name = StringValue::Get(struct_children[0]);
+		inlined_data_table.table_name = struct_children[0].GetValue<string>();
 		inlined_data_table.schema_version = struct_children[1].GetValue<idx_t>();
 		result.push_back(std::move(inlined_data_table));
 	}
@@ -769,6 +841,7 @@ WHERE table_id = {TABLE_ID} AND schema_version = {SCHEMA_VERSION})";
 	query = StringUtil::Replace(query, "{TABLE_ID}", to_string(table_id.index));
 	query = StringUtil::Replace(query, "{SCHEMA_VERSION}", to_string(schema_version));
 	auto result = Query(query);
+	result->ThrowIfError("Failed to get the begin snapshot of a schema version from DuckLake: ");
 	for (auto &row : *result) {
 		auto begin_snapshot = row.GetValue<idx_t>(0);
 		// only cache rows that are already committed - a schema version written by this transaction can still

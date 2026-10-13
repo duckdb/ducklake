@@ -35,6 +35,19 @@ bool SQLiteMetadataManager::IsRetryableCommitError(const string &message) const 
 	       !StringUtil::Contains(lower_message, "failed to execute query \"commit\": database is locked");
 }
 
+LogicalType SQLiteMetadataManager::StoredMetadataType(const LogicalType &type) {
+	// sqlite_scanner reads the declared types by their affinity
+	switch (type.id()) {
+	case LogicalTypeId::BOOLEAN:
+		return LogicalType::BIGINT;
+	case LogicalTypeId::UUID:
+	case LogicalTypeId::TIMESTAMP_TZ:
+		return LogicalType::VARCHAR;
+	default:
+		return type;
+	}
+}
+
 string SQLiteMetadataManager::GetColumnTypeInternal(const LogicalType &column_type) {
 	switch (column_type.id()) {
 	case LogicalTypeId::FLOAT:

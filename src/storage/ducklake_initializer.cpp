@@ -228,6 +228,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction,
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto metadata = metadata_manager.LoadDuckLake();
 	DuckLakeVersion resolved_version = DuckLakeVersion::UNSET;
+	bool has_data_path = false;
 	for (auto &tag : metadata.tags) {
 		if (tag.key == "version") {
 			auto catalog_version = DuckLakeVersionFromString(tag.value);
@@ -298,6 +299,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction,
 			resolved_version = catalog_version;
 		}
 		if (tag.key == "data_path") {
+			has_data_path = true;
 			if (options.data_path.empty()) {
 				options.data_path = metadata_manager.LoadPath(tag.value);
 				InitializeDataPath();
@@ -328,9 +330,20 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction,
 	for (auto &entry : metadata.table_settings) {
 		options.table_options[entry.table_id][entry.tag.key] = entry.tag.value;
 	}
-	// set correct version metadata manager
-	if (resolved_version != DuckLakeVersion::UNSET) {
-		SetVersionedMetadataManager(transaction, resolved_version);
+	if (resolved_version == DuckLakeVersion::UNSET || !has_data_path) {
+		throw InvalidInputException("Failed to load DuckLake: the metadata has no %s",
+		                            resolved_version == DuckLakeVersion::UNSET ? "version" : "data path");
+	}
+	SetVersionedMetadataManager(transaction, resolved_version);
+	auto &versioned_manager = transaction.GetMetadataManager();
+	try {
+		versioned_manager.ValidateMetadataTables(false);
+	} catch (InvalidInputException &) {
+		// a v1.1-dev1 catalog that could not be migrated on attach works without the later additions
+		if (resolved_version != DuckLakeVersion::V1_1_DEV_1) {
+			throw;
+		}
+		versioned_manager.ValidateMetadataTables(true);
 	}
 }
 

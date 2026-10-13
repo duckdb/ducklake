@@ -566,6 +566,12 @@ public:
 	virtual void MigrateV10Dev();
 	//! Whether the catalog already has every metadata table and column of v1.1-dev1
 	bool HasV1_1Dev1Additions();
+	//! Checks the columns of every metadata table against the tables that this catalog version creates
+	void ValidateMetadataTables(bool allow_missing_v1_1_dev1_additions);
+	//! The type that a metadata column created with the given type is read back as
+	virtual LogicalType StoredMetadataType(const LogicalType &type) {
+		return type;
+	}
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
 	//! Rewrites inlined tables whose columns were created with the storage types of an older DuckLake version

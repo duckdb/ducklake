@@ -31,6 +31,7 @@ public:
 	bool IsRetryableCommitError(const string &message) const override;
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
+	LogicalType StoredMetadataType(const LogicalType &type) override;
 };
 
 } // namespace duckdb

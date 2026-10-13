@@ -1,0 +1,225 @@
+# name: test/sql/metadata/metadata_table_validation.test
+# description: ATTACH refuses metadata tables whose columns do not match the catalog version
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_clean.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_clean.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
+
+query I
+SELECT i FROM dl.t
+----
+42
+
+statement ok
+DETACH dl
+
+# reordered columns
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_0.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH '{TEST_DIR}/metadata_table_validation_0.db' AS meta
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot DROP COLUMN next_catalog_id;
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot ADD COLUMN next_catalog_id BIGINT
+
+statement ok
+DETACH meta
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_0.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
+----
+column 4 of metadata table "ducklake_snapshot" is "next_file_id" of type BIGINT, expected "next_catalog_id" of type BIGINT
+
+# a column of another type
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_1.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH '{TEST_DIR}/metadata_table_validation_1.db' AS meta
+
+statement ok
+CREATE TYPE meta.inlined_name AS ENUM ('ducklake_inlined_data_1_1');
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_tables ALTER COLUMN table_name TYPE meta.inlined_name
+
+statement ok
+DETACH meta
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_1.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
+----
+metadata table "ducklake_inlined_data_tables" is "table_name" of type ENUM
+
+# an extra column
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_2.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH '{TEST_DIR}/metadata_table_validation_2.db' AS meta
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot ADD COLUMN extra BIGINT
+
+statement ok
+DETACH meta
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_2.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
+----
+metadata table "ducklake_snapshot" has an unexpected column "extra"
+
+# a missing column
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_3.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH '{TEST_DIR}/metadata_table_validation_3.db' AS meta
+
+statement ok
+ALTER TABLE meta.ducklake_data_file DROP COLUMN footer_size
+
+statement ok
+DETACH meta
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_3.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
+----
+expected "footer_size" of type BIGINT
+
+# a missing last column
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_4.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH '{TEST_DIR}/metadata_table_validation_4.db' AS meta
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_changes DROP COLUMN commit_extra_info
+
+statement ok
+DETACH meta
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_4.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
+----
+metadata table "ducklake_snapshot_changes" has no column "commit_extra_info"
+
+# a missing table
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_5.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH '{TEST_DIR}/metadata_table_validation_5.db' AS meta
+
+statement ok
+DROP TABLE meta.ducklake_schema_versions
+
+statement ok
+DETACH meta
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_5.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
+----
+ducklake_schema_versions does not exist
+
+# a missing version
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_6.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH '{TEST_DIR}/metadata_table_validation_6.db' AS meta
+
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'version'
+
+statement ok
+DETACH meta
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_6.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
+----
+the metadata has no version
+
+# a missing data path
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_7.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH '{TEST_DIR}/metadata_table_validation_7.db' AS meta
+
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'data_path'
+
+statement ok
+DETACH meta
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/metadata_table_validation_7.db' AS dl (DATA_PATH '{TEST_DIR}/metadata_table_validation')
+----
+the metadata has no data path
