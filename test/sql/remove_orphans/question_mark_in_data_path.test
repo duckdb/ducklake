@@ -1,0 +1,55 @@
+# name: test/sql/remove_orphans/question_mark_in_data_path.test
+# description: orphan cleanup matches a question mark in a data path literally
+# group: [remove_orphans]
+
+require ducklake
+
+require parquet
+
+require notwindows
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# the sibling matches d=a?b as a glob pattern when the question mark is not escaped
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/question_mark_sibling.db' AS sibling (DATA_PATH '{DATA_PATH}/question_mark/d=aQb/', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE sibling.t AS SELECT 1 AS i
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/question_mark/d=a?b/', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t (i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (5)
+
+statement ok
+COPY (SELECT 2 AS i) TO '{DATA_PATH}/question_mark/d=a?b/main/t/stray.parquet'
+
+query T
+SELECT parse_filename(path) FROM ducklake_delete_orphaned_files('lake', cleanup_all => true, dry_run => true)
+----
+stray.parquet
+
+statement ok
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true)
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('lake', cleanup_all => true, dry_run => true)
+----
+0
+
+query I
+SELECT i FROM lake.t
+----
+5
+
+query I
+SELECT i FROM sibling.t
+----
+1

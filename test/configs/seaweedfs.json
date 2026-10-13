@@ -47,6 +47,12 @@
       ]
     },
     {
+      "reason": "httpfs parses a '?' in an S3 URL as the start of its query parameters.",
+      "paths": [
+        "test/sql/remove_orphans/question_mark_in_data_path.test"
+      ]
+    },
+    {
       "reason": "Tests ObjectCache eviction under a tight memory_limit; S3 multipart upload part buffers (~80MB each) exceed the memory_limit required for the eviction scenario.",
       "paths": [
         "test/sql/insert/insert_wide_table_low_memory.test_slow"
