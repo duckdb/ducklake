@@ -124,28 +124,37 @@ struct CheckedField {
 };
 using CheckedFields = map<FieldIndex, CheckedField>;
 
-//! Whether the smallest and the largest value of a type convert, which holds for every value between them
-bool LimitsConvert(const LogicalType &source, const std::function<bool(const Value &)> &converts) {
-	return converts(Value::MinimumValue(source)) && converts(Value::MaximumValue(source));
-}
-
-//! Whether the bounds of a field show that its values convert, a decimal with a scale has inexact values between them
-bool BoundsShowValuesConvert(ClientContext &context, const DuckLakeColumnStats &stats, const CheckedField &field) {
-	auto &source = field.source.get().Type();
-	if (stats.bounds_unknown || !stats.has_min || !stats.has_max) {
+//! Whether every value between two bounds is exact in FLOAT, which holds for integers up to 2^24 in magnitude
+bool FloatHoldsValuesBetween(const LogicalType &source, const Value &min, const Value &max) {
+	if (source.id() == LogicalTypeId::DECIMAL && DecimalType::GetScale(source) > 0) {
 		return false;
 	}
-	if (ReadsThroughFloat(source, field.target) && source.id() == LogicalTypeId::DECIMAL &&
-	    DecimalType::GetScale(source) > 0) {
-		return false;
-	}
-	for (auto &bound : {stats.min, stats.max}) {
-		auto value = TryCastStatsBound(bound, stats.type);
-		if (!value || !ValueConverts(context, *value, field.target)) {
+	static constexpr double FLOAT_EXACT_LIMIT = 16777216.0;
+	for (auto &bound : {min, max}) {
+		if (std::fabs(bound.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>()) > FLOAT_EXACT_LIMIT) {
 			return false;
 		}
 	}
 	return true;
+}
+
+//! Whether every value between two bounds converts, which holds when the bounds do
+bool ValuesBetweenConvert(ClientContext &context, const LogicalType &source, const Value &min, const Value &max,
+                          const LogicalType &target) {
+	if (!min.TryCastAs(context, target) || !max.TryCastAs(context, target)) {
+		return false;
+	}
+	return !ReadsThroughFloat(source, target) || FloatHoldsValuesBetween(source, min, max);
+}
+
+//! Whether the bounds of a field show that its values convert
+bool BoundsShowValuesConvert(ClientContext &context, const DuckLakeColumnStats &stats, const CheckedField &field) {
+	if (stats.bounds_unknown || !stats.has_min || !stats.has_max) {
+		return false;
+	}
+	auto min = TryCastStatsBound(stats.min, stats.type);
+	auto max = TryCastStatsBound(stats.max, stats.type);
+	return min && max && ValuesBetweenConvert(context, field.source.get().Type(), *min, *max, field.target);
 }
 
 optional_ptr<const DuckLakeFieldId> FindChildField(const DuckLakeFieldId &field_id, FieldIndex child_index) {
@@ -165,15 +174,11 @@ void CollectCheckedFields(ClientContext &context, const DuckLakeFieldId &source,
 		if (source_type == target_type || (!source_type.IsNumeric() && !source_type.IsTemporal())) {
 			return;
 		}
-		auto in_range = [&](const Value &value) {
-			return bool(value.TryCastAs(context, target_type));
-		};
-		auto converts = [&](const Value &value) {
-			return ValueConverts(context, value, target_type);
-		};
-		if (!LimitsConvert(source_type, converts)) {
-			result.emplace(source.GetFieldIndex(),
-			               CheckedField(source, target_type, !LimitsConvert(source_type, in_range)));
+		auto min = Value::MinimumValue(source_type);
+		auto max = Value::MaximumValue(source_type);
+		if (!ValuesBetweenConvert(context, source_type, min, max, target_type)) {
+			auto can_overflow = !min.TryCastAs(context, target_type) || !max.TryCastAs(context, target_type);
+			result.emplace(source.GetFieldIndex(), CheckedField(source, target_type, can_overflow));
 		}
 		return;
 	}
@@ -273,14 +278,18 @@ void CheckStoredValues(ClientContext &context, Vector &values, idx_t count, cons
 		break;
 	}
 	case LogicalTypeId::LIST:
-		CheckStoredValues(context, ListVector::GetChildMutable(values), ListVector::GetListSize(values), *children[0],
-		                  *target.Children()[0], checked_fields);
-		break;
 	case LogicalTypeId::MAP: {
-		auto &entries = StructVector::GetEntries(ListVector::GetChildMutable(values));
-		auto entry_count = ListVector::GetListSize(values);
+		// the child vector also holds the entries of rows the scan filtered out
+		Vector child(Vector::Ref(ListVector::GetChildMutable(values)));
+		auto child_count = ListVector::GetConsecutiveChildList(values, child, 0, count);
+		if (source.Type().id() == LogicalTypeId::LIST) {
+			CheckStoredValues(context, child, child_count, *children[0], *target.Children()[0], checked_fields);
+			break;
+		}
+		child.Flatten();
+		auto &entries = StructVector::GetEntries(child);
 		for (idx_t i = 0; i < children.size(); i++) {
-			CheckStoredValues(context, entries[i], entry_count, *children[i], *target.Children()[i], checked_fields);
+			CheckStoredValues(context, entries[i], child_count, *children[i], *target.Children()[i], checked_fields);
 		}
 		break;
 	}
@@ -1309,7 +1318,7 @@ bool DuckLakeTableEntry::CheckPromotedValues(ClientContext &context, DuckLakeTra
 		}
 	}
 	if (!bounded_fields.empty()) {
-		if (!IsTransactionLocal()) {
+		if (!duckdb::IsTransactionLocal(GetTableId())) {
 			auto &metadata_manager = transaction.GetMetadataManager();
 			for (auto &bounds :
 			     metadata_manager.GetLiveFileBounds(GetTableId(), bounded_fields, transaction.GetSnapshot())) {

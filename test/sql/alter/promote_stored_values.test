@@ -211,3 +211,62 @@ query I
 SELECT c FROM ducklake.dec
 ----
 0.5
+
+# a rename in the same transaction keeps the check of the committed files
+statement ok
+CREATE TABLE ducklake.renamed (d DATE);
+
+statement ok
+INSERT INTO ducklake.renamed VALUES (DATE '2000-01-01'), (DATE '5000000-01-01');
+
+statement ok
+DELETE FROM ducklake.renamed WHERE d > DATE '3000-01-01';
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.renamed RENAME d TO e;
+
+statement error
+ALTER TABLE ducklake.renamed ALTER e SET DATA TYPE TIMESTAMP;
+----
+a data file of the column holds the value 5000000-01-01
+
+statement ok
+ROLLBACK
+
+# the limits and the bounds of integers beyond 2^24 do not show that FLOAT holds the values between them
+statement ok
+CREATE TABLE ducklake.wide (b BIGINT, i INTEGER);
+
+statement ok
+INSERT INTO ducklake.wide VALUES (16777217, 16777216), (1, 16777217), (1, 16777220);
+
+statement error
+ALTER TABLE ducklake.wide ALTER b SET DATA TYPE FLOAT;
+----
+holds the value 16777217, which FLOAT cannot hold exactly
+
+statement error
+ALTER TABLE ducklake.wide ALTER i SET DATA TYPE FLOAT;
+----
+holds the value 16777217, which FLOAT cannot hold exactly
+
+# the entries of deleted lists are not read
+statement ok
+CREATE TABLE ducklake.lists (l DECIMAL(4,1)[]);
+
+statement ok
+INSERT INTO ducklake.lists VALUES ([0.5]), ([1.1]);
+
+statement ok
+DELETE FROM ducklake.lists WHERE l[1] = 1.1;
+
+statement ok
+ALTER TABLE ducklake.lists ALTER l SET DATA TYPE FLOAT[];
+
+query I
+SELECT l FROM ducklake.lists
+----
+[0.5]
