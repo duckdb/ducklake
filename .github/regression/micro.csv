@@ -5,6 +5,7 @@ benchmark/micro/compaction/merge_adjacent_empty_tables.benchmark
 benchmark/micro/compaction/merge_adjacent_old_partition_spec.benchmark
 benchmark/micro/compaction/rewrite_data_files_deletes.benchmark
 benchmark/micro/compaction/merge_adjacent_sorted.benchmark
+benchmark/micro/compaction/merge_adjacent_sorted_shuffled.benchmark
 benchmark/micro/read/sorted_merged_point_lookups.benchmark
 benchmark/micro/maintenance/expire_snapshots.benchmark
 benchmark/micro/maintenance/flush_inlined_data.benchmark

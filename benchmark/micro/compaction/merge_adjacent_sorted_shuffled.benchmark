@@ -1,0 +1,28 @@
+# name: benchmark/micro/compaction/merge_adjacent_sorted_shuffled.benchmark
+# description: Merge 64 files of a SORTED BY table whose narrow key ranges arrived out of key order
+# group: [compaction]
+
+name Merge Adjacent Sorted Shuffled
+group micro
+subgroup compaction
+
+require ducklake
+
+require parquet
+
+argument work sorted_shuffled_work
+
+include benchmark/micro/fixtures/sorted_shuffled.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+SELECT sum(files_processed) AS processed FROM ducklake_merge_adjacent_files('lake', 't');
+
+# The merged rows must come out in sort key order; a missed reset leaves nothing to merge
+result_query II
+SELECT processed, (SELECT count(*) FILTER (WHERE k < prev) FROM (
+SELECT k, lag(k) OVER (PARTITION BY filename ORDER BY file_row_number) AS prev FROM lake.t))
+FROM __answer
+----
+64	0
