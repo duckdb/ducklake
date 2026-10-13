@@ -207,6 +207,17 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 
 			optional_idx name_offset;
 			auto &field_id = table.GetFieldId(StringsToIdentifiers(column_names), &name_offset);
+			bool has_column_size = false;
+			for (auto &stat : col_stats) {
+				if (StringValue::Get(StructValue::GetChildren(stat)[0]) == "column_size_bytes") {
+					has_column_size = true;
+					break;
+				}
+			}
+			// Nested container statistics are not yet represented in DuckLake's leaf statistics.
+			if (!has_column_size && (!name_offset.IsValid() || name_offset.GetIndex() != column_names.size())) {
+				continue;
+			}
 			if (name_offset.IsValid()) {
 				if (field_id.Type().id() != LogicalTypeId::VARIANT) {
 					throw InternalException("name_offset can only be set for variant columns");
