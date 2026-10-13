@@ -41,6 +41,8 @@ class DuckLakeUtil {
 public:
 	//! Extracts the value of a literal, or of a cast over a literal, as written in a DEFAULT or parameter default
 	static bool TryGetLiteralValue(const ParsedExpression &expr, Value &result);
+	//! The expression of a literal default stored as text, for a column of the given type
+	static unique_ptr<ParsedExpression> LiteralDefaultExpression(const Value &text, const LogicalType &type);
 	//! Extracts a macro parameter default that can be stored as a literal of its DuckLake type
 	static bool TryGetMacroDefaultLiteral(const ParsedExpression &expr, Value &result);
 	static string ParseQuotedValue(const string &input, idx_t &pos);
@@ -51,6 +53,8 @@ public:
 
 	static ParsedCatalogEntry ParseCatalogEntry(const string &input);
 	static string JoinPath(FileSystem &fs, const string &a, const string &b);
+	//! The separator of a path, always '/' for a remote path, also before its file system is loaded
+	static string PathSeparator(FileSystem &fs, const string &path);
 
 	//! Combine two filter expressions - both must hold, so AND their conjuncts and drop duplicates
 	static unique_ptr<Expression> MergeFilterExpressions(unique_ptr<Expression> left, unique_ptr<Expression> right);
@@ -92,7 +96,7 @@ public:
 	                                      const string &table_name);
 
 	//! Copy extension-registered settings from one context onto another. Core engine settings
-	//! are not copied.
+	//! are not copied, and settings that change the types read are turned off.
 	static void CopyExtensionSettings(ClientContext &from, ClientContext &to);
 	//! Sets a session extension setting without checking the configuration lock
 	static void SetExtensionSetting(ClientContext &context, const string &name, const Value &value);

@@ -32,17 +32,13 @@ DESCRIBE ducklake.test
 i	INTEGER	NO	NULL	NULL	NULL
 j	INTEGER	YES	NULL	NULL	NULL
 
-# we cannot add a null constraint to a column that already has it
-statement error
+# a null constraint on a column that already has it changes nothing
+statement ok
 ALTER TABLE ducklake.test ALTER i SET NOT NULL;
-----
-already
 
-# we cannot drop the null constraint from a column that does not have it
-statement error
+# dropping the null constraint from a column that does not have it changes nothing
+statement ok
 ALTER TABLE ducklake.test ALTER j DROP NOT NULL;
-----
-no NOT NULL constraint
 
 # column does not exist
 statement error

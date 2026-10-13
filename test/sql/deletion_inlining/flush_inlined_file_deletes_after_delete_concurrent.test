@@ -1,0 +1,62 @@
+# name: test/sql/deletion_inlining/flush_inlined_file_deletes_after_delete_concurrent.test
+# description: The deletes of a transaction that also flushes inlined file deletes move to its commit snapshot
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/flush_inlined_file_deletes_after_delete_concurrent', DATA_INLINING_ROW_LIMIT 10)
+
+# another commit lands before the transaction commits
+statement ok
+CREATE TABLE lake.c (id BIGINT, v INTEGER)
+
+statement ok
+CREATE TABLE lake.other (i INTEGER)
+
+statement ok
+INSERT INTO lake.c SELECT i, i FROM range(0, 20) t(i)
+
+statement ok
+DELETE FROM lake.c WHERE id < 5
+
+statement ok
+SET VARIABLE c_before = (SELECT max(snapshot_id) FROM ducklake_snapshots('lake'))
+
+statement ok con1
+BEGIN
+
+query I con1
+DELETE FROM lake.c WHERE id >= 9
+----
+11
+
+statement ok con1
+CALL ducklake_flush_inlined_data('lake', table_name => 'c')
+
+statement ok con2
+INSERT INTO lake.other VALUES (1)
+
+statement ok con1
+COMMIT
+
+query I
+SELECT LIST(id ORDER BY id) FROM lake.c
+----
+[5, 6, 7, 8]
+
+query I
+SELECT COUNT(*) FROM lake.c AT (VERSION => getvariable('c_before') + 1)
+----
+15
+
+query II
+SELECT change_type, COUNT(*) FROM ducklake_table_changes('lake', 'main', 'c', getvariable('c_before') + 2, getvariable('c_before') + 2) GROUP BY ALL
+----
+delete	11

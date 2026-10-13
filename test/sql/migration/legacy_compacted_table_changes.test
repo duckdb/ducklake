@@ -1,0 +1,19 @@
+# name: test/sql/migration/legacy_compacted_table_changes.test
+# description: snapshots() lists the compactions that older catalogs recorded as compacted_table
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+unzip data/old_ducklake/compacted_files.db.gz {TEST_DIR}/legacy_compacted_table_changes.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/legacy_compacted_table_changes.db' AS ducklake (DATA_PATH '{TEST_DIR}/legacy_compacted_table_changes', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+
+query II
+SELECT snapshot_id, changes FROM ducklake.snapshots() WHERE snapshot_id BETWEEN 7 AND 9 ORDER BY snapshot_id
+----
+7	{flushed_inlined=[1]}
+8	{compacted_table=[1]}
+9	{inlined_insert=[1]}

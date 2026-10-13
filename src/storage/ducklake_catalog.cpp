@@ -465,10 +465,6 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::GetEntryById(DuckLakeTransaction &tr
 
 optional_ptr<CatalogEntry> DuckLakeCatalog::GetEntryById(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
                                                          TableIndex table_id) {
-	auto local_entry = transaction.GetLocalEntryById(table_id);
-	if (local_entry) {
-		return local_entry;
-	}
 	auto &schema = GetSchemaForSnapshot(transaction, snapshot);
 	return schema.GetEntryById(table_id);
 }
@@ -527,7 +523,7 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(const DuckLakeColumnInfo 
 			col_data.default_value = ConstantExpression::Null();
 		} else {
 			if (col.default_value_type == "literal") {
-				col_data.default_value = ConstantExpression::FromValue(col.default_value);
+				col_data.default_value = DuckLakeUtil::LiteralDefaultExpression(col.default_value, col_type);
 			} else if (col.default_value_type == "expression") {
 				col_data.default_value =
 				    Parser::GetBuiltinParser().ParseSingleExpression(col.default_value.GetValue<string>());
@@ -677,6 +673,17 @@ static set<SchemaIndex> FindUnreachableSchemas(const vector<DuckLakeSchemaInfo> 
 	return unreachable;
 }
 
+void DuckLakeCatalog::AssignStableOid(CatalogEntry &entry, idx_t id) {
+	lock_guard<mutex> guard(entry_oids_lock);
+	auto oid = entry_oids.emplace(make_pair(entry.type, id), entry.oid).first->second;
+	entry.oid = oid;
+}
+
+void DuckLakeCatalog::SetEntryOids(const ducklake_entry_oids_t &oids) {
+	lock_guard<mutex> guard(entry_oids_lock);
+	entry_oids.insert(oids.begin(), oids.end());
+}
+
 unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTransaction &transaction,
                                                                       DuckLakeSnapshot snapshot) {
 	auto &metadata_manager = transaction.GetMetadataManager();
@@ -694,6 +701,7 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 		schema_info.SetSchema(Identifier(schema.name));
 		auto schema_entry = make_uniq<DuckLakeSchemaEntry>(*this, schema_info, schema.id, std::move(schema.uuid),
 		                                                   std::move(schema.path));
+		AssignStableOid(*schema_entry, schema.id.index);
 		loaded_schema_refs.emplace(schema.id, *schema_entry);
 		loaded_schemas.emplace(schema.id, std::move(schema_entry));
 	}
@@ -773,6 +781,7 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 		auto table_entry = make_uniq<DuckLakeTableEntry>(
 		    *this, schema_entry, *create_table_info, table.id, std::move(table.uuid), std::move(table.path),
 		    std::move(field_data), optional_idx(), std::move(table.inlined_data_tables), LocalChangeType::NONE);
+		AssignStableOid(*table_entry, table.id.index);
 		schema_set->AddEntry(schema_entry, table.id, std::move(table_entry));
 	}
 
@@ -794,6 +803,7 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 		auto view_entry =
 		    make_uniq<DuckLakeViewEntry>(*this, schema_entry, *create_view_info, view.id, std::move(view.uuid),
 		                                 std::move(view.sql), LocalChangeType::NONE);
+		AssignStableOid(*view_entry, view.id.index);
 		schema_set->AddEntry(schema_entry, view.id, std::move(view_entry));
 	}
 
@@ -814,6 +824,7 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 			macro_catalog_entry =
 			    make_uniq<DuckLakeTableMacroEntry>(*this, schema_entry, *create_macro, macro.macro_id);
 		}
+		AssignStableOid(*macro_catalog_entry, macro.macro_id.index);
 		schema_set->AddEntry(schema_entry, macro.macro_id, std::move(macro_catalog_entry));
 	}
 
@@ -1368,6 +1379,39 @@ void DuckLakeCatalog::CacheSchemaVersionSnapshot(TableIndex table_id, idx_t sche
 	schema_version_snapshots[make_pair(table_id.index, schema_version)] = snapshot;
 }
 
+bool DuckLakeCatalog::ColumnHoldsValues(TableIndex table_id, FieldIndex column_id, idx_t snapshot_id) {
+	lock_guard<mutex> guard(columns_with_values_lock);
+	if (!columns_with_values_snapshot.IsValid() || columns_with_values_snapshot.GetIndex() != snapshot_id) {
+		return false;
+	}
+	return columns_with_values.count(make_pair(table_id.index, column_id.index)) > 0;
+}
+
+void DuckLakeCatalog::SetColumnHoldsValues(TableIndex table_id, FieldIndex column_id, idx_t snapshot_id) {
+	lock_guard<mutex> guard(columns_with_values_lock);
+	if (!columns_with_values_snapshot.IsValid() || columns_with_values_snapshot.GetIndex() != snapshot_id) {
+		columns_with_values.clear();
+		columns_with_values_snapshot = snapshot_id;
+	}
+	columns_with_values.emplace(table_id.index, column_id.index);
+}
+
+void DuckLakeCatalog::AdvanceColumnsWithValues(idx_t snapshot_id) {
+	lock_guard<mutex> guard(columns_with_values_lock);
+	if (columns_with_values_snapshot.IsValid() && columns_with_values_snapshot.GetIndex() + 1 == snapshot_id) {
+		columns_with_values_snapshot = snapshot_id;
+	}
+}
+
+void DuckLakeCatalog::ForgetColumnsWithValues(const set<TableIndex> &table_ids) {
+	lock_guard<mutex> guard(columns_with_values_lock);
+	for (auto &table_id : table_ids) {
+		auto begin = columns_with_values.lower_bound(make_pair(table_id.index, idx_t(0)));
+		auto end = columns_with_values.lower_bound(make_pair(table_id.index + 1, idx_t(0)));
+		columns_with_values.erase(begin, end);
+	}
+}
+
 string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) const {
 	return StringUtil::Format("ducklake:%s:%s:%s:stats:%llu:table:%llu", GetName(), MetadataPath(), instance_id,
 	                          next_file_id, table_id.index);
@@ -1403,7 +1447,9 @@ void DuckLakeCatalog::RegisterCatalog() {
 	// these checks run before the metadata database is attached, which replaces any database of the same name
 	auto &name = GetAttached().GetName();
 	bool replace = options.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT;
-	if (!replace && DatabaseManager::Get(GetDatabase()).GetDatabase(name)) {
+	// a main database is registered before it is loaded, so it finds itself
+	auto existing = DatabaseManager::Get(GetDatabase()).GetDatabase(name);
+	if (!replace && existing && existing.get() != &GetAttached()) {
 		throw BinderException("Failed to attach database: database with name \"%s\" already exists",
 		                      name.GetIdentifierName());
 	}

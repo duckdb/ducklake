@@ -1,0 +1,61 @@
+# name: test/sql/stats/null_first_bounds_other_catalog.test
+# description: A column found with values gets new bounds after another catalog of the lake removed its values
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/null_first_bounds_other_catalog.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/null_first_bounds_other_catalog', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.unrelated (i INTEGER);
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS other (METADATA_CATALOG '__ducklake_metadata_ducklake')
+
+foreach tbl direct intervening
+
+statement ok
+CREATE TABLE ducklake.{tbl} (a FLOAT DEFAULT 0.2);
+
+statement ok
+INSERT INTO ducklake.{tbl} VALUES (100.2), (NULL);
+
+statement ok
+ALTER TABLE ducklake.{tbl} ALTER a TYPE DOUBLE;
+
+statement ok
+INSERT INTO ducklake.{tbl} VALUES (5);
+
+statement ok
+UPDATE other.{tbl} SET a = NULL;
+
+# a commit of this catalog after the one of the other catalog keeps the columns found with values outdated
+statement ok
+INSERT INTO ducklake.unrelated SELECT 1 WHERE '{tbl}' = 'intervening';
+
+statement ok
+INSERT INTO ducklake.{tbl} VALUES (7);
+
+query II
+SELECT s.min_value::DOUBLE = 7, s.max_value::DOUBLE = 7 FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = '{tbl}'
+----
+true	true
+
+query II
+EXPLAIN SELECT * FROM ducklake.{tbl} WHERE a > 10
+----
+physical_plan	<REGEX>:.*Empty Result.*
+
+query I
+SELECT count(*) FROM ducklake.{tbl} WHERE a = 7
+----
+1
+
+endloop

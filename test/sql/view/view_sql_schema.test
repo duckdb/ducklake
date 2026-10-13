@@ -1,0 +1,36 @@
+# name: test/sql/view/view_sql_schema.test
+# description: duckdb_views().sql qualifies a DuckLake view with its schema like DuckDB
+# group: [view]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/view_sql_schema')
+
+statement ok
+CREATE SCHEMA dl.my_schema
+
+statement ok
+CREATE VIEW dl.my_schema.v AS SELECT 42 AS x
+
+statement ok
+CREATE VIEW dl.main_view AS SELECT 1 AS y
+
+statement ok
+CREATE SCHEMA dl."odd schema"
+
+statement ok
+CREATE VIEW dl."odd schema"."odd view" (a) AS SELECT 1 AS z
+
+query I
+SELECT sql FROM duckdb_views() WHERE database_name = 'dl' ORDER BY view_name
+----
+CREATE VIEW main_view AS SELECT 1 AS y;
+CREATE VIEW "odd schema"."odd view" (a) AS SELECT 1 AS z;
+CREATE VIEW my_schema.v AS SELECT 42 AS x;

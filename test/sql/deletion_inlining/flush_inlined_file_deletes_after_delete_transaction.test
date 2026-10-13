@@ -1,0 +1,99 @@
+# name: test/sql/deletion_inlining/flush_inlined_file_deletes_after_delete_transaction.test
+# description: Flushing inlined file deletes after a delete file of the same transaction keeps one delete file
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/flush_inlined_file_deletes_after_delete', DATA_INLINING_ROW_LIMIT 10)
+
+# the first deletes are inlined, the deletes of the transaction go to a delete file
+statement ok
+CREATE TABLE lake.d (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO lake.d SELECT i, i FROM range(0, 20) t(i)
+
+statement ok
+DELETE FROM lake.d WHERE id < 5
+
+statement ok
+SET VARIABLE d_before = (SELECT max(snapshot_id) FROM ducklake_snapshots('lake'))
+
+statement ok
+BEGIN
+
+query I
+DELETE FROM lake.d WHERE id >= 9
+----
+11
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'd')
+
+statement ok
+COMMIT
+
+query II
+SELECT COUNT(*), LIST(id ORDER BY id) FROM lake.d
+----
+4	[5, 6, 7, 8]
+
+query I
+SELECT LIST(id ORDER BY id) FROM lake.d AT (VERSION => getvariable('d_before'))
+----
+[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+
+query II
+SELECT change_type, COUNT(*) FROM ducklake_table_changes('lake', 'main', 'd', getvariable('d_before') + 1, getvariable('d_before') + 1) GROUP BY ALL
+----
+delete	11
+
+statement ok
+SET VARIABLE d_id = (SELECT table_id FROM __ducklake_metadata_lake.ducklake_table WHERE table_name = 'd')
+
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE table_id = getvariable('d_id') AND end_snapshot IS NULL
+----
+1
+
+# an UPDATE in the same transaction as the flush
+statement ok
+CREATE TABLE lake.u (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO lake.u SELECT i, i FROM range(0, 20) t(i)
+
+statement ok
+DELETE FROM lake.u WHERE id < 5
+
+statement ok
+SET VARIABLE u_before = (SELECT max(snapshot_id) FROM ducklake_snapshots('lake'))
+
+statement ok
+BEGIN
+
+statement ok
+UPDATE lake.u SET v = v + 100
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'u')
+
+statement ok
+COMMIT
+
+query III
+SELECT COUNT(*), MIN(v), MAX(v) FROM lake.u
+----
+15	105	119
+
+query III
+SELECT COUNT(*), MIN(v), MAX(v) FROM lake.u AT (VERSION => getvariable('u_before'))
+----
+15	5	19

@@ -17,7 +17,7 @@ namespace duckdb {
 class DuckLakeFieldData;
 struct DuckLakeFunctionInfo;
 
-enum class InlinedVirtualColumn { NONE, COLUMN_ROW_ID, COLUMN_EMPTY };
+enum class InlinedVirtualColumn { NONE, COLUMN_ROW_ID, COLUMN_FILE_ROW_NUMBER, COLUMN_EMPTY };
 
 class DuckLakeInlinedDataReader : public BaseFileReader {
 public:

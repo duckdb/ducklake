@@ -33,7 +33,6 @@
     "Default value for STRUCT type not supported",
     "Default value for LIST type not supported",
     "only widening type promotions are allowed",
-    "the table has transaction-local changes or no stats are available",
     "Adding indexes or constraints is not supported in DuckLake",
     "Only rename on top-level struct fields is supported currently",
     "Changing Secret Manager settings after the secret manager is used is not allowed!",
@@ -231,12 +230,6 @@
       ]
     },
     {
-      "reason": "FIXME: flaky in CI — concurrent ALTER ADD COLUMN with reads sometimes aborts the writer's transaction or segfaults under DuckLake",
-      "paths": [
-        "test/sql/parallelism/interquery/concurrent_reads_while_altering.test"
-      ]
-    },
-    {
       "reason": "Different Concurrency Behavior",
       "paths": [
         "test/sql/parallelism/interquery/concurrent_force_checkpoint.test",
@@ -289,12 +282,6 @@
       ]
     },
     {
-      "reason": "FIXME: Drop the last column of a struct?",
-      "paths": [
-        "test/sql/alter/struct/drop_col_struct.test"
-      ]
-    },
-    {
       "reason": "No Catalog Dependencies",
       "paths": [
         "test/fuzzer/pedro/view_not_rebound_error.test",
@@ -305,18 +292,8 @@
         "test/sql/catalog/view/recursive_view_with_dependencies.test",
         "test/sql/catalog/view/test_view_sql_with_dependencies.test",
         "test/sql/catalog/view/test_view_schema_change.test",
-        "test/sql/catalog/test_standard_schema.test"
-      ]
-    },
-    {
-      "reason": "FIXME: View Columns",
-      "paths": [
-        "test/sql/storage/wal/wal_view_storage_no_view_dependencies.test",
-        "test/sql/storage/wal/wal_view_storage.test",
-        "test/sql/storage/catalog/test_view_explicit_aliases.test",
-        "test/sql/storage/catalog/test_view_storage_no_view_dependencies.test",
-        "test/sql/storage/catalog/test_view_storage.test",
-        "test/sql/catalog/view/test_view_sql.test"
+        "test/sql/catalog/test_standard_schema.test",
+        "test/sql/storage/wal/wal_view_storage.test"
       ]
     },
     {
@@ -430,112 +407,26 @@
       ]
     },
     {
-      "reason": "FIXME: Drop Null/Not Null Not Checked in DuckDB? Bug in core?",
-      "paths": [
-        "test/sql/alter/alter_col/test_drop_not_null.test",
-        "test/sql/alter/alter_col/test_set_not_null.test"
-      ]
-    },
-    {
       "reason": "FIXME: TIMETZ",
       "paths": [
         "test/sql/types/time/test_time_tz.test",
-        "test/sql/types/time/test_time_tz_collate.test",
-        "test/sql/types/time/test_time_tz_icu.test",
-        "test/sql/types/timestamp/test_timestamp_to_tz_cast.test",
-        "test/sql/timezone/test_icu_timezone.test"
+        "test/sql/types/time/test_time_tz_collate.test"
       ]
     },
     {
-      "reason": "FIXME: Nested Stats",
-      "paths": [
-        "test/sql/types/list/list_stats.test"
-      ]
-    },
-    {
-      "reason": "FIXME: stats() min/max is NULL for a NaN-only column (native storage reports nan)",
-      "paths": [
-        "test/sql/storage/nan_min_statistics.test"
-      ]
-    },
-    {
-      "reason": "FIXME: List NULL issues?",
-      "paths": [
-        "test/sql/function/list/list_cosine_similarity.test",
-        "test/sql/function/list/list_inner_product.test",
-        "test/sql/function/list/list_distance.test"
-      ]
-    },
-    {
-      "reason": "FIXME: BUGS? Weird behavior around CTEs",
-      "paths": [
-        "test/sql/join/semianti/antijoin.test",
-        "test/sql/subquery/scalar/test_scalar_subquery_cte.test"
-      ]
-    },
-    {
-      "reason": "FIXME: Immediate transaction mode not respected",
+      "reason": "DuckLake detects transaction conflicts at COMMIT, these tests expect them at the statement",
       "paths": [
         "test/sql/update/test_update_many_updaters_nulls.test",
         "test/sql/update/test_update_many_updaters.test",
-        "test/sql/delete/test_using_delete_duplicates.test"
+        "test/sql/transactions/test_from_update_conflict.test",
+        "test/sql/alter/rename_table/test_rename_table_collision.test",
+        "test/sql/alter/alter_col/test_not_null_multi_tran.test"
       ]
     },
     {
-      "reason": "FIXME: Internal Error",
+      "reason": "Concurrent deletes from the same data file conflict in DuckLake, also when they delete different rows",
       "paths": [
-        "test/sql/function/list/list_value_nested_lists.test"
-      ]
-    },
-    {
-      "reason": "FIXME: BUGS? Weird behavior around hugeint",
-      "paths": [
-        "test/fuzzer/sqlsmith/test_abs_overflow.test",
-        "test/fuzzer/duckfuzz/bitstring_agg_uhugeint.test",
-        "test/sql/order/hugeint_order_by_extremes.test",
-        "test/sql/types/numeric/uhugeint_try_cast.test",
-        "test/sql/types/numeric/hugeint_try_cast.test",
-        "test/sql/join/inner/equality_join_limits.test",
-        "test/sql/aggregate/group/group_by_limits.test",
-        "test/sql/storage/types/test_uhugeint_storage.test",
-        "test/sql/export/parquet/export_parquet_hugeint.test",
-        "test/optimizer/statistics/statistics_numeric.test"
-      ]
-    },
-    {
-      "reason": "FIXME: BUGS? Uncaught/Weird exception",
-      "paths": [
-        "test/sql/delete/test_segment_deletes.test",
-        "test/sql/storage/mix/updates_deletes_persistent_segments.test"
-      ]
-    },
-    {
-      "reason": "FIXME: BUGS? Deserialization error",
-      "paths": [
-        "test/sql/storage/catalog/test_drop_table.test",
-        "test/sql/storage/compression/bitpacking/struct_bitpacking.test",
-        "test/sql/storage/delete/test_unchanged_deletes_large.test",
-        "test/sql/window/test_window_range.test"
-      ]
-    },
-    {
-      "reason": "FIXME: BUGS? Unnamed structs should not be supported",
-      "paths": [
-        "test/issues/general/test_5072.test",
-        "test/sql/types/struct/struct_different_names.test"
-      ]
-    },
-    {
-      "reason": "FIXME: Pushdown NULL byte?",
-      "paths": [
-        "test/sql/function/string/null_byte.test",
-        "test/sql/storage/null_byte_storage.test"
-      ]
-    },
-    {
-      "reason": "FIXME: Nested struct storage metadata load?",
-      "paths": [
-        "test/sql/storage/types/struct/nested_struct_storage.test"
+        "test/sql/delete/test_segment_deletes.test"
       ]
     },
     {
@@ -545,59 +436,9 @@
       ]
     },
     {
-      "reason": "FIXME: Bugs? Cannot commit transaction local files",
+      "reason": "The test sets a 1000 KB memory limit, under which DuckLake metadata queries can run out of memory",
       "paths": [
-        "test/sql/transactions/conflict_rename_append.test",
         "test/sql/logging/file_system_logging_attach_deadlock.test"
-      ]
-    },
-    {
-      "reason": "FIXME: BUGS? Incorrect rename + re-create behavior",
-      "paths": [
-        "test/sql/catalog/dependencies/test_write_after_rename.test",
-        "test/sql/alter/rename_table/test_rename_table_chain_rollback.test",
-        "test/sql/alter/rename_table/test_rename_table_chain_commit.test",
-        "test/sql/alter/rename_table/test_rename_table_incorrect.test",
-        "test/sql/alter/rename_table/test_rename_table_transactions.test",
-        "test/sql/alter/rename_table/test_rename_table.test",
-        "test/sql/alter/rename_table/test_rename_table_collision.test"
-      ]
-    },
-    {
-      "reason": "FIXME: Unstable OID",
-      "paths": [
-        "test/sql/pg_catalog/pg_namespace.test"
-      ]
-    },
-    {
-      "reason": "FIXME: Statement differs from original result!",
-      "paths": [
-        "test/sql/types/nested/map/test_map_subscript.test",
-        "test/sql/types/nested/map/test_map_subscript_composite.test",
-        "test/sql/subquery/scalar/test_scalar_subquery.test",
-        "test/sql/json/test_json_macros.test",
-        "test/issues/monetdb/test_boolean_not.test",
-        "test/sql/join/asof/test_asof_join_filter_pushdown.test",
-        "test/sql/copy/parquet/parquet_1588.test"
-      ]
-    },
-    {
-      "reason": "FIXME: Logical Operator Copy requires the logical operator and all of its children to be serializable: DuckLakeScan not implemented",
-      "paths": [
-        "test/sql/optimizer/test_window_self_join.test"
-      ]
-    },
-    {
-      "reason": "FIXME: Wrong result",
-      "paths": [
-        "test/sql/join/positional/test_positional_join.test",
-        "test/sql/update/test_null_update.test"
-      ]
-    },
-    {
-      "reason": "FIXME: Transaction Conflict Error",
-      "paths": [
-        "test/sql/transactions/test_from_update_conflict.test"
       ]
     },
     {
@@ -617,12 +458,6 @@
       "reason": "FIXME: DuckTransaction::Get called on non-DuckDB transaction",
       "paths": [
         "test/sql/function/timestamp/test_icu_makedate.test"
-      ]
-    },
-    {
-      "reason": "FIXME: Macros are currently not taken in for recursion",
-      "paths": [
-        "test/sql/catalog/function/test_recursive_macro.test"
       ]
     },
     {
@@ -705,15 +540,9 @@
       ]
     },
     {
-      "reason": "FIXME: CI Deadlock?",
+      "reason": "INSERTs conflict with concurrent DELETEs in DuckLake, the final count of the test assumes they all commit",
       "paths": [
         "test/sql/update/test_stress_update_issue_19688.test"
-      ]
-    },
-    {
-      "reason": "FIXME: Internal error",
-      "paths": [
-        "test/sql/copy/csv/test_copy_null.test"
       ]
     },
     {
@@ -737,11 +566,7 @@
     {
       "reason": "FIXME: GEOMETRY limitations (stats are different in DuckLake, shredding is not supported)",
       "paths": [
-        "test/sql/types/geo/geometry_stats.test",
-        "test/sql/types/geo/geometry_shred_list.test",
-        "test/sql/types/geo/geometry_shred_limit.test",
-        "test/sql/types/geo/geometry_crs.test",
-        "test/sql/types/geo/geometry_shred.test"
+        "test/sql/types/geo/geometry_crs.test"
       ]
     },
     {
@@ -749,15 +574,6 @@
       "paths": [
         "test/sql/pivot/pivot_star.test",
         "test/sql/types/geo/geometry_update.test"
-      ]
-    },
-    {
-      "reason": "FIXME: Variant Bugs?",
-      "paths": [
-        "test/parquet/variant/variant_comparison.test",
-        "test/sql/storage/types/variant/variant_shredding_omit_untyped.test",
-        "test/parquet/variant/variant_json_copy.test",
-        "test/sql/function/variant/variant_extract_string_shredded.test"
       ]
     },
     {
@@ -873,12 +689,6 @@
       ]
     },
     {
-      "reason": "DuckLake table entries get a new object id on ALTER, the test asserts oid stability.",
-      "paths": [
-        "test/sql/catalog/test_alter_oid_stability.test"
-      ]
-    },
-    {
       "reason": "Test assumes tables vanish on restart (in-memory catalog); DuckLake persists them.",
       "paths": [
         "test/sql/aggregate/aggregate_state_export/test_state_export_quantile.test",
@@ -908,7 +718,10 @@
         "test/sql/storage/compression/uncompressed/validity_corrupt_offset.test",
         "test/sql/storage/corrupt/row_group_count_mismatch.test",
         "test/sql/storage/overflow_strings/null_overflow_string_memory.test",
-        "test/sql/storage/compression/constant/constant_negative_zero.test"
+        "test/sql/storage/compression/constant/constant_negative_zero.test",
+        "test/sql/types/geo/geometry_shred_limit.test",
+        "test/sql/types/geo/geometry_shred.test",
+        "test/sql/storage/types/variant/variant_shredding_omit_untyped.test"
       ]
     },
     {
@@ -936,17 +749,12 @@
       ]
     },
     {
-      "reason": "FIXME: reading transaction-local inlined data after in-transaction ALTER TYPE looks up the inlined table of the new schema version, which is only created at commit.",
-      "paths": [
-        "test/sql/alter/alter_type/test_alter_type_active_transaction_visibility.test"
-      ]
-    },
-    {
       "reason": "Native geometry statistics propagation differs through parquet storage.",
       "paths": [
         "test/sql/types/geo/geometry_from_wkb_stats.test",
         "test/sql/types/geo/geometry_vertex_extract.test",
-        "test/sql/types/geo/geometry_stats_prune_null.test"
+        "test/sql/types/geo/geometry_stats_prune_null.test",
+        "test/sql/types/geo/geometry_stats.test"
       ]
     },
     {
@@ -982,7 +790,7 @@
       ]
     },
     {
-      "reason": "FIXME: literal column defaults are reloaded as VARCHAR constants, so information_schema shows '1' instead of CAST(1 AS UTINYINT)",
+      "reason": "A literal column default is stored as its value, so CAST(1 AS INTEGER) on an INTEGER column reads back as 1",
       "paths": [
         "test/sql/types/test_quotes.test"
       ]

@@ -7,6 +7,9 @@ duckdb_unittest_tempdir/
 testext
 test/python/__pycache__/
 .github/regression/__pycache__/
+.github/coverage/__pycache__/
 .Rhistory
 scripts/data/
 duckdb_benchmark_data/
+# written by a `make coverage` binary run without LLVM_PROFILE_FILE
+*.profraw

@@ -74,8 +74,9 @@ DuckLakeColumnStats DuckLakeColumnStats::FromGlobalStats(const LogicalType &type
                                                          const DuckLakeGlobalColumnStatsInfo &col,
                                                          bool table_has_rows) {
 	DuckLakeColumnStats stats(type);
-	stats.has_null_count = col.has_contains_null;
-	if (col.has_contains_null) {
+	// the stored statistics of a nested column do not show its NULL values
+	stats.has_null_count = col.has_contains_null && !type.IsNested();
+	if (stats.has_null_count) {
 		stats.null_count = col.contains_null ? 1 : 0;
 	}
 	stats.has_contains_nan = col.has_contains_nan;
@@ -357,24 +358,18 @@ void DuckLakeColumnStats::SetValidity(BaseStatistics &stats) const {
 }
 
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateNumericStats() const {
-	if (!has_min && !has_max) {
+	if (!has_min || !has_max) {
+		// an empty statistics object would keep the empty range for a missing bound
 		return NumericStats::CreateUnknown(type).ToUnique();
 	}
+	auto min_value = TryCastStatsBound(min, type);
+	auto max_value = TryCastStatsBound(max, type);
+	if (!min_value || !max_value) {
+		return nullptr;
+	}
 	auto stats = NumericStats::CreateEmpty(type);
-	if (has_min) {
-		auto min_value = TryCastStatsBound(min, type);
-		if (!min_value) {
-			return nullptr;
-		}
-		NumericStats::SetMin(stats, *min_value);
-	}
-	if (has_max) {
-		auto max_value = TryCastStatsBound(max, type);
-		if (!max_value) {
-			return nullptr;
-		}
-		NumericStats::SetMax(stats, *max_value);
-	}
+	NumericStats::SetMin(stats, *min_value);
+	NumericStats::SetMax(stats, *max_value);
 	SetValidity(stats);
 	return stats.ToUnique();
 }
@@ -390,6 +385,9 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateVariantStats() const {
 unique_ptr<BaseStatistics> DuckLakeColumnStats::CreateGeometryStats() const {
 	if (!extra_stats) {
 		throw InternalException("Geometry DuckLakeColumnStats without extra_stats?");
+	}
+	if (ExtraStatsUnknown()) {
+		return GeometryStats::CreateUnknown(type).ToUnique();
 	}
 	auto &geometry_stats = extra_stats->Cast<DuckLakeColumnGeoStats>();
 	auto stats = geometry_stats.ToStats();
@@ -418,10 +416,12 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 	case LogicalTypeId::SMALLINT:
 	case LogicalTypeId::INTEGER:
 	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::HUGEINT:
 	case LogicalTypeId::UTINYINT:
 	case LogicalTypeId::USMALLINT:
 	case LogicalTypeId::UINTEGER:
 	case LogicalTypeId::UBIGINT:
+	case LogicalTypeId::UHUGEINT:
 	case LogicalTypeId::DECIMAL:
 	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIME:
@@ -435,14 +435,22 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 		return CreateNumericStats();
 	case LogicalTypeId::FLOAT:
 	case LogicalTypeId::DOUBLE: {
-		// we only create stats if we know there are no NaN values
-		// FIXME: we can just set Max to NaN instead
-		if (has_contains_nan && !contains_nan) {
+		if (!has_contains_nan) {
+			// we only create stats if we know whether there are NaN values
+			auto stats = NumericStats::CreateEmpty(type);
+			SetValidity(stats);
+			return stats.ToUnique();
+		}
+		if (!contains_nan) {
 			return CreateNumericStats();
 		}
-		auto stats = NumericStats::CreateEmpty(type);
-		SetValidity(stats);
-		return stats.ToUnique();
+		// NaN is greater than every other value, so it is the max
+		auto stats = has_min ? CreateNumericStats() : NumericStats::CreateUnknown(type).ToUnique();
+		if (stats) {
+			NumericStats::SetMax(*stats, Value::DOUBLE(std::numeric_limits<double>::quiet_NaN()).DefaultCastAs(type));
+			SetValidity(*stats);
+		}
+		return stats;
 	}
 	case LogicalTypeId::VARCHAR:
 		return CreateStringStats();

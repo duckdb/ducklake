@@ -1,0 +1,66 @@
+# name: benchmark/micro/maintenance/expire_one_snapshot.benchmark
+# description: Expire one of 1006 snapshots ten times, so the 2000 ended files keep hundreds of snapshots in their range
+# group: [maintenance]
+
+name Expire One Snapshot
+group micro
+subgroup maintenance
+
+require ducklake
+
+require parquet
+
+argument work expire_one_work
+
+include benchmark/micro/fixtures/snap1000.benchmark.in
+
+# Each expiration is rolled back and checks its own count, since only the first result is verified
+run
+BEGIN;
+SELECT CASE WHEN count(*) = 1 THEN 1 ELSE error('snapshot 500 was not expired') END AS expired
+FROM ducklake_expire_snapshots('lake', versions => [500]);
+ROLLBACK;
+BEGIN;
+SELECT CASE WHEN count(*) = 1 THEN 1 ELSE error('snapshot 500 was not expired') END AS expired
+FROM ducklake_expire_snapshots('lake', versions => [500]);
+ROLLBACK;
+BEGIN;
+SELECT CASE WHEN count(*) = 1 THEN 1 ELSE error('snapshot 500 was not expired') END AS expired
+FROM ducklake_expire_snapshots('lake', versions => [500]);
+ROLLBACK;
+BEGIN;
+SELECT CASE WHEN count(*) = 1 THEN 1 ELSE error('snapshot 500 was not expired') END AS expired
+FROM ducklake_expire_snapshots('lake', versions => [500]);
+ROLLBACK;
+BEGIN;
+SELECT CASE WHEN count(*) = 1 THEN 1 ELSE error('snapshot 500 was not expired') END AS expired
+FROM ducklake_expire_snapshots('lake', versions => [500]);
+ROLLBACK;
+BEGIN;
+SELECT CASE WHEN count(*) = 1 THEN 1 ELSE error('snapshot 500 was not expired') END AS expired
+FROM ducklake_expire_snapshots('lake', versions => [500]);
+ROLLBACK;
+BEGIN;
+SELECT CASE WHEN count(*) = 1 THEN 1 ELSE error('snapshot 500 was not expired') END AS expired
+FROM ducklake_expire_snapshots('lake', versions => [500]);
+ROLLBACK;
+BEGIN;
+SELECT CASE WHEN count(*) = 1 THEN 1 ELSE error('snapshot 500 was not expired') END AS expired
+FROM ducklake_expire_snapshots('lake', versions => [500]);
+ROLLBACK;
+BEGIN;
+SELECT CASE WHEN count(*) = 1 THEN 1 ELSE error('snapshot 500 was not expired') END AS expired
+FROM ducklake_expire_snapshots('lake', versions => [500]);
+ROLLBACK;
+BEGIN;
+SELECT CASE WHEN count(*) = 1 THEN 1 ELSE error('snapshot 500 was not expired') END AS expired
+FROM ducklake_expire_snapshots('lake', versions => [500]);
+
+# The rollback keeps all 1006 snapshots, so a missed reset leaves nothing to expire in the next run
+cleanup
+@rollback ${lake}_pristine TO ${work}
+
+result_query I
+SELECT expired FROM __answer
+----
+1

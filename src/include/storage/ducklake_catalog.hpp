@@ -248,6 +248,7 @@ public:
 
 	optional_ptr<CatalogEntry> GetEntryById(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                        SchemaIndex schema_id);
+	//! The committed table at the snapshot, without the changes of the transaction
 	optional_ptr<CatalogEntry> GetEntryById(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                        TableIndex table_id);
 	string GeneratePathFromName(const string &uuid, const string &name);
@@ -321,6 +322,8 @@ public:
 		lock_guard<mutex> guard(commit_lock);
 		last_committed_snapshot = value;
 	}
+	//! Keeps the oids of committed entries for when they are loaded
+	void SetEntryOids(const ducklake_entry_oids_t &oids);
 
 	//! Whether the metadata server can execute the commit retry loop server-side.
 	bool RetrialsServerSide() const {
@@ -376,6 +379,12 @@ public:
 	bool TryGetSchemaVersionSnapshot(TableIndex table_id, idx_t schema_version, DuckLakeSnapshot &result);
 	//! Cache the snapshot of a committed (table, schema version) pair
 	void CacheSchemaVersionSnapshot(TableIndex table_id, idx_t schema_version, DuckLakeSnapshot snapshot);
+	//! Whether a commit found values of the column at the snapshot, which then keeps its unknown table bounds
+	bool ColumnHoldsValues(TableIndex table_id, FieldIndex column_id, idx_t snapshot_id);
+	void SetColumnHoldsValues(TableIndex table_id, FieldIndex column_id, idx_t snapshot_id);
+	//! The columns found with values stay valid for the snapshot of a commit that directly follows theirs
+	void AdvanceColumnsWithValues(idx_t snapshot_id);
+	void ForgetColumnsWithValues(const set<TableIndex> &table_ids);
 
 	//! Invalidate the cached table stats entry for a given stats cache key.
 	void InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id);
@@ -399,8 +408,13 @@ private:
 	void RegisterCatalog();
 	//! Returns whether no other DuckLake uses the metadata catalog
 	bool UnregisterCatalog();
+	//! Gives an entry loaded from the catalog the oid of its id, so it keeps its oid across snapshots
+	void AssignStableOid(CatalogEntry &entry, idx_t id);
 
 private:
+	//! The oid of each loaded or committed entry
+	mutex entry_oids_lock;
+	ducklake_entry_oids_t entry_oids;
 	mutex name_maps_lock;
 	//! Map of mapping index -> name map
 	DuckLakeNameMapSet name_maps;
@@ -434,6 +448,9 @@ private:
 	//! The snapshot each committed (table_id, schema_version) pair resolves to, which later commits do not change
 	mutex schema_version_snapshot_lock;
 	map<pair<idx_t, idx_t>, DuckLakeSnapshot> schema_version_snapshots;
+	mutex columns_with_values_lock;
+	optional_idx columns_with_values_snapshot;
+	set<pair<idx_t, idx_t>> columns_with_values;
 	//! The schema versions of each table at the schema version they were looked up at, guarded by the same lock
 	unordered_map<idx_t, pair<idx_t, DuckLakeTableSchemaVersions>> table_schema_versions;
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit

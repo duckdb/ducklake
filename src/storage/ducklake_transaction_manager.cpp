@@ -37,6 +37,13 @@ ErrorData DuckLakeTransactionManager::CommitTransaction(ClientContext &context, 
 	return ErrorData();
 }
 
+void DuckLakeTransactionManager::GetWrittenFiles(vector<string> &result) {
+	lock_guard<mutex> l(transaction_lock);
+	for (auto &entry : transactions) {
+		entry.second->GetWrittenFiles(result);
+	}
+}
+
 void DuckLakeTransactionManager::RollbackTransaction(Transaction &transaction) {
 	auto &ducklake_transaction = transaction.Cast<DuckLakeTransaction>();
 	ducklake_transaction.Rollback();

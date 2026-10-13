@@ -1,0 +1,76 @@
+# name: test/sql/partitioning/bucket_pruning_in_list_columns.test
+# description: Bucket pruning keeps every file for an IN list that holds an expression of the column
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/bucket_pruning_in_list_columns', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE s (v VARCHAR)
+
+statement ok
+ALTER TABLE s SET PARTITIONED BY (bucket(4, v))
+
+statement ok
+INSERT INTO s SELECT 'v' || i FROM range(0, 20) g(i)
+
+statement ok
+CREATE TABLE t (i INTEGER)
+
+statement ok
+ALTER TABLE t SET PARTITIONED BY (bucket(10, i))
+
+statement ok
+INSERT INTO t SELECT i::INTEGER FROM range(0, 100) g(i)
+
+query I
+SELECT count(*) FROM s WHERE v IN ('v1', 'v5', v)
+----
+20
+
+query I
+SELECT count(*) FROM s WHERE v IN ('v1', 'v5', lower(v))
+----
+20
+
+query I
+SELECT count(*) FROM s WHERE v IN ('v1', v) AND v <> 'zz'
+----
+20
+
+query I
+SELECT count(*) FROM t WHERE i IN (1, 5, i)
+----
+100
+
+query I
+SELECT count(*) FROM t WHERE i IN (1, 5, i // 1)
+----
+100
+
+# lists of constants still prune, and a NULL in the list matches no row
+query I
+SELECT count(*) FROM s WHERE v IN ('v1', 'v5', NULL)
+----
+2
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM s WHERE v IN ('v1', 'v5', NULL)
+----
+analyzed_plan	<REGEX>:.*Total Files Read: [12].*
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM s WHERE v IN ('v1', 'v5')
+----
+analyzed_plan	<REGEX>:.*Total Files Read: [12].*

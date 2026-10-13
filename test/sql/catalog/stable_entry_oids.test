@@ -1,0 +1,106 @@
+# name: test/sql/catalog/stable_entry_oids.test
+# description: schemas, tables and views keep their oid across catalog changes
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/stable_entry_oids')
+
+statement ok
+CREATE SCHEMA dl.s
+
+statement ok
+CREATE TABLE dl.s.t (i INTEGER)
+
+statement ok
+CREATE VIEW dl.s.v AS SELECT 1 AS x
+
+statement ok
+SET VARIABLE schema_oid = (SELECT oid FROM duckdb_schemas() WHERE database_name = 'dl' AND schema_name = 's')
+
+statement ok
+SET VARIABLE table_oid = (SELECT table_oid FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 't')
+
+statement ok
+SET VARIABLE view_oid = (SELECT view_oid FROM duckdb_views() WHERE database_name = 'dl' AND view_name = 'v')
+
+statement ok
+CREATE SCHEMA dl.other
+
+statement ok
+ALTER TABLE dl.s.t ADD COLUMN j INTEGER
+
+statement ok
+ALTER TABLE dl.s.t RENAME TO t2
+
+query III
+SELECT (SELECT oid FROM duckdb_schemas() WHERE database_name = 'dl' AND schema_name = 's') = getvariable('schema_oid'),
+    (SELECT table_oid FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 't2') = getvariable('table_oid'),
+    (SELECT view_oid FROM duckdb_views() WHERE database_name = 'dl' AND view_name = 'v') = getvariable('view_oid')
+----
+true	true	true
+
+# also within the transaction that alters the table
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.s.t2 ADD COLUMN k INTEGER
+
+statement ok
+COMMENT ON VIEW dl.s.v IS 'a view'
+
+query II
+SELECT
+    (SELECT table_oid FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 't2') = getvariable('table_oid'),
+    (SELECT view_oid FROM duckdb_views() WHERE database_name = 'dl' AND view_name = 'v') = getvariable('view_oid')
+----
+true	true
+
+statement ok
+COMMIT
+
+# entries created in a transaction keep their oid when it commits
+statement ok
+CREATE TEMP MACRO s2_oids() AS [
+    (SELECT oid FROM duckdb_schemas() WHERE database_name = 'dl' AND schema_name = 's2'),
+    (SELECT table_oid FROM duckdb_tables() WHERE database_name = 'dl' AND schema_name = 's2'),
+    (SELECT view_oid FROM duckdb_views() WHERE database_name = 'dl' AND schema_name = 's2'),
+    (SELECT function_oid FROM duckdb_functions() WHERE database_name = 'dl' AND function_name = 'm'),
+    (SELECT function_oid FROM duckdb_functions() WHERE database_name = 'dl' AND function_name = 'tm')]
+
+statement ok
+BEGIN
+
+statement ok
+CREATE SCHEMA dl.s2
+
+statement ok
+CREATE TABLE dl.s2.t (i INTEGER)
+
+statement ok
+CREATE VIEW dl.s2.v AS SELECT 1 AS x
+
+statement ok
+CREATE MACRO dl.s2.m(a) AS a
+
+statement ok
+CREATE MACRO dl.s2.tm() AS TABLE SELECT 1 AS x
+
+statement ok
+SET VARIABLE created_oids = s2_oids()
+
+statement ok
+COMMIT
+
+query II
+SELECT s2_oids() = getvariable('created_oids'), len(list_filter(s2_oids(), lambda x: x IS NOT NULL))
+----
+true	5

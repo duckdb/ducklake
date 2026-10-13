@@ -1,0 +1,61 @@
+# name: test/sql/metadata/sqlite_all_varchar.test
+# description: sqlite_all_varchar applies to the user's SQLite reads but not to the reads of a SQLite catalog
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_all_varchar.db' AS lake (DATA_PATH '{DATA_PATH}/sqlite_all_varchar')
+
+statement ok
+CREATE TABLE lake.t AS SELECT 1 AS i
+
+statement ok
+SET GLOBAL sqlite_all_varchar = true
+
+query I
+SELECT i FROM lake.t
+----
+1
+
+query I
+SELECT DISTINCT typeof(snapshot_id) FROM __ducklake_metadata_lake.ducklake_snapshot
+----
+VARCHAR
+
+statement ok
+SET GLOBAL sqlite_all_varchar = false
+
+statement ok
+SET sqlite_all_varchar = true
+
+query I
+SELECT i FROM lake.t
+----
+1
+
+statement ok
+INSERT INTO lake.t VALUES (2)
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_all_varchar.db' AS lake
+
+query II
+SELECT i, typeof(i) FROM lake.t ORDER BY i
+----
+1	INTEGER
+2	INTEGER
+
+query I
+SELECT DISTINCT typeof(snapshot_id) FROM __ducklake_metadata_lake.ducklake_snapshot
+----
+VARCHAR

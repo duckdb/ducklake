@@ -457,17 +457,27 @@ WHERE del.begin_snapshot <= {SNAPSHOT_ID}
 			file_info.max_snapshot = MaxValue(file_info.max_snapshot, MaxSnapshotId(merged_deletions));
 		}
 
+		auto source = DeleteFileSource::FLUSH;
+		DuckLakeDeleteFile local_delete;
+		if (transaction.GetLocalDeleteFile(table_id, file_info.file_path, local_delete) &&
+		    local_delete.source == DeleteFileSource::REGULAR) {
+			if (merged_deletions.empty()) {
+				merged_deletions = file_info.deletions;
+			}
+			auto local_deletions =
+			    DuckLakeDeleteFilter::ScanDeleteFile(context, DuckLakeMultiFileList::GetDeleteData(local_delete));
+			// new deletes are dated to the expected commit snapshot
+			MergeDeletesWithSnapshots(local_deletions, snapshot.snapshot_id + 1, merged_deletions);
+			file_info.max_snapshot = MaxValue(file_info.max_snapshot, MaxSnapshotId(merged_deletions));
+			source = DeleteFileSource::REGULAR;
+		}
+
 		// Use reference to either merged or original deletions
 		const auto &deletions_to_write = merged_deletions.empty() ? file_info.deletions : merged_deletions;
 
-		WriteDeleteFileWithSnapshotsInput file_input {context,
-		                                              transaction,
-		                                              fs,
-		                                              table.DataPath(),
-		                                              encryption_key,
-		                                              file_info.file_path,
-		                                              deletions_to_write,
-		                                              DeleteFileSource::FLUSH};
+		WriteDeleteFileWithSnapshotsInput file_input {
+		    context, transaction, fs, table.DataPath(), encryption_key, file_info.file_path, deletions_to_write,
+		    source};
 		auto delete_file = DuckLakeDeleteFileWriter::Write(context, file_input, use_deletion_vectors);
 		delete_file.data_file_id = DataFileIndex(file_id);
 		delete_file.max_snapshot = file_info.max_snapshot;

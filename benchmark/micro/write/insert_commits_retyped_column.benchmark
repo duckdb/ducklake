@@ -1,0 +1,50 @@
+# name: benchmark/micro/write/insert_commits_retyped_column.benchmark
+# description: Twenty single-row commits into a table of ~1024 files with a retyped column of unknown bounds
+# group: [write]
+
+name Insert Commits Retyped Column
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work float_files_work
+
+include benchmark/micro/fixtures/float_files.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# The default of w does not survive the retype and w holds a NULL, so the first commit checks the live files
+run
+ALTER TABLE lake.events ADD COLUMN w FLOAT DEFAULT 0.2;
+INSERT INTO lake.events VALUES (-1, 0.5, NULL);
+ALTER TABLE lake.events ALTER COLUMN w TYPE DOUBLE;
+INSERT INTO lake.events VALUES (-2, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-3, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-4, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-5, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-6, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-7, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-8, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-9, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-10, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-11, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-12, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-13, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-14, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-15, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-16, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-17, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-18, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-19, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-20, 0.5, 0.5);
+INSERT INTO lake.events VALUES (-21, 0.5, 0.5);
+
+# A missed reset fails the ALTER because w already exists, and the bounds of w must stay unknown
+result_query III
+SELECT (SELECT count(*) FROM lake.events WHERE id < 0), (SELECT count(*) FROM lake.events WHERE w > 0.3),
+(SELECT min_value IS NULL AND contains_null FROM __ducklake_metadata_lake.ducklake_table_column_stats WHERE column_id = 3)
+----
+21	20	true

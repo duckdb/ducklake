@@ -336,7 +336,6 @@ public:
 			file_row_id_chunk.SetChildCardinality(count);
 			deleted_row_collection->Append(append_state, file_row_id_chunk);
 		}
-		total_deleted_count += local_entry.size();
 		local_entry.clear();
 	}
 
@@ -496,10 +495,11 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 		throw NotImplementedException("The same row was updated multiple times - this is not (yet) supported in "
 		                              "DuckLake. Eliminate duplicate matches prior to running the UPDATE");
 	}
+	global_state.total_deleted_count += sorted_deletes.size();
 
 	if (data_file_info.data_type == DuckLakeDataType::TRANSACTION_LOCAL_INLINED_DATA) {
 		// deletes from transaction-local inlined data are directly deleted from the inlined data
-		transaction.DeleteFromLocalInlinedData(table.GetTableId(), std::move(sorted_deletes));
+		transaction.DeleteFromLocalInlinedData(table, std::move(sorted_deletes));
 		return;
 	}
 	if (data_file_info.data_type == DuckLakeDataType::INLINED_DATA) {

@@ -1,0 +1,25 @@
+# name: benchmark/micro/read/topn_float_many_files.benchmark
+# description: Run Top-N queries on a FLOAT column whose dynamic filters skip most of ~1024 files
+# group: [read]
+
+name Top-N Float Many Files
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/float_pruning.benchmark.in
+
+run
+SELECT count(*) AS cnt, sum(id) AS sid FROM (
+(SELECT id, c FROM lake.f ORDER BY c DESC LIMIT 10)
+UNION ALL (SELECT id, c FROM lake.f ORDER BY c DESC LIMIT 1000)
+UNION ALL (SELECT id, c FROM lake.f ORDER BY c ASC LIMIT 10)
+UNION ALL (SELECT id, c FROM lake.f ORDER BY c ASC LIMIT 1000)
+UNION ALL (SELECT id, c FROM lake.f WHERE id % 3 = 0 ORDER BY c DESC LIMIT 100)
+);
+
+result II
+2120	2327822660

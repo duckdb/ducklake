@@ -1,0 +1,108 @@
+# name: test/sql/concurrent/concurrent_merge_into_insert_only.test
+# description: a MERGE INTO with only a NOT MATCHED INSERT conflicts with concurrent inserts into its table
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/concurrent_merge_into_insert_only', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(key INTEGER, writer INTEGER);
+
+statement ok
+CREATE TABLE ducklake.t_inlined(key INTEGER, writer INTEGER);
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 't_inlined')
+
+foreach tbl t t_inlined
+
+# two MERGEs of the same absent key
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+MERGE INTO ducklake.{tbl} AS t USING (SELECT 42 AS key, 1 AS writer) AS s ON t.key = s.key WHEN NOT MATCHED THEN INSERT VALUES (s.key, s.writer)
+
+statement ok con2
+MERGE INTO ducklake.{tbl} AS t USING (SELECT 42 AS key, 2 AS writer) AS s ON t.key = s.key WHEN NOT MATCHED THEN INSERT VALUES (s.key, s.writer)
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query II
+SELECT key, writer FROM ducklake.{tbl}
+----
+42	1
+
+# a MERGE of a key that a concurrent INSERT adds
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.{tbl} VALUES (43, 1)
+
+statement ok con2
+MERGE INTO ducklake.{tbl} AS t USING (SELECT 43 AS key, 2 AS writer) AS s ON t.key = s.key WHEN NOT MATCHED THEN INSERT VALUES (s.key, s.writer)
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query II
+SELECT key, writer FROM ducklake.{tbl} ORDER BY key
+----
+42	1
+43	1
+
+# a MERGE with a DELETE and an INSERT action marks the table from both actions
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+MERGE INTO ducklake.{tbl} AS t USING (SELECT 44 AS key, 1 AS writer) AS s ON t.key = s.key WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (s.key, s.writer)
+
+statement ok con2
+MERGE INTO ducklake.{tbl} AS t USING (SELECT 44 AS key, 2 AS writer) AS s ON t.key = s.key WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (s.key, s.writer)
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query II
+SELECT key, writer FROM ducklake.{tbl} ORDER BY key
+----
+42	1
+43	1
+44	1
+
+endloop

@@ -110,6 +110,8 @@ public:
 	optional_idx partition_id;
 	//! The encryption key used for writing the Parquet files
 	string encryption_key;
+	//! Whether the rows to insert depend on the rows of the table, like the NOT MATCHED rows of a MERGE
+	bool reads_table = false;
 
 public:
 	// // Source interface

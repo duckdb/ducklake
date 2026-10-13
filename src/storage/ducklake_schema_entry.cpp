@@ -71,19 +71,22 @@ unique_ptr<CreateInfo> DuckLakeSchemaEntry::GetInfo() const {
 }
 
 bool DuckLakeSchemaEntry::HandleCreateConflict(CatalogTransaction transaction, CatalogType catalog_type,
-                                               const string &entry_name, OnCreateConflict on_conflict) {
+                                               const string &entry_name, CreateInfo &info) {
 	auto existing_entry = GetEntry(transaction, catalog_type, Identifier(entry_name));
 	if (!existing_entry) {
 		// no conflict
 		return true;
 	}
-	switch (on_conflict) {
+	switch (info.on_conflict) {
 	case OnCreateConflict::ERROR_ON_CONFLICT:
 		throw CatalogException::EntryAlreadyExists(existing_entry->type, Identifier(entry_name));
 	case OnCreateConflict::IGNORE_ON_CONFLICT:
 		// ignore - skip without throwing an error
 		return false;
 	case OnCreateConflict::REPLACE_ON_CONFLICT: {
+		if (info.dependencies.Contains(*existing_entry)) {
+			throw CatalogException("CREATE OR REPLACE is not allowed to depend on itself");
+		}
 		if (existing_entry->type != catalog_type) {
 			throw CatalogException("Existing object %s is of type %s, trying to replace with type %s",
 			                       Identifier(entry_name), CatalogTypeToString(existing_entry->type),
@@ -111,7 +114,7 @@ DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction, BoundCr
 	auto &base_info = info.Base();
 	// check if we have an existing entry with this name
 	if (!HandleCreateConflict(transaction, CatalogType::TABLE_ENTRY, base_info.GetTableName().GetIdentifierName(),
-	                          base_info.on_conflict)) {
+	                          base_info)) {
 		return nullptr;
 	}
 	//! get a local table-id
@@ -209,7 +212,7 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateFunction(CatalogTransactio
 	}
 	auto macro_entry = MacroCatalogEntry::Create(ParentCatalog(), *this, create_macro_info);
 	// We check if there is a conflict, as multi-macro implementations are only supported if they do not exist yet
-	if (!HandleCreateConflict(transaction, info.type, info.GetFunctionName().GetIdentifierName(), info.on_conflict)) {
+	if (!HandleCreateConflict(transaction, info.type, info.GetFunctionName().GetIdentifierName(), info)) {
 		return nullptr;
 	}
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
@@ -263,8 +266,7 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction tr
 		throw NotImplementedException("DuckLake does not support secure views");
 	}
 	// check if we have an existing entry with this name
-	if (!HandleCreateConflict(transaction, CatalogType::VIEW_ENTRY, info.GetViewName().GetIdentifierName(),
-	                          info.on_conflict)) {
+	if (!HandleCreateConflict(transaction, CatalogType::VIEW_ENTRY, info.GetViewName().GetIdentifierName(), info)) {
 		return nullptr;
 	}
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
@@ -354,11 +356,10 @@ void DuckLakeSchemaEntry::Alter(CatalogTransaction catalog_transaction, AlterInf
 		auto &table = GetAlterEntry<DuckLakeTableEntry>(*this, catalog_transaction, alter, NOT_A_TABLE_MESSAGE);
 		auto new_table = table.Alter(context, transaction, alter);
 		if (alter.alter_table_type == AlterTableType::RENAME_TABLE) {
-			// We must check if this view name does not yet exist.
 			auto existing_table = GetEntry(catalog_transaction, CatalogType::TABLE_ENTRY, new_table->name);
 			if (alter.GetQualifiedName().Name() != new_table->name && existing_table) {
-				throw BinderException("Cannot rename table %s to %s, since %s already exists.",
-				                      alter.GetQualifiedName().Name(), new_table->name, new_table->name);
+				throw CatalogException("Could not rename %s to %s: another entry with this name already exists!",
+				                       alter.GetQualifiedName().Name(), new_table->name);
 			}
 		}
 		transaction.AlterEntry(table, std::move(new_table));

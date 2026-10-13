@@ -1,0 +1,71 @@
+# name: test/sql/stats/topn_nan_file_pruning.test
+# description: Top-N dynamic filters keep files with NaN, which their max leaves out
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/topn_nan_file_pruning', DATA_INLINING_ROW_LIMIT 0)
+
+# one thread without read-ahead opens each file after the previous one is scanned
+statement ok
+SET threads = 1
+
+statement ok
+SET read_ahead_depth = 0
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER, d DOUBLE, f FLOAT)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 100.0, 100.0)
+
+statement ok
+INSERT INTO ducklake.t VALUES (2, 'nan', 'nan'), (3, 1.0, 1.0)
+
+query I
+SELECT d FROM ducklake.t ORDER BY d DESC LIMIT 1
+----
+nan
+
+query I
+SELECT f FROM ducklake.t ORDER BY f DESC LIMIT 1
+----
+nan
+
+query I
+SELECT id FROM ducklake.t ORDER BY d DESC LIMIT 2
+----
+2
+1
+
+query I
+SELECT d FROM ducklake.t ORDER BY d ASC LIMIT 1
+----
+1.0
+
+# files without NaN are still skipped
+statement ok
+CREATE TABLE ducklake.p (id INTEGER, d DOUBLE)
+
+statement ok
+INSERT INTO ducklake.p SELECT i, 100.0 FROM range(5) t(i)
+
+statement ok
+INSERT INTO ducklake.p SELECT i, 1.0 FROM range(7) t(i)
+
+query II
+EXPLAIN ANALYZE SELECT d FROM ducklake.p ORDER BY d DESC LIMIT 1
+----
+analyzed_plan	<REGEX>:.*Total Files Skipped: 1.*
+
+query I
+SELECT d FROM ducklake.p ORDER BY d DESC LIMIT 1
+----
+100.0

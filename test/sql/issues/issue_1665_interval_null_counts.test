@@ -1,0 +1,113 @@
+# name: test/sql/issues/issue_1665_interval_null_counts.test
+# description: NULL tests on INTERVAL columns, which the Parquet writer collects no value or null counts for
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1665', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER, iv INTERVAL, s STRUCT(a INTERVAL))
+
+statement ok
+INSERT INTO dl.t VALUES (1, NULL, NULL), (2, INTERVAL 5 MINUTE, {'a': INTERVAL 1 DAY}), (3, INTERVAL 1 DAY, {'a': NULL})
+
+query I
+SELECT count(*) FROM dl.t WHERE iv IS NULL
+----
+1
+
+query I
+SELECT count(*) FROM dl.t WHERE iv IS NOT NULL
+----
+2
+
+query I
+SELECT count(*) FROM dl.t WHERE iv IS NOT NULL AND i > 1
+----
+2
+
+query I
+SELECT count(*) FROM dl.t WHERE s.a IS NULL
+----
+2
+
+query I
+SELECT count(*) FROM dl.t WHERE s.a IS NOT NULL
+----
+1
+
+# the counts are unknown rather than zero
+query II
+SELECT value_count IS NULL, null_count IS NULL FROM __ducklake_metadata_dl.ducklake_file_column_stats
+WHERE column_id = (SELECT column_id FROM __ducklake_metadata_dl.ducklake_column WHERE column_name = 'iv')
+----
+true	true
+
+# flushed inlined rows
+statement ok
+CREATE TABLE dl.f (i INTEGER, iv INTERVAL)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10, table_name => 'f')
+
+statement ok
+INSERT INTO dl.f VALUES (1, NULL), (2, INTERVAL 5 MINUTE)
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'f')
+
+query II
+SELECT (SELECT count(*) FROM dl.f WHERE iv IS NULL), (SELECT count(*) FROM dl.f WHERE iv IS NOT NULL)
+----
+1	1
+
+# file stats do not show a NULL in an INTERVAL column
+statement ok
+CREATE TABLE dl.n (i INTEGER, iv INTERVAL NOT NULL)
+
+statement error
+INSERT INTO dl.n VALUES (1, NULL)
+----
+NOT NULL constraint failed
+
+statement ok
+INSERT INTO dl.n VALUES (1, INTERVAL 1 DAY)
+
+statement error
+UPDATE dl.n SET iv = NULL
+----
+NOT NULL constraint failed
+
+query I
+SELECT count(*) FROM dl.n WHERE iv IS NOT NULL
+----
+1
+
+# written by DuckDB 1.5.6, whose file stats store zero value and null counts for INTERVAL columns
+unzip data/old_ducklake/interval_null_counts.db.gz {TEST_DIR}/issue_1665_legacy.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1665_legacy.db' AS legacy (DATA_PATH 'data/old_ducklake/interval_null_counts/', OVERRIDE_DATA_PATH TRUE, READ_ONLY)
+
+query II
+SELECT (SELECT count(*) FROM legacy.t WHERE iv IS NULL), (SELECT count(*) FROM legacy.t WHERE iv IS NOT NULL)
+----
+1	2
+
+unzip data/old_ducklake/interval_null_counts.db.gz {TEST_DIR}/issue_1665_alter.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1665_alter.db' AS alter_legacy (DATA_PATH 'data/old_ducklake/interval_null_counts/', OVERRIDE_DATA_PATH TRUE)
+
+statement error
+ALTER TABLE alter_legacy.t ALTER COLUMN iv SET NOT NULL
+----
+the column has NULL values

@@ -131,12 +131,6 @@
       ]
     },
     {
-      "reason": "FIXME: old sqlite extension has issues with this query, can be removed after v1.5.1",
-      "paths": [
-        "test/sql/metadata/ducklake_ui_catalog_query.test"
-      ]
-    },
-    {
       "reason": "FIXME: 3-writer concurrent delete-retry test is nondeterministic under sqlite single-writer locking with current duckdb main; failed deletes error loudly (\"database is locked\", swallowed by statement maybe) so rows legitimately remain - no silent loss.",
       "paths": [
         "test/sql/deletion_inlining/test_deletion_inlining_concurrent_retry.test"

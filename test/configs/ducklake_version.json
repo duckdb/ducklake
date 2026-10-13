@@ -29,6 +29,12 @@
       ]
     },
     {
+      "reason": "Inlining VARIANT values into a SQLite or Postgres catalog needs 1.1-dev1 and is disabled when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/data_inlining/data_inlining_variant_sql_rollback.test"
+      ]
+    },
+    {
       "reason": "The NULL column type was added in 1.1-dev1 and is not available when ducklake_default_version is pinned to 1.0",
       "paths": [
         "test/sql/types/null_type.test",
@@ -37,7 +43,8 @@
         "test/sql/data_inlining/data_inlining_null_type.test",
         "test/sql/add_files/add_files_null_type.test",
         "test/sql/macros/test_null_default.test",
-        "test/sql/macros/typed_null_default.test"
+        "test/sql/macros/typed_null_default.test",
+        "test/sql/geo/null_to_geometry_promotion_stats.test"
       ]
     },
     {
@@ -53,6 +60,7 @@
         "test/sql/comments/comment_on_view_column_conflict.test",
         "test/sql/comments/comment_on_view_column_invalid.test",
         "test/sql/comments/comment_on_view_column_update.test",
+        "test/sql/comments/copy_database_view_column_comments.test",
         "test/sql/comments/drop_view_expires_view_column_tags.test"
       ]
     },
@@ -101,6 +109,7 @@
         "test/sql/delete/deletion_vector.test",
         "test/sql/delete/deletion_vector_inlined_flush.test",
         "test/sql/delete/deletion_vector_multi_snapshot.test",
+        "test/sql/delete/deletion_vector_replaced_twice.test",
         "test/sql/rewrite_data_files/rewrite_deletion_vectors.test"
       ]
     }

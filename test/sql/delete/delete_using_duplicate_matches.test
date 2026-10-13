@@ -1,0 +1,57 @@
+# name: test/sql/delete/delete_using_duplicate_matches.test
+# description: DELETE USING counts a row that matches several rows of the USING side once
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/delete_using_duplicate_matches', DATA_INLINING_ROW_LIMIT 1000)
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT range AS i FROM range(2000)
+
+statement ok
+INSERT INTO ducklake.t SELECT range AS i FROM range(2000, 2100)
+
+statement ok
+CREATE TABLE ducklake.d AS SELECT i % 5 AS i FROM range(50) t(i) UNION ALL SELECT 2000 + i % 5 FROM range(50) t(i)
+
+# five rows of a data file and five inlined rows, each matched ten times
+query I
+DELETE FROM ducklake.t USING ducklake.d WHERE t.i = d.i
+----
+10
+
+query II
+SELECT count(*), sum(i) FROM ducklake.t
+----
+2090	2193930
+
+# inlined rows and a data file of the current transaction
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t SELECT 3000 + range FROM range(5)
+
+statement ok
+INSERT INTO ducklake.t SELECT 4000 + range FROM range(2000)
+
+query I
+DELETE FROM ducklake.t USING (SELECT 3000 + i % 5 AS i FROM range(50) t(i) UNION ALL SELECT 4000 + i % 3 FROM range(30) t(i)) d WHERE t.i = d.i
+----
+8
+
+statement ok
+COMMIT
+
+query II
+SELECT count(*), sum(i) FROM ducklake.t WHERE i >= 3000
+----
+1997	9986997

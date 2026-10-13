@@ -25,6 +25,7 @@ DuckLakeViewEntry::DuckLakeViewEntry(Catalog &catalog, SchemaCatalogEntry &schem
 DuckLakeViewEntry::DuckLakeViewEntry(DuckLakeViewEntry &parent, CreateViewInfo &info, LocalChange local_change)
     : DuckLakeViewEntry(parent.catalog, parent.schema, info, parent.GetViewId(), parent.GetViewUUID(), parent.query_sql,
                         local_change) {
+	oid = parent.oid;
 }
 
 unique_ptr<CatalogEntry> DuckLakeViewEntry::AlterEntry(ClientContext &context, AlterInfo &info) {
@@ -83,8 +84,10 @@ unique_ptr<CreateInfo> DuckLakeViewEntry::GetInfo() const {
 }
 
 string DuckLakeViewEntry::ToSQL() const {
+	auto qualified_name = schema.GetQualifiedName(name);
+	qualified_name.StripCatalog();
 	string result = "CREATE VIEW ";
-	result += SQLIdentifier::ToString(name.GetIdentifierName());
+	result += qualified_name.ToString(QualifiedNameToStringMode::HIDE_DEFAULT_SCHEMA);
 	if (!aliases.empty()) {
 		result += " (";
 		result += StringUtil::Join(aliases, aliases.size(), ", ", [](const Identifier &alias) {

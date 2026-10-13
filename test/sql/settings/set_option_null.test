@@ -1,0 +1,43 @@
+# name: test/sql/settings/set_option_null.test
+# description: set_option with a NULL value raises a regular error
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/set_option_null')
+
+foreach option parquet_compression parquet_version parquet_compression_level data_inlining_row_limit parquet_row_group_size parquet_row_group_size_bytes target_file_size require_commit_message hive_file_pattern rewrite_delete_threshold delete_older_than expire_older_than auto_compact per_thread_output write_deletion_vectors sort_on_insert
+
+statement error
+CALL dl.set_option('{option}', NULL)
+----
+option can't be null.
+
+endloop
+
+statement ok
+CREATE TABLE dl.t (i INTEGER, j INTEGER)
+
+statement error
+CALL dl.set_option('parquet_compression', NULL, table_name => 't')
+----
+The parquet_compression option can't be null.
+
+# a NULL list of columns clears skip_stats_columns
+statement ok
+CALL dl.set_option('skip_stats_columns', ['j'], table_name => 't')
+
+statement ok
+CALL dl.set_option('skip_stats_columns', NULL, table_name => 't')
+
+query I
+SELECT count(*) FROM dl.options() WHERE option_name = 'skip_stats_columns' AND value <> ''
+----
+0

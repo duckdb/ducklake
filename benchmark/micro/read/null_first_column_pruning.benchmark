@@ -1,0 +1,34 @@
+# name: benchmark/micro/read/null_first_column_pruning.benchmark
+# description: Add a column without a default to a table of 1000 small files, fill it in a later commit, then filter
+# group: [read]
+
+name Null First Column Pruning
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+argument work null_first_column_work
+
+include benchmark/micro/fixtures/compaction.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# The column is all NULL when it is added, so only bounds set by the later insert can skip the older files
+run
+ALTER TABLE lake.frag ADD COLUMN flag INTEGER;
+INSERT INTO lake.frag SELECT i, 0, 'new', i % 10 FROM range(2048000, 2049000) t(i);
+SELECT (SELECT count(*) FROM lake.frag WHERE flag > 9) + (SELECT count(*) FROM lake.frag WHERE flag < 0)
++ (SELECT count(*) FROM lake.frag WHERE flag = 10) + (SELECT count(*) FROM lake.frag WHERE flag >= 100)
++ (SELECT count(*) FROM lake.frag WHERE flag BETWEEN 20 AND 30) + (SELECT count(*) FROM lake.frag WHERE flag = -1)
++ (SELECT count(*) FROM lake.frag WHERE flag IN (11, 12)) + (SELECT count(*) FROM lake.frag WHERE flag > 1000)
++ (SELECT count(*) FROM lake.frag WHERE flag <= -5) + (SELECT count(*) FROM lake.frag WHERE flag = 99) AS outside,
+(SELECT count(*) FROM lake.frag) AS total;
+
+# A missed reset fails the ALTER because flag already exists
+result_query II
+SELECT outside, total FROM __answer
+----
+0	2049000
