@@ -499,7 +499,7 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 
 	if (data_file_info.data_type == DuckLakeDataType::TRANSACTION_LOCAL_INLINED_DATA) {
 		// deletes from transaction-local inlined data are directly deleted from the inlined data
-		transaction.DeleteFromLocalInlinedData(table.GetTableId(), std::move(sorted_deletes));
+		transaction.DeleteFromLocalInlinedData(table, std::move(sorted_deletes));
 		return;
 	}
 	if (data_file_info.data_type == DuckLakeDataType::INLINED_DATA) {

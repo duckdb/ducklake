@@ -424,13 +424,6 @@
       ]
     },
     {
-      "reason": "FIXME: BUGS? Weird behavior around hugeint",
-      "paths": [
-        "test/fuzzer/duckfuzz/bitstring_agg_uhugeint.test",
-        "test/optimizer/statistics/statistics_numeric.test"
-      ]
-    },
-    {
       "reason": "Concurrent deletes from the same data file conflict in DuckLake, also when they delete different rows",
       "paths": [
         "test/sql/delete/test_segment_deletes.test"

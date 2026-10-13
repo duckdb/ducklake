@@ -94,6 +94,9 @@ private:
 	optional_ptr<DuckLakeFieldId> parent;
 };
 
+//! The nested type with the names and types of the given children
+LogicalType GetNewNestedType(const LogicalType &type, const vector<unique_ptr<DuckLakeFieldId>> &new_children);
+
 class DuckLakeFieldData {
 public:
 	DuckLakeFieldData() = default;

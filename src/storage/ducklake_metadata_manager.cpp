@@ -1939,20 +1939,28 @@ static bool CollectBucketEqualityValues(ClientContext &context, const Expression
 		if (op_expr.GetChildren().size() < 2 || !ExpressionFilter::IsSimpleFilterColumnRef(*op_expr.GetChildren()[0])) {
 			return false;
 		}
+		// an element that is not a constant can match in any bucket, a NULL constant matches no row
+		vector<string> partition_values;
 		for (idx_t i = 1; i < op_expr.GetChildren().size(); i++) {
 			auto &child = *op_expr.GetChildren()[i];
 			if (child.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+				return false;
+			}
+			auto &constant = child.Cast<BoundConstantExpression>().GetValue();
+			if (constant.IsNull()) {
 				continue;
 			}
 			string partition_value;
-			if (!FoldBucketValue(context, child.Cast<BoundConstantExpression>().GetValue(), col_type, bucket_count,
-			                     partition_value)
-			         .IsValid()) {
-				continue;
+			if (!FoldBucketValue(context, constant, col_type, bucket_count, partition_value).IsValid()) {
+				return false;
 			}
-			out.push_back(std::move(partition_value));
+			partition_values.push_back(std::move(partition_value));
 		}
-		return !out.empty();
+		if (partition_values.empty()) {
+			return false;
+		}
+		out.insert(out.end(), partition_values.begin(), partition_values.end());
+		return true;
 	}
 	case ExpressionClass::BOUND_CONJUNCTION: {
 		// Only AND conjunctions give a valid (tighter) prune. A child equality on this column suffices;
@@ -3887,7 +3895,7 @@ string DuckLakeMetadataManager::GetPathSeparator(const string &path) {
 		return catalog.Separator();
 	}
 	// if catalog is not loaded, use the file system
-	return GetFileSystem().PathSeparator(path);
+	return DuckLakeUtil::PathSeparator(GetFileSystem(), path);
 }
 
 string DuckLakeMetadataManager::StorePath(string path) {
@@ -4671,8 +4679,15 @@ string DuckLakeMetadataManager::WriteNewPartitionKeys(const vector<DuckLakeParti
 		}
 	}
 
+	auto changed_specs = GetChangedSpecs(existing_partitions, new_partitions);
+	for (auto &partition : new_partitions) {
+		if (partition.replaces_equal_spec) {
+			// a bucket column changed type, so the last spec replaces the current one even with the same fields
+			changed_specs[partition.table_id.index] = new_partitions[last_partition_index[partition.table_id.index]];
+		}
+	}
 	set<TableIndex> altered_tables;
-	for (auto &new_partition : GetChangedSpecs(existing_partitions, new_partitions)) {
+	for (auto &new_partition : changed_specs) {
 		altered_tables.insert(new_partition.second.table_id);
 		append_partition(new_partition.second, "NULL");
 	}

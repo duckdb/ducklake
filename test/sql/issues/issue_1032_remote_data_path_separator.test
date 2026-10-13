@@ -1,0 +1,40 @@
+# name: test/sql/issues/issue_1032_remote_data_path_separator.test
+# description: A remote data path keeps its '/' separators when the catalog is attached before its file system is loaded
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/issue_1032_remote_data_path_separator.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET autoload_known_extensions = false
+
+statement ok
+SET autoinstall_known_extensions = false
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1032_remote_data_path_separator')
+
+# the data path a catalog created with httpfs stores, without needing httpfs here
+statement ok
+UPDATE __ducklake_metadata_dl.ducklake_metadata SET value = 'gs://my-bucket/my-data/' WHERE key = 'data_path'
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+
+query I
+SELECT data_path FROM ducklake_settings('dl')
+----
+gs://my-bucket/my-data/
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'data_path'
+----
+gs://my-bucket/my-data/

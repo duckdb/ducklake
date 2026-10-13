@@ -1,0 +1,25 @@
+# name: benchmark/micro/write/update_inlined_transaction.benchmark
+# description: One transaction that inlines 200 rows, then updates 50 and deletes 10 of them before the commit
+# group: [write]
+
+name Update Inlined Transaction
+group micro
+subgroup write
+
+require ducklake
+
+argument work update_inl_work
+
+argument warm_table lake.main.ins_0
+
+include benchmark/micro/fixtures/commit.benchmark.in
+
+run benchmark/micro/queries/update_inlined_transaction.sql
+
+include benchmark/micro/fixtures/restore_cleanup_warm.benchmark.in
+
+# A missed reset doubles the rows, and a data file means the rows were not inlined
+result_query II
+SELECT (SELECT count(*) FROM lake.main.ins_0), (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+----
+190	0

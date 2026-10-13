@@ -1,0 +1,263 @@
+# name: test/sql/partitioning/bucket_pruning_type_promotion.test
+# description: bucket pruning keeps the files written before a type change that changes the bucket of a value
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/bucket_pruning_type_promotion', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake
+
+# type changes that change the hash of a value
+foreach source,target INTEGER,HUGEINT INTEGER,DOUBLE INTEGER,DECIMAL(38) BIGINT,HUGEINT UTINYINT,SMALLINT
+
+statement ok
+CREATE TABLE h (c {source}, k INTEGER)
+
+statement ok
+ALTER TABLE h SET PARTITIONED BY (bucket(16, c))
+
+statement ok
+INSERT INTO h VALUES (5, 1), (6, 2)
+
+statement ok
+ALTER TABLE h ALTER c TYPE {target}
+
+query I
+SELECT k FROM h WHERE c = 5
+----
+1
+
+query I
+SELECT k FROM h WHERE c IN (5, 6, 99) ORDER BY k
+----
+1
+2
+
+statement ok
+INSERT INTO h VALUES (5, 3), (7, 4)
+
+query I
+SELECT k FROM h WHERE c = 5 ORDER BY k
+----
+1
+3
+
+query I
+SELECT k FROM h WHERE c IN (6, 7) ORDER BY k
+----
+2
+4
+
+statement ok
+DROP TABLE h
+
+endloop
+
+# a DECIMAL that gets wider hashes its text instead of its unscaled value
+statement ok
+CREATE TABLE d (c DECIMAL(18,2), k INTEGER)
+
+statement ok
+ALTER TABLE d SET PARTITIONED BY (bucket(16, c))
+
+statement ok
+INSERT INTO d VALUES (1.25, 1)
+
+statement ok
+ALTER TABLE d ALTER c TYPE DECIMAL(38,2)
+
+query I
+SELECT k FROM d WHERE c = 1.25
+----
+1
+
+# a DECIMAL with a larger scale hashes another unscaled value
+statement ok
+CREATE TABLE e (c DECIMAL(4,1), k INTEGER)
+
+statement ok
+ALTER TABLE e SET PARTITIONED BY (bucket(16, c))
+
+statement ok
+INSERT INTO e VALUES (1.5, 1)
+
+statement ok
+ALTER TABLE e ALTER c TYPE DECIMAL(9,2)
+
+query I
+SELECT k FROM e WHERE c = 1.5
+----
+1
+
+# a DATE hashes days and a TIMESTAMP microseconds
+statement ok
+CREATE TABLE t (c DATE, k INTEGER)
+
+statement ok
+ALTER TABLE t SET PARTITIONED BY (bucket(16, c))
+
+statement ok
+INSERT INTO t VALUES (DATE '2020-01-01', 1)
+
+statement ok
+ALTER TABLE t ALTER c TYPE TIMESTAMP
+
+query I
+SELECT k FROM t WHERE c = TIMESTAMP '2020-01-01'
+----
+1
+
+# files written before the type change in the same transaction
+statement ok
+CREATE TABLE x (c INTEGER, k INTEGER)
+
+statement ok
+ALTER TABLE x SET PARTITIONED BY (bucket(16, c))
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO x VALUES (5, 1)
+
+statement ok
+ALTER TABLE x ALTER c TYPE HUGEINT
+
+statement ok
+INSERT INTO x VALUES (5, 2)
+
+statement ok
+COMMIT
+
+query I
+SELECT k FROM x WHERE c = 5 ORDER BY k
+----
+1
+2
+
+# the same bucket spec set again after the type change in the same transaction
+statement ok
+CREATE TABLE s (c INTEGER, k INTEGER)
+
+statement ok
+ALTER TABLE s SET PARTITIONED BY (bucket(16, c))
+
+statement ok
+INSERT INTO s VALUES (5, 1)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE s ALTER c TYPE HUGEINT
+
+statement ok
+ALTER TABLE s SET PARTITIONED BY (k)
+
+statement ok
+ALTER TABLE s SET PARTITIONED BY (bucket(16, c))
+
+statement ok
+COMMIT
+
+query I
+SELECT k FROM s WHERE c = 5
+----
+1
+
+# adding, dropping and renaming a field changes the text that a STRUCT hashes, each starts a spec
+statement ok
+CREATE TABLE st (c STRUCT(x INTEGER, y INTEGER), k INTEGER)
+
+statement ok
+ALTER TABLE st SET PARTITIONED BY (bucket(16, c))
+
+statement ok
+INSERT INTO st VALUES ({'x': 5, 'y': 6}, 1)
+
+statement ok
+ALTER TABLE st ADD COLUMN c.z INTEGER
+
+query I
+SELECT k FROM st WHERE c = {'x': 5, 'y': 6, 'z': NULL}
+----
+1
+
+statement ok
+INSERT INTO st VALUES ({'x': 7, 'y': 8, 'z': 9}, 2)
+
+statement ok
+ALTER TABLE st DROP COLUMN c.y
+
+query I
+SELECT k FROM st WHERE c = {'x': 7, 'z': 9}
+----
+2
+
+statement ok
+SET VARIABLE st_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'st')
+
+statement ok
+ALTER TABLE st RENAME c.x TO w
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_partition_info WHERE table_id = getvariable('st_id')
+----
+4
+
+# type changes that keep the hash of every value, so the old files are still pruned
+foreach source,target INTEGER,BIGINT INTEGER,DECIMAL(18) FLOAT,DOUBLE UTINYINT,UBIGINT UINTEGER,HUGEINT UBIGINT,UHUGEINT UTINYINT,DECIMAL(38) HUGEINT,HUGEINT DECIMAL(4),DECIMAL(18) DECIMAL(20),DECIMAL(38)
+
+statement ok
+CREATE TABLE w (c {source}, k INTEGER)
+
+statement ok
+ALTER TABLE w SET PARTITIONED BY (bucket(16, c))
+
+statement ok
+INSERT INTO w SELECT i, i FROM range(64) t(i)
+
+statement ok
+ALTER TABLE w ALTER c TYPE {target}
+
+query I
+SELECT k FROM w WHERE c = 5
+----
+5
+
+query II
+EXPLAIN ANALYZE SELECT k FROM w WHERE c = 5
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1\s.*
+
+statement ok
+DROP TABLE w
+
+endloop
+
+# a type change of a column that is no bucket key keeps the spec
+statement ok
+CREATE TABLE p (c INTEGER, k INTEGER)
+
+statement ok
+ALTER TABLE p SET PARTITIONED BY (c, bucket(16, k))
+
+statement ok
+INSERT INTO p SELECT 1, i FROM range(64) t(i)
+
+statement ok
+ALTER TABLE p ALTER c TYPE HUGEINT
+
+query II
+EXPLAIN ANALYZE SELECT k FROM p WHERE k = 5
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1\s.*
