@@ -1,5 +1,5 @@
 # name: test/sql/data_inlining/inlined_stats_bounds.test
-# description: the bounds of inlined rows are ordered like the values of their type, and BLOB bounds are hexadecimal
+# description: the bounds of inlined rows are ordered like the values of their type, BLOB bounds are hexadecimal and INTERVAL columns have none
 # group: [data_inlining]
 
 require ducklake
@@ -23,7 +23,7 @@ query III
 SELECT c.column_name, s.min_value, s.max_value FROM meta.ducklake_table_column_stats s JOIN meta.ducklake_column c USING (table_id, column_id) ORDER BY c.column_id
 ----
 bl	61	FF
-iv	10:00:00	1 day
+iv	NULL	NULL
 i	-10	9
 d	-1.50	10.25
 dt	0045-03-15 (BC)	infinity

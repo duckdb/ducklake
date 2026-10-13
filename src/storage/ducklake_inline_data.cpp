@@ -261,9 +261,6 @@ static bool TryGetTypedStats(Vector &input_vec, idx_t row_count, DuckLakeColumnS
 	case LogicalTypeId::BLOB:
 		result = TemplatedUpdateStats<string_t, StatsBlobOperator>(input_vec, type, row_count);
 		return true;
-	case LogicalTypeId::TIME_TZ:
-		result = TemplatedUpdateStats<dtime_tz_t, StatsTypedOperator>(input_vec, type, row_count);
-		return true;
 	case LogicalTypeId::BOOLEAN:
 	case LogicalTypeId::TINYINT:
 	case LogicalTypeId::SMALLINT:
@@ -369,6 +366,10 @@ DuckLakeColumnStats GetVectorStats(Vector &input_vec, idx_t row_count) {
 		} else {
 			result = TemplatedUpdateStats<string_t, StatsFallbackOperator>(str_vector, type, row_count);
 		}
+	}
+	if (type.id() == LogicalTypeId::INTERVAL) {
+		// bounds are compared as text when they are merged, and Parquet files have no INTERVAL bounds either
+		result.ClearBounds();
 	}
 	if (type.id() == LogicalTypeId::FLOAT) {
 		result.has_contains_nan = true;
