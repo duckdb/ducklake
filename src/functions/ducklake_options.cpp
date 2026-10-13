@@ -111,7 +111,7 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 	for (auto &schema_setting : metadata.schema_settings) {
 		string scope_entry;
 		auto schema_entry = ducklake_catalog.GetEntryById(transaction, snapshot, schema_setting.schema_id);
-		if (schema_entry) {
+		if (schema_entry && !transaction.IsDeleted(*schema_entry)) {
 			scope_entry = schema_entry->Cast<SchemaCatalogEntry>().GetSchemaName();
 		}
 		result->rows.push_back(GetOptionRow(schema_setting.tag, "SCHEMA", scope_entry));
@@ -120,8 +120,11 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 	// Table options
 	for (auto &table_setting : metadata.table_settings) {
 		string scope_entry;
-		auto table_entry = ducklake_catalog.GetEntryById(transaction, snapshot, table_setting.table_id);
-		if (table_entry) {
+		auto table_entry = transaction.GetLocalEntryById(table_setting.table_id);
+		if (!table_entry) {
+			table_entry = ducklake_catalog.GetEntryById(transaction, snapshot, table_setting.table_id);
+		}
+		if (table_entry && !transaction.IsDeleted(*table_entry)) {
 			auto &table_catalog_entry = table_entry->Cast<TableCatalogEntry>();
 			scope_entry =
 			    QualifiedName(table_catalog_entry.ParentSchema().GetSchemaPath(), table_entry->name).ToString();

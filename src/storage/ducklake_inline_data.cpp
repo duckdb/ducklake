@@ -320,6 +320,29 @@ void SetFinalStats(DuckLakeBaseColumnStats &stats, DuckLakeInlinedData &result) 
 	}
 }
 
+static vector<DuckLakeBaseColumnStats> GetColumnStats(DuckLakeTableEntry &table, ColumnDataCollection &data,
+                                                      idx_t column_count) {
+	vector<DuckLakeBaseColumnStats> result;
+	auto &field_data = table.GetFieldData();
+	auto skipped_fields = table.GetSkippedStatsFields();
+	for (auto &chunk : data.Chunks()) {
+		for (idx_t c = 0; c < column_count; c++) {
+			UpdateStats(result, c, chunk.data[c], chunk.size(), field_data.GetByRootIndex(PhysicalIndex(c)),
+			            skipped_fields);
+		}
+	}
+	return result;
+}
+
+void DuckLakeInlineData::RecomputeColumnStats(DuckLakeTableEntry &table, DuckLakeInlinedData &inlined_data) {
+	auto &data = *inlined_data.data;
+	inlined_data.column_stats.clear();
+	for (auto &column_stats : GetColumnStats(table, data, data.ColumnCount())) {
+		SetFinalStats(column_stats, inlined_data);
+	}
+	inlined_data.outdated_stats_table = nullptr;
+}
+
 OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                                              OperatorFinalizeInput &input) const {
 	// push inlined data to transaction
@@ -350,15 +373,7 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 	auto physical_col_count = table.GetColumns().PhysicalColumnCount();
 
 	// compute the column stats for the data
-	vector<DuckLakeBaseColumnStats> new_stats;
-	auto &field_data = table.GetFieldData();
-	auto skipped_fields = table.GetSkippedStatsFields();
-	for (auto &chunk : inlined_data.Chunks()) {
-		for (idx_t c = 0; c < physical_col_count; c++) {
-			UpdateStats(new_stats, c, chunk.data[c], chunk.size(), field_data.GetByRootIndex(PhysicalIndex(c)),
-			            skipped_fields);
-		}
-	}
+	auto new_stats = GetColumnStats(table, inlined_data, physical_col_count);
 	// set the final stats and verify NOT NULL constraints
 	auto not_null_fields = table.GetNotNullFields();
 	for (idx_t c = 0; c < new_stats.size(); c++) {

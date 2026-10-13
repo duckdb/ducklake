@@ -19,6 +19,8 @@
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/execution/operator/persistent/physical_merge_into.hpp"
 
 namespace duckdb {
 
@@ -211,6 +213,15 @@ DuckLakeUpdate &DuckLakeUpdate::PlanUpdateOperator(ClientContext &context, Physi
 	return update_op;
 }
 
+//! Whether the plan is the input of a MERGE action, which cannot hold a MERGE of its own
+static bool IsMergeActionInput(PhysicalOperator &plan) {
+	reference<PhysicalOperator> op = plan;
+	while (op.get().type == PhysicalOperatorType::PROJECTION && !op.get().children.empty()) {
+		op = op.get().children[0];
+	}
+	return op.get().type == PhysicalOperatorType::MERGE_ACTION_SOURCE;
+}
+
 PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPlanGenerator &planner, LogicalUpdate &op,
                                               PhysicalOperator &child_plan) {
 	if (op.return_chunk) {
@@ -221,12 +232,48 @@ PhysicalOperator &DuckLakeCatalog::PlanUpdate(ClientContext &context, PhysicalPl
 	DuckLakeCopyInput copy_input(context, table);
 	copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID;
 	auto &update_op = DuckLakeUpdate::PlanUpdateOperator(context, planner, op, child_plan, copy_input);
-
-	// follow the insert path for inlining
 	auto &verified_plan = DuckLakeVerifyNotNull::Plan(planner, table, update_op);
-	auto pipeline =
-	    DuckLakeInsert::PlanInsertPipeline(context, planner, verified_plan, table.schema, table.GetColumns(),
-	                                       table.name, nullptr, false, GetInliningLimit(context, table));
+
+	auto &transaction = DuckLakeTransaction::Get(context, *this);
+	if (!transaction.HasTransactionLocalInserts(table.GetTableId()) || IsMergeActionInput(child_plan)) {
+		return PlanUpdateInsert(context, planner, table, verified_plan, copy_input);
+	}
+	// rows inserted in this transaction get their row ids at commit, so their new versions are written without them
+	auto row_id_index = update_op.row_id_index;
+	auto local_rows = make_uniq<MergeIntoOperator>();
+	local_rows->action_type = MergeActionType::MERGE_INSERT;
+	local_rows->condition = BoundComparisonExpression::Create(
+	    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+	    make_uniq<BoundReferenceExpression>(LogicalType::BIGINT, row_id_index),
+	    make_uniq<BoundConstantExpression>(
+	        Value::BIGINT(NumericCast<int64_t>(DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START))));
+	for (idx_t col_idx = 0; col_idx < row_id_index; col_idx++) {
+		local_rows->expressions.push_back(make_uniq<BoundReferenceExpression>(verified_plan.types[col_idx], col_idx));
+	}
+	auto &local_input = PlanMergeActionSource(planner, verified_plan, MergeActionCondition::WHEN_MATCHED, *local_rows);
+	DuckLakeCopyInput local_copy_input(context, table);
+	local_rows->op = PlanUpdateInsert(context, planner, table, local_input, local_copy_input);
+
+	auto committed_rows = make_uniq<MergeIntoOperator>();
+	committed_rows->action_type = MergeActionType::MERGE_INSERT;
+	auto &committed_input =
+	    PlanMergeActionSource(planner, verified_plan, MergeActionCondition::WHEN_MATCHED, *committed_rows);
+	committed_rows->op = PlanUpdateInsert(context, planner, table, committed_input, copy_input);
+
+	map<MergeActionCondition, vector<unique_ptr<MergeIntoOperator>>> actions;
+	auto &matched_actions = actions[MergeActionCondition::WHEN_MATCHED];
+	matched_actions.push_back(std::move(local_rows));
+	matched_actions.push_back(std::move(committed_rows));
+	return planner.Make<PhysicalMergeInto>(op.types, verified_plan, std::move(actions), row_id_index, optional_idx(),
+	                                       true, false);
+}
+
+PhysicalOperator &DuckLakeCatalog::PlanUpdateInsert(ClientContext &context, PhysicalPlanGenerator &planner,
+                                                    DuckLakeTableEntry &table, PhysicalOperator &plan,
+                                                    DuckLakeCopyInput &copy_input) {
+	// follow the insert path for inlining
+	auto pipeline = DuckLakeInsert::PlanInsertPipeline(context, planner, plan, table.schema, table.GetColumns(),
+	                                                   table.name, nullptr, false, GetInliningLimit(context, table));
 	auto &physical_copy = DuckLakeInsert::PlanCopyForInsert(context, planner, copy_input, pipeline.root.get());
 	auto &insert_op = DuckLakeInsert::PlanInsert(context, planner, table, std::move(copy_input.encryption_key));
 	return pipeline.AttachInsert(insert_op, physical_copy);

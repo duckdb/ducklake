@@ -1,0 +1,79 @@
+# name: test/sql/stats/hugeint_stats.test
+# description: HUGEINT and UHUGEINT columns give their bounds to DuckDB
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/hugeint_stats', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (h HUGEINT, u UHUGEINT)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 2), (10, 20)
+
+query IIII
+SELECT (stats(h)).min, (stats(h)).max, (stats(u)).min, (stats(u)).max FROM dl.t LIMIT 1
+----
+1	10	2	20
+
+query II
+SELECT bitstring_agg(h), bitstring_agg(u) FROM dl.t
+----
+1000000001	1000000000000000001
+
+# parquet keeps no bounds for these types, so a flushed table has none either
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query IIII
+SELECT (stats(h)).min IS NULL, (stats(h)).max IS NULL, (stats(u)).min IS NULL, (stats(u)).max IS NULL
+FROM dl.t LIMIT 1
+----
+true	true	true	true
+
+query I
+SELECT count(*) FROM dl.t WHERE h > 5 AND u > 10
+----
+1
+
+statement ok
+CREATE TABLE dl.limits (h HUGEINT, u UHUGEINT)
+
+statement ok
+INSERT INTO dl.limits VALUES
+    ('-170141183460469231731687303715884105728', '0'),
+    ('170141183460469231731687303715884105727', '340282366920938463463374607431768211455'),
+    (NULL, NULL)
+
+query II
+SELECT (stats(h)).min, (stats(h)).max FROM dl.limits LIMIT 1
+----
+-170141183460469231731687303715884105728	170141183460469231731687303715884105727
+
+query II
+SELECT (stats(u)).min, (stats(u)).max FROM dl.limits LIMIT 1
+----
+0	340282366920938463463374607431768211455
+
+query II
+SELECT (stats(h)).has_null, (stats(u)).has_null FROM dl.limits LIMIT 1
+----
+true	true
+
+query I
+SELECT count(*) FROM dl.limits WHERE h < 0 AND u = 0
+----
+1
+
+query I
+SELECT count(*) FROM dl.limits WHERE u > '170141183460469231731687303715884105727'::UHUGEINT
+----
+1

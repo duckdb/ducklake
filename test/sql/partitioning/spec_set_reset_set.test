@@ -1,0 +1,111 @@
+# name: test/sql/partitioning/spec_set_reset_set.test
+# description: the last sort and partition spec of a transaction is committed after a reset in between
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/spec_set_reset_set', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(a INTEGER);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.t SET SORTED BY (a);
+
+statement ok
+ALTER TABLE lake.t RESET SORTED BY;
+
+statement ok
+ALTER TABLE lake.t SET SORTED BY (a);
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM meta.ducklake_sort_info WHERE end_snapshot IS NULL
+----
+1
+
+statement ok
+INSERT INTO lake.t VALUES (3), (1), (2);
+
+query I
+SELECT list(a ORDER BY file_row_number) FROM lake.t
+----
+[1, 2, 3]
+
+statement ok
+CREATE TABLE lake.u(a INTEGER);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.u SET PARTITIONED BY (a);
+
+statement ok
+ALTER TABLE lake.u RESET PARTITIONED BY;
+
+statement ok
+ALTER TABLE lake.u SET PARTITIONED BY (a);
+
+statement ok
+INSERT INTO lake.u VALUES (1);
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM meta.ducklake_partition_info WHERE end_snapshot IS NULL
+----
+1
+
+statement ok
+INSERT INTO lake.u VALUES (2);
+
+query II
+SELECT count(*), bool_and(partition_id IN (SELECT partition_id FROM meta.ducklake_partition_info WHERE end_snapshot IS NULL)) FROM meta.ducklake_data_file WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'u')
+----
+2	true
+
+query I
+SELECT count(*) FROM meta.ducklake_data_file WHERE path LIKE '%a=2%'
+----
+1
+
+# a reset that ends the transaction still leaves a table without a spec
+statement ok
+CREATE TABLE lake.v(a INTEGER);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.v SET SORTED BY (a);
+
+statement ok
+ALTER TABLE lake.v SET PARTITIONED BY (a);
+
+statement ok
+ALTER TABLE lake.v RESET SORTED BY;
+
+statement ok
+ALTER TABLE lake.v RESET PARTITIONED BY;
+
+statement ok
+COMMIT
+
+query II
+SELECT (SELECT count(*) FROM meta.ducklake_sort_info WHERE end_snapshot IS NULL), (SELECT count(*) FROM meta.ducklake_partition_info WHERE end_snapshot IS NULL)
+----
+1	1

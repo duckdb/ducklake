@@ -13,6 +13,7 @@
 #include "common/index.hpp"
 
 namespace duckdb {
+class DuckLakeTableEntry;
 
 struct DuckLakeInlinedData {
 	unique_ptr<ColumnDataCollection> data;
@@ -21,6 +22,8 @@ struct DuckLakeInlinedData {
 	map<FieldIndex, DuckLakeColumnStats> column_stats;
 	//! Row Ids for update inlining
 	vector<int64_t> row_ids;
+	//! Set when rows were deleted, the table to recompute column_stats with before the commit
+	optional_ptr<DuckLakeTableEntry> outdated_stats_table;
 
 	//! Row count of the inlined collection.
 	idx_t Count() const;

@@ -29,6 +29,7 @@
 #include <mutex>
 
 namespace duckdb {
+struct DuckLakeCopyInput;
 struct DuckLakeGlobalStatsInfo;
 class DuckLakeCatalog;
 class ColumnList;
@@ -233,6 +234,10 @@ public:
 	                             PhysicalOperator &plan) override;
 	PhysicalOperator &PlanMergeInto(ClientContext &context, PhysicalPlanGenerator &planner, LogicalMergeInto &op,
 	                                PhysicalOperator &plan) override;
+	//! Plans the inlining, copy and insert that write the new versions of updated rows
+	PhysicalOperator &PlanUpdateInsert(ClientContext &context, PhysicalPlanGenerator &planner,
+	                                   DuckLakeTableEntry &table, PhysicalOperator &plan,
+	                                   DuckLakeCopyInput &copy_input);
 	unique_ptr<LogicalOperator> BindCreateIndex(Binder &binder, CreateStatement &stmt, TableCatalogEntry &table,
 	                                            unique_ptr<LogicalOperator> plan) override;
 	unique_ptr<LogicalOperator> BindAlterAddIndex(Binder &binder, TableCatalogEntry &table_entry,
@@ -248,6 +253,7 @@ public:
 
 	optional_ptr<CatalogEntry> GetEntryById(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                        SchemaIndex schema_id);
+	//! The committed table at the snapshot, without the changes of the transaction
 	optional_ptr<CatalogEntry> GetEntryById(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                        TableIndex table_id);
 	string GeneratePathFromName(const string &uuid, const string &name);
@@ -378,6 +384,12 @@ public:
 	//! Cache the begin snapshot of a committed (table, schema version) pair. The row that backs it is written
 	//! once when the schema version is created and never updated, so the mapping is permanent.
 	void CacheSchemaVersionBeginSnapshot(TableIndex table_id, idx_t schema_version, idx_t begin_snapshot);
+	//! Whether a commit found values of the column at the snapshot, which then keeps its unknown table bounds
+	bool ColumnHoldsValues(TableIndex table_id, FieldIndex column_id, idx_t snapshot_id);
+	void SetColumnHoldsValues(TableIndex table_id, FieldIndex column_id, idx_t snapshot_id);
+	//! The columns found with values stay valid for the snapshot of a commit that directly follows theirs
+	void AdvanceColumnsWithValues(idx_t snapshot_id);
+	void ForgetColumnsWithValues(const set<TableIndex> &table_ids);
 
 	//! Invalidate the cached table stats entry for a given stats cache key.
 	void InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id);
@@ -442,6 +454,9 @@ private:
 	//! version is created and is never updated, so entries are permanent (only committed rows are cached)
 	mutex schema_version_snapshot_lock;
 	map<pair<idx_t, idx_t>, idx_t> schema_version_begin_snapshots;
+	mutex columns_with_values_lock;
+	optional_idx columns_with_values_snapshot;
+	set<pair<idx_t, idx_t>> columns_with_values;
 	//! The schema versions of each table at the schema version they were looked up at, guarded by the same lock
 	unordered_map<idx_t, pair<idx_t, DuckLakeTableSchemaVersions>> table_schema_versions;
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit

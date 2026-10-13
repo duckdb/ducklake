@@ -117,7 +117,10 @@ public:
 	void AppendDeleteFiles(TableIndex table_id, const string &data_file_path, vector<DuckLakeDeleteFile> files);
 	void AppendInlinedData(ClientContext &context, TableIndex table_id, unique_ptr<DuckLakeInlinedData> new_data);
 	void AddNewInlinedDeletes(TableIndex table_id, const string &table_name, set<idx_t> new_deletes);
-	void DeleteFromLocalInlinedData(ClientContext &context, TableIndex table_id, set<idx_t> new_deletes);
+	void DeleteFromLocalInlinedData(ClientContext &context, DuckLakeTableEntry &table, set<idx_t> new_deletes);
+	void SetOutdatedStatsTable(TableIndex table_id, DuckLakeTableEntry &table);
+	//! Recompute the inlined column stats that deletes left outdated
+	void RecomputeOutdatedStats(ClientContext &context);
 	void AddColumnToLocalInlinedData(ClientContext &context, TableIndex table_id, const LogicalType &new_column_type,
 	                                 FieldIndex new_field_index, const Value &default_value);
 	void RemoveColumnFromLocalInlinedData(ClientContext &context, TableIndex table_id,
@@ -255,7 +258,7 @@ public:
 	void SetRequiresNewInlinedTable(bool requires_new);
 	bool GetRequiresNewInlinedTable() const;
 	void AddNewInlinedDeletes(TableIndex table_id, const string &table_name, set<idx_t> new_deletes);
-	void DeleteFromLocalInlinedData(TableIndex table_id, set<idx_t> new_deletes);
+	void DeleteFromLocalInlinedData(DuckLakeTableEntry &table, set<idx_t> new_deletes);
 	void AddColumnToLocalInlinedData(TableIndex table_id, const LogicalType &new_column_type,
 	                                 FieldIndex new_field_index, const Value &default_value = Value());
 	void RemoveColumnFromLocalInlinedData(TableIndex table_id, LogicalIndex removed_column_index,

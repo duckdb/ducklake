@@ -1,0 +1,431 @@
+# name: test/sql/stats/null_first_bounds_across_commits.test
+# description: A column whose first commits hold only NULL values gets its table bounds from later commits
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/null_first_bounds_across_commits.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/null_first_bounds_across_commits', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.f (c FLOAT);
+
+statement ok
+INSERT INTO ducklake.f VALUES (NULL);
+
+statement ok
+INSERT INTO ducklake.f VALUES (0.2);
+
+statement ok
+INSERT INTO ducklake.f VALUES (0.5);
+
+query III
+SELECT s.contains_null::BOOLEAN, s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 'f'
+----
+true	0.2	0.5
+
+query II
+EXPLAIN SELECT * FROM ducklake.f WHERE c > 10
+----
+physical_plan	<REGEX>:.*Empty Result.*
+
+query I
+SELECT count(*) FROM ducklake.f WHERE c > 0.3
+----
+1
+
+# an inlined NULL row lets the next inlined value set the bounds, and the flush keeps them
+statement ok
+CREATE TABLE ducklake.i (c FLOAT);
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'i')
+
+statement ok
+INSERT INTO ducklake.i VALUES (NULL);
+
+statement ok
+INSERT INTO ducklake.i VALUES (0.2);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'i')
+
+query II
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 'i'
+----
+0.2	0.2
+
+query II
+EXPLAIN SELECT * FROM ducklake.i WHERE c > 10
+----
+physical_plan	<REGEX>:.*Empty Result.*
+
+# unknown bounds of a column that holds values stay unknown, so no filter skips those values
+statement ok
+CREATE TABLE ducklake.v (c FLOAT);
+
+statement ok
+INSERT INTO ducklake.v VALUES (0.2);
+
+statement ok
+CREATE TABLE ducklake.w (c FLOAT);
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 10, table_name => 'w')
+
+statement ok
+INSERT INTO ducklake.w VALUES (0.2);
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id IN (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name IN ('v', 'w'))
+
+foreach tbl v w
+
+statement ok
+INSERT INTO ducklake.{tbl} VALUES (5);
+
+statement ok
+INSERT INTO ducklake.{tbl} SELECT 6 FROM range(20);
+
+query II
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = '{tbl}'
+----
+NULL	NULL
+
+query I
+SELECT count(*) FROM ducklake.{tbl} WHERE c < 1
+----
+1
+
+endloop
+
+# a column added without a default reads as NULL in the older files
+statement ok
+CREATE TABLE ducklake.a (i INTEGER);
+
+statement ok
+INSERT INTO ducklake.a VALUES (1);
+
+statement ok
+ALTER TABLE ducklake.a ADD COLUMN f INTEGER;
+
+statement ok
+INSERT INTO ducklake.a VALUES (2, 5);
+
+query II
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_column c USING (table_id, column_id) JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 'a' AND c.column_name = 'f'
+----
+5	5
+
+query II
+EXPLAIN SELECT * FROM ducklake.a WHERE f > 10
+----
+physical_plan	<REGEX>:.*Empty Result.*
+
+# with a default the older files read the default, so unknown bounds stay unknown
+statement ok
+CREATE TABLE ducklake.d (i INTEGER);
+
+statement ok
+INSERT INTO ducklake.d VALUES (1);
+
+statement ok
+ALTER TABLE ducklake.d ADD COLUMN f INTEGER DEFAULT 7;
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id IN (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'd')
+
+statement ok
+INSERT INTO ducklake.d VALUES (2, 9);
+
+query II
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_column c USING (table_id, column_id) JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 'd' AND c.column_name = 'f'
+----
+NULL	NULL
+
+query I
+SELECT count(*) FROM ducklake.d WHERE f < 8
+----
+1
+
+# a merged file holds the rows of its newest source file, even when its statistics of a column are missing
+statement ok
+CREATE TABLE ducklake.m (i INTEGER);
+
+statement ok
+INSERT INTO ducklake.m VALUES (1);
+
+statement ok
+ALTER TABLE ducklake.m ADD COLUMN c INTEGER;
+
+statement ok
+INSERT INTO ducklake.m VALUES (2, 100);
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'm')
+
+statement ok
+DELETE FROM __ducklake_metadata_ducklake.ducklake_file_column_stats WHERE table_id IN (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'm') AND column_id IN (SELECT column_id FROM __ducklake_metadata_ducklake.ducklake_column WHERE column_name = 'c')
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id IN (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'm')
+
+statement ok
+INSERT INTO ducklake.m VALUES (3, 5);
+
+query I
+SELECT count(*) FROM ducklake.m WHERE c > 10
+----
+1
+
+# inlined rows written before a column without default read it as NULL
+statement ok
+CREATE TABLE ducklake.inl_added (column_one INTEGER) WITH (data_inlining_row_limit = 10);
+
+statement ok
+INSERT INTO ducklake.inl_added VALUES (1);
+
+statement ok
+INSERT INTO ducklake.inl_added VALUES (2);
+
+statement ok
+ALTER TABLE ducklake.inl_added ADD COLUMN column_two INTEGER;
+
+statement ok
+ALTER TABLE ducklake.inl_added RENAME COLUMN column_two TO column_three;
+
+statement ok
+INSERT INTO ducklake.inl_added VALUES (3, 1);
+
+statement ok
+INSERT INTO ducklake.inl_added VALUES (4, 3);
+
+query II
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_column c USING (table_id, column_id) JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 'inl_added' AND c.column_name = 'column_three'
+----
+1	3
+
+query II
+EXPLAIN SELECT * FROM ducklake.inl_added WHERE column_three > 10
+----
+physical_plan	<REGEX>:.*Empty Result.*
+
+# inlined values written under the old name of a renamed column keep unknown bounds unknown
+statement ok
+CREATE TABLE ducklake.inl_renamed (c FLOAT) WITH (data_inlining_row_limit = 10);
+
+statement ok
+INSERT INTO ducklake.inl_renamed VALUES (0.2);
+
+statement ok
+ALTER TABLE ducklake.inl_renamed RENAME COLUMN c TO d;
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id IN (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'inl_renamed')
+
+statement ok
+INSERT INTO ducklake.inl_renamed VALUES (5);
+
+query II
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 'inl_renamed'
+----
+NULL	NULL
+
+query I
+SELECT count(*) FROM ducklake.inl_renamed WHERE d < 1
+----
+1
+
+# the schema of an inlined data table stays known once the snapshots of its schema version are expired
+foreach tbl inl_expired_null inl_expired_value
+
+statement ok
+CREATE TABLE ducklake.{tbl} (a INTEGER) WITH (data_inlining_row_limit = 10);
+
+statement ok
+INSERT INTO ducklake.{tbl} VALUES (1);
+
+statement ok
+ALTER TABLE ducklake.{tbl} ADD COLUMN b INTEGER;
+
+statement ok
+INSERT INTO ducklake.{tbl} VALUES (2, CASE WHEN '{tbl}' = 'inl_expired_value' THEN 100 END);
+
+statement ok
+CREATE TABLE ducklake.later_{tbl} (i INTEGER);
+
+statement ok
+SET VARIABLE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = '{tbl}')
+
+statement ok
+SET VARIABLE inlined_version = (SELECT MAX(schema_version) FROM __ducklake_metadata_ducklake.ducklake_inlined_data_tables WHERE table_id = getvariable('table_id'))
+
+statement ok
+SET VARIABLE schema_snapshots = (SELECT list(snapshot_id) FROM __ducklake_metadata_ducklake.ducklake_snapshot WHERE schema_version = getvariable('inlined_version'))
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => getvariable('schema_snapshots'))
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id = getvariable('table_id')
+
+endloop
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/null_first_bounds_across_commits', DATA_INLINING_ROW_LIMIT 0)
+
+foreach tbl inl_expired_null inl_expired_value
+
+statement ok
+INSERT INTO ducklake.{tbl} VALUES (3, 5);
+
+endloop
+
+query II
+EXPLAIN SELECT * FROM ducklake.inl_expired_null WHERE b > 10
+----
+physical_plan	<REGEX>:.*Empty Result.*
+
+query II
+SELECT (SELECT count(*) FROM ducklake.inl_expired_null WHERE b > 10), (SELECT count(*) FROM ducklake.inl_expired_value WHERE b > 10)
+----
+0	1
+
+# of two columns with unknown bounds only the one without values gets the new bounds
+statement ok
+CREATE TABLE ducklake.mc (a INTEGER, b INTEGER);
+
+statement ok
+CREATE TABLE ducklake.mc_inl (a INTEGER, b INTEGER) WITH (data_inlining_row_limit = 10);
+
+foreach tbl mc mc_inl
+
+statement ok
+INSERT INTO ducklake.{tbl} VALUES (5, NULL), (NULL, NULL);
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id IN (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = '{tbl}')
+
+statement ok
+INSERT INTO ducklake.{tbl} VALUES (1, 2);
+
+query III
+SELECT s.column_id, s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = '{tbl}' ORDER BY s.column_id
+----
+1	NULL	NULL
+2	2	2
+
+query I
+SELECT count(*) FROM ducklake.{tbl} WHERE a > 3
+----
+1
+
+endloop
+
+# the inlined data tables of many schema versions are checked in batches
+statement ok
+CREATE TABLE ducklake.many_versions (a INTEGER, b INTEGER) WITH (data_inlining_row_limit = 10);
+
+statement ok
+CREATE TABLE ducklake.many_versions_value (a INTEGER, b INTEGER) WITH (data_inlining_row_limit = 10);
+
+foreach tbl many_versions many_versions_value
+
+statement ok
+INSERT INTO ducklake.{tbl} VALUES (1, NULL);
+
+loop i 0 17
+
+statement ok
+ALTER TABLE ducklake.{tbl} ADD COLUMN c{i} INTEGER;
+
+endloop
+
+endloop
+
+statement ok
+INSERT INTO ducklake.many_versions_value (a, b) VALUES (2, 100);
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'many_versions_value')
+
+foreach tbl many_versions many_versions_value
+
+statement ok
+INSERT INTO ducklake.{tbl} (a, b) VALUES (3, 5);
+
+endloop
+
+query II
+EXPLAIN SELECT * FROM ducklake.many_versions WHERE b > 10
+----
+physical_plan	<REGEX>:.*Empty Result.*
+
+query II
+SELECT (SELECT count(*) FROM ducklake.many_versions WHERE b > 10), (SELECT count(*) FROM ducklake.many_versions_value WHERE b > 10)
+----
+0	1
+
+# rows deleted by a commit can leave a column found with values without them
+statement ok
+CREATE TABLE ducklake.updated (c INTEGER) WITH (data_inlining_row_limit = 10);
+
+statement ok
+INSERT INTO ducklake.updated VALUES (100), (NULL);
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_column_stats SET min_value = NULL, max_value = NULL WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'updated')
+
+statement ok
+INSERT INTO ducklake.updated VALUES (5);
+
+statement ok
+UPDATE ducklake.updated SET c = NULL;
+
+statement ok
+INSERT INTO ducklake.updated VALUES (7);
+
+query II
+EXPLAIN SELECT * FROM ducklake.updated WHERE c > 10
+----
+physical_plan	<REGEX>:.*Empty Result.*
+
+query I
+SELECT count(*) FROM ducklake.updated WHERE c > 10
+----
+0
+
+# the values of dropped files do not keep new values from setting the bounds
+statement ok
+CREATE TABLE ducklake.reloaded (c INTEGER);
+
+statement ok
+INSERT INTO ducklake.reloaded VALUES (100);
+
+statement ok
+DELETE FROM ducklake.reloaded;
+
+statement ok
+INSERT INTO ducklake.reloaded VALUES (NULL);
+
+statement ok
+INSERT INTO ducklake.reloaded VALUES (7);
+
+query II
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 'reloaded'
+----
+7	7
+
+query II
+EXPLAIN SELECT * FROM ducklake.reloaded WHERE c > 10
+----
+physical_plan	<REGEX>:.*Empty Result.*

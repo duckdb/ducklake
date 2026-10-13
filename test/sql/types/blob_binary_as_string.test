@@ -1,0 +1,85 @@
+# name: test/sql/types/blob_binary_as_string.test
+# description: BLOB columns read and compact unchanged with binary_as_string set
+# group: [types]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/blob_binary_as_string', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER, b BLOB, s STRUCT(b BLOB), l BLOB[])
+
+# an escape sequence written as bytes, plain text, and bytes that are not valid UTF-8
+statement ok
+INSERT INTO ducklake.t VALUES (1, '\x5Cx41'::BLOB, {'b': '\x5Cx41'::BLOB}, ['\x5Cx41'::BLOB])
+
+statement ok
+INSERT INTO ducklake.t VALUES (2, 'abc'::BLOB, {'b': 'abc'::BLOB}, ['abc'::BLOB])
+
+statement ok
+INSERT INTO ducklake.t VALUES (3, '\xFF\xFE'::BLOB, {'b': '\xFF\xFE'::BLOB}, ['\xFF\xFE'::BLOB])
+
+statement ok
+CREATE TABLE expected AS SELECT * FROM ducklake.t
+
+statement ok
+SET binary_as_string = true
+
+query IIII
+SELECT id, b = '\x5Cx41'::BLOB OR b = 'abc'::BLOB OR b = '\xFF\xFE'::BLOB, octet_length(b), typeof(b) FROM ducklake.t ORDER BY id
+----
+1	true	4	BLOB
+2	true	3	BLOB
+3	true	2	BLOB
+
+query I
+SELECT count(*) FROM (SELECT * FROM ducklake.t EXCEPT SELECT * FROM expected)
+----
+0
+
+statement ok
+SET VARIABLE last_snapshot = (SELECT max(snapshot_id) FROM ducklake.snapshots())
+
+query I
+SELECT count(*) FROM ducklake_table_changes('ducklake', 'main', 't', 0, getvariable('last_snapshot')) WHERE b NOT IN (SELECT b FROM expected)
+----
+0
+
+# compaction writes what it reads
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake')
+
+statement ok
+DELETE FROM ducklake.t WHERE id = 2
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0.0)
+
+statement ok
+CHECKPOINT ducklake
+
+statement ok
+SET binary_as_string = false
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't')
+----
+1
+
+query I
+SELECT count(*) FROM (SELECT * FROM ducklake.t EXCEPT SELECT * FROM expected WHERE id <> 2)
+----
+0
+
+query II
+SELECT id, octet_length(b) FROM ducklake.t ORDER BY id
+----
+1	4
+3	2

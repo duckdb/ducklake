@@ -1,0 +1,51 @@
+# name: test/sql/comments/comment_on_column_invalid.test
+# description: COMMENT ON COLUMN fails with a binder error for a column the table does not have
+# group: [comments]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_column_comment_bad/')
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement error
+COMMENT ON COLUMN ducklake.t.nope IS 'x'
+----
+Binder Error: Table "t" does not have a column with name "nope"
+
+# the database stays usable and the comment of an existing column still works
+statement ok
+COMMENT ON COLUMN ducklake.t.I IS 'ok'
+
+query I
+SELECT comment FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 't'
+----
+ok
+
+# inside a transaction the error only aborts the transaction
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+statement error
+COMMENT ON COLUMN ducklake.t.nope IS 'x'
+----
+Binder Error
+
+statement ok
+ROLLBACK
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+0

@@ -46,6 +46,16 @@ struct FlushedInlinedTableInfo;
 
 enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND };
 
+//! A check whether the live rows of an inlined data table hold a value of a column
+struct DuckLakeInlinedValueCheck {
+	string table_name;
+	//! The rows up to this snapshot are flushed by the commit
+	idx_t flushed_up_to;
+	FieldIndex column_id;
+	//! The name of the column in the inlined data table, empty when any live row counts as a value
+	string column_name;
+};
+
 //! Metadata column names inside ducklake_inlined_data_<table_id>_<schema_version> tables.
 struct DuckLakeInlinedColNames {
 	//! Column name prefix reserved for DuckLake internal use
@@ -348,14 +358,18 @@ public:
 	virtual idx_t GetBeginSnapshotForTable(TableIndex table_id);
 	virtual idx_t GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version);
 	DuckLakeTableSchemaVersions GetTableSchemaVersions(TableIndex table_id, DuckLakeSnapshot snapshot);
+	//! The net row count of the data files that were committed before the snapshot's next file id
 	virtual idx_t GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot);
 	optional_idx GetNetDataFileRowCountForStats(TableIndex table_id, DuckLakeSnapshot snapshot);
 	virtual idx_t GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot);
 	//! SQL builders for stats-refresh metadata lookups; caller substitutes placeholders + executes.
 	//! With require_exact, the count is NULL if any visible file is only partially visible to the snapshot.
+	//! With exclude_new_files, the files of the commit, which can already be in the catalog, are not counted.
 	static string GetNetDataFileRowCountSql(TableIndex table_id, const string &inlined_deletion_table,
-	                                        bool require_exact = false);
+	                                        bool require_exact = false, bool exclude_new_files = false);
 	static string GetNetInlinedRowCountSql(const string &inlined_table_name, const DuckLakeInlinedColNames &col_names);
+	//! The rows that are stored, deleted ones included, and the rows that are live
+	static string GetInlinedRowCountsSql(const string &inlined_table_name, const DuckLakeInlinedColNames &col_names);
 	static string GetTableColumnSchemaSql(TableIndex table_id);
 	static string GetInlinedTableNamesSql(TableIndex table_id);
 	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id);
@@ -454,6 +468,17 @@ public:
 	static string DropDataFiles(const set<DataFileIndex> &dropped_files);
 	//! Selects the given data files that are still in the metadata
 	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
+	//! Selects the given columns that a live data file of the table records values of, or holds the default of
+	static string GetColumnsWithRecordedValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids);
+	//! Selects the given columns that may hold values other than NULL in a live data file of the table
+	static string GetColumnsWithFileValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
+	                                          const map<FieldIndex, idx_t> &null_default_columns);
+	//! Selects the versions of the given columns with their begin snapshot, whether their initial default is NULL and
+	//! whether they are top level columns
+	static string GetColumnDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids);
+	//! Selects the number of live inlined values of each check, the checks of a table are consecutive
+	static string GetInlinedValuesSql(const vector<DuckLakeInlinedValueCheck> &checks,
+	                                  const DuckLakeInlinedColNames &col_names);
 	//! Selects the given tables or views renamed after the snapshot
 	static string GetRenamedAfterSnapshotSql(const string &metadata_table_name, const string &id_name,
 	                                         const set<TableIndex> &ids);
@@ -513,6 +538,7 @@ public:
 	//! Caller substitutes `{METADATA_CATALOG}` / `{SNAPSHOT_ID}` and executes via the commit context's executor.
 	static string ReadInlinedDataAggregatesSql(const string &inlined_table_name, const string &select_list,
 	                                           const DuckLakeInlinedColNames &col_names);
+	//! The column stats of the data files committed before the snapshot's next file id
 	static string ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness);
 	//! Throws on a failed inlined data read, hinting at the migration for legacy named catalogs
 	void CheckInlinedDataReadError(QueryResult &result, const string &inlined_table_name);
@@ -529,9 +555,10 @@ public:
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
+	//! The tables with data files that are not dropped
+	unordered_set<idx_t> GetTablesWithLiveDataFiles();
 	virtual void SetConfigOption(const DuckLakeConfigOption &option);
 	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);
-	virtual bool IsColumnCreatedWithTable(const string &table_name, const string &column_name);
 	virtual void MigrateV01();
 	virtual void MigrateV02(bool allow_failures = false);
 	virtual void MigrateV03(bool allow_failures = false);
@@ -543,6 +570,8 @@ public:
 	bool HasV1_1Dev1Additions();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
+	//! Adds the schema version rows of inlined tables that older versions registered without one
+	void MigrateInlinedSchemaVersions();
 	//! Rewrites inlined tables whose columns were created with the storage types of an older DuckLake version
 	virtual void MigrateInlinedDataTypes() {
 	}

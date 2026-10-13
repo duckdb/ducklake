@@ -53,6 +53,8 @@ public:
 
 	static ParsedCatalogEntry ParseCatalogEntry(const string &input);
 	static string JoinPath(FileSystem &fs, const string &a, const string &b);
+	//! The separator of a path, always '/' for a remote path, also before its file system is loaded
+	static string PathSeparator(FileSystem &fs, const string &path);
 
 	//! Combine two filter expressions - both must hold, so AND their conjuncts and drop duplicates
 	static unique_ptr<Expression> MergeFilterExpressions(unique_ptr<Expression> left, unique_ptr<Expression> right);
@@ -94,7 +96,7 @@ public:
 	                                      const string &table_name);
 
 	//! Copy extension-registered settings from one context onto another. Core engine settings
-	//! are not copied.
+	//! are not copied, and settings that change the types read are turned off.
 	static void CopyExtensionSettings(ClientContext &from, ClientContext &to);
 	//! Sets a session extension setting without checking the configuration lock
 	static void SetExtensionSetting(ClientContext &context, const string &name, const Value &value);

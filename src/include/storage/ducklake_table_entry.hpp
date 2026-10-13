@@ -66,11 +66,17 @@ public:
 	}
 	//! Whether the transaction changed the type of a column of this table
 	bool ChangedColumnType();
+	//! Whether this transaction added the field with ADD COLUMN
+	bool AddedColumn(FieldIndex field_index);
 	optional_ptr<DuckLakePartition> GetPartitionData() {
 		return partition_data.get();
 	}
 	optional_ptr<const DuckLakePartition> GetPartitionData() const {
 		return partition_data.get();
+	}
+	//! Whether this entry starts a new partition spec with the same fields
+	bool StartsPartitionSpec() const {
+		return starts_partition_spec;
 	}
 	optional_ptr<DuckLakeSort> GetSortData() {
 		return sort_data.get();
@@ -213,6 +219,10 @@ private:
 	                                    SetTableOptionsInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
 	                                    ResetTableOptionsInfo &info);
+	//! The entry of a column type change, which starts a new partition spec when bucket hashes change
+	unique_ptr<CatalogEntry> AlterColumnType(DuckLakeTransaction &transaction, CreateTableInfo &info,
+	                                         unique_ptr<ColumnChangeInfo> change_info,
+	                                         shared_ptr<DuckLakeFieldData> new_field_data);
 
 	unique_ptr<DuckLakeFieldId> GetNestedEvolution(const DuckLakeFieldId &source_id, const LogicalType &target,
 	                                               ColumnChangeInfo &result, optional_idx parent_idx);
@@ -252,6 +262,7 @@ private:
 	vector<DuckLakeInlinedTableInfo> inlined_data_tables;
 	LocalChange local_change;
 	unique_ptr<DuckLakePartition> partition_data;
+	bool starts_partition_spec = false;
 	unique_ptr<DuckLakeSort> sort_data;
 	map<string, string> table_options;
 	// only set for REMOVED_COLUMN

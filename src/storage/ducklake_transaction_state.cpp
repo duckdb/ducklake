@@ -336,6 +336,11 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(table_id, other_changes.dropped_tables, "alter table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "alter table", "altered it");
 	}
+	// the rows checked for NULL values do not include rows inserted by others since the snapshot
+	for (auto &table_id : changes.tables_set_not_null) {
+		ConflictCheck(table_id, other_changes.inserted_tables, "set not null on table", "inserted into it");
+		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "set not null on table", "inserted into it");
+	}
 	for (auto &view_id : changes.altered_views) {
 		ConflictCheck(view_id, other_changes.dropped_views, "alter view", "dropped it");
 		ConflictCheck(view_id, other_changes.altered_views, "alter view", "altered it");
@@ -812,6 +817,22 @@ ReadInlinedTableColumns(TableIndex table_id, const DuckLakeCommitContext &contex
 	return result;
 }
 
+static void CountInlinedRows(const vector<string> &inlined_table_names, DuckLakeSnapshot snapshot,
+                             const DuckLakeCommitContext &context, idx_t &stored_rows, idx_t &live_rows) {
+	stored_rows = 0;
+	live_rows = 0;
+	for (auto &inlined_table_name : inlined_table_names) {
+		auto sql = DuckLakeMetadataManager::GetInlinedRowCountsSql(SQLQuotedIdentifier::ToString(inlined_table_name),
+		                                                           context.InlinedColNames());
+		auto result = context.query_metadata_with_snapshot(snapshot, sql);
+		result->ThrowIfError("Failed to read the inlined row counts from DuckLake: ");
+		for (auto &row : *result) {
+			stored_rows += row.GetValue<idx_t>(0);
+			live_rows += row.GetValue<idx_t>(1);
+		}
+	}
+}
+
 bool DuckLakeTransactionState::TryMergeInlinedStats(TableIndex table_id,
                                                     const vector<DuckLakeColumnSchemaEntry> &columns,
                                                     const vector<string> &inlined_table_names,
@@ -1038,11 +1059,18 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 	if (parquet_gross_rows != context.get_net_data_file_row_count(table_id)) {
 		return;
 	}
+	// deleted inlined rows stay stored, and flushing them later does not count them again
+	auto inlined_table_names = context.get_inlined_table_names(table_id);
+	idx_t stored_inlined;
+	idx_t net_inlined;
+	CountInlinedRows(inlined_table_names, snapshot, context, stored_inlined, net_inlined);
+	if (stored_inlined != net_inlined) {
+		return;
+	}
 
 	// 3. Fold in committed inlined data (REWRITE_DELETES does not rewrite inlined data). Pass only the top-level
 	//    roots: TryMergeInlinedStats references each column by name against the inlined table and bails on any
 	//    non-scalar root; feeding it nested leaves would emit MIN("<leaf>") against a column that does not exist.
-	idx_t net_inlined = context.get_net_inlined_row_count(table_id);
 	if (net_inlined > 0) {
 		vector<DuckLakeColumnSchemaEntry> root_columns;
 		for (auto &col : columns) {
@@ -1050,7 +1078,6 @@ void DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_qu
 				root_columns.push_back(col);
 			}
 		}
-		auto inlined_table_names = context.get_inlined_table_names(table_id);
 		if (!TryMergeInlinedStats(table_id, root_columns, inlined_table_names, snapshot, new_stats, context)) {
 			return; // cannot account for inlined data exactly - keep the existing stats and the scan fallback
 		}
@@ -1239,6 +1266,168 @@ string DuckLakeTransactionState::WriteAddedFieldStats(const vector<DuckLakeAdded
 	return result;
 }
 
+//! Whether the new data has bounds of the column and statistics of all its rows at the type of the column
+static bool NewDataSetsBounds(FieldIndex column_id, const LogicalType &type,
+                              const LocalTableDataChanges &table_changes) {
+	bool has_values = false;
+	auto covers_column = [&](const map<FieldIndex, DuckLakeColumnStats> &column_stats) {
+		auto entry = column_stats.find(column_id);
+		if (entry == column_stats.end() || entry->second.type != type) {
+			return false;
+		}
+		if (!entry->second.AnyValid()) {
+			return true;
+		}
+		has_values = true;
+		return entry->second.has_min && entry->second.has_max;
+	};
+	for (auto &file : table_changes.new_data_files) {
+		if (!covers_column(file.column_stats)) {
+			return false;
+		}
+	}
+	if (table_changes.new_inlined_data && !covers_column(table_changes.new_inlined_data->column_stats)) {
+		return false;
+	}
+	return has_values;
+}
+
+static void RemoveReturnedColumns(const string &sql, set<FieldIndex> &columns, const DuckLakeCommitContext &context) {
+	auto result = context.conflict_query_executor(sql);
+	result->ThrowIfError("Failed to commit DuckLake transaction - failed to get the file statistics of a table:");
+	for (auto &row : *result) {
+		columns.erase(FieldIndex(row.GetValue<idx_t>(0)));
+	}
+}
+
+//! Removes the columns that a live inlined row may hold a value of
+static void RemoveColumnsWithInlinedValues(TableIndex table_id, const vector<FlushedInlinedTableInfo> &flushed_tables,
+                                           const map<FieldIndex, idx_t> &null_default_columns,
+                                           const set<FieldIndex> &top_level_columns, set<FieldIndex> &columns,
+                                           const DuckLakeCommitContext &context) {
+	vector<vector<DuckLakeInlinedValueCheck>> table_checks;
+	for (auto &table : ReadInlinedTableColumns(table_id, context)) {
+		// this commit flushes the rows up to the flush snapshot into its new files
+		idx_t flushed_up_to = 0;
+		for (auto &flushed : flushed_tables) {
+			if (flushed.inlined_table.table_name == table.first) {
+				flushed_up_to = flushed.flush_snapshot_id;
+			}
+		}
+		vector<DuckLakeInlinedValueCheck> checks;
+		for (auto &column_id : columns) {
+			// a nested field is checked as a whole row
+			string column_name;
+			if (top_level_columns.count(column_id)) {
+				auto held = table.second.find(column_id);
+				if (held == table.second.end() && null_default_columns.count(column_id)) {
+					// the rows were written before the column, they read its NULL default
+					continue;
+				}
+				if (held != table.second.end()) {
+					column_name = held->second.column_name;
+				}
+			}
+			checks.push_back(DuckLakeInlinedValueCheck {table.first, flushed_up_to, column_id, column_name});
+		}
+		if (!checks.empty()) {
+			table_checks.push_back(std::move(checks));
+		}
+	}
+	// a query joins the counts of a bounded number of inlined data tables
+	static constexpr idx_t TABLES_PER_QUERY = 16;
+	for (idx_t batch_start = 0; batch_start < table_checks.size() && !columns.empty();
+	     batch_start += TABLES_PER_QUERY) {
+		vector<DuckLakeInlinedValueCheck> checks;
+		auto batch_end = MinValue<idx_t>(batch_start + TABLES_PER_QUERY, table_checks.size());
+		for (idx_t table_idx = batch_start; table_idx < batch_end; table_idx++) {
+			for (auto &check : table_checks[table_idx]) {
+				if (columns.count(check.column_id)) {
+					checks.push_back(check);
+				}
+			}
+		}
+		if (checks.empty()) {
+			continue;
+		}
+		auto values = context.conflict_query_executor(
+		    DuckLakeMetadataManager::GetInlinedValuesSql(checks, context.InlinedColNames()));
+		values->ThrowIfError("Failed to commit DuckLake transaction - failed to check the inlined data of a table:");
+		for (auto &row : *values) {
+			for (idx_t check_idx = 0; check_idx < checks.size(); check_idx++) {
+				if (row.GetValue<int64_t>(check_idx) > 0) {
+					columns.erase(checks[check_idx].column_id);
+				}
+			}
+		}
+	}
+}
+
+void DuckLakeTransactionState::RemoveColumnsWithValues(TableIndex table_id, set<FieldIndex> &columns,
+                                                       const DuckLakeCommitContext &context) const {
+	// most columns with values are found without reading the statistics of each live file
+	RemoveReturnedColumns(DuckLakeMetadataManager::GetColumnsWithRecordedValuesSql(table_id, columns), columns,
+	                      context);
+	if (columns.empty()) {
+		return;
+	}
+	auto defaults = context.conflict_query_executor(DuckLakeMetadataManager::GetColumnDefaultsSql(table_id, columns));
+	defaults->ThrowIfError("Failed to commit DuckLake transaction - failed to get the defaults of a table:");
+	// the snapshot each column with a NULL initial default was added in
+	map<FieldIndex, idx_t> null_default_columns;
+	set<FieldIndex> value_defaults;
+	set<FieldIndex> top_level_columns;
+	for (auto &row : *defaults) {
+		FieldIndex column_id(row.GetValue<idx_t>(0));
+		auto begin_snapshot = row.GetValue<idx_t>(1);
+		auto entry = null_default_columns.emplace(column_id, begin_snapshot);
+		entry.first->second = MinValue(entry.first->second, begin_snapshot);
+		if (!row.GetValue<bool>(2)) {
+			value_defaults.insert(column_id);
+		}
+		if (row.GetValue<bool>(3)) {
+			top_level_columns.insert(column_id);
+		}
+	}
+	for (auto &column_id : value_defaults) {
+		null_default_columns.erase(column_id);
+	}
+	RemoveReturnedColumns(DuckLakeMetadataManager::GetColumnsWithFileValuesSql(table_id, columns, null_default_columns),
+	                      columns, context);
+	if (!columns.empty()) {
+		RemoveColumnsWithInlinedValues(table_id, flushed_inlined_tables, null_default_columns, top_level_columns,
+		                               columns, context);
+	}
+}
+
+void DuckLakeTransactionState::ResolveNullOnlyBounds(TableIndex table_id, const LocalTableDataChanges &table_changes,
+                                                     DuckLakeTableStats &stats, idx_t snapshot_id,
+                                                     const DuckLakeCommitContext &context) const {
+	// committed stats do not tell all NULL values apart from invalidated bounds, the live data does
+	set<FieldIndex> null_only_columns;
+	for (auto &entry : stats.column_stats) {
+		auto &column_stats = entry.second;
+		bool without_nulls = column_stats.has_null_count && column_stats.null_count == 0;
+		if (column_stats.bounds_unknown && !without_nulls &&
+		    !context.column_holds_values(table_id, entry.first, snapshot_id) &&
+		    NewDataSetsBounds(entry.first, column_stats.type, table_changes)) {
+			null_only_columns.insert(entry.first);
+		}
+	}
+	if (null_only_columns.empty()) {
+		return;
+	}
+	auto columns_with_values = null_only_columns;
+	RemoveColumnsWithValues(table_id, null_only_columns, context);
+	for (auto &column_id : null_only_columns) {
+		columns_with_values.erase(column_id);
+		stats.column_stats.find(column_id)->second.bounds_unknown = false;
+	}
+	for (auto &column_id : columns_with_values) {
+		context.set_column_holds_values(table_id, column_id, snapshot_id);
+	}
+}
+
 NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
     string &batch_query, DuckLakeCommitState &commit_state, optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
     const DuckLakeCommitContext &context, map<TableIndex, DroppedDataFileStats> &attempt_dropped_file_stats) {
@@ -1266,6 +1455,8 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		}
 		bool clear_column_stats = ApplyDroppedFileStats(table_id, new_globals, attempt_dropped_file_stats);
 		auto &new_stats = new_globals.stats;
+		ResolveNullOnlyBounds(table_id, table_changes, new_stats, commit_state.commit_snapshot.snapshot_id - 1,
+		                      context);
 		commit_state.PrepareFloatBounds(table_id, new_stats.column_stats);
 		vector<DuckLakeDeleteFile> delete_files;
 		for (auto &file : table_changes.new_data_files) {
@@ -1347,6 +1538,33 @@ NewMacroInfo DuckLakeTransactionState::GetNewMacros(DuckLakeCommitState &commit_
 		}
 	}
 	return result;
+}
+
+static DuckLakeTagInfo CommentTag(idx_t id, const Value &comment) {
+	DuckLakeTagInfo comment_info;
+	comment_info.id = id;
+	comment_info.key = "comment";
+	comment_info.value = comment;
+	return comment_info;
+}
+
+static DuckLakeColumnTagInfo ColumnCommentTag(TableIndex table_id, FieldIndex field_index, const Value &comment) {
+	DuckLakeColumnTagInfo comment_info;
+	comment_info.table_id = table_id;
+	comment_info.field_index = field_index;
+	comment_info.key = "comment";
+	comment_info.value = comment;
+	return comment_info;
+}
+
+static DuckLakeViewColumnTagInfo ViewColumnCommentTag(TableIndex view_id, const string &column_name,
+                                                      const Value &comment) {
+	DuckLakeViewColumnTagInfo comment_info;
+	comment_info.view_id = view_id;
+	comment_info.column_name = column_name;
+	comment_info.key = "comment";
+	comment_info.value = comment;
+	return comment_info;
 }
 
 void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state, DuckLakeCatalogSet &catalog_set,
@@ -1431,11 +1649,7 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			if (comment_remaining > 0) {
 				break;
 			}
-			DuckLakeTagInfo comment_info;
-			comment_info.id = commit_state.GetTableId(table).index;
-			comment_info.key = "comment";
-			comment_info.value = table.comment;
-			result.new_tags.push_back(std::move(comment_info));
+			result.new_tags.push_back(CommentTag(commit_state.GetTableId(table).index, table.comment));
 
 			transaction_changes.altered_tables.insert(table_id);
 			break;
@@ -1446,12 +1660,9 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			if (col_comment_rem > 0) {
 				break;
 			}
-			DuckLakeColumnTagInfo comment_info;
-			comment_info.table_id = commit_state.GetTableId(table);
-			comment_info.field_index = local_change.field_index;
-			comment_info.key = "comment";
-			comment_info.value = table.GetColumnByFieldId(local_change.field_index).Comment();
-			result.new_column_tags.push_back(std::move(comment_info));
+			result.new_column_tags.push_back(
+			    ColumnCommentTag(commit_state.GetTableId(table), local_change.field_index,
+			                     table.GetColumnByFieldId(local_change.field_index).Comment()));
 
 			transaction_changes.altered_tables.insert(table_id);
 			break;
@@ -1502,6 +1713,11 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			// note that in case of nested types we might be dropping multiple columns here
 			auto &changed_fields = table.GetChangedFields();
 			HandleChangedFields(commit_state.GetTableId(table), changed_fields, result, txn_added_fields);
+			if (table.StartsPartitionSpec()) {
+				auto partition_key = DuckLakeTransaction::GetNewPartitionKey(commit_state, table);
+				partition_key.replaces_equal_spec = true;
+				result.new_partition_keys.push_back(std::move(partition_key));
+			}
 			for (auto &new_field : changed_fields.new_fields) {
 				auto field_index = new_field.column_info.id;
 				bool retyped = std::find(changed_fields.dropped_fields.begin(), changed_fields.dropped_fields.end(),
@@ -1577,6 +1793,17 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 					config_option.option.value = option.second;
 					config_option.table_id = new_table_id;
 					result.new_table_options.push_back(std::move(config_option));
+				}
+				// the comments the table was created with, unless a later COMMENT ON replaces them
+				if (comment_remaining == 0 && !table.comment.IsNull()) {
+					result.new_tags.push_back(CommentTag(new_table_id.index, table.comment));
+				}
+				for (auto &col : table.GetColumns().Logical()) {
+					auto field_index = table.GetFieldId(col.Physical()).GetFieldIndex();
+					if (col.Comment().IsNull() || column_comment_remaining.count(field_index)) {
+						continue;
+					}
+					result.new_column_tags.push_back(ColumnCommentTag(new_table_id, field_index, col.Comment()));
 				}
 			}
 			break;
@@ -1657,11 +1884,7 @@ void DuckLakeTransactionState::GetNewViewInfo(DuckLakeCommitState &commit_state,
 			if (view_comment_remaining > 0) {
 				break;
 			}
-			DuckLakeTagInfo comment_info;
-			comment_info.id = commit_state.GetViewId(view).index;
-			comment_info.key = "comment";
-			comment_info.value = view.comment;
-			result.new_tags.push_back(std::move(comment_info));
+			result.new_tags.push_back(CommentTag(commit_state.GetViewId(view).index, view.comment));
 
 			transaction_changes.altered_views.insert(view.GetViewId());
 			break;
@@ -1676,15 +1899,12 @@ void DuckLakeTransactionState::GetNewViewInfo(DuckLakeCommitState &commit_state,
 			if (rem > 0) {
 				break;
 			}
-			DuckLakeViewColumnTagInfo comment_info;
-			comment_info.view_id = commit_state.GetViewId(view);
-			comment_info.column_name = local_change.view_column_comment_name;
-			comment_info.key = "comment";
 			auto create_info_ptr = view.GetInfo();
 			auto &view_info = create_info_ptr->Cast<CreateViewInfo>();
 			auto cit = view_info.column_comments_map.find(Identifier(local_change.view_column_comment_name));
-			comment_info.value = cit != view_info.column_comments_map.end() ? cit->second : Value();
-			result.new_view_column_tags.push_back(std::move(comment_info));
+			auto comment = cit != view_info.column_comments_map.end() ? cit->second : Value();
+			result.new_view_column_tags.push_back(
+			    ViewColumnCommentTag(commit_state.GetViewId(view), local_change.view_column_comment_name, comment));
 
 			transaction_changes.altered_views.insert(view.GetViewId());
 			break;
@@ -1708,21 +1928,22 @@ void DuckLakeTransactionState::GetNewViewInfo(DuckLakeCommitState &commit_state,
 
 			// remap the view in the commit state
 			commit_state.committed_tables.emplace(old_view_id, new_view_id);
-			if (view.GetLocalChange().type == LocalChangeType::RENAMED) {
+			auto view_change = view.GetLocalChange().type;
+			if (view_change == LocalChangeType::CREATED || view_change == LocalChangeType::RENAMED) {
 				auto create_info_ptr = view.GetInfo();
 				auto &view_info = create_info_ptr->Cast<CreateViewInfo>();
 				for (auto &entry : view_info.column_comments_map) {
 					auto column_name = entry.first.GetIdentifierName();
-					if (view_column_comment_remaining.find(column_name) != view_column_comment_remaining.end()) {
+					if (entry.second.IsNull() ||
+					    view_column_comment_remaining.find(column_name) != view_column_comment_remaining.end()) {
 						continue;
 					}
-					DuckLakeViewColumnTagInfo comment_info;
-					comment_info.view_id = new_view_id;
-					comment_info.column_name = column_name;
-					comment_info.key = "comment";
-					comment_info.value = entry.second;
-					result.new_view_column_tags.push_back(std::move(comment_info));
+					result.new_view_column_tags.push_back(ViewColumnCommentTag(new_view_id, column_name, entry.second));
 				}
+			}
+			// the comment the view was created with, unless a later COMMENT ON replaces it
+			if (view_change == LocalChangeType::CREATED && view_comment_remaining == 0 && !view.comment.IsNull()) {
+				result.new_tags.push_back(CommentTag(new_view_id.index, view.comment));
 			}
 			break;
 		}

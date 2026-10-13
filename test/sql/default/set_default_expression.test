@@ -1,0 +1,173 @@
+# name: test/sql/default/set_default_expression.test
+# description: SET DEFAULT accepts an expression for added and renamed columns and after a table rename
+# group: [default]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/set_default_expression.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/set_default_expression')
+
+statement ok
+CREATE TABLE dl.t(i INT, c INT)
+
+statement ok
+INSERT INTO dl.t VALUES (0, 0)
+
+statement ok
+ALTER TABLE dl.t RENAME TO t_renamed
+
+statement ok
+ALTER TABLE dl.t_renamed ALTER c SET DEFAULT round(pi())
+
+# an added column keeps NULL in the existing rows
+statement ok
+ALTER TABLE dl.t_renamed ADD COLUMN d INT
+
+statement ok
+ALTER TABLE dl.t_renamed ALTER d SET DEFAULT CAST('5' AS INT)
+
+statement ok
+ALTER TABLE dl.t_renamed RENAME COLUMN c TO c_renamed
+
+statement ok
+ALTER TABLE dl.t_renamed ALTER c_renamed SET DEFAULT round(pi()) + 1
+
+statement ok
+INSERT INTO dl.t_renamed (i) VALUES (1)
+
+# a column added in this transaction only takes a default that ADD COLUMN takes
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.t_renamed ADD COLUMN e INT
+
+statement error
+ALTER TABLE dl.t_renamed ALTER e SET DEFAULT 2 * 3
+----
+We cannot add a column with a non-literal default value
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.t_renamed ADD COLUMN e INT
+
+statement ok
+ALTER TABLE dl.t_renamed ALTER e SET DEFAULT CAST('6' AS INT)
+
+statement ok
+INSERT INTO dl.t_renamed (i) VALUES (2)
+
+statement ok
+COMMIT
+
+query IIII
+SELECT i, c_renamed, d, e FROM dl.t_renamed ORDER BY i
+----
+0	0	NULL	NULL
+1	4	5	NULL
+2	4	5	6
+
+# a table created in the same transaction
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE dl.local(i INT, c INT)
+
+statement ok
+ALTER TABLE dl.local ALTER c SET DEFAULT round(pi())
+
+statement ok
+INSERT INTO dl.local (i) VALUES (1)
+
+statement ok
+COMMIT
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+
+statement ok
+INSERT INTO dl.t_renamed (i) VALUES (3)
+
+statement ok
+INSERT INTO dl.local (i) VALUES (2)
+
+query IIII
+SELECT i, c_renamed, d, e FROM dl.t_renamed WHERE i = 3
+----
+3	4	5	6
+
+query II
+SELECT i, c FROM dl.local ORDER BY i
+----
+1	3
+2	3
+
+# ADD COLUMN still needs a constant for the existing rows
+statement error
+ALTER TABLE dl.t_renamed ADD COLUMN f DOUBLE DEFAULT random()
+----
+We cannot add a column with a non-literal default value
+
+# nested columns take no default
+statement ok
+CREATE TABLE dl.nested(i INT, s STRUCT(a INT))
+
+statement error
+ALTER TABLE dl.nested ALTER s SET DEFAULT CAST('{a: 7}' AS STRUCT(a INT))
+----
+Default value for STRUCT type not supported
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.nested ADD COLUMN s2 STRUCT(a INT)
+
+statement error
+ALTER TABLE dl.nested ALTER s2 SET DEFAULT CAST('{a: 7}' AS STRUCT(a INT))
+----
+Default value for STRUCT type not supported
+
+statement ok
+ROLLBACK
+
+# the literal default of a column added in this transaction is not cast while it is set
+statement ok
+SET TimeZone = 'UTC'
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.nested ADD COLUMN ts TIMESTAMPTZ
+
+statement ok
+ALTER TABLE dl.nested ALTER ts SET DEFAULT '2020-01-01 00:00:00 America/New_York'
+
+statement ok
+INSERT INTO dl.nested (i) VALUES (1)
+
+statement ok
+COMMIT
+
+query I
+SELECT ts FROM dl.nested
+----
+2020-01-01 05:00:00+00

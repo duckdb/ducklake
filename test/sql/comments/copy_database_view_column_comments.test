@@ -1,0 +1,53 @@
+# name: test/sql/comments/copy_database_view_column_comments.test
+# description: The column comments of views created by COPY FROM DATABASE are kept after the commit
+# group: [comments]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/copy_database_view_column_comments.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{TEST_DIR}/copy_database_view_column_comments_src.db' AS src
+
+statement ok
+CREATE TABLE src.t (id INTEGER, v VARCHAR)
+
+statement ok
+CREATE VIEW src.vw AS SELECT id, v FROM src.t
+
+statement ok
+COMMENT ON COLUMN src.vw.v IS 'view column comment'
+
+statement ok
+COMMENT ON COLUMN src.vw.id IS 'replaced'
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/copy_database_view_column_comments')
+
+statement ok
+BEGIN
+
+statement ok
+COPY FROM DATABASE src TO lake
+
+statement ok
+COMMENT ON COLUMN lake.vw.id IS 'id comment'
+
+statement ok
+COMMIT
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake
+
+query II
+SELECT column_name, comment FROM duckdb_columns() WHERE database_name = 'lake' AND table_name = 'vw' ORDER BY 1
+----
+id	id comment
+v	view column comment

@@ -1,0 +1,107 @@
+# name: test/sql/alter/set_not_null_without_stats.test
+# description: SET NOT NULL checks the rows when the stats cannot rule out NULL values
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/set_not_null_without_stats')
+
+# a table without rows has no stats
+statement ok
+CREATE TABLE ducklake.empty(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.empty ALTER i SET NOT NULL
+
+statement error
+INSERT INTO ducklake.empty VALUES (NULL)
+----
+NOT NULL constraint failed
+
+# a table created in the open transaction
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.local_empty(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.local_empty ALTER i SET NOT NULL
+
+statement ok
+COMMIT
+
+statement error
+INSERT INTO ducklake.local_empty VALUES (NULL)
+----
+NOT NULL constraint failed
+
+# nested columns only have stats for their fields
+statement ok
+CREATE TABLE ducklake.nested(s STRUCT(a INTEGER), l INTEGER[], m MAP(INTEGER, INTEGER))
+
+statement ok
+INSERT INTO ducklake.nested VALUES ({'a': NULL}, [NULL], MAP {1: NULL})
+
+statement ok
+ALTER TABLE ducklake.nested ALTER s SET NOT NULL
+
+statement ok
+ALTER TABLE ducklake.nested ALTER l SET NOT NULL
+
+statement ok
+ALTER TABLE ducklake.nested ALTER m SET NOT NULL
+
+statement error
+INSERT INTO ducklake.nested VALUES (NULL, [1], MAP {1: 2})
+----
+NOT NULL constraint failed
+
+query III
+SELECT * FROM ducklake.nested
+----
+{'a': NULL}	[NULL]	{1=NULL}
+
+statement ok
+CREATE TABLE ducklake.nested_null(s STRUCT(a INTEGER))
+
+statement ok
+INSERT INTO ducklake.nested_null VALUES ({'a': 1}), (NULL)
+
+statement error
+ALTER TABLE ducklake.nested_null ALTER s SET NOT NULL
+----
+the column has NULL values
+
+# the rows inserted by another transaction since the snapshot are not checked, so the commit conflicts
+statement ok
+CREATE TABLE ducklake.concurrent(i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+ALTER TABLE ducklake.concurrent ALTER i SET NOT NULL
+
+statement ok con2
+INSERT INTO ducklake.concurrent VALUES (NULL)
+
+statement error con1
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT count(*) FROM ducklake.concurrent WHERE i IS NULL
+----
+1
+
+statement ok
+INSERT INTO ducklake.concurrent VALUES (NULL)

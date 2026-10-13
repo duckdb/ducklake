@@ -1,0 +1,49 @@
+# name: test/sql/alter/alter_type_collation.test
+# description: a type change to a VARCHAR with a collation is rejected like a new column with a collation
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/alter_type_collation')
+
+statement ok
+USE lake
+
+statement ok
+CREATE TABLE t (id INTEGER, s VARCHAR, l VARCHAR[], c STRUCT(a VARCHAR, b INTEGER), m MAP(VARCHAR, VARCHAR));
+
+statement ok
+INSERT INTO t VALUES (1, 'hello', ['hello'], {'a': 'hello', 'b': 1}, MAP {'k': 'hello'}),
+	(2, 'HELLO', ['HELLO'], {'a': 'HELLO', 'b': 2}, MAP {'k': 'HELLO'});
+
+statement error
+ALTER TABLE t ALTER s TYPE VARCHAR COLLATE nocase;
+----
+Collations are not supported in DuckLake storage
+
+statement error
+ALTER TABLE t ALTER l TYPE VARCHAR('nocase')[];
+----
+Collations are not supported in DuckLake storage
+
+statement error
+ALTER TABLE t ALTER c TYPE STRUCT(b INTEGER, a VARCHAR('nocase'));
+----
+Collations are not supported in DuckLake storage
+
+statement error
+ALTER TABLE t ALTER m TYPE MAP(VARCHAR, VARCHAR('nocase'));
+----
+Collations are not supported in DuckLake storage
+
+query I
+SELECT id FROM t WHERE s = 'hello' AND l[1] = 'hello' AND c.a = 'hello' AND m['k'] = 'hello'
+----
+1

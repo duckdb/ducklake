@@ -1,0 +1,77 @@
+# name: test/sql/settings/options_dropped_scopes.test
+# description: Expiring the snapshots of dropped schemas and tables removes their options
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/options_dropped_scopes.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/options_dropped_scopes')
+
+statement ok
+CREATE SCHEMA ducklake.s
+
+statement ok
+CREATE TABLE ducklake.s.t(i INTEGER)
+
+statement ok
+CREATE TABLE ducklake.s.kept(i INTEGER)
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'zstd', schema => 's', table_name => 't')
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'snappy', schema => 's', table_name => 'kept')
+
+statement ok
+CALL ducklake.set_option('parquet_compression', 'gzip', schema => 's')
+
+statement ok
+DROP TABLE ducklake.s.t
+
+# a dropped table keeps its options while a snapshot still sees it
+query III
+SELECT value, scope, scope_entry FROM ducklake.options() WHERE scope <> 'GLOBAL' ORDER BY value
+----
+gzip	SCHEMA	s
+snappy	TABLE	s.kept
+zstd	TABLE	NULL
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+query III
+SELECT value, scope, scope_entry FROM ducklake.options() WHERE scope <> 'GLOBAL' ORDER BY value
+----
+gzip	SCHEMA	s
+snappy	TABLE	s.kept
+
+statement ok
+DROP TABLE ducklake.s.kept
+
+statement ok
+DROP SCHEMA ducklake.s
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+query I
+SELECT count(*) FROM ducklake.options() WHERE scope <> 'GLOBAL'
+----
+0
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+
+query I
+SELECT count(*) FROM ducklake.options() WHERE scope <> 'GLOBAL'
+----
+0

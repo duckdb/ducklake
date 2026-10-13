@@ -233,8 +233,15 @@ void DuckLakeUtil::EnsureDirectoryExists(FileSystem &fs, const string &data_path
 	}
 }
 
+string DuckLakeUtil::PathSeparator(FileSystem &fs, const string &path) {
+	if (FileSystem::IsRemoteFile(path)) {
+		return "/";
+	}
+	return fs.PathSeparator(path);
+}
+
 string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) {
-	auto sep = fs.PathSeparator(a);
+	auto sep = PathSeparator(fs, a);
 	if (StringUtil::EndsWith(a, sep)) {
 		return a + b;
 	} else {
@@ -549,6 +556,11 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 			continue;
 		}
 		auto setting_index = option.setting_index.GetIndex();
+		// these change the types read from the metadata and data files
+		if (entry.first == "sqlite_all_varchar" || entry.first == "binary_as_string") {
+			to.config.user_settings.SetUserSetting(setting_index, Value::BOOLEAN(false));
+			continue;
+		}
 		if (!from.config.user_settings.IsSet(setting_index)) {
 			continue;
 		}
@@ -645,13 +657,6 @@ static string ParseBoolean(ClientContext &context, const string &, const Value &
 	return DuckLakeUtil::BoolLiteral(val.CastAs(context, LogicalType::BOOLEAN).GetValue<bool>());
 }
 
-static string ParseAutoCompact(ClientContext &context, const string &option, const Value &val) {
-	if (val.IsNull()) {
-		throw BinderException("The %s option can't be null.", option.c_str());
-	}
-	return ParseBoolean(context, option, val);
-}
-
 //! resolved against the table by the caller
 static string ParseSkippedStatsColumns(ClientContext &, const string &, const Value &) {
 	return string();
@@ -671,7 +676,7 @@ static const unordered_map<string, config_option_parser_t> &ConfigOptionParsers(
 	    {"rewrite_delete_threshold", ParseDeleteThreshold},
 	    {"delete_older_than", ParseInterval},
 	    {"expire_older_than", ParseInterval},
-	    {"auto_compact", ParseAutoCompact},
+	    {"auto_compact", ParseBoolean},
 	    {"per_thread_output", ParseBoolean},
 	    {"write_deletion_vectors", ParseBoolean},
 	    {"sort_on_insert", ParseBoolean},
@@ -688,6 +693,10 @@ void DuckLakeUtil::ValidateConfigOptionName(const string &option) {
 
 string DuckLakeUtil::ParseConfigOptionValue(ClientContext &context, const string &option, const Value &val) {
 	ValidateConfigOptionName(option);
+	// a NULL list of columns clears skip_stats_columns
+	if (val.IsNull() && option != "skip_stats_columns") {
+		throw BinderException("The %s option can't be null.", option.c_str());
+	}
 	return ConfigOptionParsers().at(option)(context, option, val);
 }
 
