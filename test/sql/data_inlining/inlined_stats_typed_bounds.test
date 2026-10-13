@@ -1,0 +1,61 @@
+# name: test/sql/data_inlining/inlined_stats_typed_bounds.test
+# description: the bounds of inlined rows of every type, at the limits of the types and with special values
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/inlined_stats_typed_bounds', DATA_INLINING_ROW_LIMIT 1000)
+
+statement ok
+CREATE TABLE lake.t (b BOOLEAN, ti TINYINT, si SMALLINT, i INTEGER, bi BIGINT, hi HUGEINT, ut UTINYINT, us USMALLINT, ui UINTEGER, ub UBIGINT, uh UHUGEINT, f FLOAT, d DOUBLE, d1 DECIMAL(4,2), d2 DECIMAL(18,3), d3 DECIMAL(38,10), dt DATE, tm TIME, ts TIMESTAMP, tss TIMESTAMP_S, tsm TIMESTAMP_MS, tsn TIMESTAMP_NS, tz TIMESTAMPTZ, ttz TIMETZ, iv INTERVAL, v VARCHAR, bl BLOB, u UUID, l INTEGER[], st STRUCT(a DATE, b BLOB));
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 1000, table_name => 't')
+
+statement ok
+INSERT INTO lake.t VALUES
+ (true, -128, -32768, -2147483648, -9223372036854775808, -170141183460469231731687303715884105728, 0, 0, 0, 0, 0, -0.0, 'nan', -99.99, -1.5, -0.0000000001, DATE '-0044-03-15', TIME '00:00:00', TIMESTAMP '-infinity', TIMESTAMP_S '1970-01-01', TIMESTAMP_MS '2000-01-01 00:00:00.001', TIMESTAMP_NS '1677-09-22', TIMESTAMPTZ '2000-01-01 00:00:00+05', TIMETZ '12:00:00+05', INTERVAL '1 day', 'b', 'a'::BLOB, '00000000-0000-0000-0000-000000000001', [3, -1], {'a': DATE 'infinity', 'b': '\xFF'::BLOB}),
+ (false, 127, 32767, 2147483647, 9223372036854775807, 170141183460469231731687303715884105727, 255, 65535, 4294967295, 18446744073709551615, 340282366920938463463374607431768211455, 0.0, 'inf', 99.99, 2.5, 1.5, DATE 'infinity', TIME '24:00:00', TIMESTAMP 'infinity', TIMESTAMP_S '2038-01-19', TIMESTAMP_MS '1969-12-31 23:59:59.999', TIMESTAMP_NS '2262-04-11', TIMESTAMPTZ '2000-01-01 00:00:00-05', TIMETZ '12:00:00-05', INTERVAL '10 hours', 'aa', '\xFF'::BLOB, 'ffffffff-ffff-ffff-ffff-ffffffffffff', [100], {'a': DATE '2000-01-01', 'b': 'a'::BLOB}),
+ (NULL, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, -1.5, '-inf', 0, 0, 0, DATE '2000-01-01', TIME '12:00:00', TIMESTAMP '2000-01-01', NULL, NULL, NULL, NULL, TIMETZ '23:00:00-15:59', INTERVAL '-0 days', '', ''::BLOB, NULL, NULL, NULL);
+
+query IIIII
+SELECT c.column_name, s.min_value, s.max_value, s.contains_null::BOOLEAN, s.contains_nan::BOOLEAN FROM __ducklake_metadata_lake.ducklake_table_column_stats s JOIN __ducklake_metadata_lake.ducklake_column c ON c.column_id = s.column_id AND c.table_id = s.table_id ORDER BY s.column_id;
+----
+b	false	true	true	NULL
+ti	-128	127	false	NULL
+si	-32768	32767	false	NULL
+i	-2147483648	2147483647	false	NULL
+bi	-9223372036854775808	9223372036854775807	false	NULL
+hi	-170141183460469231731687303715884105728	170141183460469231731687303715884105727	false	NULL
+ut	0	255	false	NULL
+us	0	65535	false	NULL
+ui	0	4294967295	false	NULL
+ub	0	18446744073709551615	false	NULL
+uh	0	340282366920938463463374607431768211455	false	NULL
+f	-1.5	0.0	false	false
+d	-inf	nan	false	true
+d1	-99.99	99.99	false	NULL
+d2	-1.500	2.500	false	NULL
+d3	-0.0000000001	1.5000000000	false	NULL
+dt	0045-03-15 (BC)	infinity	false	NULL
+tm	00:00:00	24:00:00	false	NULL
+ts	-infinity	infinity	false	NULL
+tss	1970-01-01 00:00:00	2038-01-19 00:00:00	true	NULL
+tsm	1969-12-31 23:59:59.999	2000-01-01 00:00:00.001	true	NULL
+tsn	1677-09-22 00:00:00	2262-04-11 00:00:00	true	NULL
+tz	1999-12-31 19:00:00+00	2000-01-01 05:00:00+00	true	NULL
+ttz	12:00:00+05	23:00:00-15:59	false	NULL
+iv	00:00:00	10:00:00	false	NULL
+v	(empty)	b	false	NULL
+bl	(empty)	a	false	NULL
+u	00000000-0000-0000-0000-000000000001	ffffffff-ffff-ffff-ffff-ffffffffffff	true	NULL
+element	-1	100	false	NULL
+a	2000-01-01	infinity	true	NULL
+b	\xFF	a	true	NULL

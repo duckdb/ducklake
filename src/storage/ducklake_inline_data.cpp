@@ -197,20 +197,6 @@ struct StatsTypedOperator {
 	}
 };
 
-//! Renders the bounds of a BLOB in hexadecimal, as the Parquet writer does
-struct StatsBlobOperator : public StatsFallbackOperator {
-	static string GetFinalStats(Vector &input_vec, idx_t row, string_t input) {
-		auto data = const_data_ptr_cast(input.GetData());
-		string result;
-		result.reserve(input.GetSize() * 2);
-		for (idx_t i = 0; i < input.GetSize(); i++) {
-			result += Blob::HEX_TABLE[data[i] >> 4];
-			result += Blob::HEX_TABLE[data[i] & 0x0F];
-		}
-		return result;
-	}
-};
-
 template <class T, class OP>
 DuckLakeColumnStats TemplatedUpdateStats(Vector &input_vec, const LogicalType &type, idx_t row_count) {
 	UnifiedVectorFormat format;
@@ -258,9 +244,6 @@ DuckLakeColumnStats TemplatedUpdateStats(Vector &input_vec, const LogicalType &t
 static bool TryGetTypedStats(Vector &input_vec, idx_t row_count, DuckLakeColumnStats &result) {
 	auto &type = input_vec.GetType();
 	switch (type.id()) {
-	case LogicalTypeId::BLOB:
-		result = TemplatedUpdateStats<string_t, StatsBlobOperator>(input_vec, type, row_count);
-		return true;
 	case LogicalTypeId::BOOLEAN:
 	case LogicalTypeId::TINYINT:
 	case LogicalTypeId::SMALLINT:
@@ -284,7 +267,6 @@ static bool TryGetTypedStats(Vector &input_vec, idx_t row_count, DuckLakeColumnS
 	case LogicalTypeId::TIMESTAMP_NS:
 	case LogicalTypeId::TIMESTAMP_TZ:
 	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	case LogicalTypeId::INTERVAL:
 	case LogicalTypeId::VARCHAR:
 		break;
 	default:
@@ -330,9 +312,6 @@ static bool TryGetTypedStats(Vector &input_vec, idx_t row_count, DuckLakeColumnS
 	case PhysicalType::DOUBLE:
 		result = TemplatedUpdateStats<double, StatsTypedOperator>(input_vec, type, row_count);
 		return true;
-	case PhysicalType::INTERVAL:
-		result = TemplatedUpdateStats<interval_t, StatsTypedOperator>(input_vec, type, row_count);
-		return true;
 	case PhysicalType::VARCHAR:
 		result = TemplatedUpdateStats<string_t, StatsFallbackOperator>(input_vec, type, row_count);
 		return true;
@@ -366,10 +345,6 @@ DuckLakeColumnStats GetVectorStats(Vector &input_vec, idx_t row_count) {
 		} else {
 			result = TemplatedUpdateStats<string_t, StatsFallbackOperator>(str_vector, type, row_count);
 		}
-	}
-	if (type.id() == LogicalTypeId::INTERVAL) {
-		// bounds are compared as text when they are merged, and Parquet files have no INTERVAL bounds either
-		result.ClearBounds();
 	}
 	if (type.id() == LogicalTypeId::FLOAT) {
 		result.has_contains_nan = true;
