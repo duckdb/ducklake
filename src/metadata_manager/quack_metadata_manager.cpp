@@ -39,7 +39,7 @@ QuackMetadataManager::GetMetadataTableColumns(const vector<string> &table_names)
 	    "SELECT table_name FROM duckdb_tables() WHERE database_name = current_database() AND schema_name = %s",
 	    SQLString(schema_name)));
 	tables->ThrowIfError("Failed to list the DuckLake metadata tables: ");
-	unordered_set<string> existing_tables;
+	case_insensitive_set_t existing_tables;
 	for (auto &row : *tables) {
 		existing_tables.insert(row.GetValue<string>(0));
 	}

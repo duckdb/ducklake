@@ -572,7 +572,7 @@ public:
 	virtual LogicalType StoredMetadataType(const LogicalType &type) {
 		return type;
 	}
-	//! The columns of the given metadata tables that exist, by table name, with the types as they are read back
+	//! Column names and types of the given metadata tables that exist
 	virtual map<string, vector<pair<string, string>>> GetMetadataTableColumns(const vector<string> &table_names);
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);

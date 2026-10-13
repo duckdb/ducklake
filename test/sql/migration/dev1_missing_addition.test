@@ -51,7 +51,7 @@ DETACH meta
 
 endloop
 
-# a re-added min_is_exact would land after max_is_exact, where the values of the other column are written
+# restoring min_is_exact would reverse the stats columns
 statement ok
 ATTACH '{TEST_DIR}/dev1_missing_addition.db' AS meta
 

@@ -21,6 +21,7 @@ public:
 	}
 
 	bool TypeIsNativelySupported(const LogicalType &type) override;
+	map<string, vector<pair<string, string>>> GetMetadataTableColumns(const vector<string> &table_names) override;
 	bool SupportsAppender() const override {
 		return false;
 	}
