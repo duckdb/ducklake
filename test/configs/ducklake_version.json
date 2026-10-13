@@ -85,6 +85,13 @@
       ]
     },
     {
+      "reason": "TIMETZ files that keep the offset were added in 1.1-dev1, a catalog pinned to 1.0 writes TIMETZ as a Parquet TIME without the offset",
+      "paths": [
+        "test/sql/types/timetz_offset.test",
+        "test/sql/types/timetz_offset_version.test"
+      ]
+    },
+    {
       "reason": "Epoch partition transforms were added in 1.1-dev1 and are not available when ducklake_default_version is pinned to 1.0",
       "paths": [
         "test/sql/add_files/add_file_epoch_partitioned.test",

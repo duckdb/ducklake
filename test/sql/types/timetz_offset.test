@@ -91,8 +91,11 @@ CREATE TABLE ducklake.b (x TIMETZ);
 statement ok
 INSERT INTO ducklake.b VALUES (TIMETZ '01:00:00+05'), (TIMETZ '23:00:00-05'), (TIMETZ '12:00:00+00');
 
+statement ok
+SET VARIABLE b_bounds = (SELECT {'min': s.min_value::TIMETZ, 'max': s.max_value::TIMETZ} FROM __ducklake_metadata_ducklake.ducklake_file_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 'b')
+
 query I
-SELECT bool_and(b.x BETWEEN s.min_value::TIMETZ AND s.max_value::TIMETZ) FROM ducklake.b, __ducklake_metadata_ducklake.ducklake_file_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 'b'
+SELECT bool_and(x BETWEEN getvariable('b_bounds').min AND getvariable('b_bounds').max) FROM ducklake.b
 ----
 true
 
