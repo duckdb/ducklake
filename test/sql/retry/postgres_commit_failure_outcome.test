@@ -1,0 +1,116 @@
+# name: test/sql/retry/postgres_commit_failure_outcome.test
+# description: a failed COMMIT of a Postgres catalog removes its files once Postgres reports that it did not commit
+# group: [retry]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS commit_failure_outcome CASCADE')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS lake
+(DATA_PATH '{DATA_PATH}/commit_failure_outcome', METADATA_SCHEMA 'commit_failure_outcome',
+DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t (i INTEGER)
+
+# a deferred trigger makes Postgres fail the COMMIT of the next data file
+statement ok
+CALL postgres_execute('pg', 'CREATE FUNCTION commit_failure_outcome.refuse_commit() RETURNS trigger
+LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION ''commit refused''; END $$')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE CONSTRAINT TRIGGER refuse_commit AFTER INSERT
+ON commit_failure_outcome.ducklake_data_file DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION commit_failure_outcome.refuse_commit()')
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO lake.t VALUES (1)
+
+# Postgres reports the transaction as aborted, so its file is removed
+statement error
+COMMIT
+----
+<REGEX>:.*Failed to commit DuckLake transaction\.\n.*commit refused.*
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/commit_failure_outcome/**/*.parquet')
+----
+0
+
+# the same holds when the COMMIT loses its connection before Postgres commits
+statement ok
+CALL postgres_execute('pg', 'CREATE OR REPLACE FUNCTION commit_failure_outcome.refuse_commit() RETURNS trigger
+LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_terminate_backend(pg_backend_pid()); PERFORM pg_sleep(1); RETURN NULL; END $$')
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO lake.t VALUES (1)
+
+statement error
+COMMIT
+----
+<REGEX>:.*Failed to commit DuckLake transaction\.\n.*connection.*
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/commit_failure_outcome/**/*.parquet')
+----
+0
+
+statement ok
+CALL postgres_execute('pg', 'DROP TRIGGER refuse_commit ON commit_failure_outcome.ducklake_data_file')
+
+# a commit without files does not read its transaction id, so the outcome of its failed COMMIT stays unknown
+statement ok
+CALL postgres_execute('pg', 'CREATE OR REPLACE FUNCTION commit_failure_outcome.refuse_commit() RETURNS trigger
+LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION ''commit refused''; END $$')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE CONSTRAINT TRIGGER refuse_commit AFTER INSERT
+ON commit_failure_outcome.ducklake_snapshot DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION commit_failure_outcome.refuse_commit()')
+
+statement error
+CREATE TABLE lake.u (i INTEGER)
+----
+<REGEX>:.*it may have been committed.*commit refused.*
+
+statement ok
+CALL postgres_execute('pg', 'DROP TRIGGER refuse_commit ON commit_failure_outcome.ducklake_snapshot')
+
+statement ok
+INSERT INTO lake.t VALUES (2)
+
+query I
+SELECT * FROM lake.t
+----
+2
+
+# the removed files leave nothing for orphan cleanup
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('lake', cleanup_all => true)
+----
+0
+
+statement ok
+DETACH lake
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA commit_failure_outcome CASCADE')
