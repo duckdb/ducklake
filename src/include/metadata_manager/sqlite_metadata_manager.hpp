@@ -31,7 +31,7 @@ public:
 		// the default SQLITE_MAX_COLUMN
 		return 2000;
 	}
-	bool IsRetryableCommitError(const string &message) const override;
+	bool IsRetryableCommitError(const string &message) override;
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
 };

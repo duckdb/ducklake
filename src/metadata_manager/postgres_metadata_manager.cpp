@@ -286,14 +286,13 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	}
 }
 
-bool PostgresMetadataManager::IsRetryableCommitError(const string &message) const {
+bool PostgresMetadataManager::IsRetryableCommitError(const string &message) {
+	if (RemovedInlinedTableAfterRollback()) {
+		return true;
+	}
 	// the server error follows the failed query, which can contain any text
 	auto server_error_start = message.rfind("\": ");
 	auto server_error = server_error_start == string::npos ? message : message.substr(server_error_start);
-	// Cleanup can hold a registration row while waiting for an inlined table read by this transaction.
-	if (StringUtil::Contains(StringUtil::Lower(server_error), "deadlock detected")) {
-		return true;
-	}
 	// constraint names are not translated, so a conflict on a metadata primary key is found in any language
 	for (auto end = server_error.find("_pkey"); end != string::npos; end = server_error.find("_pkey", end + 1)) {
 		auto start = end;
@@ -308,15 +307,50 @@ bool PostgresMetadataManager::IsRetryableCommitError(const string &message) cons
 	return false;
 }
 
-string PostgresMetadataManager::GetInlinedTableNamesForCommitSql(TableIndex table_id) {
-	// Keep registrations until commit: cleanup deletes them before dropping superseded inlined tables.
+unique_ptr<QueryResult> PostgresMetadataManager::GetInlinedTablesForCommit(const set<TableIndex> &table_ids) {
+	// Keep registrations until commit, since cleanup deletes them before dropping superseded inlined tables.
 	auto &catalog = transaction.GetCatalog();
-	auto remote_query =
-	    StringUtil::Format("SELECT table_name FROM %s.ducklake_inlined_data_tables WHERE table_id = %d FOR KEY SHARE",
-	                       SQLQuotedIdentifier::ToString(catalog.MetadataSchemaName()), table_id.index);
-	return StringUtil::Format(
-	    "SELECT table_name FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
-	    SQLString::ToString(remote_query));
+	auto names_query = GetInlinedTableNamesForTablesSql(table_ids);
+	failed_inlined_table_locks.clear();
+	auto candidates = Query(string(names_query));
+	candidates->ThrowIfError("Failed to read inlined table registrations: ");
+	// Waiting here can deadlock against cleanup waiting to drop a table we already read.
+	auto remote_query = StringUtil::Format(R"(
+WITH locked AS MATERIALIZED (%s ORDER BY table_id, table_name FOR KEY SHARE SKIP LOCKED)
+SELECT table_id, table_name FROM locked
+UNION ALL
+SELECT NULL, NULL WHERE (SELECT COUNT(*) FROM locked) <> (SELECT COUNT(*) FROM (%s) candidates))",
+	                                       names_query, names_query);
+	SubstituteCatalogPlaceholders(remote_query, SQLQuotedIdentifier::ToString(catalog.MetadataSchemaName()));
+	auto result = Query(StringUtil::Format(
+	    "SELECT table_id, table_name FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
+	    SQLString::ToString(remote_query)));
+	if (result->HasError()) {
+		for (auto &row : *candidates) {
+			failed_inlined_table_locks.insert(row.GetValue<string>(1));
+		}
+	}
+	return result;
+}
+
+bool PostgresMetadataManager::RemovedInlinedTableAfterRollback() {
+	if (failed_inlined_table_locks.empty()) {
+		return false;
+	}
+	// A cleanup committed after our snapshot can make locking fail with a localized serialization error.
+	auto names = std::move(failed_inlined_table_locks);
+	failed_inlined_table_locks.clear();
+	auto query = StringUtil::Format(
+	    "SELECT DISTINCT table_name FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_name IN (%s)",
+	    StringUtil::Join(names, ",", [](const string &name) { return SQLString::ToString(name); }));
+	auto result = Query(query);
+	if (result->HasError()) {
+		return false;
+	}
+	for (auto &row : *result) {
+		names.erase(row.GetValue<string>(0));
+	}
+	return !names.empty();
 }
 
 bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_name) {

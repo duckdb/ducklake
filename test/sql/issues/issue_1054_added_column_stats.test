@@ -492,13 +492,13 @@ COMMIT
 statement ok con1
 COMMIT
 
-# Refreshing the gross count invalidates cached bounds from concurrent commits.
+# A smaller gross count must not make the deleted minimum exact, but nullability stays known.
 query III
 SELECT CAST(s.contains_null AS BOOLEAN), s.min_value, s.max_value FROM issue_1054_meta.ducklake_table_column_stats s
 JOIN issue_1054_meta.ducklake_table t USING (table_id)
 WHERE t.table_name = 'cr' AND s.column_id = 2
 ----
-NULL	NULL	NULL
+false	NULL	NULL
 
 query IIII
 SELECT (SELECT count(*) FROM dl.cr WHERE b = 42), (SELECT count(*) FROM dl.cr WHERE a = 100),

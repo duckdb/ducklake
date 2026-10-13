@@ -47,7 +47,11 @@ SELECT count(*), min(i), max(i) FROM lake.t
 ----
 200	1	2000
 
-query TT
-SELECT min_value, max_value FROM meta.ducklake_table_column_stats
+# A later insert must not make the deleted minimum exact again.
+statement ok
+INSERT INTO lake.t VALUES (2001)
+
+query III
+SELECT count(*), min(i), max(i) FROM lake.t
 ----
-NULL	NULL
+201	1	2001
