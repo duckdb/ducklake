@@ -255,14 +255,23 @@ using compaction_map_t =
 //! Orders the candidate files of each group by the bounds of the first sort key, so that merged files cover narrow
 //! ranges of it
 static void OrderCandidatesBySortKey(DuckLakeMetadataManager &metadata_manager, DuckLakeTableEntry &latest_table,
-                                     const vector<DuckLakeCompactionFileEntry> &files,
+                                     const vector<DuckLakeCompactionFileEntry> &files, idx_t target_file_size,
                                      compaction_map_t<DuckLakeCompactionCandidates> &candidates) {
+	// a group that merges into one file keeps its order, which keeps adjacent files adjacent
+	vector<reference<vector<idx_t>>> ordered_groups;
 	set<DataFileIndex> ordered_files;
 	for (auto &group : candidates) {
-		if (group.second.candidate_files.size() > 1) {
-			for (auto &file_idx : group.second.candidate_files) {
-				ordered_files.insert(files[file_idx].file.id);
-			}
+		auto &candidate_files = group.second.candidate_files;
+		idx_t group_size = 0;
+		for (auto &file_idx : candidate_files) {
+			group_size += files[file_idx].file.data.file_size_bytes;
+		}
+		if (candidate_files.size() <= 1 || group_size <= target_file_size) {
+			continue;
+		}
+		ordered_groups.push_back(candidate_files);
+		for (auto &file_idx : candidate_files) {
+			ordered_files.insert(files[file_idx].file.id);
 		}
 	}
 	auto sort_data = latest_table.GetSortData();
@@ -294,8 +303,8 @@ static void OrderCandidatesBySortKey(DuckLakeMetadataManager &metadata_manager, 
 		return;
 	}
 	bool descending = first_key.sort_direction == OrderType::DESCENDING;
-	for (auto &group : candidates) {
-		auto &candidate_files = group.second.candidate_files;
+	for (auto &group : ordered_groups) {
+		auto &candidate_files = group.get();
 		// files without bounds keep their order after the others
 		std::stable_sort(candidate_files.begin(), candidate_files.end(), [&](idx_t left, idx_t right) {
 			auto left_bounds = file_bounds.find(files[left].file.id);
@@ -406,7 +415,8 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 	}
 
 	// the sort of the merges follows the table in the transaction, which can have changed it
-	OrderCandidatesBySortKey(metadata_manager, GetLatestTableEntry(catalog, transaction, table), files, candidates);
+	OrderCandidatesBySortKey(metadata_manager, GetLatestTableEntry(catalog, transaction, table), files,
+	                         target_file_size, candidates);
 
 	// we have gathered all the candidate files per compaction group
 	// iterate over them to generate actual compaction commands
