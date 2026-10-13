@@ -139,3 +139,20 @@ We are happy to welcome external contributions to our DuckLake extension. Our ac
 # run tests with deletion vectors enabled
 ./build/release/test/unittest --test-config test/configs/deletion_vectors.json
 ```
+
+### Code Coverage
+
+`make codecov` builds `build/codecov`, a release build in which only the DuckLake sources are instrumented for clang's
+source-based code coverage, like `make codecov` in DuckDB. DuckDB's test runner then writes the coverage report of the
+tests it runs, by default the fast ones. It needs `llvm-profdata`, `llvm-cov` and `genhtml` from lcov 2.0 to 2.5 (2.2
+and 2.6 fail on its options). Run it from the repository root, so the report only shows `src`:
+
+```bash
+python3 duckdb/scripts/ci/run_tests.py build/codecov/test/unittest --coverage-report build/codecov/coverage/fast
+# any test runner argument works, e.g. the tests with SQLite as catalog database
+python3 duckdb/scripts/ci/run_tests.py build/codecov/test/unittest --coverage-report build/codecov/coverage/sqlite \
+  --test-config test/configs/sqlite.json "test/sql/*"
+```
+
+CI merges the coverage of the tests of every metadata catalog (DuckDB, PostgreSQL, SQLite and Quack) into the
+`coverage-ducklake` artifact, and fails a pull request that lowers the line coverage of the latest report of `main`.

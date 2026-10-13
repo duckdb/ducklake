@@ -284,8 +284,15 @@ void DuckLakeUtil::SyncLocalFiles(ClientContext &context, const vector<string> &
 #endif
 }
 
+string DuckLakeUtil::PathSeparator(FileSystem &fs, const string &path) {
+	if (FileSystem::IsRemoteFile(path)) {
+		return "/";
+	}
+	return fs.PathSeparator(path);
+}
+
 string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) {
-	auto sep = fs.PathSeparator(a);
+	auto sep = PathSeparator(fs, a);
 	if (StringUtil::EndsWith(a, sep)) {
 		return a + b;
 	} else {
@@ -600,6 +607,11 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 			continue;
 		}
 		auto setting_index = option.setting_index.GetIndex();
+		// these change the types read from the metadata and data files
+		if (entry.first == "sqlite_all_varchar" || entry.first == "binary_as_string") {
+			to.config.user_settings.SetUserSetting(setting_index, Value::BOOLEAN(false));
+			continue;
+		}
 		if (!from.config.user_settings.IsSet(setting_index)) {
 			continue;
 		}

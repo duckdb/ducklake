@@ -59,6 +59,7 @@ DEFAULT_PORT = 19999
 DEFAULT_TOKEN = "ducklake-test-token"
 DEFAULT_TIMEOUT = 120  # seconds per test
 SIDECAR_STARTUP_TIMEOUT = 5.0  # seconds to wait for :PORT to listen
+SIDECAR_SHUTDOWN_TIMEOUT = 10.0  # seconds to wait for the sidecar to exit on its own
 
 
 @dataclass
@@ -174,6 +175,17 @@ def start_sidecar(duckdb_bin: Path, port: int, token: str, log_path: Path,
 def stop_sidecar(sidecar: subprocess.Popen) -> None:
     if sidecar.poll() is not None:
         return
+    if os.name == "posix" and os.environ.get("LLVM_PROFILE_FILE"):
+        # With stdin closed, interrupting the keep-alive query makes the CLI exit normally, which is when a
+        # coverage build writes its profile
+        try:
+            if sidecar.stdin is not None:
+                sidecar.stdin.close()
+            sidecar.send_signal(signal.SIGINT)
+            sidecar.wait(timeout=SIDECAR_SHUTDOWN_TIMEOUT)
+            return
+        except (subprocess.TimeoutExpired, ProcessLookupError, OSError):
+            pass
     try:
         if os.name == "posix":
             os.killpg(os.getpgid(sidecar.pid), signal.SIGTERM)

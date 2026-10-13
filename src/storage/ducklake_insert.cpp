@@ -226,6 +226,11 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 				throw InvalidInputException("Top-level variant cannot have stats");
 			}
 			auto column_stats = ParseColumnStats(field_id.Type(), col_stats);
+			if (data_file.row_count > 0 && column_stats.has_num_values && column_stats.num_values == 0) {
+				// the writer only counts the values of columns it collects statistics for
+				column_stats.has_num_values = false;
+				column_stats.has_null_count = false;
+			}
 			if (column_stats.null_count > 0 && column_names.size() == 1) {
 				// we wrote NULL values to a base column - verify NOT NULL constraint
 				if (global_state.not_null_fields.count(column_names[0])) {
@@ -733,8 +738,7 @@ PhysicalOperator &DuckLakeVerifyNotNull::Plan(PhysicalPlanGenerator &planner, Du
 	auto not_null_fields = table.GetNotNullFields();
 	vector<pair<idx_t, Identifier>> columns;
 	for (auto &col : table.GetColumns().Physical()) {
-		// the file statistics of a nested column are per field, so they do not show a NULL value of the column
-		if (col.Type().IsNested() && not_null_fields.count(col.Name().GetIdentifierName())) {
+		if (!FileStatsShowNulls(col.Type()) && not_null_fields.count(col.Name().GetIdentifierName())) {
 			columns.emplace_back(col.Physical().index, col.Name());
 		}
 	}

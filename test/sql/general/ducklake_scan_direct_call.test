@@ -1,0 +1,20 @@
+# name: test/sql/general/ducklake_scan_direct_call.test
+# description: Calling ducklake_scan directly raises a regular error
+# group: [general]
+
+require parquet
+
+require ducklake
+
+statement ok
+COPY (SELECT 42 AS x) TO '{TEST_DIR}/ducklake_scan_direct_call.parquet'
+
+statement error
+SELECT * FROM ducklake_scan('{TEST_DIR}/ducklake_scan_direct_call.parquet')
+----
+Cannot call function
+
+query I
+SELECT x FROM '{TEST_DIR}/ducklake_scan_direct_call.parquet'
+----
+42

@@ -1,0 +1,91 @@
+# name: test/sql/geo/null_to_geometry_promotion_stats.test
+# description: A column promoted from the NULL type to GEOMETRY keeps unknown geometry statistics
+# group: [geo]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/null_to_geometry_promotion_stats.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/null_to_geometry_promotion_stats', METADATA_CATALOG 'dl_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(g "NULL")
+
+statement ok
+INSERT INTO dl.t VALUES (NULL)
+
+statement ok
+ALTER TABLE dl.t ALTER g TYPE GEOMETRY
+
+statement ok
+INSERT INTO dl.t VALUES ('POINT(1 2)'::GEOMETRY)
+
+query II
+SELECT g, vertex_extract(g, 'x') FROM dl.t ORDER BY ALL
+----
+POINT (1 2)	1.0
+NULL	NULL
+
+query I
+SELECT count(*) FROM dl.t WHERE vertex_extract(g, 'y') = 2
+----
+1
+
+# the bounds of the NULL rows are unknown, so no geometry statistics are stored for them
+query I
+SELECT extra_stats IS NULL FROM dl_meta.ducklake_table_column_stats
+----
+true
+
+statement ok
+INSERT INTO dl.t VALUES ('POINT(3 4)'::GEOMETRY)
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/null_to_geometry_promotion_stats', METADATA_CATALOG 'dl_meta')
+
+query I
+SELECT count(*) FROM dl.t WHERE vertex_extract(g, 'y') IN (2, 4)
+----
+2
+
+# inlined rows
+statement ok
+CREATE TABLE dl.i(g "NULL")
+
+statement ok
+INSERT INTO dl.i VALUES (NULL)
+
+statement ok
+ALTER TABLE dl.i ALTER g TYPE GEOMETRY
+
+statement ok
+INSERT INTO dl.i VALUES ('POINT(1 2)'::GEOMETRY)
+
+query I
+SELECT count(*) FROM dl.i WHERE vertex_extract(g, 'x') = 1
+----
+1
+
+# a column created as GEOMETRY keeps its extent
+statement ok
+CREATE TABLE dl.c(g GEOMETRY)
+
+statement ok
+INSERT INTO dl.c VALUES (NULL), ('POINT(1 2)'::GEOMETRY)
+
+statement ok
+INSERT INTO dl.c VALUES ('POINT(3 4)'::GEOMETRY)
+
+query I
+SELECT extra_stats FROM dl_meta.ducklake_table_column_stats
+WHERE table_id = (SELECT table_id FROM dl_meta.ducklake_table WHERE table_name = 'c' AND end_snapshot IS NULL)
+----
+{"bbox":{"xmin":1.0,"xmax":3.0,"ymin":2.0,"ymax":4.0,"zmin":null,"zmax":null,"mmin":null,"mmax":null},"types":["point"]}

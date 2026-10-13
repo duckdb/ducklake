@@ -29,6 +29,11 @@ inline bool StatsBoundsRequireOffset(const LogicalType &type) {
 	return type.id() == LogicalTypeId::TIMESTAMP_TZ || type.id() == LogicalTypeId::TIMESTAMP_TZ_NS;
 }
 
+//! The file statistics of a nested column are per field, and the Parquet writer collects none for INTERVAL
+inline bool FileStatsShowNulls(const LogicalType &type) {
+	return !type.IsNested() && type.id() != LogicalTypeId::INTERVAL;
+}
+
 //! Bounds that cannot be cast are unknown
 optional<Value> TryCastStatsBound(const string &bound, const LogicalType &type);
 
@@ -67,6 +72,10 @@ struct DuckLakeColumnStats {
 			return num_values > null_count;
 		}
 		return any_valid;
+	}
+	//! Extra statistics of unknown bounds that no value was merged into are unknown
+	bool ExtraStatsUnknown() const {
+		return bounds_unknown && !AnyValid();
 	}
 	//! Strings can have truncated min/max stats, other types are always exact
 	bool EffectiveMinIsExact() const {
