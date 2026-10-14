@@ -100,12 +100,12 @@ using DeletedRowVersions = map<pair<int64_t, int64_t>, int64_t>;
 static DeletedRowVersions GetDeletedRowVersions(DuckLakeMetadataManager &metadata_manager, DuckLakeSnapshot snapshot,
                                                 const DuckLakeTableEntry &table, const string &inlined_table_name) {
 	auto col_names = metadata_manager.InlinedColNames();
-	auto sql = metadata_manager.QueryPlaceholders(snapshot);
-	auto flush_source = metadata_manager.InlinedFlushSource(sql, inlined_table_name, table);
+	auto flush_source = metadata_manager.InlinedFlushSource(inlined_table_name, table);
 	auto result = metadata_manager.Query(
-	    sql.Format("SELECT %s, %s, %s FROM %s inlined_data WHERE {SNAPSHOT_ID} >= %s AND %s IS NOT NULL;",
-	               col_names.row_id, col_names.begin_snapshot, col_names.end_snapshot, flush_source,
-	               col_names.begin_snapshot, col_names.end_snapshot));
+	    snapshot,
+	    StringUtil::Format("SELECT %s, %s, %s FROM %s inlined_data WHERE {SNAPSHOT_ID} >= %s AND %s IS NOT NULL;",
+	                       col_names.row_id, col_names.begin_snapshot, col_names.end_snapshot, flush_source,
+	                       col_names.begin_snapshot, col_names.end_snapshot));
 	metadata_manager.CheckInlinedDataReadError(*result, inlined_table_name);
 	DeletedRowVersions deleted_rows;
 	for (auto &row : *result) {
@@ -362,8 +362,7 @@ static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &c
 	}
 
 	// Query the inlined deletions with the delete file active when their data file was last visible
-	auto deletions_result =
-	    metadata_manager.Query(metadata_manager.QueryPlaceholders(snapshot).Format(R"(
+	auto deletions_result = metadata_manager.Query(snapshot, StringUtil::Format(R"(
 SELECT del.file_id, data.path, data.path_is_relative, del.row_id, del.begin_snapshot,
        existing_del.delete_file_id, existing_del.path as del_path, existing_del.path_is_relative as del_path_is_relative,
        existing_del.begin_snapshot as del_begin_snapshot, existing_del.encryption_key as del_encryption_key,
@@ -377,7 +376,7 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_delete_file existing_del
             OR existing_del.end_snapshot >= COALESCE(data.end_snapshot, {SNAPSHOT_ID} + 1))
 WHERE del.begin_snapshot <= {SNAPSHOT_ID}
 	)",
-	                                                                               inlined_table_name, table_id.index));
+	                                                                            inlined_table_name, table_id.index));
 	deletions_result->ThrowIfError("Failed to query inlined file deletions for flush: ");
 
 	unordered_map<idx_t, FileDeleteInfo> files_to_flush;

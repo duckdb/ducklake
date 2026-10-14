@@ -162,11 +162,9 @@ void DuckLakeInitializer::RestartMetadataTransaction(DuckLakeTransaction &transa
 }
 
 void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction) {
-	auto &metadata_manager = transaction.GetMetadataManager();
-	auto attach_query = metadata_manager.QueryPlaceholders().Resolve(
-	                        "ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}") +
-	                    GetAttachOptions();
-	auto result = metadata_manager.AttachMetadata(attach_query);
+	const string attach_query =
+	    "ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions();
+	auto result = transaction.GetMetadataManager().AttachMetadata(attach_query);
 	result->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
 	                     catalog.MetadataPath() + "\"");
 }

@@ -12,7 +12,6 @@
 #include "common/ducklake_snapshot.hpp"
 #include "common/index.hpp"
 #include "storage/ducklake_metadata_info.hpp"
-#include "storage/ducklake_metadata_manager.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_view_entry.hpp"
@@ -60,12 +59,10 @@ struct CompactionInformation {
 };
 
 struct DuckLakeCommitState {
-	DuckLakeCommitState(DuckLakeSnapshot &snapshot, DuckLakeSQLPlaceholders sql_p)
-	    : commit_snapshot(snapshot), sql(std::move(sql_p)) {
+	explicit DuckLakeCommitState(DuckLakeSnapshot &snapshot) : commit_snapshot(snapshot) {
 	}
 
 	DuckLakeSnapshot &commit_snapshot;
-	const DuckLakeSQLPlaceholders sql;
 	map<SchemaIndex, SchemaIndex> committed_schemas;
 	map<TableIndex, TableIndex> committed_tables;
 	map<idx_t, idx_t> committed_partition_ids;

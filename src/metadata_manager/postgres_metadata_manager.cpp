@@ -248,16 +248,16 @@ bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_nam
 	auto remote_query = StringUtil::Format(
 	    "SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = %s AND tablename = %s LIMIT 1",
 	    SQLString::ToString(catalog.MetadataSchemaName().GetIdentifierName()), SQLString::ToString(table_name));
-	auto result = DuckLakeMetadataManager::Query(QueryPlaceholders().Format(
-	    "SELECT 1 FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
-	    SQLString::ToString(remote_query)));
+	auto query =
+	    StringUtil::Format("SELECT 1 FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
+	                       SQLString::ToString(remote_query));
+	auto result = DuckLakeMetadataManager::Query(query);
 	result->ThrowIfError("Failed to probe for DuckLake inlined-deletion table: ");
 	return result->Fetch() != nullptr;
 }
 
 void PostgresMetadataManager::MigrateInlinedDataTypes() {
-	auto sql = QueryPlaceholders();
-	auto columns = DuckLakeMetadataManager::Query(sql.Resolve(GetInlinedTableColumnsSql()));
+	auto columns = DuckLakeMetadataManager::Query(GetInlinedTableColumnsSql());
 	columns->ThrowIfError("Failed to read the columns of inlined-data tables while migrating: ");
 	map<string, case_insensitive_map_t<string>> inlined_tables;
 	for (auto &row : *columns) {
@@ -266,7 +266,7 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 	for (auto &inlined_table : inlined_tables) {
 		auto &table_name = inlined_table.first;
 		auto probe = DuckLakeMetadataManager::Query(
-		    sql.Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", SQLIdentifier(table_name)));
+		    StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", SQLIdentifier(table_name)));
 		if (probe->HasError() || probe->GetNames().size() < 3) {
 			continue;
 		}
@@ -314,30 +314,28 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 			continue;
 		}
 		auto migrated_name = table_name + "_migrated";
-		auto migrate_query = InlinedTableDdlSql(sql, migrated_name, column_defs, col_names);
-		migrate_query +=
-		    sql.Format("INSERT INTO {METADATA_CATALOG}.%s SELECT %s FROM {METADATA_CATALOG}.%s;",
-		               SQLIdentifier(migrated_name), StringUtil::Join(select_list, ", "), SQLIdentifier(table_name));
-		migrate_query += sql.Format("DROP TABLE {METADATA_CATALOG}.%s;", SQLIdentifier(table_name));
-		migrate_query += sql.Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME TO %s;", SQLIdentifier(migrated_name),
-		                            SQLIdentifier(table_name));
+		auto migrate_query = InlinedTableDdlSql(migrated_name, column_defs, col_names);
+		migrate_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s SELECT %s FROM {METADATA_CATALOG}.%s;",
+		                                    SQLIdentifier(migrated_name), StringUtil::Join(select_list, ", "),
+		                                    SQLIdentifier(table_name));
+		migrate_query += StringUtil::Format("DROP TABLE {METADATA_CATALOG}.%s;", SQLIdentifier(table_name));
+		migrate_query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME TO %s;",
+		                                    SQLIdentifier(migrated_name), SQLIdentifier(table_name));
 		auto result = DuckLakeMetadataManager::Execute(migrate_query);
 		result->ThrowIfError(
 		    StringUtil::Format("Failed to migrate the column types of inlined-data table \"%s\": ", table_name));
 	}
 }
 
-DuckLakeSQLPlaceholders PostgresMetadataManager::BatchPlaceholders() const {
-	return CatalogPlaceholders(SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
-}
-
-unique_ptr<QueryResult> PostgresMetadataManager::ExecuteBatch(const string &query) {
-	D_ASSERT(!DuckLakeSQLPlaceholders::HasUnresolvedPlaceholder(query));
-	auto catalog_literal = SQLString::ToString(transaction.GetCatalog().MetadataDatabaseName());
+unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
+	SubstituteTransactionPlaceholders(snapshot, query);
+	auto &ducklake_catalog = transaction.GetCatalog();
+	SubstituteCatalogPlaceholders(query, SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataSchemaName()));
+	auto catalog_literal = SQLString::ToString(ducklake_catalog.MetadataDatabaseName());
 	// casts of float bounds to text keep their exact value
-	auto batch = "SET LOCAL extra_float_digits = 3;" + query;
+	query = "SET LOCAL extra_float_digits = 3;" + query;
 	auto result = transaction.GetConnection().Query(
-	    StringUtil::Format("CALL postgres_execute(%s, %s, prepare=FALSE)", catalog_literal, SQLString(batch)));
+	    StringUtil::Format("CALL postgres_execute(%s, %s, prepare=FALSE)", catalog_literal, SQLString(query)));
 	return std::move(result);
 }
 
@@ -347,21 +345,26 @@ void PostgresMetadataManager::ClearCache() {
 }
 
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
-	return QueryPlaceholders().Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
-	                                  SQLString(BatchPlaceholders().Resolve(LatestSnapshotQuery())));
+	auto remote_query = LatestSnapshotQuery();
+	SubstituteCatalogPlaceholders(remote_query,
+	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
+	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
+	                          SQLString(remote_query));
 }
 
 string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                                                       const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
                                                       const vector<idx_t> &runtime_filter_stats_columns,
-                                                      FileListType file_list_type) {
-	// the query runs in Postgres, which knows the metadata schema but not the catalog of DuckDB
-	auto remote_query =
-	    DuckLakeMetadataManager::GenerateFileListQuery(table, BatchPlaceholders().WithSnapshot(snapshot), filter_info,
-	                                                   dynamic_filters, runtime_filter_stats_columns, file_list_type);
-	return QueryPlaceholders().Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
-	                                  SQLString(remote_query));
+                                                      FileListType file_list_type, const string &) {
+	auto remote_query = DuckLakeMetadataManager::GenerateFileListQuery(table, snapshot, filter_info, dynamic_filters,
+	                                                                   runtime_filter_stats_columns, file_list_type);
+	remote_query = DuckLakeUtil::ReplaceSkippingQuotes(remote_query, SnapshotPlaceholders(snapshot));
+	SubstituteCatalogPlaceholders(remote_query,
+	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
+
+	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
+	                          SQLString(remote_query));
 }
 
 } // namespace duckdb

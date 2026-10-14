@@ -1449,7 +1449,6 @@ void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version) {
 
 void DuckLakeTransaction::DropEmptySupersededInlinedTablesClientSide() {
 	DuckLakeCommitContext context;
-	context.read_placeholders = metadata_manager->QueryPlaceholders();
 	context.query_metadata = [&](string q) {
 		return metadata_manager->Query(q);
 	};
@@ -1475,11 +1474,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
                                         const DuckLakeRetryConfig &retry_config) {
 	vector<unique_ptr<SQLStatement>> inlined_inserts;
 	DuckLakeCommitContext context;
-	context.batch_placeholders = metadata_manager->BatchPlaceholders();
-	context.read_placeholders = metadata_manager->QueryPlaceholders();
-	context.conflict_placeholders = context.read_placeholders.WithSnapshot(transaction_snapshot);
 	context.conflict_query_executor = [&](string q) -> unique_ptr<QueryResult> {
-		auto result = metadata_manager->Query(q);
+		auto result = metadata_manager->Query(transaction_snapshot, q);
 		result->ThrowIfError("Failed to commit DuckLake transaction - failed to get snapshot and "
 		                     "snapshot changes for conflict resolution:");
 		return result;
@@ -1495,8 +1491,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		// the client context has no active transaction during the commit
 		state->local_changes.SetDeleteCommitSnapshot(*GetConnection().context, *this, commit_snapshot);
 	};
-	context.execute_commit_batch = [&](const string &query) {
-		auto result = metadata_manager->ExecuteBatch(query);
+	context.execute_commit_batch = [&](DuckLakeSnapshot snapshot, string &query) {
+		auto result = metadata_manager->Execute(snapshot, query);
 		for (auto &insert : inlined_inserts) {
 			if (result->HasError()) {
 				break;
@@ -1537,25 +1533,25 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.execute_in_transaction = [&](string q) {
 		return metadata_manager->ExecuteInTransaction(q);
 	};
+	context.query_metadata_with_snapshot = [&](DuckLakeSnapshot s, string q) {
+		return metadata_manager->Query(s, q);
+	};
 	context.try_append_data_files = [&](DuckLakeSnapshot &snapshot, const vector<DuckLakeFileInfo> &files,
 	                                    const vector<DuckLakeTableInfo> &new_tables,
 	                                    vector<DuckLakeSchemaInfo> &new_schemas) {
 		return metadata_manager->TryAppendDataFiles(snapshot, files, new_tables, new_schemas);
 	};
-	context.write_inlined_tables = [&](const DuckLakeSQLPlaceholders &sql, DuckLakeSnapshot snapshot,
-	                                   const vector<DuckLakeTableInfo> &tables) {
-		return metadata_manager->WriteNewInlinedTables(sql, snapshot, tables);
+	context.write_inlined_tables = [&](DuckLakeSnapshot snapshot, const vector<DuckLakeTableInfo> &tables) {
+		return metadata_manager->WriteNewInlinedTables(snapshot, tables);
 	};
-	context.write_inlined_file_deletes = [&](const DuckLakeSQLPlaceholders &sql,
-	                                         const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) {
-		return metadata_manager->WriteNewInlinedFileDeletesSqlBatch(sql, new_deletes);
+	context.write_inlined_file_deletes = [&](const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) {
+		return metadata_manager->WriteNewInlinedFileDeletesSqlBatch(new_deletes);
 	};
-	context.write_inlined_data = [&](const DuckLakeSQLPlaceholders &sql, DuckLakeSnapshot &snapshot,
-	                                 const vector<DuckLakeInlinedDataInfo> &new_data,
+	context.write_inlined_data = [&](DuckLakeSnapshot &snapshot, const vector<DuckLakeInlinedDataInfo> &new_data,
 	                                 const vector<DuckLakeTableInfo> &new_tables,
 	                                 const vector<DuckLakeTableInfo> &new_inlined_data_tables_result) {
-		return metadata_manager->WriteNewInlinedData(sql, snapshot, new_data, new_tables,
-		                                             new_inlined_data_tables_result, inlined_inserts);
+		return metadata_manager->WriteNewInlinedData(snapshot, new_data, new_tables, new_inlined_data_tables_result,
+		                                             inlined_inserts);
 	};
 	context.get_table_stats = [&](TableIndex table_id) {
 		return ducklake_catalog.GetTableStats(*this, table_id);
@@ -1716,6 +1712,14 @@ unique_ptr<QueryResult> DuckLakeTransaction::ExecuteRaw(string query) {
 		cb(query, end - start);
 	}
 	return std::move(result);
+}
+
+unique_ptr<QueryResult> DuckLakeTransaction::Query(string query) {
+	return metadata_manager->Query(query);
+}
+
+unique_ptr<QueryResult> DuckLakeTransaction::Query(DuckLakeSnapshot snapshot, string query) {
+	return metadata_manager->Query(snapshot, query);
 }
 
 Identifier DuckLakeTransaction::GetDefaultSchemaName() {

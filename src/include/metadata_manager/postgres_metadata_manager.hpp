@@ -36,8 +36,7 @@ public:
 	void MigrateInlinedDataTypes() override;
 	bool IsRetryableCommitError(const string &message) const override;
 
-	DuckLakeSQLPlaceholders BatchPlaceholders() const override;
-	unique_ptr<QueryResult> ExecuteBatch(const string &query) override;
+	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 
 	void ClearCache() override;
 
@@ -46,8 +45,8 @@ protected:
 	string GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                             const FilterPushdownInfo *filter_info,
 	                             const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
-	                             const vector<idx_t> &runtime_filter_stats_columns,
-	                             FileListType file_list_type) override;
+	                             const vector<idx_t> &runtime_filter_stats_columns, FileListType file_list_type,
+	                             const string &metadata_table_prefix) override;
 	string CastValueToTarget(const Value &value, const LogicalType &type) override;
 	string CastStatsToTarget(const string &stats, const LogicalType &type, StatsCastType cast_type) override;
 };

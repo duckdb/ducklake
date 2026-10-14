@@ -31,10 +31,10 @@ public:
 	void FlushChangesServerSide(DuckLakeTransaction &transaction, DuckLakeSnapshot transaction_snapshot,
 	                            const TransactionChangeInformation &transaction_changes,
 	                            const DuckLakeRetryConfig &retry_config) override;
-	DuckLakeSQLPlaceholders QueryPlaceholders() const override;
-	unique_ptr<QueryResult> ExecuteBatch(const string &query) override;
-	unique_ptr<QueryResult> ExecuteInTransaction(const string &query) override;
-	unique_ptr<QueryResult> Query(const string &query) override;
+	using DuckLakeMetadataManager::Query;
+	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
+	unique_ptr<QueryResult> ExecuteInTransaction(string &query) override;
+	unique_ptr<QueryResult> Query(string &query) override;
 	unique_ptr<QueryResult> AttachMetadata(const string &attach_query) override;
 	void ClearCache() override;
 
