@@ -190,6 +190,12 @@
       "paths": [
         "test/sql/issues/issue_1146_column_insert_batches.test"
       ]
+    },
+    {
+      "reason": "A quack catalog commits each statement, so its commits keep sending inlined rows as SQL text",
+      "paths": [
+        "test/sql/data_inlining/inlined_commit_append.test"
+      ]
     }
   ]
 }

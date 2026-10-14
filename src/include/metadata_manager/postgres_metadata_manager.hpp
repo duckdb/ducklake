@@ -27,6 +27,7 @@ public:
 	bool ReadsInlinedDataInPages() const override {
 		return false;
 	}
+	bool InsertsInlinedRowsAfterBatch(idx_t row_count) const override;
 	idx_t MaxIdentifierLength() const override {
 		return 63;
 	}

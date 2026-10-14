@@ -63,3 +63,5 @@ benchmark/micro/maintenance/expire_one_snapshot.benchmark
 benchmark/micro/read/topn_float_many_files.benchmark
 benchmark/micro/read/null_first_column_pruning.benchmark
 benchmark/micro/write/insert_commits_retyped_column.benchmark
+benchmark/micro/write/insert_inlined_rows.benchmark
+benchmark/micro/compaction/merge_adjacent_inlined_deletions.benchmark

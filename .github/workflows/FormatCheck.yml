@@ -1,7 +1,7 @@
 name: Format Check
 on:
   pull_request:
-    types: [opened, reopened, synchronize]
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches:
       - main
@@ -12,6 +12,7 @@ concurrency:
 
 jobs:
   format-check:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Check Code Format
     runs-on: ubuntu-22.04
     env:

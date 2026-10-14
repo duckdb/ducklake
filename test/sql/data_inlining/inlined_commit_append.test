@@ -1,0 +1,98 @@
+# name: test/sql/data_inlining/inlined_commit_append.test
+# description: Inlined rows are appended at commit instead of being sent as SQL text
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/inlined_commit_append', DATA_INLINING_ROW_LIMIT 100000)
+
+statement ok
+CREATE TABLE ducklake.t(a BIGINT, b INTEGER, c DOUBLE, d DECIMAL(18,3), e DATE, f VARCHAR, g TIMESTAMPTZ, h INTEGER[])
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+INSERT INTO ducklake.t SELECT i, i::INTEGER, i / 7, i / 3, DATE '2000-01-01' + (i % 10000)::INTEGER, 'str' || i,
+    to_timestamp(946684800 + i), [i, NULL] FROM range(10000) r(i)
+
+# the metadata queries of the commit do not hold the rows
+query I
+SELECT sum(length(query)) < 65536 FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+true
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM GLOB('{DATA_PATH}/inlined_commit_append/**/*.parquet')
+----
+0
+
+query IIIIIIII
+SELECT count(*), sum(a), sum(b), sum(c)::BIGINT, sum(d), max(e), count(DISTINCT f), max(g) FROM ducklake.t
+----
+10000	49995000	49995000	7142143	16665000.000	2027-05-18	10000	2000-01-01 02:46:39+00
+
+query IIIIIIIII
+SELECT rowid, a, b, c, d, e, f, g, h FROM ducklake.t WHERE a = 9999
+----
+9999	9999	9999	1428.4285714285713	3333.000	2027-05-18	str9999	2000-01-01 02:46:39+00	[9999, NULL]
+
+statement ok
+INSERT INTO ducklake.t VALUES (NULL, NULL, 'nan', NULL, NULL, 'quote''s', NULL, NULL)
+
+query IIIIIII
+SELECT rowid, a, c, d, f, g, h FROM ducklake.t WHERE a IS NULL
+----
+10000	NULL	nan	NULL	quote's	NULL	NULL
+
+# updated rows keep their row ids and rows inserted with them get new ones
+statement ok
+BEGIN
+
+statement ok
+UPDATE ducklake.t SET f = f || '_u' WHERE a % 50 = 0
+
+statement ok
+INSERT INTO ducklake.t VALUES (10000, 10000, NULL, NULL, NULL, 'new', NULL, NULL)
+
+statement ok
+COMMIT
+
+query III
+SELECT count(*), min(rowid), max(rowid) FROM ducklake.t WHERE f LIKE '%_u'
+----
+200	0	9950
+
+query II
+SELECT rowid, f FROM ducklake.t WHERE a = 10000
+----
+10001	new
+
+query II
+SELECT count(*), count(DISTINCT rowid) FROM ducklake.t
+----
+10002	10002
+
+# the rows before the update are still visible to time travel
+query II
+SELECT count(*), count(*) FILTER (WHERE f LIKE '%_u') FROM ducklake.t AT (VERSION => 3)
+----
+10001	0
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query IIII
+SELECT count(*), sum(a), count(*) FILTER (WHERE f LIKE '%_u'), max(rowid) FROM ducklake.t
+----
+10002	50005000	200	10001
