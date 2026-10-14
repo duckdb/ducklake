@@ -66,10 +66,10 @@ static idx_t VariableDataSize(const Vector &vector, bool count_values, idx_t bud
 				sel.set_index(sel_count++, list.offset + i);
 				if (sel_count == STANDARD_VECTOR_SIZE) {
 					add_elements();
+					if (size > budget) {
+						return size;
+					}
 				}
-			}
-			if (size > budget) {
-				return size;
 			}
 		}
 		if (sel_count > 0) {
@@ -80,6 +80,9 @@ static idx_t VariableDataSize(const Vector &vector, bool count_values, idx_t bud
 	case PhysicalType::STRUCT:
 		for (auto &child : StructVector::GetEntries(vector)) {
 			size += VariableDataSize(child, count_values, budget);
+			if (size > budget) {
+				return size;
+			}
 		}
 		break;
 	default:
@@ -103,14 +106,14 @@ public:
 	InlinePhase AddRows(InlineDataState &state, DataChunk &input) {
 		idx_t new_bytes = 0;
 		// a chunk with more rows than the limit is not inlined whatever its size
-		for (idx_t c = 0; c < input.ColumnCount() && input.size() <= op.inline_row_limit; c++) {
+		for (idx_t c = 0;
+		     c < input.ColumnCount() && input.size() <= op.inline_row_limit && new_bytes <= max_inlined_bytes; c++) {
 			new_bytes += VariableDataSize(input.data[c], false, max_inlined_bytes);
 		}
 		lock_guard<mutex> guard(lock);
 		total_inlined_rows += input.size();
 		total_inlined_bytes += new_bytes;
 		if (ExceedsLimit()) {
-			// we have exceeded the limit, bail
 			if (global_inlined_data) {
 				// if we have any global inlined data - add it to the local inlined data so we can emit it
 				AddToCollection(std::move(global_inlined_data), state.inlined_data);
