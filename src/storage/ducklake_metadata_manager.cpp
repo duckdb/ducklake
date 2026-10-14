@@ -230,6 +230,10 @@ INSERT INTO {METADATA_CATALOG}.ducklake_schema (schema_id, schema_uuid, begin_sn
 	result->ThrowIfError("Failed to initialize DuckLake: ");
 }
 
+string DuckLakeMetadataManager::GetCreateIndexStatements() {
+	return string();
+}
+
 string DuckLakeMetadataManager::GetSchemaTableStatement() {
 	return "CREATE TABLE {METADATA_CATALOG}.ducklake_schema(schema_id BIGINT PRIMARY KEY, schema_uuid UUID, "
 	       "begin_snapshot BIGINT, end_snapshot BIGINT, schema_name VARCHAR, path VARCHAR, path_is_relative BOOLEAN);";
@@ -509,7 +513,7 @@ void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	MigrateInlinedColumnNames(allow_failures);
 	MigrateInlinedSchemaVersions();
 	MigrateInlinedDataTypes();
-	ExecuteMigration(V1_1Dev1MigrationQuery(), allow_failures, "1.0", "1.1-dev1");
+	ExecuteMigration(V1_1Dev1MigrationQuery() + GetCreateIndexStatements(), allow_failures, "1.0", "1.1-dev1");
 }
 
 void DuckLakeMetadataManager::MigrateV10Dev() {
@@ -518,7 +522,7 @@ void DuckLakeMetadataManager::MigrateV10Dev() {
 	try {
 		// DDL locks the metadata tables exclusively on Postgres, a catalog with every addition runs none
 		if (!HasV1_1Dev1Additions()) {
-			ExecuteMigration(V1_1Dev1MigrationQuery(), true, "1.0", "1.1-dev1");
+			ExecuteMigration(V1_1Dev1MigrationQuery() + GetCreateIndexStatements(), true, "1.0", "1.1-dev1");
 		}
 	} catch (std::exception &ex) {
 		ErrorData error(ex);

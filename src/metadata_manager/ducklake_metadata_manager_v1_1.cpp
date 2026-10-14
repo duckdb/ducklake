@@ -50,6 +50,7 @@ string DuckLakeMetadataManagerV1_1<Base>::GetCreateTableStatements() {
 	auto result = Base::GetCreateTableStatements();
 	result += "CREATE TABLE {METADATA_CATALOG}.ducklake_view_column_tag(view_id BIGINT, column_name VARCHAR, "
 	          "begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR);\n";
+	result += this->GetCreateIndexStatements();
 	return result;
 }
 

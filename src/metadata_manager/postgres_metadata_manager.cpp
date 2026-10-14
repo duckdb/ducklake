@@ -350,6 +350,12 @@ void PostgresMetadataManager::ClearCache() {
 	result->ThrowIfError("Failed to clear the PostgreSQL metadata cache: ");
 }
 
+string PostgresMetadataManager::GetCreateIndexStatements() {
+	// the file list query reads the stats of one column of one table
+	return "CREATE INDEX IF NOT EXISTS idx_fcs_table_col ON {METADATA_CATALOG}.ducklake_file_column_stats "
+	       "(table_id, column_id);\n";
+}
+
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	return R"(
 	SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},

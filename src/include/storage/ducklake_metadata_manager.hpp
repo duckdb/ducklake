@@ -288,6 +288,8 @@ public:
 	virtual string GetDeleteFileTableStatement();
 	virtual string GetFileColumnStatsTableStatement();
 	virtual string GetTableColumnStatsTableStatement();
+	//! Get the CREATE INDEX statements of the v1.1 metadata tables
+	virtual string GetCreateIndexStatements();
 	//! Get the version string written to ducklake_metadata
 	virtual string GetVersionString();
 	virtual DuckLakeMetadata LoadDuckLake();
