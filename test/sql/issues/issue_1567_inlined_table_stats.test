@@ -1,0 +1,104 @@
+# name: test/sql/issues/issue_1567_inlined_table_stats.test
+# description: Stats of an inlined table created after the last ALTER of its table are merged with its own columns
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1567_stats', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t (a INTEGER)
+
+statement ok
+ALTER TABLE lake.t ADD COLUMN b INTEGER
+
+statement ok
+INSERT INTO lake.t SELECT i, i FROM range(20) r(i)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+INSERT INTO lake.t VALUES (100, 5)
+
+# the inlined table now belongs to an older schema version
+statement ok
+ALTER TABLE lake.t ALTER COLUMN b TYPE BIGINT
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+DELETE FROM lake.t WHERE b = 19
+
+# the rewrite recomputes the bounds, which needs the columns of the inlined table
+statement ok
+CALL ducklake_rewrite_data_files('lake', 't', delete_threshold => 0)
+
+query II
+SELECT min_value, max_value FROM __ducklake_metadata_lake.ducklake_table_column_stats WHERE column_id = 2
+----
+0	18
+
+query III
+SELECT count(*), max(b), count(*) FILTER (WHERE a = 100 AND b = 5) FROM lake.t
+----
+20	18	1
+
+# the inlined table of a table altered in a commit that also creates another inlined table
+statement ok
+CREATE TABLE lake.s (a INTEGER)
+
+statement ok
+CREATE TABLE lake.o (a INTEGER)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.s ADD COLUMN b INTEGER
+
+statement ok
+INSERT INTO lake.s VALUES (100, 5)
+
+statement ok
+INSERT INTO lake.o VALUES (1)
+
+statement ok
+COMMIT
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+INSERT INTO lake.s SELECT i, i FROM range(20) r(i)
+
+statement ok
+ALTER TABLE lake.s ALTER COLUMN b TYPE BIGINT
+
+statement ok
+DELETE FROM lake.s WHERE b = 19
+
+statement ok
+CALL ducklake_rewrite_data_files('lake', 's', delete_threshold => 0)
+
+query II
+SELECT min_value, max_value FROM __ducklake_metadata_lake.ducklake_table_column_stats
+WHERE table_id = (SELECT table_id FROM __ducklake_metadata_lake.ducklake_table WHERE table_name = 's') AND column_id = 2
+----
+0	18
+
+query III
+SELECT count(*), max(b), count(*) FILTER (WHERE a = 100 AND b = 5) FROM lake.s
+----
+20	18	1

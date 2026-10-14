@@ -343,10 +343,15 @@ idx_t DuckLakeCatalog::GetBeginSnapshotForTable(TableIndex table_id, DuckLakeTra
 	return metadata_manager.GetBeginSnapshotForTable(table_id);
 }
 
-idx_t DuckLakeCatalog::GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version,
-                                                        DuckLakeTransaction &transaction) {
+DuckLakeSnapshot DuckLakeCatalog::GetSchemaVersionSnapshot(TableIndex table_id, idx_t schema_version,
+                                                           DuckLakeTransaction &transaction) {
 	auto &metadata_manager = transaction.GetMetadataManager();
-	return metadata_manager.GetBeginSnapshotForSchemaVersion(table_id, schema_version);
+	auto snapshot = metadata_manager.GetSchemaVersionSnapshot(table_id, schema_version);
+	auto transaction_snapshot = transaction.GetSnapshot();
+	if (snapshot.schema_version <= schema_version && transaction_snapshot.schema_version == schema_version) {
+		return transaction_snapshot;
+	}
+	return snapshot;
 }
 
 shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeCatalog::GetSchemaCacheEntry(DuckLakeTransaction &transaction,
@@ -1074,6 +1079,22 @@ void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckL
 	} else {
 		inlined_deletion_not_exists[table_id.index] = snapshot.snapshot_id;
 	}
+}
+
+DuckLakeTableSchemaVersions DuckLakeCatalog::GetTableSchemaVersions(DuckLakeTransaction &transaction,
+                                                                    TableIndex table_id) {
+	auto snapshot = transaction.GetSnapshot();
+	{
+		lock_guard<mutex> guard(schema_version_snapshot_lock);
+		auto entry = table_schema_versions.find(table_id.index);
+		if (entry != table_schema_versions.end() && entry->second.first == snapshot.schema_version) {
+			return entry->second.second;
+		}
+	}
+	auto schema_versions = transaction.GetMetadataManager().GetTableSchemaVersions(table_id, snapshot);
+	lock_guard<mutex> guard(schema_version_snapshot_lock);
+	table_schema_versions[table_id.index] = make_pair(snapshot.schema_version, schema_versions);
+	return schema_versions;
 }
 
 string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) const {

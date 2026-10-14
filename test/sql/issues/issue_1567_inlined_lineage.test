@@ -1,0 +1,74 @@
+# name: test/sql/issues/issue_1567_inlined_lineage.test
+# description: Added inline lineage fields survive unrelated schema changes and read-only historical reads
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/issue_1567_lineage.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1567_lineage', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.gas (period DATE, series VARCHAR, price DOUBLE, source_id VARCHAR)
+
+statement ok
+CREATE TABLE lake.unaffected (value INTEGER)
+
+statement ok
+INSERT INTO lake.unaffected VALUES (42)
+
+statement ok
+ALTER TABLE lake.gas ADD COLUMN tin_partition VARCHAR
+
+statement ok
+ALTER TABLE lake.gas ADD COLUMN valid_from TIMESTAMPTZ
+
+statement ok
+ALTER TABLE lake.gas ADD COLUMN valid_to TIMESTAMPTZ
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+INSERT INTO lake.gas VALUES ('2020-01-02', 'spot', 2.16, 'gas-row', '2020-01-02-00:00', '2026-01-01 12:00:00+00', NULL)
+
+statement ok
+SET VARIABLE inserted = (SELECT max(snapshot_id) FROM lake.snapshots())
+
+statement ok
+CREATE VIEW lake.unrelated AS SELECT 1 AS value
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1567_lineage', READ_ONLY)
+
+# Historical and current reads use the same stored lineage, including its legitimate NULL.
+query TTI
+SELECT tin_partition, valid_from::VARCHAR, valid_to IS NULL FROM lake.gas AT (VERSION => getvariable('inserted'))
+----
+2020-01-02-00:00	2026-01-01 12:00:00+00	true
+
+query TTI
+SELECT tin_partition, valid_from::VARCHAR, valid_to IS NULL FROM lake.gas
+----
+2020-01-02-00:00	2026-01-01 12:00:00+00	true
+
+query I
+SELECT count(*) FROM lake.gas WHERE tin_partition = '2020-01-02-00:00' AND valid_from IS NOT NULL
+----
+1
+
+query I
+SELECT value FROM lake.unaffected
+----
+42
+
+statement ok
+DETACH lake

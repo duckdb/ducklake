@@ -15,6 +15,7 @@
 #include "duckdb/main/client_context_state.hpp"
 #include "duckdb/storage/object_cache.hpp"
 #include "storage/ducklake_catalog_set.hpp"
+#include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_partition_data.hpp"
 #include "storage/ducklake_stats.hpp"
 
@@ -250,7 +251,8 @@ public:
 	optional_ptr<const DuckLakeNameMap> TryGetMappingById(DuckLakeTransaction &transaction, MappingIndex mapping_id);
 	MappingIndex TryGetCompatibleNameMap(DuckLakeTransaction &transaction, const DuckLakeNameMap &name_map);
 	idx_t GetBeginSnapshotForTable(TableIndex table_id, DuckLakeTransaction &transaction);
-	idx_t GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version, DuckLakeTransaction &transaction);
+	DuckLakeSnapshot GetSchemaVersionSnapshot(TableIndex table_id, idx_t schema_version,
+	                                          DuckLakeTransaction &transaction);
 
 	static unique_ptr<DuckLakeStats> ConstructStatsMap(vector<DuckLakeGlobalStatsInfo> &global_stats,
 	                                                   DuckLakeCatalogSet &schema);
@@ -271,6 +273,9 @@ public:
 	InlinedDeletionCacheResult CheckInlinedDeletionTableCache(TableIndex table_id, DuckLakeSnapshot snapshot);
 	//! Cache the result of an inlined deletion table existence check
 	void CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists);
+
+	//! The schema versions of the table at the snapshot of the transaction
+	DuckLakeTableSchemaVersions GetTableSchemaVersions(DuckLakeTransaction &transaction, TableIndex table_id);
 
 	//! Invalidate the cached table stats entry for a given stats cache key.
 	void InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id);
@@ -320,6 +325,9 @@ private:
 	//! Table IDs where the inlined deletion table is known to NOT exist, with the snapshot_id at which we checked
 	//! Valid as long as current snapshot.snapshot_id <= cached snapshot_id
 	unordered_map<idx_t, idx_t> inlined_deletion_not_exists;
+	mutex schema_version_snapshot_lock;
+	//! The schema versions of each table at the schema version they were looked up at, guarded by the same lock
+	unordered_map<idx_t, pair<idx_t, DuckLakeTableSchemaVersions>> table_schema_versions;
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit
 	mutable mutex commit_lock;
 	optional_idx last_committed_snapshot;

@@ -1,0 +1,115 @@
+# name: test/sql/issues/issue_1567_inlined_table_legacy_version.test
+# description: Inlined tables that DuckDB 1.5.6 registered at a schema version without a schema row of their table
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+# written by DuckDB 1.5.6
+unzip data/old_ducklake/inlined_schema_versions.db.gz {TEST_DIR}/issue_1567_legacy.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1567_legacy.db' AS lake (DATA_PATH '{TEST_DIR}/issue_1567_legacy', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta')
+
+# t got its first inlined rows after its ALTER, m and r in the commit of their ALTER
+query III
+SELECT tbl.table_name, idt.schema_version, list(sv.schema_version ORDER BY sv.schema_version)
+FROM meta.ducklake_inlined_data_tables idt
+JOIN meta.ducklake_table tbl USING (table_id)
+JOIN meta.ducklake_schema_versions sv USING (table_id)
+GROUP BY ALL
+ORDER BY ALL
+----
+m	7	[3, 8]
+n	8	[5]
+r	7	[4, 8]
+t	6	[1, 2]
+
+query II
+SELECT a, b FROM lake.t
+----
+x	B
+
+query II
+SELECT a, b FROM lake.t AT (VERSION => 6)
+----
+x	B
+
+# a later ALTER of m does not apply to its inlined table
+statement ok
+ALTER TABLE lake.m ADD COLUMN c INTEGER
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1567_legacy.db' AS lake (DATA_PATH '{TEST_DIR}/issue_1567_legacy', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta')
+
+query III
+SELECT a, b, c FROM lake.m
+----
+100	5	NULL
+
+query I
+SELECT b FROM lake.r
+----
+5
+
+query I
+SELECT a FROM lake.n
+----
+1
+
+# the rewrite merges the bounds of the inlined table, which needs its columns
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+INSERT INTO lake.r SELECT i FROM range(20) t(i)
+
+statement ok
+DELETE FROM lake.r WHERE b = 19
+
+statement ok
+CALL ducklake_rewrite_data_files('lake', 'r', delete_threshold => 0)
+
+query II
+SELECT min_value, max_value FROM meta.ducklake_table_column_stats
+WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'r')
+----
+0	18
+
+query II
+SELECT count(*), max(b) FROM lake.r
+----
+20	18
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+query III
+SELECT a, b, c FROM lake.m
+----
+100	5	NULL
+
+query II
+SELECT a, b FROM lake.t
+----
+x	B
+
+statement ok
+SET VARIABLE m_files = (SELECT list(data_file) FROM ducklake_list_files('lake', 'm'))
+
+query II
+SELECT a, b FROM read_parquet(getvariable('m_files'))
+----
+100	5
+
+statement ok
+SET VARIABLE t_files = (SELECT list(data_file) FROM ducklake_list_files('lake', 't'))
+
+query II
+SELECT a, b FROM read_parquet(getvariable('t_files'))
+----
+x	B

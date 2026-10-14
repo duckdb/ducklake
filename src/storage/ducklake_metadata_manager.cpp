@@ -477,19 +477,70 @@ WHERE table_id = {TABLE_ID})";
 	throw InternalException("Table %llu does not exist", table_id.index);
 }
 
-idx_t DuckLakeMetadataManager::GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version) {
-	string query = R"(
-SELECT begin_snapshot
-FROM {METADATA_CATALOG}.ducklake_schema_versions
-WHERE table_id = {TABLE_ID} AND schema_version = {SCHEMA_VERSION})";
-	query = StringUtil::Replace(query, "{TABLE_ID}", to_string(table_id.index));
-	query = StringUtil::Replace(query, "{SCHEMA_VERSION}", to_string(schema_version));
-	auto result = transaction.Query(query);
-	for (auto &row : *result) {
-		return row.GetValue<idx_t>(0);
+DuckLakeTableSchemaVersions DuckLakeMetadataManager::GetTableSchemaVersions(TableIndex table_id,
+                                                                            DuckLakeSnapshot snapshot) {
+	auto query = StringUtil::Format("SELECT MIN(schema_version), MAX(schema_version) FROM "
+	                                "{METADATA_CATALOG}.ducklake_schema_versions "
+	                                "WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}",
+	                                table_id.index);
+	auto result = Query(snapshot, query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to get the schema versions of a table from DuckLake: ");
 	}
-	// We need to fallback to GetBeginSnapshotForTable if this table doesnt have an alter yet
-	return GetBeginSnapshotForTable(table_id);
+	DuckLakeTableSchemaVersions schema_versions;
+	for (auto &row : *result) {
+		schema_versions.creation = row.IsNull(0) ? optional_idx() : optional_idx(row.GetValue<idx_t>(0));
+		schema_versions.last_change = row.IsNull(1) ? optional_idx() : optional_idx(row.GetValue<idx_t>(1));
+	}
+	return schema_versions;
+}
+
+DuckLakeSnapshot DuckLakeMetadataManager::GetSchemaVersionSnapshot(TableIndex table_id, idx_t schema_version) {
+	// Inline registrations use global versions, while table schema rows are sparse.
+	// Resolve both fields together so the schema cache loads the matching table schema.
+	// https://github.com/duckdb/ducklake/pull/1590
+	string query = R"(
+SELECT begin_snapshot, schema_version
+FROM {METADATA_CATALOG}.ducklake_schema_versions
+WHERE table_id = {TABLE_ID})";
+	query = StringUtil::Replace(query, "{TABLE_ID}", to_string(table_id.index));
+	auto result = transaction.Query(query);
+	if (result->HasError()) {
+		result->GetErrorObject().Throw("Failed to read the schema versions of a table from DuckLake: ");
+	}
+	DuckLakeSnapshot last_change;
+	DuckLakeSnapshot next_change;
+	for (auto &row : *result) {
+		DuckLakeSnapshot change(row.GetValue<idx_t>(0), row.GetValue<idx_t>(1), 0, 0);
+		if (change.schema_version <= schema_version) {
+			if (last_change.snapshot_id == DConstants::INVALID_INDEX ||
+			    change.schema_version > last_change.schema_version) {
+				last_change = change;
+			}
+		} else if (next_change.snapshot_id == DConstants::INVALID_INDEX ||
+		           change.schema_version < next_change.schema_version) {
+			next_change = change;
+		}
+	}
+	if (next_change.snapshot_id != DConstants::INVALID_INDEX && last_change.schema_version != schema_version) {
+		// A registration can fall inside a commit with multiple schema changes. Its
+		// predecessor distinguishes that layout from an ALTER after the inline insert.
+		auto previous = transaction.Query(
+		    StringUtil::Format("SELECT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id = %d",
+		                       next_change.snapshot_id - 1));
+		if (previous->HasError()) {
+			previous->GetErrorObject().Throw("Failed to read the preceding snapshot from DuckLake: ");
+		}
+		for (auto &row : *previous) {
+			if (row.GetValue<idx_t>(0) < schema_version) {
+				return next_change;
+			}
+		}
+	}
+	if (last_change.snapshot_id != DConstants::INVALID_INDEX) {
+		return last_change;
+	}
+	return DuckLakeSnapshot(GetBeginSnapshotForTable(table_id), schema_version, 0, 0);
 }
 
 string DuckLakeMetadataManager::GetNetDataFileRowCountSql(TableIndex table_id, const string &inlined_deletion_table) {
@@ -2695,11 +2746,16 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 
 	auto context_ptr = transaction.context.lock();
 	auto &context = *context_ptr;
+	auto schema_changes = transaction.SchemaChangesMade();
+	// a commit with schema changes already has a new schema version
+	bool new_schema_version = schema_changes;
 	for (auto &entry : new_data) {
 		string inlined_table_name;
+		bool new_inlined_table = false;
 		for (auto &inlined_table : new_inlined_data_tables_result) {
 			if (inlined_table.id == entry.table_id) {
 				inlined_table_name = InlinedTableNameFor(inlined_table.id.index, commit_snapshot.schema_version);
+				new_inlined_table = true;
 			}
 		}
 		if (inlined_table_name.empty()) {
@@ -2709,10 +2765,18 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 				inlined_table_name = it->second;
 			}
 		}
-		if (inlined_table_name.empty()) {
+		DuckLakeTableSchemaVersions schema_versions;
+		if (!new_inlined_table) {
+			schema_versions = transaction.GetCatalog().GetTableSchemaVersions(transaction, entry.table_id);
+		}
+		if (inlined_table_name.empty() && !new_inlined_table) {
 			auto query = LatestInlinedTableQuery(entry.table_id.index) + ";";
 			auto result = transaction.Query(commit_snapshot, query);
 			for (auto &row : *result) {
+				if (!DuckLakeTableEntry::IsCurrentInlinedDataTable(row.GetValue<idx_t>(1),
+				                                                   schema_versions.last_change)) {
+					continue;
+				}
 				inlined_table_name = row.GetValue<string>(0);
 				insert_inlined_table_name_cache[entry.table_id.index] = inlined_table_name;
 			}
@@ -2744,9 +2808,24 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			// write the new inlined table
 			string inlined_tables;
 			string inlined_table_queries;
-			commit_snapshot.schema_version++;
+			optional_idx registered_version;
+			if (schema_versions.ChangedSinceCreation()) {
+				// the schema_versions row of the last change gives the columns of the new inlined table
+				registered_version = schema_versions.last_change;
+			} else if (schema_changes) {
+				// a version of its own would raise the version of this commit above its other inlined tables
+				registered_version = schema_versions.creation;
+			}
+			if (!new_inlined_table && (!registered_version.IsValid() || !new_schema_version)) {
+				commit_snapshot.schema_version++;
+				new_schema_version = true;
+			}
+			auto inlined_table_snapshot = commit_snapshot;
+			if (registered_version.IsValid()) {
+				inlined_table_snapshot.schema_version = registered_version.GetIndex();
+			}
 			inlined_table_name =
-			    GetInlinedTableQueries(commit_snapshot, table_info, inlined_tables, inlined_table_queries);
+			    GetInlinedTableQueries(inlined_table_snapshot, table_info, inlined_tables, inlined_table_queries);
 			batch_query += "INSERT INTO {METADATA_CATALOG}.ducklake_inlined_data_tables VALUES " + inlined_tables + ";";
 			batch_query += inlined_table_queries;
 		}
@@ -3088,7 +3167,7 @@ ORDER BY row_id, begin_snapshot;)",
 }
 
 string DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(const string &inlined_table_name,
-                                                              const string &select_list) {
+                                                             const string &select_list) {
 	return StringUtil::Format(R"(
 SELECT %s
 FROM {METADATA_CATALOG}.%s

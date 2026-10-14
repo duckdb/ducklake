@@ -1,0 +1,306 @@
+# name: test/sql/issues/issue_1567_inlined_table_added_columns.test
+# description: An inlined table created after the last ALTER of its table keeps the added columns through a flush
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/issue_1567.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1567', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t (a VARCHAR)
+
+statement ok
+CREATE TABLE lake.c (a VARCHAR)
+
+statement ok
+ALTER TABLE lake.t ADD COLUMN b VARCHAR
+
+statement ok
+ALTER TABLE lake.c ADD COLUMN b VARCHAR
+
+# the first inlined insert creates the inlined tables
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+INSERT INTO lake.t VALUES ('x', 'B')
+
+statement ok
+SET VARIABLE inserted = (SELECT max(snapshot_id) FROM lake.snapshots())
+
+statement ok
+INSERT INTO lake.c VALUES ('y', 'C')
+
+# a later schema change of another object
+statement ok
+CREATE VIEW lake.v AS SELECT 1 AS one
+
+query II
+SELECT a, b FROM lake.t
+----
+x	B
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1567')
+
+query II
+SELECT a, b FROM lake.t
+----
+x	B
+
+# the scan above must leave the catalog of the insert intact
+query II
+SELECT a, b FROM lake.t AT (VERSION => getvariable('inserted'))
+----
+x	B
+
+query II
+SELECT a, b FROM lake.c AT (VERSION => getvariable('inserted'))
+----
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 't')
+
+statement ok
+CHECKPOINT lake
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1567')
+
+query II
+SELECT a, b FROM lake.t
+----
+x	B
+
+query II
+SELECT a, b FROM lake.c
+----
+y	C
+
+# the flushed files hold the added column
+query I
+SELECT list(b ORDER BY b) FROM read_parquet('{DATA_PATH}/issue_1567/main/*/*.parquet')
+----
+[B, C]
+
+# one commit that creates the inlined tables of two tables
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE lake.p (a VARCHAR)
+
+statement ok
+CREATE TABLE lake.q (a VARCHAR)
+
+statement ok
+ALTER TABLE lake.p ADD COLUMN b VARCHAR
+
+statement ok
+ALTER TABLE lake.q ADD COLUMN b VARCHAR
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO lake.p VALUES ('p', 'P')
+
+statement ok
+INSERT INTO lake.q VALUES ('q', 'Q')
+
+statement ok
+COMMIT
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1567')
+
+query II
+SELECT a, b FROM lake.p
+----
+p	P
+
+query II
+SELECT a, b FROM lake.q
+----
+q	Q
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+statement ok
+CHECKPOINT lake
+
+query I
+SELECT list(b ORDER BY b) FROM read_parquet('{DATA_PATH}/issue_1567/main/*/*.parquet')
+----
+[B, C, P, Q]
+
+# one commit that alters a table and creates the inlined tables of two tables
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE lake.m (a VARCHAR)
+
+statement ok
+CREATE TABLE lake.n (a VARCHAR)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.m ADD COLUMN b VARCHAR
+
+statement ok
+INSERT INTO lake.m VALUES ('m', 'M')
+
+statement ok
+INSERT INTO lake.n VALUES ('n')
+
+statement ok
+COMMIT
+
+statement ok
+SET VARIABLE altered = (SELECT max(snapshot_id) FROM lake.snapshots())
+
+statement ok
+CREATE VIEW lake.w AS SELECT 2 AS two
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1567')
+
+query II
+SELECT a, b FROM lake.m
+----
+m	M
+
+# expiring the commit and the snapshot before it keeps the added column
+statement ok
+CALL ducklake_expire_snapshots('lake', versions => [getvariable('altered') - 1, getvariable('altered')])
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1567')
+
+query II
+SELECT a, b FROM lake.m
+----
+m	M
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'm')
+
+query II
+SELECT a, b FROM lake.m
+----
+m	M
+
+query II
+SELECT a, b FROM read_parquet('{DATA_PATH}/issue_1567/main/m/*.parquet')
+----
+m	M
+
+# an ALTER after the expired insert that created an inlined table does not apply to it
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE lake.e (a VARCHAR)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+INSERT INTO lake.e VALUES ('e')
+
+statement ok
+SET VARIABLE inserted = (SELECT max(snapshot_id) FROM lake.snapshots())
+
+statement ok
+ALTER TABLE lake.e ADD COLUMN b VARCHAR
+
+statement ok
+CALL ducklake_expire_snapshots('lake', versions => [getvariable('inserted')])
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1567')
+
+query II
+SELECT a, b FROM lake.e
+----
+e	NULL
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'e')
+
+query II
+SELECT a, b FROM lake.e
+----
+e	NULL
+
+# the same with a later insert into the inlined table before the ALTER
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE lake.f (a VARCHAR)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+INSERT INTO lake.f VALUES ('f')
+
+statement ok
+SET VARIABLE inserted = (SELECT max(snapshot_id) FROM lake.snapshots())
+
+statement ok
+INSERT INTO lake.f VALUES ('g')
+
+statement ok
+ALTER TABLE lake.f ADD COLUMN b VARCHAR
+
+statement ok
+CALL ducklake_expire_snapshots('lake', versions => [getvariable('inserted')])
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/issue_1567')
+
+query II
+SELECT a, b FROM lake.f ORDER BY a
+----
+f	NULL
+g	NULL

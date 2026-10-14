@@ -78,6 +78,9 @@ public:
 	const vector<DuckLakeInlinedTableInfo> &GetInlinedDataTables() const {
 		return inlined_data_tables;
 	}
+	//! Whether an inlined data table of the schema version has the columns of the last schema change
+	static bool IsCurrentInlinedDataTable(idx_t schema_version, optional_idx last_schema_change);
+	bool HasCurrentInlinedDataTable(optional_idx last_schema_change) const;
 	const ColumnDefinition &GetColumnByFieldId(FieldIndex field_index) const;
 	//! Returns the root field id of a column
 	const DuckLakeFieldId &GetFieldId(PhysicalIndex column_index) const;
