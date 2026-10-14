@@ -64,3 +64,4 @@ benchmark/micro/read/null_first_column_pruning.benchmark
 benchmark/micro/write/insert_commits_retyped_column.benchmark
 benchmark/micro/write/insert_inlined_rows.benchmark
 benchmark/micro/compaction/merge_adjacent_inlined_deletions.benchmark
+benchmark/micro/write/ctas_large_list.benchmark
