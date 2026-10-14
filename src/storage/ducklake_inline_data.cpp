@@ -32,15 +32,24 @@ public:
 	ColumnDataScanState emit_scan;
 };
 
+//! Inlined rows are written into the metadata catalog, so their data is bounded per row of the limit
+static constexpr idx_t MAX_INLINED_BYTES_PER_ROW = 16384;
+
 class InlineDataGlobalState : public GlobalOperatorState {
 public:
 	explicit InlineDataGlobalState(const DuckLakeInlineData &op) : op(op), total_inlined_rows(0) {
 	}
 
-	InlinePhase AddRows(InlineDataState &state, idx_t new_rows) {
+	bool ExceedsLimit() const {
+		return total_inlined_rows > op.inline_row_limit ||
+		       total_inlined_bytes / MAX_INLINED_BYTES_PER_ROW >= op.inline_row_limit;
+	}
+
+	InlinePhase AddRows(InlineDataState &state, DataChunk &input) {
 		lock_guard<mutex> guard(lock);
-		total_inlined_rows += new_rows;
-		if (total_inlined_rows > op.inline_row_limit) {
+		total_inlined_rows += input.size();
+		total_inlined_bytes += input.GetDataSize();
+		if (ExceedsLimit()) {
 			// we have exceeded the total amount of rows - bail
 			if (global_inlined_data) {
 				// if we have any global inlined data - add it to the local inlined data so we can emit it
@@ -63,6 +72,7 @@ public:
 	const DuckLakeInlineData &op;
 	mutex lock;
 	idx_t total_inlined_rows = 0;
+	idx_t total_inlined_bytes = 0;
 	unique_ptr<ColumnDataCollection> global_inlined_data;
 };
 
@@ -95,7 +105,7 @@ OperatorResultType DuckLakeInlineData::Execute(ExecutionContext &context, DataCh
 	}
 	// we have a new batch of rows
 	// add the count to the global count and check if we are still inlining rows
-	auto new_phase = gstate.AddRows(state, input.size());
+	auto new_phase = gstate.AddRows(state, input);
 	if (new_phase != InlinePhase::INLINING_ROWS) {
 		// we have exceeded the limit - start emitting rows from the `inlined_data` if we have it
 		if (state.inlined_data) {
@@ -137,7 +147,7 @@ OperatorFinalizeResultType DuckLakeInlineData::FinalExecute(ExecutionContext &co
 	}
 	// push the inlined data into the global inlined data
 	lock_guard<mutex> guard(gstate.lock);
-	if (gstate.total_inlined_rows > inline_row_limit) {
+	if (gstate.ExceedsLimit()) {
 		// we have changed our mind on inlining - we need to emit the rows again
 		state.inlined_data->InitializeScan(state.emit_scan);
 		state.phase = InlinePhase::EMITTING_PREVIOUSLY_INLINED_ROWS;
