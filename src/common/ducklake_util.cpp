@@ -614,8 +614,9 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 			// LCOV_EXCL_STOP
 		}
 		auto setting_index = option.setting_index.GetIndex();
-		// these change the types read from the metadata and data files
-		if (entry.first == "sqlite_all_varchar" || entry.first == "binary_as_string") {
+		// Keep metadata/data types stable without callbacks that clear shared catalog caches.
+		if (entry.first == "sqlite_all_varchar" || entry.first == "binary_as_string" ||
+		    entry.first == "pg_array_as_varchar") {
 			to.config.user_settings.SetUserSetting(setting_index, Value::BOOLEAN(false));
 			continue;
 		}
