@@ -49,6 +49,19 @@ SELECT (SELECT count(*) FROM ducklake_list_files('ducklake', 'nested_string')),
 ----
 1	1	0
 
+# Strings in structs and in any column count
+statement ok
+CREATE TABLE ducklake.big_struct AS SELECT {'s': repeat('x', 200000)} AS st
+
+statement ok
+CREATE TABLE ducklake.second_column AS SELECT 1 AS i, repeat('x', 200000) AS s
+
+query II
+SELECT (SELECT count(*) FROM ducklake_list_files('ducklake', 'big_struct')),
+	(SELECT count(*) FROM ducklake_list_files('ducklake', 'second_column'))
+----
+1	1
+
 # The columns of a wide row do not count against the bound
 statement ok
 CREATE TABLE ducklake.wide AS
