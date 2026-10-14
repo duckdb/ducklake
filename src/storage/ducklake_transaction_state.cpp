@@ -709,7 +709,7 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 							merged_max_partial_snapshot = file_max_snapshot;
 						}
 					}
-					// use the first source file's begin_snapshot for proper time travel support
+					// use the oldest begin_snapshot of the source files for proper time travel support
 					output_begin_snapshot = first_begin_snapshot;
 					if (compaction.source_files.size() > 1) {
 						output_max_partial_snapshot = merged_max_partial_snapshot;

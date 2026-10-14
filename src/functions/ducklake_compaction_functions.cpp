@@ -252,8 +252,7 @@ template <typename T>
 using compaction_map_t =
     unordered_map<DuckLakeCompactionGroup, T, DuckLakeCompactionGroupHash, DuckLakeCompactionGroupEquality>;
 
-//! Orders the candidate files of each group by the bounds of the first sort key, so that merged files cover narrow
-//! ranges of it
+//! Orders the candidate files of each group by the bounds of the first sort key
 static void OrderCandidatesBySortKey(DuckLakeMetadataManager &metadata_manager, DuckLakeTableEntry &latest_table,
                                      const vector<DuckLakeCompactionFileEntry> &files, idx_t target_file_size,
                                      compaction_map_t<DuckLakeCompactionCandidates> &candidates) {
