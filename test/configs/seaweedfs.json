@@ -51,6 +51,12 @@
       "paths": [
         "test/sql/insert/insert_wide_table_low_memory.test_slow"
       ]
+    },
+    {
+      "reason": "FIXME: S3 multipart uploads hold their parts in memory, so a Parquet write of 4 MiB values that fits a 64MB memory_limit on local disk runs out of memory on S3.",
+      "paths": [
+        "test/sql/data_inlining/inlined_data_paged_reads_memory.test"
+      ]
     }
   ]
 }
