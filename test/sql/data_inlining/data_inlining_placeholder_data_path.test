@@ -1,0 +1,34 @@
+# name: test/sql/data_inlining/data_inlining_placeholder_data_path.test
+# description: a data path that looks like metadata query placeholders is stored verbatim
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# the test runner replaces {DATA_PATH} itself, so the placeholder is built by concatenation
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}_path' AS path_lake (DATA_PATH '{DATA_PATH}/placeholder_strings_{SNAPSHOT_ID}''{' || 'METADATA_CATALOG}', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE path_lake.t (s VARCHAR);
+
+statement ok
+INSERT INTO path_lake.t VALUES ('a');
+
+statement ok
+CALL ducklake_flush_inlined_data('path_lake');
+
+query I
+FROM path_lake.t
+----
+a
+
+query I
+SELECT data_file LIKE '%placeholder_strings_{SNAPSHOT_ID}''{METADATA_CATALOG}%' FROM ducklake_list_files('path_lake', 't')
+----
+true

@@ -144,26 +144,3 @@ query III
 SELECT author, commit_message, commit_extra_info FROM ducklake_snapshots('ducklake') ORDER BY snapshot_id DESC LIMIT 1
 ----
 {COMMIT_MESSAGE}	{SNAPSHOT_ID}	{AUTHOR}
-
-# a data path containing placeholders
-statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}_path' AS path_lake (DATA_PATH '{DATA_PATH}/placeholder_strings_{SNAPSHOT_ID}''{' || 'METADATA_CATALOG}', DATA_INLINING_ROW_LIMIT 10)
-
-statement ok
-CREATE TABLE path_lake.t (s VARCHAR);
-
-statement ok
-INSERT INTO path_lake.t VALUES ('a');
-
-statement ok
-CALL ducklake_flush_inlined_data('path_lake');
-
-query I
-FROM path_lake.t
-----
-a
-
-query I
-SELECT data_file LIKE '%placeholder_strings_{SNAPSHOT_ID}''{METADATA_CATALOG}%' FROM ducklake_list_files('path_lake', 't')
-----
-true
