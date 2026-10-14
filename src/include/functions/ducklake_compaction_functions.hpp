@@ -49,6 +49,8 @@ public:
 	vector<Value> partition_values;
 	optional_idx row_id_start;
 	CompactionType type;
+	//! Whether the rows reach the rotating copy in the order they must be written in
+	bool ordered_input = false;
 
 public:
 	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override;

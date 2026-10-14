@@ -1,0 +1,30 @@
+# name: benchmark/micro/compaction/merge_adjacent_inlined_deletions.benchmark
+# description: Five merge calls that find nothing to merge on a table of 10000 files with inlined deletions
+# group: [compaction]
+
+name Merge Adjacent Inlined Deletions
+group micro
+subgroup compaction
+
+require ducklake
+
+require parquet
+
+argument work inlined_deletion_files_work
+
+include benchmark/micro/fixtures/inlined_deletion_files.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# files with deletions are excluded from merging
+run
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake');
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake');
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake');
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake');
+SELECT count(*) AS merges FROM ducklake_merge_adjacent_files('lake');
+
+result_query III
+SELECT merges, (SELECT count(*) FROM ducklake_list_files('lake', 't')), (SELECT count(*) FROM lake.t) FROM __answer;
+----
+0	10000	190000
