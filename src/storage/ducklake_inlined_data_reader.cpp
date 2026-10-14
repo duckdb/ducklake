@@ -292,6 +292,7 @@ bool DuckLakeInlinedDataReader::LoadNextPage(ClientContext &context) {
 		limit = MinValue<idx_t>(page.limit * PAGE_GROWTH, page_bytes / row_bytes);
 	}
 	page.limit = limit;
+	bool measures_row = read_by_keys && row_bytes == 0;
 
 	unique_ptr<QueryResult> query_result;
 	DuckLakeInlinedDataPage rows_page;
@@ -338,6 +339,11 @@ bool DuckLakeInlinedDataReader::LoadNextPage(ClientContext &context) {
 		}
 		// a large row weighs on the next pages until rows of the measured size follow
 		row_bytes = MaxValue<idx_t>(MaxValue<idx_t>(1, measured_bytes / row_count), row_bytes / PAGE_GROWTH);
+	}
+	if (measures_row && row_bytes <= small_row_bytes && key_position < keys.size()) {
+		// a small measured row is read again with the next rows instead of in a vector of its own
+		key_position--;
+		return LoadNextPage(context);
 	}
 	MapDeletedRows();
 	page.offset += row_count;

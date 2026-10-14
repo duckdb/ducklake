@@ -1,0 +1,38 @@
+# name: test/sql/data_inlining/inlined_data_paged_flush_row_groups.test_slow
+# description: a flush of inlined rows read in pages writes row groups of whole vectors
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_data_paged_flush_row_groups', DATA_INLINING_ROW_LIMIT 200000)
+
+# the first row measures the size of the rows, and is read again with the rows after it
+statement ok
+CREATE TABLE dl.t (id INTEGER, s VARCHAR);
+
+statement ok
+INSERT INTO dl.t SELECT i, 'value ' || i FROM range(125000) t(i);
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 't');
+
+statement ok
+SET VARIABLE flushed_file = (SELECT data_file FROM ducklake_list_files('dl', 't'))
+
+query I
+SELECT row_group_num_rows FROM parquet_metadata(getvariable('flushed_file')) WHERE column_id = 0 ORDER BY row_group_id
+----
+122880
+2120
+
+query III
+SELECT count(*), sum(id), count(DISTINCT s) FROM dl.t
+----
+125000	7812437500	125000
