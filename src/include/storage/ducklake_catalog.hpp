@@ -29,6 +29,7 @@
 #include <mutex>
 
 namespace duckdb {
+struct DuckLakeCopyInput;
 struct DuckLakeGlobalStatsInfo;
 class DuckLakeCatalog;
 class ColumnList;
@@ -233,6 +234,10 @@ public:
 	                             PhysicalOperator &plan) override;
 	PhysicalOperator &PlanMergeInto(ClientContext &context, PhysicalPlanGenerator &planner, LogicalMergeInto &op,
 	                                PhysicalOperator &plan) override;
+	//! Plans the inlining, copy and insert that write the new versions of updated rows
+	PhysicalOperator &PlanUpdateInsert(ClientContext &context, PhysicalPlanGenerator &planner,
+	                                   DuckLakeTableEntry &table, PhysicalOperator &plan,
+	                                   DuckLakeCopyInput &copy_input);
 	unique_ptr<LogicalOperator> BindCreateIndex(Binder &binder, CreateStatement &stmt, TableCatalogEntry &table,
 	                                            unique_ptr<LogicalOperator> plan) override;
 	unique_ptr<LogicalOperator> BindAlterAddIndex(Binder &binder, TableCatalogEntry &table_entry,

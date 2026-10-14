@@ -5,6 +5,7 @@ name: Main Extension Distribution Pipeline
 on:
   push:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
 
 concurrency:
@@ -13,6 +14,7 @@ concurrency:
 
 jobs:
   get-duckdb-version:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Get DuckDB version
     runs-on: ubuntu-latest
     outputs:
@@ -25,6 +27,7 @@ jobs:
         run: echo "duckdb_version=$(cat .github/duckdb-version)" >> $GITHUB_OUTPUT
 
   duckdb-next-build:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Build extension binaries
     needs: get-duckdb-version
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5-variegata
@@ -38,6 +41,7 @@ jobs:
 
   # Regression test, see https://github.com/duckdb/ducklake/pull/1256 for more details.
   gcc12-compatibility-build:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Build with GCC 12
     runs-on: ubuntu-22.04
     env:
@@ -79,9 +83,9 @@ jobs:
           make release
 
   duckdb-next-deploy:
+    if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.ref != 'refs/heads/main')
     name: Deploy extension binaries
     needs: [get-duckdb-version, duckdb-next-build, gcc12-compatibility-build]
-    if: github.ref != 'refs/heads/main'
     uses: duckdb/extension-ci-tools/.github/workflows/_extension_deploy.yml@main
     secrets: inherit
     with:
@@ -91,6 +95,7 @@ jobs:
       deploy_versioned: ${{ startsWith(github.ref, 'refs/heads/v') }}
 
   relassert:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Build relassert
     runs-on: ${{ github.repository_owner == 'duckdb' && 'namespace-profile-linux-x64' || 'ubuntu-latest' }}
     env:

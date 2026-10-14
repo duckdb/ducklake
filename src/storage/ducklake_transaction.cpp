@@ -1609,10 +1609,6 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		auto table = get_table_entry(table_id);
 		return table ? table->GetNetDataFileRowCount(*this) : 0;
 	};
-	context.get_net_inlined_row_count = [&](TableIndex table_id) -> idx_t {
-		auto table = get_table_entry(table_id);
-		return table ? table->GetNetInlinedRowCount(*this) : 0;
-	};
 	context.build_stats_map = [&](vector<DuckLakeGlobalStatsInfo> &stats) {
 		auto &schema = ducklake_catalog.GetSchemaForSnapshot(*this, GetSnapshot());
 		return DuckLakeCatalog::ConstructStatsMap(stats, schema);

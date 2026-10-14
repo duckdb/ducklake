@@ -362,6 +362,8 @@ TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique
 unique_ptr<FunctionData> DuckLakeFunctions::BindDuckLakeScan(ClientContext &context, BoundTableFunction &function) {
 	vector<Value> inputs {Value("")};
 	named_argument_map_t param_map;
+	// the column types come from the catalog, so a session setting must not turn BLOB columns into VARCHAR
+	param_map.insert(Identifier("binary_as_string"), Value::BOOLEAN(false));
 	vector<LogicalType> return_types;
 	vector<Identifier> input_table_names;
 	TableFunctionRef empty_ref;

@@ -1,0 +1,67 @@
+# name: test/sql/compaction/merge_adjacent_inlined_deletion_lookup.test
+# description: Merging adjacent files finds the files with inlined deletions without listing the candidate files
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_adjacent_inlined_deletion_lookup', DATA_INLINING_ROW_LIMIT 1)
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, i % 300 FROM range(600) r(i)
+
+# every file has one deleted row
+statement ok
+DELETE FROM ducklake.t WHERE id < 300
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT count(*) FROM ducklake_merge_adjacent_files('ducklake')
+----
+0
+
+statement ok
+CALL disable_logging()
+
+# the deletion lookup does not list the candidate files
+query II
+SELECT count(*), max(length(query)) < 1024 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query ILIKE '%SELECT DISTINCT file_id FROM%'
+----
+1	true
+
+statement ok
+INSERT INTO ducklake.t SELECT i, i % 300 FROM range(600, 1200) r(i)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, i % 300 FROM range(1200, 1800) r(i)
+
+# only the two new files in each partition merge
+query II
+SELECT sum(files_processed), sum(files_created) FROM ducklake_merge_adjacent_files('ducklake')
+----
+600	300
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't')
+----
+600
+
+query III
+SELECT count(*), sum(id), count(*) FILTER (WHERE id < 300) FROM ducklake.t
+----
+1500	1574250	0

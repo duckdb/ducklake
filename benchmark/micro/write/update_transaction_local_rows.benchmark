@@ -1,0 +1,52 @@
+# name: benchmark/micro/write/update_transaction_local_rows.benchmark
+# description: UPDATE half of 1M rows inserted in the same transaction, together with 1M committed rows, with commit
+# group: [write]
+
+name Update Transaction Local Rows
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument lake update_local_rows_v1
+
+argument work update_local_rows_work
+
+cache_file ${lake}_ready.marker
+
+load
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CALL lake.set_option('data_inlining_row_limit', 0);
+CREATE TABLE lake.t AS SELECT i AS id, i * 2 AS v FROM range(1000000) t(i);
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
+
+include benchmark/micro/fixtures/restore_reload.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+BEGIN;
+INSERT INTO lake.t SELECT i AS id, i * 2 AS v FROM range(1000000, 2000000) t(i);
+UPDATE lake.t SET v = v + 1 WHERE id % 2 = 0;
+COMMIT;
+
+# A missed reset leaves 3M rows
+result_query III
+SELECT count(*), sum(v), count(*) FILTER (WHERE v % 2 = 1) FROM lake.t
+----
+2000000	3999999000000	1000000

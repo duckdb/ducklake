@@ -1,0 +1,132 @@
+# name: test/sql/migration/v10_inlined_schema_versions.test
+# description: the v1.1 migration adds the schema versions of inlined tables written by DuckDB 1.5.6
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+# written by DuckDB 1.5.6, m and r got inlined rows in the commit of their ALTER, t after its ALTER
+unzip data/old_ducklake/inlined_schema_versions.db.gz {TEST_DIR}/v10_inlined_schema_versions.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+
+# n was never altered and keeps its only row
+query III
+SELECT tbl.table_name, sv.begin_snapshot, sv.schema_version
+FROM meta.ducklake_schema_versions sv
+JOIN meta.ducklake_table tbl USING (table_id)
+ORDER BY ALL
+----
+m	3	3
+m	7	7
+m	7	8
+n	5	5
+r	4	4
+r	7	7
+r	7	8
+t	1	1
+t	2	2
+t	6	6
+
+statement ok
+CREATE TABLE lake.z (i INTEGER)
+
+# the snapshot before the commit of m and r
+statement ok
+CALL ducklake_expire_snapshots('lake', versions => [6])
+
+statement ok
+DETACH lake
+
+# a migration of the v1.1 catalog adds no row
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT count(*) FROM meta.ducklake_schema_versions
+----
+11
+
+query II
+SELECT a, b FROM lake.m
+----
+100	5
+
+query I
+SELECT b FROM lake.r
+----
+5
+
+query II
+SELECT a, b FROM lake.t
+----
+x	B
+
+query I
+SELECT a FROM lake.n
+----
+1
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+query II
+SELECT a, b FROM lake.m
+----
+100	5
+
+query I
+SELECT b FROM lake.r
+----
+5
+
+query II
+SELECT a, b FROM lake.t
+----
+x	B
+
+statement ok
+SET VARIABLE m_files = (SELECT list(data_file) FROM ducklake_list_files('lake', 'm'))
+
+query II
+SELECT a, b FROM read_parquet(getvariable('m_files'))
+----
+100	5
+
+statement ok
+DETACH lake
+
+# the commit of an inlined table is unknown once the snapshot before it is expired
+unzip data/old_ducklake/inlined_schema_versions.db.gz {TEST_DIR}/v10_inlined_schema_versions_expired.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions_expired.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions_expired', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE lake.z (i INTEGER)
+
+statement ok
+CALL ducklake_expire_snapshots('lake', versions => [6])
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions_expired.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions_expired', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+
+query III
+SELECT tbl.table_name, sv.begin_snapshot, sv.schema_version
+FROM meta.ducklake_schema_versions sv
+JOIN meta.ducklake_table tbl USING (table_id)
+ORDER BY ALL
+----
+m	3	3
+m	7	8
+n	5	5
+r	4	4
+r	7	8
+t	1	1
+t	2	2
+z	8	9

@@ -479,9 +479,35 @@ bool DuckLakeMetadataManager::HasV1_1Dev1Additions() {
 	return !Query(probe)->HasError();
 }
 
+void DuckLakeMetadataManager::MigrateInlinedSchemaVersions() {
+	// the commit of an inlined table is only known while the snapshot before that commit exists
+	auto result = Execute(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions (begin_snapshot, schema_version, table_id)
+SELECT DISTINCT commits.snapshot_id, idt.schema_version, idt.table_id
+FROM (
+	SELECT snapshot_id, schema_version, LAG(snapshot_id) OVER (ORDER BY snapshot_id) AS previous_snapshot_id,
+		LAG(schema_version) OVER (ORDER BY snapshot_id) AS previous_schema_version
+	FROM {METADATA_CATALOG}.ducklake_snapshot
+) commits
+JOIN {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+	ON idt.schema_version > commits.previous_schema_version AND idt.schema_version <= commits.schema_version
+WHERE commits.previous_snapshot_id = commits.snapshot_id - 1
+AND commits.previous_schema_version < commits.schema_version
+AND NOT EXISTS (
+	SELECT 1 FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+	WHERE sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version
+) AND (
+	SELECT COUNT(*) FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+	WHERE sv.table_id = idt.table_id AND sv.begin_snapshot <= commits.snapshot_id
+) > 1;
+)");
+	result->ThrowIfError("Failed to add the schema versions of inlined-data tables while migrating to v1.1-dev1: ");
+}
+
 void DuckLakeMetadataManager::MigrateV10(bool allow_failures) {
 	// rename first so a conflict aborts while the catalog is still at v1.0
 	MigrateInlinedColumnNames(allow_failures);
+	MigrateInlinedSchemaVersions();
 	MigrateInlinedDataTypes();
 	ExecuteMigration(V1_1Dev1MigrationQuery(), allow_failures, "1.0", "1.1-dev1");
 }
@@ -858,6 +884,16 @@ WHERE {SNAPSHOT_ID} >= %s
   AND ({SNAPSHOT_ID} < %s OR %s IS NULL))",
 	                          inlined_table_name, col_names.begin_snapshot, col_names.end_snapshot,
 	                          col_names.end_snapshot);
+}
+
+string DuckLakeMetadataManager::GetInlinedRowCountsSql(const string &inlined_table_name,
+                                                       const DuckLakeInlinedColNames &col_names) {
+	return StringUtil::Format(R"(
+SELECT COUNT(*), COUNT(CASE WHEN {SNAPSHOT_ID} < %s OR %s IS NULL THEN 1 END)
+FROM {METADATA_CATALOG}.%s
+WHERE {SNAPSHOT_ID} >= %s)",
+	                          col_names.end_snapshot, col_names.end_snapshot, inlined_table_name,
+	                          col_names.begin_snapshot);
 }
 
 idx_t DuckLakeMetadataManager::GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot) {
@@ -2696,14 +2732,8 @@ ORDER BY data.begin_snapshot, data.row_id_start, data.data_file_id, del.begin_sn
 				file.has_inlined_deletions = true;
 			}
 		}
-	} else {
-		// Cheap existence-only check — avoids fetching every deleted row_id for non-rewrite paths.
-		vector<idx_t> file_ids;
-		file_ids.reserve(files.size());
-		for (auto &file : files) {
-			file_ids.push_back(file.file.id.index);
-		}
-		auto files_with_deletions = GetFileIdsWithInlinedDeletions(table_id, snapshot, file_ids);
+	} else if (!files.empty()) {
+		auto files_with_deletions = GetFileIdsWithInlinedDeletions(table_id, snapshot);
 		for (auto &file : files) {
 			if (files_with_deletions.count(file.file.id.index)) {
 				file.has_inlined_deletions = true;
@@ -3419,12 +3449,10 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 		for (auto &type : entry.data->data->Types()) {
 			needs_encoding |= DuckLakeUtil::GetInlinedStorageType(*this, type) != type;
 		}
-		if (needs_encoding) {
+		if (needs_encoding || InsertsInlinedRowsAfterBatch(entry.data->data->Count())) {
 			inlined_inserts.push_back(InlinedDataInsert(transaction, commit_snapshot, entry, inlined_table_name));
 			continue;
 		}
-		// Build one cell list per row, then defer formatting to the shared helper.
-		// FIXME: we can do a much faster append than this
 		const bool has_preserved_row_ids = entry.data->HasPreservedRowIds();
 		auto cells_per_row = DuckLakeUtil::InlinedDataToSQL(transaction, *entry.data->data);
 		batch_query += FormatInlinedDataInsert(inlined_table_name, entry.row_id_start, has_preserved_row_ids,
@@ -3569,23 +3597,15 @@ map<idx_t, set<idx_t>> DuckLakeMetadataManager::ReadInlinedFileDeletions(TableIn
 	return result;
 }
 
-// FIXME: We should probably cache this..
 unordered_set<idx_t> DuckLakeMetadataManager::GetFileIdsWithInlinedDeletions(TableIndex table_id,
-                                                                             DuckLakeSnapshot snapshot,
-                                                                             const vector<idx_t> &file_ids) {
+                                                                             DuckLakeSnapshot snapshot) {
 	unordered_set<idx_t> result;
-	if (file_ids.empty()) {
-		return result;
-	}
 	auto inlined_table_name = GetInlinedDeletionTableName(table_id, snapshot);
 	if (inlined_table_name.empty()) {
 		return result;
 	}
-	auto file_id_list =
-	    StringUtil::Join(file_ids, file_ids.size(), ", ", [](idx_t file_id) { return to_string(file_id); });
-	auto query = StringUtil::Format("SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s WHERE file_id IN (%s) AND "
-	                                "begin_snapshot <= {SNAPSHOT_ID}",
-	                                inlined_table_name, file_id_list);
+	auto query = StringUtil::Format(
+	    "SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s WHERE begin_snapshot <= {SNAPSHOT_ID}", inlined_table_name);
 	auto query_result = Query(snapshot, query);
 	query_result->ThrowIfError("Failed to read inlined file deletion IDs from DuckLake: ");
 	for (auto &row : *query_result) {
@@ -5389,6 +5409,11 @@ WHERE table_id IN (%s);)",
 			                                         delete_tbl, deleted_table_ids));
 			result->ThrowIfError("Failed to delete from " + delete_tbl + " in DuckLake: ");
 		}
+		auto options_result = Execute(StringUtil::Format(R"(
+DELETE FROM {METADATA_CATALOG}.ducklake_metadata
+WHERE scope = 'table' AND scope_id IN (%s);)",
+		                                                 deleted_table_ids));
+		options_result->ThrowIfError("Failed to delete table options in DuckLake: ");
 
 		// Drop orphaned inlined tables
 		for (auto &inlined_table_name : inlined_tables_to_drop) {
@@ -5403,6 +5428,7 @@ WHERE table_id IN (%s);)",
 	if (transaction.GetCatalog().SupportsV1_1Metadata()) {
 		tables_to_delete_from.insert(tables_to_delete_from.begin() + 2, "ducklake_view_column_tag");
 	}
+	bool deleted_schemas = false;
 	for (auto &delete_tbl : tables_to_delete_from) {
 		auto result = Execute(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
@@ -5413,6 +5439,23 @@ WHERE end_snapshot IS NOT NULL AND NOT EXISTS(
 );)",
 		                                         delete_tbl));
 		result->ThrowIfError("Failed to delete from " + delete_tbl + " in DuckLake: ");
+		if (delete_tbl == "ducklake_schema") {
+			// a result without a row count is treated as a deletion
+			deleted_schemas = true;
+			for (auto &row : *result) {
+				deleted_schemas = row.GetValue<int64_t>(0) > 0;
+			}
+		}
+	}
+	if (deleted_schemas) {
+		auto options_result = Execute(R"(
+DELETE FROM {METADATA_CATALOG}.ducklake_metadata
+WHERE scope = 'schema' AND NOT EXISTS(
+    SELECT schema_id
+    FROM {METADATA_CATALOG}.ducklake_schema
+    WHERE schema_id = scope_id
+);)");
+		options_result->ThrowIfError("Failed to delete schema options in DuckLake: ");
 	}
 
 	// A v1.1 catalog prefixes the bound column names, so inlined tables cannot share the statement

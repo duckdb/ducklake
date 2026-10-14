@@ -107,10 +107,6 @@ struct DuckLakeCommitContext {
 	std::function<idx_t(TableIndex)> get_net_data_file_row_count = [](TableIndex) {
 		return 0;
 	};
-	//! Net (delete-adjusted) row count of a table's inlined-data tables.
-	std::function<idx_t(TableIndex)> get_net_inlined_row_count = [](TableIndex) {
-		return 0;
-	};
 	//! Builds a DuckLakeStats map from a vector of per-snapshot global stats (retry path).
 	std::function<unique_ptr<DuckLakeStats>(vector<DuckLakeGlobalStatsInfo> &)> build_stats_map;
 	//! Invalidates the cached schema in the catalog for a given schema version.
