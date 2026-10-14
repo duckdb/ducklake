@@ -1,5 +1,5 @@
 # name: benchmark/micro/read/inlined_large_values.benchmark
-# description: Read 64 inlined rows of 1 MiB values, which the scan reads in pages that each hold one row
+# description: Read 64 inlined rows of 1 MiB values
 # group: [read]
 
 name Inlined Large Values

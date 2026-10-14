@@ -246,7 +246,7 @@ bool DuckLakeInlinedDataReader::LoadNextPage(ClientContext &context) {
 		return false;
 	}
 	// a page holds a sixteenth of the memory, rows up to the size where a vector of them fits a page are read
-	// in ranges, larger ones one row at a time
+	// in ranges, larger ones one row at a time unless the read keys fit a page
 	static constexpr idx_t MIN_PAGE_BYTES = 1ULL << 20ULL;
 	static constexpr idx_t PAGE_GROWTH = 16;
 	auto page_bytes = MaxValue<idx_t>(MIN_PAGE_BYTES, BufferManager::GetBufferManager(context).GetMaxMemory() / 16);
@@ -283,11 +283,13 @@ bool DuckLakeInlinedDataReader::LoadNextPage(ClientContext &context) {
 		limit = 0;
 	} else if (!read_by_keys) {
 		limit = MaxValue<idx_t>(1, page_bytes / MaxValue<idx_t>(1, row_bytes));
-	} else if (row_bytes == 0 || row_bytes > small_row_bytes) {
+	} else if (row_bytes == 0) {
 		limit = 1;
-	} else if ((keys.size() - key_position) * row_bytes <= page_bytes) {
-		// the read keys fit a page, which reads each vector of their values once
+	} else if (keys.size() - key_position <= page_bytes / largest_row_bytes) {
+		// the read keys fit a page even at the size of the largest rows, which reads each vector of values once
 		limit = keys.size() - key_position;
+	} else if (row_bytes > small_row_bytes) {
+		limit = 1;
 	} else {
 		limit = MinValue<idx_t>(page.limit * PAGE_GROWTH, page_bytes / row_bytes);
 	}
@@ -337,8 +339,10 @@ bool DuckLakeInlinedDataReader::LoadNextPage(ClientContext &context) {
 				measured_bytes += ValueBytes(vector, chunk.size());
 			}
 		}
+		auto page_row_bytes = MaxValue<idx_t>(1, measured_bytes / row_count);
+		largest_row_bytes = MaxValue(largest_row_bytes, page_row_bytes);
 		// a large row weighs on the next pages until rows of the measured size follow
-		row_bytes = MaxValue<idx_t>(MaxValue<idx_t>(1, measured_bytes / row_count), row_bytes / PAGE_GROWTH);
+		row_bytes = MaxValue<idx_t>(page_row_bytes, row_bytes / PAGE_GROWTH);
 	}
 	if (measures_row && row_bytes <= small_row_bytes && key_position < keys.size()) {
 		// a small measured row is read again with the next rows instead of in a vector of its own

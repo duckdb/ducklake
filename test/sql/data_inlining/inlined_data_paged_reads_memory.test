@@ -41,6 +41,23 @@ endloop
 statement ok
 UPDATE dl.versions SET c = 'last';
 
+# a small row between large ones does not let the next page hold every remaining large row
+statement ok
+CREATE TABLE dl.mixed (id INTEGER, c VARCHAR);
+
+statement ok
+INSERT INTO dl.mixed SELECT 0, repeat('A', 4194304);
+
+statement ok
+INSERT INTO dl.mixed VALUES (1, 'small');
+
+loop i 2 17
+
+statement ok
+INSERT INTO dl.mixed SELECT ${i}, repeat('A', 4194304);
+
+endloop
+
 statement ok
 SET memory_limit = '64MB'
 
@@ -51,6 +68,11 @@ query I
 SELECT length(c) FROM dl.large LIMIT 1
 ----
 4194304
+
+query III
+SELECT count(*), sum(id), sum(length(c)) FROM dl.mixed
+----
+17	136	67108869
 
 statement ok
 DELETE FROM dl.large WHERE id = 5;
