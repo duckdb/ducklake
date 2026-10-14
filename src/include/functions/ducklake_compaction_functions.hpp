@@ -49,7 +49,7 @@ public:
 	vector<Value> partition_values;
 	optional_idx row_id_start;
 	CompactionType type;
-	//! Whether the copy receives sorted rows that it has to write in order while it rotates files
+	//! Whether the rows reach the rotating copy in the order they must be written in
 	bool ordered_input = false;
 
 public:

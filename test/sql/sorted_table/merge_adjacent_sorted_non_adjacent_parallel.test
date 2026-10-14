@@ -1,0 +1,60 @@
+# name: test/sql/sorted_table/merge_adjacent_sorted_non_adjacent_parallel.test
+# description: Merging non-adjacent sorted files keeps the sort order and row ids under parallelism
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merge_sorted_parallel', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+PRAGMA verify_parallelism
+
+statement ok
+SET threads = 8
+
+statement ok
+CALL ducklake.set_option('parquet_row_group_size', 2048)
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER, k BIGINT)
+
+statement ok
+ALTER TABLE ducklake.t SET SORTED BY (k)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, (i * 7919) % 100003 FROM range(50000) t(i)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, i FROM range(50000, 50010) t(i)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, (i * 7919) % 100003 FROM range(50010, 100000) t(i)
+
+# dropping the middle file leaves the other two files non-adjacent
+statement ok
+DELETE FROM ducklake.t WHERE id BETWEEN 50000 AND 50009
+
+statement ok
+CREATE TEMPORARY TABLE before_merge AS SELECT rowid AS rid, id, k FROM ducklake.t
+
+query I
+SELECT files_processed FROM ducklake_merge_adjacent_files('ducklake', 't')
+----
+2
+
+query I
+SELECT count(*) FROM (SELECT k < lag(k) OVER (PARTITION BY filename ORDER BY file_row_number) AS out_of_order FROM ducklake.t) WHERE out_of_order
+----
+0
+
+query I
+SELECT count(*) FROM (SELECT rowid AS rid, id, k FROM ducklake.t EXCEPT ALL SELECT * FROM before_merge)
+----
+0

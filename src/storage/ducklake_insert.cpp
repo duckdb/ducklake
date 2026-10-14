@@ -531,6 +531,11 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 			info->options[option.second].emplace_back(option_value);
 		}
 	}
+	// the writer accepts a compression level only for ZSTD, which a table can override
+	auto compression = info->options.find("compression");
+	if (compression == info->options.end() || !StringUtil::CIEquals(compression->second[0].ToString(), "zstd")) {
+		info->options.erase("compression_level");
+	}
 	string per_thread_output_str;
 	bool per_thread_output = false;
 	if (catalog.TryGetConfigOption("per_thread_output", per_thread_output_str, schema_id, table_id,

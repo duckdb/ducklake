@@ -84,7 +84,7 @@ PhysicalOperator &DuckLakeLogicalCompaction::CreatePlan(ClientContext &context, 
 		}
 		transaction.ReleaseMetadataTransaction();
 	}
-	if (ordered_input && child.type == PhysicalOperatorType::COPY_TO_FILE) {
+	if (ordered_input) {
 		DuckLakeInsert::PreserveSortedOrder(child.Cast<PhysicalCopyToFile>());
 	}
 	return planner.Make<DuckLakeCompaction>(types, table, std::move(source_files), std::move(encryption_key),
@@ -792,11 +792,12 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 
 	auto &latest_table = GetLatestTableEntry(catalog, transaction, table);
 	auto sort_data = latest_table.GetSortData();
-	bool sorted = false;
+	bool sort_applied = false;
 	if (sort_data) {
 		auto unsorted_root = root.get();
 		root = DuckLakeCompactor::InsertSort(binder, root, table, latest_table, sort_data);
-		sorted = root.get() != unsorted_root;
+		// InsertSort returns root if the sort isn't in DuckDB dialect.
+		sort_applied = root.get() != unsorted_root;
 	}
 
 	// adjacent files are merged into one file that starts at the first file's row_id_start
@@ -824,8 +825,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	auto compaction = make_uniq<DuckLakeLogicalCompaction>(
 	    binder.GenerateTableIndex(), table, std::move(actionable_source_files), std::move(copy_input.encryption_key),
 	    partition_id, std::move(partition_values), target_row_id_start, type);
-	// a merge of files that are not adjacent rotates files, which the batch copy that keeps the order cannot
-	compaction->ordered_input = sorted && !merge_in_order;
+	compaction->ordered_input = sort_applied && !merge_in_order;
 	compaction->children.push_back(std::move(copy));
 	return std::move(compaction);
 }
