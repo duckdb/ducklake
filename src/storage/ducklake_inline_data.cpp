@@ -11,6 +11,7 @@
 #include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/common/vector/map_vector.hpp"
+#include "duckdb/common/operator/multiply.hpp"
 
 namespace duckdb {
 
@@ -35,8 +36,8 @@ public:
 //! Inlined rows are written into the metadata catalog, so their data is bounded per row of the limit
 static constexpr idx_t MAX_INLINED_BYTES_PER_ROW = 16384;
 
-//! Bytes of the strings and list elements of a vector, the part of its data that the column count does not bound
-static idx_t VariableDataSize(const Vector &vector, bool count_values) {
+//! Bytes of the strings and list elements of a vector, sized until they exceed the budget
+static idx_t VariableDataSize(const Vector &vector, bool count_values, idx_t budget) {
 	auto physical_type = vector.GetType().InternalType();
 	idx_t size = count_values ? vector.size() * GetTypeIdSize(physical_type) : 0;
 	switch (physical_type) {
@@ -46,16 +47,39 @@ static idx_t VariableDataSize(const Vector &vector, bool count_values) {
 		}
 		break;
 	case PhysicalType::LIST: {
-		auto element_count = ListVector::GetTotalEntryCount(vector);
-		SelectionVector sel(element_count);
-		ListVector::GetConsecutiveChildSelVector(vector, sel, 0, vector.size());
-		Vector elements(ListVector::GetChild(vector), sel, element_count);
-		size += VariableDataSize(elements, true);
+		auto &child = ListVector::GetChild(vector);
+		auto child_type = child.GetType().InternalType();
+		if (!child.GetType().IsNested() && child_type != PhysicalType::VARCHAR) {
+			return size + ListVector::GetTotalEntryCount(vector) * GetTypeIdSize(child_type);
+		}
+		// rows can share elements, so the elements of each row are sized in batches
+		SelectionVector sel(STANDARD_VECTOR_SIZE);
+		idx_t sel_count = 0;
+		auto add_elements = [&]() {
+			Vector elements(child, sel, sel_count);
+			size += VariableDataSize(elements, true, budget);
+			sel_count = 0;
+		};
+		for (auto &entry : vector.ValidValues<list_entry_t>()) {
+			auto &list = entry.GetValue();
+			for (idx_t i = 0; i < list.length; i++) {
+				sel.set_index(sel_count++, list.offset + i);
+				if (sel_count == STANDARD_VECTOR_SIZE) {
+					add_elements();
+				}
+			}
+			if (size > budget) {
+				return size;
+			}
+		}
+		if (sel_count > 0) {
+			add_elements();
+		}
 		break;
 	}
 	case PhysicalType::STRUCT:
 		for (auto &child : StructVector::GetEntries(vector)) {
-			size += VariableDataSize(child, count_values);
+			size += VariableDataSize(child, count_values, budget);
 		}
 		break;
 	default:
@@ -67,17 +91,20 @@ static idx_t VariableDataSize(const Vector &vector, bool count_values) {
 class InlineDataGlobalState : public GlobalOperatorState {
 public:
 	explicit InlineDataGlobalState(const DuckLakeInlineData &op) : op(op), total_inlined_rows(0) {
+		if (!TryMultiplyOperator::Operation(op.inline_row_limit, MAX_INLINED_BYTES_PER_ROW, max_inlined_bytes)) {
+			max_inlined_bytes = NumericLimits<idx_t>::Maximum();
+		}
 	}
 
 	bool ExceedsLimit() const {
-		return total_inlined_rows > op.inline_row_limit ||
-		       total_inlined_bytes / MAX_INLINED_BYTES_PER_ROW >= op.inline_row_limit;
+		return total_inlined_rows > op.inline_row_limit || total_inlined_bytes > max_inlined_bytes;
 	}
 
 	InlinePhase AddRows(InlineDataState &state, DataChunk &input) {
 		idx_t new_bytes = 0;
-		for (auto &column : input.data) {
-			new_bytes += VariableDataSize(column, false);
+		// a chunk with more rows than the limit is not inlined whatever its size
+		for (idx_t c = 0; c < input.ColumnCount() && input.size() <= op.inline_row_limit; c++) {
+			new_bytes += VariableDataSize(input.data[c], false, max_inlined_bytes);
 		}
 		lock_guard<mutex> guard(lock);
 		total_inlined_rows += input.size();
@@ -106,6 +133,7 @@ public:
 	mutex lock;
 	idx_t total_inlined_rows = 0;
 	idx_t total_inlined_bytes = 0;
+	idx_t max_inlined_bytes;
 	unique_ptr<ColumnDataCollection> global_inlined_data;
 };
 
