@@ -1,0 +1,52 @@
+# name: benchmark/micro/read/small_table_filters_many_stats.benchmark
+# description: Run 10 filtered scans of a 2-file table in a lake whose other table has 105000 file column stats rows
+# group: [read]
+
+name Small Table Filters Many Stats
+group micro
+subgroup read
+
+require ducklake
+
+cache_file small_table_filters_many_stats_ready.marker
+
+load
+@create small_table_filters_many_stats
+@attach small_table_filters_many_stats AS lake (DATA_PATH '${BENCHMARK_DIR}/small_table_filters_many_stats_files', DATA_INLINING_ROW_LIMIT 0)
+CREATE TABLE lake.big (k INTEGER, c1 INTEGER, c2 INTEGER, c3 INTEGER, c4 INTEGER, c5 INTEGER, c6 INTEGER, c7 INTEGER,
+c8 INTEGER, c9 INTEGER, c10 INTEGER, c11 INTEGER, c12 INTEGER, c13 INTEGER, c14 INTEGER, c15 INTEGER, c16 INTEGER,
+c17 INTEGER, c18 INTEGER, c19 INTEGER, c20 INTEGER);
+ALTER TABLE lake.big SET PARTITIONED BY (k);
+INSERT INTO lake.big SELECT k, k + 1, k + 2, k + 3, k + 4, k + 5, k + 6, k + 7, k + 8, k + 9, k + 10, k + 11, k + 12,
+k + 13, k + 14, k + 15, k + 16, k + 17, k + 18, k + 19, k + 20 FROM range(5000) t(k);
+CREATE TABLE lake.small (k INTEGER, v INTEGER);
+INSERT INTO lake.small SELECT i, i FROM range(100) t(i);
+INSERT INTO lake.small SELECT i, i FROM range(100, 200) t(i);
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 'big')) <> 5000
+OR (SELECT count(*) FROM ducklake_list_files('lake', 'small')) <> 2
+THEN error('big must have 5000 files and small 2') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+@seal small_table_filters_many_stats
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/small_table_filters_many_stats_ready.marker' (FORMAT CSV);
+@attach small_table_filters_many_stats AS lake (READ_ONLY)
+
+reload
+@attach small_table_filters_many_stats AS lake (READ_ONLY)
+
+run
+SELECT count(*) FROM lake.small WHERE v > 150;
+SELECT count(*) FROM lake.small WHERE v > 151;
+SELECT count(*) FROM lake.small WHERE v > 152;
+SELECT count(*) FROM lake.small WHERE v > 153;
+SELECT count(*) FROM lake.small WHERE v > 154;
+SELECT count(*) FROM lake.small WHERE k < 10 AND v > 5;
+SELECT count(*) FROM lake.small WHERE k < 11 AND v > 5;
+SELECT count(*) FROM lake.small WHERE k < 12 AND v > 5;
+SELECT count(*) FROM lake.small WHERE k < 13 AND v > 5;
+SELECT count(*) FROM lake.small WHERE k < 14 AND v > 5;
+
+result_query I
+SELECT * FROM __answer
+----
+49
