@@ -36,27 +36,32 @@ public:
 static constexpr idx_t MAX_INLINED_BYTES_PER_ROW = 16384;
 
 //! Bytes of the strings and list elements of a vector, the part of its data that the column count does not bound
-static idx_t VariableDataSize(const Vector &vector) {
-	switch (vector.GetType().InternalType()) {
-	case PhysicalType::VARCHAR: {
-		idx_t size = 0;
+static idx_t VariableDataSize(const Vector &vector, bool count_values) {
+	auto physical_type = vector.GetType().InternalType();
+	idx_t size = count_values ? vector.size() * GetTypeIdSize(physical_type) : 0;
+	switch (physical_type) {
+	case PhysicalType::VARCHAR:
 		for (auto &entry : vector.ValidValues<string_t>()) {
 			size += entry.GetValue().GetSize();
 		}
-		return size;
+		break;
+	case PhysicalType::LIST: {
+		auto element_count = ListVector::GetTotalEntryCount(vector);
+		SelectionVector sel(element_count);
+		ListVector::GetConsecutiveChildSelVector(vector, sel, 0, vector.size());
+		Vector elements(ListVector::GetChild(vector), sel, element_count);
+		size += VariableDataSize(elements, true);
+		break;
 	}
-	case PhysicalType::LIST:
-		return ListVector::GetChild(vector).GetDataSize(ListVector::GetListSize(vector));
-	case PhysicalType::STRUCT: {
-		idx_t size = 0;
+	case PhysicalType::STRUCT:
 		for (auto &child : StructVector::GetEntries(vector)) {
-			size += VariableDataSize(child);
+			size += VariableDataSize(child, count_values);
 		}
-		return size;
-	}
+		break;
 	default:
-		return 0;
+		break;
 	}
+	return size;
 }
 
 class InlineDataGlobalState : public GlobalOperatorState {
@@ -70,13 +75,15 @@ public:
 	}
 
 	InlinePhase AddRows(InlineDataState &state, DataChunk &input) {
+		idx_t new_bytes = 0;
+		for (auto &column : input.data) {
+			new_bytes += VariableDataSize(column, false);
+		}
 		lock_guard<mutex> guard(lock);
 		total_inlined_rows += input.size();
-		for (auto &column : input.data) {
-			total_inlined_bytes += VariableDataSize(column);
-		}
+		total_inlined_bytes += new_bytes;
 		if (ExceedsLimit()) {
-			// we have exceeded the total amount of rows - bail
+			// we have exceeded the limit, bail
 			if (global_inlined_data) {
 				// if we have any global inlined data - add it to the local inlined data so we can emit it
 				AddToCollection(std::move(global_inlined_data), state.inlined_data);
