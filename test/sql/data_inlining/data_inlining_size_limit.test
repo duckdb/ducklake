@@ -59,6 +59,19 @@ SELECT (SELECT count(*) FROM ducklake.wide), (SELECT count(*) FROM ducklake_list
 ----
 1	0
 
+# Data of exactly 16 KiB per row of the limit is still inlined
+statement ok
+CREATE TABLE ducklake.at_bound AS SELECT repeat('x', 163840) AS s
+
+statement ok
+CREATE TABLE ducklake.over_bound AS SELECT repeat('x', 163841) AS s
+
+query II
+SELECT (SELECT count(*) FROM ducklake_list_files('ducklake', 'at_bound')),
+	(SELECT count(*) FROM ducklake_list_files('ducklake', 'over_bound'))
+----
+0	1
+
 # A higher inlining limit raises the bound as well
 statement ok
 CALL ducklake.set_option('data_inlining_row_limit', 1000)
