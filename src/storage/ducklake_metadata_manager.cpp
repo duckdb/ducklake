@@ -2890,10 +2890,12 @@ string DuckLakeSQLPlaceholders::ResolveInternal(const string &sql_template, bool
 		string value;
 		if (TryGetValue(sql_template.substr(open + 1, close - open - 1), value)) {
 			result += escape_percent ? StringUtil::Replace(value, "%", "%%") : value;
+			pos = close + 1;
 		} else {
-			result.append(sql_template, open, close - open + 1);
+			// a brace that opens no placeholder, like a struct literal, can still contain one
+			result += '{';
+			pos = open + 1;
 		}
-		pos = close + 1;
 	}
 	return result;
 }

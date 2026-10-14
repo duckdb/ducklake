@@ -37,6 +37,12 @@ FROM ducklake.t ORDER BY s
 a{SNAPSHOT_ID}b
 c{METADATA_CATALOG}d
 
+# the filter is pushed into the file list query
+query I
+FROM ducklake.t WHERE s = 'a{SNAPSHOT_ID}b'
+----
+a{SNAPSHOT_ID}b
+
 # the test runner replaces {DATA_PATH} itself, so the placeholder is built by concatenation
 statement ok
 INSERT INTO ducklake.t VALUES ('e{' || 'DATA_PATH}f');
@@ -103,6 +109,23 @@ query II
 FROM ducklake."{SNAPSHOT_ID}"."{METADATA_CATALOG}"
 ----
 {SCHEMA_VERSION}	{'{AUTHOR}': 1}
+
+# view and macro definitions
+statement ok
+CREATE VIEW ducklake.v AS SELECT '{SNAPSHOT_ID}' AS x;
+
+query I
+FROM ducklake.v
+----
+{SNAPSHOT_ID}
+
+statement ok
+CREATE MACRO ducklake.m(p := '{NEXT_FILE_ID}') AS p || '{METADATA_CATALOG}';
+
+query I
+SELECT ducklake.m()
+----
+{NEXT_FILE_ID}{METADATA_CATALOG}
 
 # commit info
 statement ok

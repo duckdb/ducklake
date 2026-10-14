@@ -78,6 +78,7 @@ private:
 	//! All inlined-data table names registered for a table id (any schema version).
 	vector<string> LookupInlinedTableNames(TableIndex table_id);
 	bool InlinedFileDeletionTableExists(TableIndex table_id);
+	unique_ptr<QueryResult> QueryMetadata(const string &query);
 	//! Execute a query on the fresh connection; throw on error.
 	unique_ptr<QueryResult> RunQuery(const string &query, const char *what);
 	//! Scan a temporary staging table via the catalog API (no SQL, no lock).

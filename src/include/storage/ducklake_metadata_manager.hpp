@@ -331,7 +331,6 @@ public:
 	unique_ptr<QueryResult> Execute(const string &query);
 	//! Runs the statements in a transaction of their own, rolled back when one of them fails
 	virtual unique_ptr<QueryResult> ExecuteInTransaction(const string &query);
-	//! Runs the batch of statements of a commit
 	virtual unique_ptr<QueryResult> ExecuteBatch(const string &query);
 
 protected:

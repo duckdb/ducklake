@@ -25,11 +25,10 @@ struct DuckLakeColumnSchemaEntry {
 
 //! The executors below run resolved SQL, see DuckLakeSQLPlaceholders
 struct DuckLakeCommitContext {
-	//! The placeholders of the commit batch, without the snapshot id of the commit
+	//! Without a snapshot, each commit attempt adds its snapshot id
 	DuckLakeSQLPlaceholders batch_placeholders;
-	//! The placeholders of the queries the commit reads with, without a snapshot
 	DuckLakeSQLPlaceholders read_placeholders;
-	//! The placeholders of the conflict resolution queries, at the snapshot of the transaction
+	//! At the snapshot of the transaction
 	DuckLakeSQLPlaceholders conflict_placeholders;
 	//! Runs a metadata-DB query during conflict resolution.
 	std::function<unique_ptr<QueryResult>(string)> conflict_query_executor;

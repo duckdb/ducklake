@@ -640,13 +640,13 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.read_placeholders = placeholders;
 	ctx.conflict_placeholders = placeholders.WithSnapshot(transaction_snapshot);
 	ctx.conflict_query_executor = [this](string q) -> unique_ptr<QueryResult> {
-		return fresh_conn.Query(q);
+		return QueryMetadata(q);
 	};
 	ctx.get_snapshot = [this]() {
 		return transaction_snapshot;
 	};
 	ctx.execute_commit_batch = [this](const string &query) -> unique_ptr<QueryResult> {
-		return fresh_conn.Query(query);
+		return QueryMetadata(query);
 	};
 	ctx.commit_connection = [this]() {
 		fresh_conn.Commit();
@@ -660,7 +660,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		fresh_conn.BeginTransaction();
 	};
 	ctx.query_metadata = [this](string q) -> unique_ptr<QueryResult> {
-		return fresh_conn.Query(q);
+		return QueryMetadata(q);
 	};
 	ctx.write_inlined_data = [this](const DuckLakeSQLPlaceholders &sql, DuckLakeSnapshot &,
 	                                const vector<DuckLakeInlinedDataInfo> &new_data, const vector<DuckLakeTableInfo> &,
@@ -727,8 +727,13 @@ bool DuckLakeServerSideCommit::InlinedFileDeletionTableExists(TableIndex table_i
 	return fresh_conn.TableInfo(database_name, Identifier(metadata_schema_name), Identifier(table_name)) != nullptr;
 }
 
+unique_ptr<QueryResult> DuckLakeServerSideCommit::QueryMetadata(const string &query) {
+	D_ASSERT(!DuckLakeSQLPlaceholders::HasUnresolvedPlaceholder(query));
+	return fresh_conn.Query(query);
+}
+
 unique_ptr<QueryResult> DuckLakeServerSideCommit::RunQuery(const string &query, const char *what) {
-	auto result = fresh_conn.Query(query);
+	auto result = QueryMetadata(query);
 	result->ThrowIfError(StringUtil::Format("Server-side ducklake_commit (%s) failed: ", what));
 	return result;
 }

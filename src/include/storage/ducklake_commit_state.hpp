@@ -65,7 +65,6 @@ struct DuckLakeCommitState {
 	}
 
 	DuckLakeSnapshot &commit_snapshot;
-	//! The placeholders of the commit batch
 	const DuckLakeSQLPlaceholders sql;
 	map<SchemaIndex, SchemaIndex> committed_schemas;
 	map<TableIndex, TableIndex> committed_tables;
