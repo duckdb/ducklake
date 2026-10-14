@@ -1,0 +1,121 @@
+# name: test/sql/migration/postgres_file_column_stats_index.test
+# description: Postgres catalogs of v1.1 index the file column stats by table and column, also after a migration
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
+
+foreach schema stats_index_new stats_index_v10 stats_index_user
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS ${schema} CASCADE')
+
+endloop
+
+statement ok
+CREATE MACRO stats_indexes(schema_name) AS TABLE
+SELECT indexname, indexdef FROM postgres_query('pg', 'SELECT schemaname, indexname, indexdef FROM pg_indexes
+WHERE tablename = ''ducklake_file_column_stats''')
+WHERE schemaname = schema_name
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/stats_index_new', METADATA_SCHEMA 'stats_index_new', DUCKLAKE_VERSION '1.1-dev1')
+
+statement ok
+DETACH dl
+
+query I
+SELECT indexdef FROM stats_indexes('stats_index_new')
+----
+CREATE INDEX idx_fcs_table_col ON stats_index_new.ducklake_file_column_stats USING btree (table_id, column_id)
+
+# A catalog written by DuckLake 1.0 gets the index when it migrates
+unzip data/old_ducklake/stale_table_size.db.gz {TEST_DIR}/stats_index_v10.db
+
+statement ok
+ATTACH '{TEST_DIR}/stats_index_v10.db' AS old_metadata (READ_ONLY)
+
+statement ok
+CALL postgres_execute('pg', 'CREATE SCHEMA stats_index_v10')
+
+foreach table column column_mapping column_tag data_file delete_file file_column_stats file_partition_value file_variant_stats files_scheduled_for_deletion inlined_data_1_1 inlined_data_tables macro macro_impl macro_parameters metadata name_mapping partition_column partition_info schema schema_versions snapshot snapshot_changes sort_expression sort_info table table_column_stats table_stats tag view
+
+statement ok
+CREATE TABLE pg.stats_index_v10.ducklake_${table} AS FROM old_metadata.ducklake_${table}
+
+endloop
+
+statement ok
+DETACH old_metadata
+
+query I
+SELECT count(*) FROM stats_indexes('stats_index_v10')
+----
+0
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH 'data/old_ducklake/stale_table_size/', METADATA_SCHEMA 'stats_index_v10', OVERRIDE_DATA_PATH TRUE,
+AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT count(*) FROM dl.t
+----
+201
+
+statement ok
+DETACH dl
+
+query I
+SELECT indexdef FROM stats_indexes('stats_index_v10')
+----
+CREATE INDEX idx_fcs_table_col ON stats_index_v10.ducklake_file_column_stats USING btree (table_id, column_id)
+
+# Version 1.0 catalogs get no index, and the migration keeps one created by hand under the same name
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/stats_index_user', METADATA_SCHEMA 'stats_index_user', DUCKLAKE_VERSION '1.0')
+
+statement ok
+DETACH dl
+
+query I
+SELECT count(*) FROM stats_indexes('stats_index_user')
+----
+0
+
+statement ok
+CALL postgres_execute('pg', 'CREATE INDEX idx_fcs_table_col ON stats_index_user.ducklake_file_column_stats (table_id, column_id)')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(METADATA_SCHEMA 'stats_index_user', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+DETACH dl
+
+query II
+SELECT (SELECT count(*) FROM stats_indexes('stats_index_user')),
+	(SELECT value FROM postgres_query('pg', 'SELECT value FROM stats_index_user.ducklake_metadata WHERE key = ''version'''))
+----
+1	1.1-dev1
+
+foreach schema stats_index_new stats_index_v10 stats_index_user
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA ${schema} CASCADE')
+
+endloop
