@@ -1,0 +1,25 @@
+# name: benchmark/micro/write/ctas_large_string_list.benchmark
+# description: CREATE TABLE AS of one row holding a list of 100000 strings into a lake that inlines up to 10 rows
+# group: [write]
+
+name CTAS Large String List
+group micro
+subgroup write
+
+require ducklake
+
+argument lake ctas_large_string_list
+
+argument work ctas_large_string_list_work
+
+include benchmark/micro/fixtures/empty_inlining_lake.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+CREATE TABLE lake.g AS SELECT list('value_' || i ORDER BY i) AS l FROM range(100000) t(i);
+
+result_query II
+SELECT len(l), l[100000] FROM lake.g
+----
+100000	value_99999
