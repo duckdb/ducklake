@@ -1,0 +1,42 @@
+# name: test/sql/data_inlining/data_inlining_size_limit.test
+# description: Rows whose data exceeds 16 KiB per row of the inlining limit are written to a data file
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/data_inlining_size_limit', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.big AS SELECT list(i ORDER BY i) AS l FROM range(100000) t(i)
+
+statement ok
+CREATE TABLE ducklake.small AS SELECT list(i ORDER BY i) AS l FROM range(1000) t(i)
+
+query II
+SELECT (SELECT count(*) FROM ducklake_list_files('ducklake', 'big')), (SELECT count(*) FROM ducklake_list_files('ducklake', 'small'))
+----
+1	0
+
+query II
+SELECT len(l), l[100000] FROM ducklake.big
+----
+100000	99999
+
+# A higher inlining limit raises the bound as well
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 1000)
+
+statement ok
+CREATE TABLE ducklake.raised AS SELECT list(i ORDER BY i) AS l FROM range(100000) t(i)
+
+query II
+SELECT (SELECT count(*) FROM ducklake_list_files('ducklake', 'raised')), (SELECT len(l) FROM ducklake.raised)
+----
+0	100000
