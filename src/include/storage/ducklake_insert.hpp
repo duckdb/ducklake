@@ -136,6 +136,8 @@ public:
 	//! Put a projection of the expressions on top of the plan
 	static void GenerateProjection(PhysicalPlanGenerator &planner, vector<unique_ptr<Expression>> &expressions,
 	                               optional_ptr<PhysicalOperator> &plan);
+	//! Makes the copy write sorted input in order, even when it rotates files
+	static void PreserveSortedOrder(PhysicalCopyToFile &physical_copy);
 	static PhysicalOperator &PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                    DuckLakeTableEntry &table, string encryption_key);
 	static void RemoveEmptyFiles(ClientContext &context, DuckLakeInsertGlobalState &gstate);

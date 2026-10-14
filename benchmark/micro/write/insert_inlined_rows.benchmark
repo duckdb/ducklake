@@ -1,0 +1,25 @@
+# name: benchmark/micro/write/insert_inlined_rows.benchmark
+# description: INSERT 10000 rows into an inlined table of six scalar columns, including the commit
+# group: [write]
+
+name Insert Inlined Rows
+group micro
+subgroup write
+
+require ducklake
+
+argument work inlined_insert_work
+
+include benchmark/micro/fixtures/inlined_insert.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+INSERT INTO lake.t SELECT i, i::INTEGER, i / 7, i / 3, DATE '2000-01-01' + (i % 10000)::INTEGER, 'str' || i
+FROM range(10000) t(i);
+
+# A data file means the rows were not inlined
+result_query III
+SELECT (SELECT count(*) FROM lake.t), (SELECT sum(a) FROM lake.t), (SELECT count(*) FROM ducklake_list_files('lake', 't'))
+----
+10000	49995000	0

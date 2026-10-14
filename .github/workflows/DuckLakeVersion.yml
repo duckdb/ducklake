@@ -1,5 +1,9 @@
 name: DuckLake Backwards Compatibility Tests
-on: [push, pull_request,repository_dispatch]
+on:
+  push:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  repository_dispatch:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
   cancel-in-progress: true
@@ -9,6 +13,7 @@ defaults:
 
 jobs:
   ducklake-version-tests:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: DuckLake 1.0 Backwards Compatibility
     runs-on: ubuntu-latest
     strategy:

@@ -218,6 +218,10 @@ public:
 	virtual bool CommitsEachStatement() const {
 		return false;
 	}
+	//! Whether a commit inserts inlined rows after its batch instead of sending them as VALUES text in it
+	virtual bool InsertsInlinedRowsAfterBatch(idx_t row_count) const {
+		return !CommitsEachStatement();
+	}
 	//! Probe the metadata server for optional capabilities, for now we only check for server-side retries
 	virtual void ProbeServerCapabilities() {
 	}
@@ -712,9 +716,7 @@ private:
 	static unordered_map<string /* name */, create_t> metadata_managers;
 	static mutex metadata_managers_lock;
 
-	//! Check which file IDs have inlined deletions (returns set of file IDs that have deletions)
-	unordered_set<idx_t> GetFileIdsWithInlinedDeletions(TableIndex table_id, DuckLakeSnapshot snapshot,
-	                                                    const vector<idx_t> &file_ids);
+	unordered_set<idx_t> GetFileIdsWithInlinedDeletions(TableIndex table_id, DuckLakeSnapshot snapshot);
 	unique_ptr<QueryResult> ReadInlinedDataChanges(DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot,
 	                                               const string &inlined_table_name,
 	                                               const vector<string> &columns_to_read,
