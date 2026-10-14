@@ -29,6 +29,36 @@ SELECT len(l), l[100000] FROM ducklake.big
 ----
 100000	99999
 
+# Strings inside lists count, and so does every row of a list, not the buffer behind them
+statement ok
+CREATE TABLE ducklake.nested_string AS SELECT [repeat('x', 1000000)] AS l
+
+statement ok
+CREATE TABLE ducklake.repeated AS SELECT range(3000) AS l FROM range(10)
+
+statement ok
+CREATE TABLE memory.source AS SELECT 1 AS id, range(100000) AS l UNION ALL SELECT 2, [1, 2, 3]
+
+statement ok
+CREATE TABLE ducklake.filtered AS SELECT l FROM memory.source WHERE id = 2
+
+query III
+SELECT (SELECT count(*) FROM ducklake_list_files('ducklake', 'nested_string')),
+	(SELECT count(*) FROM ducklake_list_files('ducklake', 'repeated')),
+	(SELECT count(*) FROM ducklake_list_files('ducklake', 'filtered'))
+----
+1	1	0
+
+# The columns of a wide row do not count against the bound
+statement ok
+CREATE TABLE ducklake.wide AS
+SELECT * FROM (PIVOT (SELECT 'c' || i AS k, [NULL]::BIGINT[] AS v FROM range(1000) r(i)) ON k USING first(v))
+
+query II
+SELECT (SELECT count(*) FROM ducklake.wide), (SELECT count(*) FROM ducklake_list_files('ducklake', 'wide'))
+----
+1	0
+
 # A higher inlining limit raises the bound as well
 statement ok
 CALL ducklake.set_option('data_inlining_row_limit', 1000)
