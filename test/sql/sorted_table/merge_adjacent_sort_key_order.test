@@ -33,6 +33,9 @@ statement ok
 INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(50000, 60000) r(i);
 
 statement ok
+SET VARIABLE second_insert = (SELECT max(snapshot_id) FROM lake.snapshots())
+
+statement ok
 INSERT INTO lake.t SELECT i, md5(i::VARCHAR) FROM range(100000, 110000) r(i);
 
 statement ok
@@ -114,6 +117,11 @@ query II
 SELECT count(*), max(k) FROM lake.t AT (VERSION => getvariable('first_insert'))
 ----
 10000	9999
+
+query II
+SELECT count(*), max(k) FROM lake.t AT (VERSION => getvariable('second_insert'))
+----
+20000	59999
 
 # a descending sort orders the files by their largest key
 statement ok
