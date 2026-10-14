@@ -35,6 +35,30 @@ public:
 //! Inlined rows are written into the metadata catalog, so their data is bounded per row of the limit
 static constexpr idx_t MAX_INLINED_BYTES_PER_ROW = 16384;
 
+//! Bytes of the strings and list elements of a vector, the part of its data that the column count does not bound
+static idx_t VariableDataSize(const Vector &vector) {
+	switch (vector.GetType().InternalType()) {
+	case PhysicalType::VARCHAR: {
+		idx_t size = 0;
+		for (auto &entry : vector.ValidValues<string_t>()) {
+			size += entry.GetValue().GetSize();
+		}
+		return size;
+	}
+	case PhysicalType::LIST:
+		return ListVector::GetChild(vector).GetDataSize(ListVector::GetListSize(vector));
+	case PhysicalType::STRUCT: {
+		idx_t size = 0;
+		for (auto &child : StructVector::GetEntries(vector)) {
+			size += VariableDataSize(child);
+		}
+		return size;
+	}
+	default:
+		return 0;
+	}
+}
+
 class InlineDataGlobalState : public GlobalOperatorState {
 public:
 	explicit InlineDataGlobalState(const DuckLakeInlineData &op) : op(op), total_inlined_rows(0) {
@@ -48,7 +72,9 @@ public:
 	InlinePhase AddRows(InlineDataState &state, DataChunk &input) {
 		lock_guard<mutex> guard(lock);
 		total_inlined_rows += input.size();
-		total_inlined_bytes += input.GetDataSize();
+		for (auto &column : input.data) {
+			total_inlined_bytes += VariableDataSize(column);
+		}
 		if (ExceedsLimit()) {
 			// we have exceeded the total amount of rows - bail
 			if (global_inlined_data) {
