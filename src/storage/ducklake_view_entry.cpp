@@ -97,7 +97,7 @@ string DuckLakeViewEntry::ToSQL() const {
 	}
 	result += " AS ";
 	// switcharoo of generic {DUCKLAKE_CATALOG}. with actual catalog name
-	result += DuckLakeUtil::ReplaceSkippingQuotes(query_sql, "{DUCKLAKE_CATALOG}.", catalog.GetName() + ".");
+	result += DuckLakeUtil::ReplaceSkippingQuotes(query_sql, {{"{DUCKLAKE_CATALOG}.", catalog.GetName() + "."}});
 	result += ";";
 	return result;
 }
@@ -113,7 +113,8 @@ unique_ptr<CatalogEntry> DuckLakeViewEntry::Copy(ClientContext &context) const {
 unique_ptr<SelectStatement> DuckLakeViewEntry::ParseSelectStatement() const {
 	auto parser = Parser::GetBuiltinParser();
 	// switcharoo of generic {DUCKLAKE_CATALOG}. with actual catalog name
-	auto resolved_sql = DuckLakeUtil::ReplaceSkippingQuotes(query_sql, "{DUCKLAKE_CATALOG}.", catalog.GetName() + ".");
+	auto resolved_sql =
+	    DuckLakeUtil::ReplaceSkippingQuotes(query_sql, {{"{DUCKLAKE_CATALOG}.", catalog.GetName() + "."}});
 	return CreateViewInfo::ParseSelect(parser, resolved_sql);
 }
 

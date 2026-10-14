@@ -201,9 +201,7 @@ public:
 	}
 
 	DuckLakeSnapshotCommit &GetCommitInfo();
-	unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string query);
-	unique_ptr<QueryResult> Query(string query);
-	//! Execute SQL on the metadata connection without placeholder substitution or metadata-manager wrapping.
+	//! Execute SQL on the metadata connection without metadata-manager wrapping.
 	unique_ptr<QueryResult> ExecuteRaw(string query);
 	Connection &GetConnection();
 	//! Releases the metadata transaction until the next metadata access

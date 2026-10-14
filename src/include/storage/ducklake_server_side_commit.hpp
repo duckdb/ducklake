@@ -72,13 +72,11 @@ private:
 	//! Assemble the DuckLakeCommitContext with all closures.
 	DuckLakeCommitContext BuildContext(idx_t &committed_snapshot_id, idx_t &committed_schema_version);
 	//! Build INSERT SQL from staged inlined tuples.
-	string BuildInlinedDataInserts(const vector<DuckLakeInlinedDataInfo> &new_data);
+	string BuildInlinedDataInserts(const DuckLakeSQLPlaceholders &sql, const vector<DuckLakeInlinedDataInfo> &new_data);
 	//! Resolve and cache the latest inlined-data table name.
 	const string &ResolveInlinedTableName(TableIndex table_id);
 	//! All inlined-data table names registered for a table id (any schema version).
 	vector<string> LookupInlinedTableNames(TableIndex table_id);
-	//! Replace {METADATA_CATALOG}, {SNAPSHOT_ID}, etc. in SQL.
-	string SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const;
 	bool InlinedFileDeletionTableExists(TableIndex table_id);
 	//! Execute a query on the fresh connection; throw on error.
 	unique_ptr<QueryResult> RunQuery(const string &query, const char *what);
@@ -89,6 +87,8 @@ private:
 	ClientContext &context;
 	const string metadata_schema_name;
 	const string schema_id;
+	//! The metadata schema is the default schema of the server, so the commit has no catalog or path values
+	const DuckLakeSQLPlaceholders placeholders;
 	const int64_t schema_version;
 	Connection fresh_conn;
 	DuckLakeRetryConfig retry_config;

@@ -57,9 +57,11 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 		return std::move(result);
 	}
 
-	string filter;
+	auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
+	auto &metadata_manager = transaction.GetMetadataManager();
 	// we can never delete the most recent snapshot
-	filter = "snapshot_id != (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot) AND ";
+	auto filter = metadata_manager.QueryPlaceholders().Resolve(
+	    "snapshot_id != (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot) AND ");
 	if (has_timestamp) {
 		auto from_timestamp = older_than.GetValue<timestamp_tz_t>();
 		auto timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(timestamp_t(from_timestamp.value));
@@ -70,8 +72,6 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 	} else {
 		filter += StringUtil::Format("snapshot_id IN (%s)", StringUtil::Join(snapshot_ids, ", "));
 	}
-	auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
-	auto &metadata_manager = transaction.GetMetadataManager();
 	result->snapshots = metadata_manager.GetAllSnapshots(filter);
 	for (auto &snapshot : result->snapshots) {
 		result->rows.push_back(DuckLakeSnapshotsFunction::GetSnapshotValues(snapshot));

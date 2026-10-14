@@ -373,11 +373,7 @@ void DuckLakeUtil::ValidateCanEnableInlining(const ColumnList &columns, bool pre
 	}
 }
 
-string DuckLakeUtil::ReplaceSkippingQuotes(const string &sql, const string &from, const string &to) {
-	if (from.empty()) {
-		return sql;
-	}
-
+string DuckLakeUtil::ReplaceSkippingQuotes(const string &sql, const vector<pair<string, string>> &replacements) {
 	auto tokens = Parser::Tokenize(sql);
 
 	// Collect quoted ranges (string constants and double-quoted identifiers) where replacement doesn't happen
@@ -414,10 +410,17 @@ string DuckLakeUtil::ReplaceSkippingQuotes(const string &sql, const string &from
 			continue;
 		}
 
-		// If not inside a quoted range, check for a match of `from`
-		if (sql.compare(pos, from.size(), from) == 0) {
-			result += to;
-			pos += from.size();
+		bool replaced = false;
+		for (auto &replacement : replacements) {
+			auto &from = replacement.first;
+			if (!from.empty() && sql.compare(pos, from.size(), from) == 0) {
+				result += replacement.second;
+				pos += from.size();
+				replaced = true;
+				break;
+			}
+		}
+		if (replaced) {
 			continue;
 		}
 

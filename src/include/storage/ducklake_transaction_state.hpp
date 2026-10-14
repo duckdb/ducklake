@@ -23,7 +23,14 @@ struct DuckLakeColumnSchemaEntry {
 	bool is_root;
 };
 
+//! The executors below run resolved SQL, see DuckLakeSQLPlaceholders
 struct DuckLakeCommitContext {
+	//! The placeholders of the commit batch, without the snapshot id of the commit
+	DuckLakeSQLPlaceholders batch_placeholders;
+	//! The placeholders of the queries the commit reads with, without a snapshot
+	DuckLakeSQLPlaceholders read_placeholders;
+	//! The placeholders of the conflict resolution queries, at the snapshot of the transaction
+	DuckLakeSQLPlaceholders conflict_placeholders;
 	//! Runs a metadata-DB query during conflict resolution.
 	std::function<unique_ptr<QueryResult>(string)> conflict_query_executor;
 	//! Whether the inlined file deletion table of a table exists, it is created lazily
@@ -34,7 +41,7 @@ struct DuckLakeCommitContext {
 	std::function<void(idx_t)> set_delete_commit_snapshot = [](idx_t) {
 	};
 	//! Executes the batched snapshot/changes SQL against the metadata DB.
-	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string &)> execute_commit_batch;
+	std::function<unique_ptr<QueryResult>(const string &)> execute_commit_batch;
 	//! Classifies metadata-catalog errors that are safe to retry.
 	std::function<bool(const string &)> is_retryable_metadata_error = [](const string &) {
 		return false;
@@ -56,8 +63,6 @@ struct DuckLakeCommitContext {
 	std::function<unique_ptr<QueryResult>(string)> query_metadata;
 	//! Runs cleanup statements atomically.
 	std::function<unique_ptr<QueryResult>(string)> execute_in_transaction;
-	//! Runs a snapshot-templated metadata-DB query (handles {SNAPSHOT_ID} substitution).
-	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> query_metadata_with_snapshot;
 	//! Optional Appender fast-path.
 	std::function<bool(DuckLakeSnapshot &, const vector<DuckLakeFileInfo> &, const vector<DuckLakeTableInfo> &,
 	                   vector<DuckLakeSchemaInfo> &)>
@@ -66,21 +71,23 @@ struct DuckLakeCommitContext {
 		    return false;
 	    };
 	//! Emits the SQL that registers new inlined data tables (CREATE TABLE + ducklake_inlined_data_tables INSERT).
-	std::function<string(DuckLakeSnapshot, const vector<DuckLakeTableInfo> &)> write_inlined_tables =
-	    [](DuckLakeSnapshot, const vector<DuckLakeTableInfo> &) {
-		    return string();
-	    };
+	std::function<string(const DuckLakeSQLPlaceholders &, DuckLakeSnapshot, const vector<DuckLakeTableInfo> &)>
+	    write_inlined_tables =
+	        [](const DuckLakeSQLPlaceholders &, DuckLakeSnapshot, const vector<DuckLakeTableInfo> &) {
+		        return string();
+	        };
 	//! Emits the SQL that appends inlined data for the given table changes (handles new inlined-table creation,
 	//! per-tx cache, and the per-row INSERT VALUES).
-	std::function<string(DuckLakeSnapshot &, const vector<DuckLakeInlinedDataInfo> &, const vector<DuckLakeTableInfo> &,
-	                     const vector<DuckLakeTableInfo> &)>
+	std::function<string(const DuckLakeSQLPlaceholders &, DuckLakeSnapshot &, const vector<DuckLakeInlinedDataInfo> &,
+	                     const vector<DuckLakeTableInfo> &, const vector<DuckLakeTableInfo> &)>
 	    write_inlined_data;
 	//! Emits the SQL that creates+populates per-table inlined file-deletion tables (ducklake_inlined_delete_<id>)
 	//! and marks the metadata-manager cache for clearing when a new such table is created.
-	std::function<string(const vector<DuckLakeInlinedFileDeletionInfo> &)> write_inlined_file_deletes =
-	    [](const vector<DuckLakeInlinedFileDeletionInfo> &) {
-		    return string();
-	    };
+	std::function<string(const DuckLakeSQLPlaceholders &, const vector<DuckLakeInlinedFileDeletionInfo> &)>
+	    write_inlined_file_deletes =
+	        [](const DuckLakeSQLPlaceholders &, const vector<DuckLakeInlinedFileDeletionInfo> &) {
+		        return string();
+	        };
 	//! Whether an earlier commit found values of a column at the snapshot
 	std::function<bool(TableIndex, FieldIndex, idx_t)> column_holds_values = [](TableIndex, FieldIndex, idx_t) {
 		return false;
@@ -162,7 +169,8 @@ public:
 	                        const DuckLakeCommitContext &context) const;
 
 	static SnapshotDeletedFromFiles
-	GetFilesDeletedOrDroppedAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor);
+	GetFilesDeletedOrDroppedAfterSnapshot(const DuckLakeSQLPlaceholders &sql,
+	                                      const std::function<unique_ptr<QueryResult>(string)> &executor);
 
 	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes,
 	                            const DuckLakeSnapshotCommit &commit_info) const;

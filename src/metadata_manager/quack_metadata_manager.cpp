@@ -12,13 +12,15 @@ namespace duckdb {
 QuackMetadataManager::QuackMetadataManager(DuckLakeTransaction &transaction) : DuckLakeMetadataManager(transaction) {
 }
 
-unique_ptr<QueryResult> QuackMetadataManager::Query(string &query) {
+DuckLakeSQLPlaceholders QuackMetadataManager::QueryPlaceholders() const {
+	// the queries run on the quack server, which knows the metadata schema but not the catalog of DuckDB
+	return CatalogPlaceholders(SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
+}
+
+unique_ptr<QueryResult> QuackMetadataManager::Query(const string &query) {
+	D_ASSERT(!DuckLakeSQLPlaceholders::HasUnresolvedPlaceholder(query));
 	auto &ducklake_catalog = transaction.GetCatalog();
 	lock_guard<std::recursive_mutex> guard(ducklake_catalog.GetMetadataQueryLock());
-	auto schema_identifier = SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataSchemaName());
-	query = StringUtil::Replace(query, "{METADATA_CATALOG}", schema_identifier);
-	SubstituteCatalogPlaceholders(query);
-
 	auto metadata_catalog_name_literal = SQLString::ToString(ducklake_catalog.MetadataDatabaseName());
 	auto wrapper = StringUtil::Format("CALL system.main.quack_query_by_name(%s, %s)", metadata_catalog_name_literal,
 	                                  SQLString(query));
@@ -32,10 +34,8 @@ unique_ptr<QueryResult> QuackMetadataManager::Query(string &query) {
 }
 
 unique_ptr<QueryResult> QuackMetadataManager::AttachMetadata(const string &attach_query) {
-	auto query = attach_query;
-	SubstituteCatalogPlaceholders(query);
 	Connection fresh_conn(transaction.GetCatalog().GetDatabase());
-	auto result = fresh_conn.Query(query);
+	auto result = fresh_conn.Query(attach_query);
 
 	for (idx_t attempt = 0; attempt < 5 && result->HasError(); attempt++) {
 		auto raw_message = result->GetErrorObject().RawMessage();
@@ -45,18 +45,17 @@ unique_ptr<QueryResult> QuackMetadataManager::AttachMetadata(const string &attac
 		if (!retryable) {
 			break;
 		}
-		result = fresh_conn.Query(query);
+		result = fresh_conn.Query(attach_query);
 	}
 	return std::move(result);
 }
 
-unique_ptr<QueryResult> QuackMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
+unique_ptr<QueryResult> QuackMetadataManager::ExecuteBatch(const string &query) {
 	// the server commits each statement on its own, so the statements run in a server transaction
-	SubstituteTransactionPlaceholders(snapshot, query);
 	return ExecuteInTransaction(query);
 }
 
-unique_ptr<QueryResult> QuackMetadataManager::ExecuteInTransaction(string &query) {
+unique_ptr<QueryResult> QuackMetadataManager::ExecuteInTransaction(const string &query) {
 	// hold the lock through the rollback
 	lock_guard<std::recursive_mutex> guard(transaction.GetCatalog().GetMetadataQueryLock());
 	return DuckLakeMetadataManager::ExecuteInTransaction(query);
@@ -68,10 +67,10 @@ string QuackMetadataManager::MetadataExistsQuery() const {
 }
 
 bool QuackMetadataManager::InlinedDeletionTableExists(const string &table_name) {
-	auto query = StringUtil::Format("SELECT 1 FROM duckdb_tables() WHERE database_name = current_database() "
-	                                "AND schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
-	                                SQLString::ToString(table_name));
-	auto result = Query(query);
+	auto result = Query(QueryPlaceholders().Format("SELECT 1 FROM duckdb_tables() WHERE database_name = "
+	                                               "current_database() AND schema_name = "
+	                                               "{METADATA_SCHEMA_NAME_LITERAL} AND table_name = %s",
+	                                               SQLString::ToString(table_name)));
 	result->ThrowIfError("Failed to probe for DuckLake inlined-deletion table: ");
 	return result->Fetch() != nullptr;
 }
@@ -150,8 +149,7 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
 }
 
 bool QuackMetadataManager::MetadataExists() {
-	auto query = MetadataExistsQuery();
-	auto result = Query(query);
+	auto result = Query(QueryPlaceholders().Resolve(MetadataExistsQuery()));
 	result->ThrowIfError("Failed to probe DuckLake metadata: ");
 	auto chunk = result->Fetch();
 	if (!chunk || chunk->size() == 0) {
