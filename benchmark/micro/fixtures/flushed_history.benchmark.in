@@ -6,17 +6,20 @@ cache_file flushed_history_ready.marker
 
 # Snapshots 2 to 11 insert, 12 to 31 update and 32 to 41 delete, every row changes at most once, and 42 flushes
 load
-EXPORT DATABASE '${BENCHMARK_DIR}/flushed_history_gen';
-COPY (SELECT CASE
-WHEN k < 10 THEN 'INSERT INTO lake.t SELECT i, i FROM range(' || (k * 10000) || ', ' || ((k + 1) * 10000) || ') t(i);'
-WHEN k < 30 THEN 'UPDATE lake.t SET v = v + 1 WHERE id % 100 = ' || (k - 10) || ';'
-ELSE 'DELETE FROM lake.t WHERE id % 100 = ' || (k + 20) || ';'
-END || ' COMMIT; BEGIN;' FROM range(40) t(k))
-TO '${BENCHMARK_DIR}/flushed_history_gen/schema.sql' (HEADER false, QUOTE '');
 @create flushed_history
 @attach flushed_history AS lake (DATA_PATH '${BENCHMARK_DIR}/flushed_history_files', DATA_INLINING_ROW_LIMIT 100000)
 CREATE TABLE lake.t (id BIGINT, v BIGINT);
-IMPORT DATABASE '${BENCHMARK_DIR}/flushed_history_gen';
+BEGIN;
+@for k in range(10)
+INSERT INTO lake.t SELECT i, i FROM range(@{k} * 10000, (@{k} + 1) * 10000) t(i); COMMIT; BEGIN;
+@end
+@for r in range(20)
+UPDATE lake.t SET v = v + 1 WHERE id % 100 = @{r}; COMMIT; BEGIN;
+@end
+@for r in range(50, 60)
+DELETE FROM lake.t WHERE id % 100 = @{r}; COMMIT; BEGIN;
+@end
+COMMIT;
 CALL ducklake_flush_inlined_data('lake');
 SELECT CASE WHEN (SELECT count(*) <> 43 FROM lake.snapshots())
 OR (SELECT count(*) <> 1 FROM __ducklake_metadata_lake.ducklake_data_file WHERE end_snapshot IS NULL)

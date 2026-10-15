@@ -346,7 +346,7 @@ unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapsh
 }
 
 void PostgresMetadataManager::ClearCache() {
-	auto result = transaction.ExecuteRaw("CALL pg_clear_cache();");
+	auto result = transaction.ExecuteRaw("CALL postgres_clear_cache();");
 	result->ThrowIfError("Failed to clear the PostgreSQL metadata cache: ");
 }
 

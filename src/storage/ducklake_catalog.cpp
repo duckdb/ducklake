@@ -1259,7 +1259,7 @@ idx_t DuckLakeCatalog::GetTargetFileSize(ClientContext &context, SchemaIndex sch
 	Value setting_val;
 	if (context.TryGetCurrentSetting("ducklake_target_file_size", setting_val) && !setting_val.IsNull() &&
 	    !setting_val.ToString().empty()) {
-		return DBConfig::ParseMemoryLimit(setting_val.ToString());
+		return DBConfig::ParseMemoryLimitOrMaximum(setting_val.ToString());
 	}
 	return GetConfigOption<idx_t>("target_file_size", schema_id, table_id, DEFAULT_TARGET_FILE_SIZE, table_options);
 }

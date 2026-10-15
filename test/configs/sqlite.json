@@ -20,6 +20,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "Only DuckDB catalogs drop the empty inlined data table that an ALTER supersedes",
+      "paths": [
+        "test/sql/alter/alter_drops_empty_inlined_tables.test"
+      ]
+    },
+    {
       "reason": "Test requires a Quack metadata catalog",
       "paths": [
         "test/sql/quack/inlined_superseded_drop_failure.test"

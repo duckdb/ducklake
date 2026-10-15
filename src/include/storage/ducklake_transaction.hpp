@@ -56,6 +56,8 @@ public:
 struct FlushedInlinedTableInfo {
 	DuckLakeInlinedTableInfo inlined_table;
 	idx_t flush_snapshot_id;
+	//! A flush that writes no file leaves no rows to delete
+	bool wrote_files = true;
 };
 
 struct DroppedDataFileStats {
@@ -217,6 +219,8 @@ public:
 	DuckLakeSnapshot GetSnapshot();
 	DuckLakeSnapshot GetSnapshot(optional_ptr<BoundAtClause> at_clause,
 	                             SnapshotBound bound = SnapshotBound::UPPER_BOUND);
+	//! The newest snapshot that the transaction sees, also when the catalog is opened at a fixed snapshot
+	idx_t GetNewestVisibleSnapshotId();
 
 	static DuckLakeTransaction &Get(ClientContext &context, Catalog &catalog);
 
@@ -281,7 +285,7 @@ public:
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	void DeleteInlinedData(const DuckLakeInlinedTableInfo &inlined_table);
 	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
-	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id);
+	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files);
 	bool InlinedTableFlushed(const string &table_name);
 	//! Marks the inlined file deletions of the table flushed up to the snapshot, the commit deletes them
 	void MarkInlinedFileDeletionsFlushed(TableIndex table_id, idx_t flush_snapshot_id);
@@ -393,7 +397,9 @@ private:
 	mutex delete_attempted_lock;
 	//! The snapshots expired by this transaction, deleted when it commits
 	vector<DuckLakeSnapshotInfo> expired_snapshots;
-	//! The snapshot of the transaction (latest snapshot in DuckLake)
+	DuckLakeSnapshot GetLatestSnapshot();
+	//! The latest snapshot in DuckLake when the transaction first looked, the snapshot of the transaction unless the
+	//! catalog is opened at a fixed snapshot
 	mutex snapshot_lock;
 	unique_ptr<DuckLakeSnapshot> snapshot;
 	idx_t local_catalog_id;

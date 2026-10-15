@@ -97,7 +97,7 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column
 	ExpressionType comparison_type;
 	Value constant;
 	{
-		lock_guard<mutex> l(filter_data->lock);
+		annotated_shared_lock<annotated_shared_mutex> l(filter_data->lock);
 		if (!filter_data->initialized) {
 			return false;
 		}
@@ -339,7 +339,10 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			auto txn = read_info.GetTransaction();
 			bool has_local_delete = read_info.include_local_changes && txn &&
 			                        txn->HasLocalDeleteForFile(read_info.table_id, reader.GetFileName());
-			if (!has_local_delete) {
+			if (read_info.scan_type == DuckLakeScanType::SCAN_INSERTIONS) {
+				// only the deletes of the snapshot that inserted the rows
+				delete_filter->SetSnapshotFilter(file_entry.snapshot_id.GetIndex());
+			} else if (!has_local_delete) {
 				// We only set snapshot filter if this file is not a current running transaction
 				// OW, we are guaranteed to be on the latest valid snapshot
 				delete_filter->SetSnapshotFilter(read_info.snapshot.snapshot_id);

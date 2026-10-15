@@ -1,0 +1,41 @@
+# name: benchmark/micro/read/scan_after_alters.benchmark
+# description: Twenty scans of a table of 1000 rows in one file after 200 ALTERs without a CHECKPOINT
+# group: [read]
+
+name Scan After Alters
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/altered_scan.benchmark.in
+
+run
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+SELECT sum(i) AS total FROM lake.p;
+
+# The 200 ALTERs must have given p 200 more schema versions than q
+result_query II
+SELECT total, (SELECT count(*) FROM lake.snapshots()) FROM __answer;
+----
+499500	203

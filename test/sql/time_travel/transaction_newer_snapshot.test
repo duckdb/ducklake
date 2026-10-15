@@ -1,0 +1,85 @@
+# name: test/sql/time_travel/transaction_newer_snapshot.test
+# description: A transaction does not list, time travel to or read the changes of snapshots committed after it started
+# group: [time_travel]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/transaction_newer_snapshot')
+
+statement ok
+CREATE TABLE lake.t (i INTEGER)
+
+statement ok
+INSERT INTO lake.t SELECT range FROM range(10)
+
+statement ok con1
+BEGIN
+
+query II con1
+SELECT count(*), (SELECT max(snapshot_id) FROM lake.snapshots()) FROM lake.t
+----
+10	2
+
+statement ok con2
+INSERT INTO lake.t SELECT range FROM range(100, 150)
+
+query II con1
+SELECT count(*), (SELECT max(snapshot_id) FROM lake.snapshots()) FROM lake.t
+----
+10	2
+
+# a time after the other commit, which now() of the open transaction is not
+statement ok con2
+COPY (SELECT now() AS ts) TO '{TEST_DIR}/transaction_newer_snapshot.csv'
+
+statement ok con1
+SET VARIABLE after_insert = (SELECT ts::TIMESTAMPTZ FROM read_csv('{TEST_DIR}/transaction_newer_snapshot.csv'))
+
+query I con1
+SELECT count(*) FROM lake.t AT (TIMESTAMP => getvariable('after_insert'))
+----
+10
+
+query I con1
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 't', TIMESTAMPTZ '2000-01-01 00:00:00+00', getvariable('after_insert'))
+----
+10
+
+statement error con1
+SELECT count(*) FROM lake.t AT (VERSION => 3)
+----
+No snapshot found at version 3
+
+statement ok con1
+ROLLBACK
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM lake.t
+----
+60
+
+statement ok con2
+INSERT INTO lake.t SELECT range FROM range(200, 250)
+
+statement error con1
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 't', 0, 4)
+----
+No snapshot found at version 4
+
+statement ok con1
+ROLLBACK
+
+query II con1
+SELECT count(*), (SELECT max(snapshot_id) FROM lake.snapshots()) FROM ducklake_table_changes('lake', 'main', 't', 0, 4)
+----
+110	4
