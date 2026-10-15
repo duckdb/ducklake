@@ -384,6 +384,20 @@ unique_ptr<FunctionData> DuckLakeFunctions::BindDuckLakeScan(ClientContext &cont
 
 TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique_ptr<FunctionData> &bind_data,
                                                   const EntryLookupInfo &lookup_info) {
+	auto &transaction = DuckLakeTransaction::Get(context, ParentCatalog());
+	if (!lookup_info.GetAtClause() && transaction.IsRenamed(*this)) {
+		auto schema_id = ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId();
+		auto local_entry =
+		    transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY, schema_id, name.GetIdentifierName());
+		if (!local_entry || local_entry->Cast<DuckLakeTableEntry>().GetTableId() != GetTableId()) {
+			throw BinderException("Table with name %s does not exist", name);
+		}
+	}
+	return GetScanFunctionById(context, bind_data, lookup_info);
+}
+
+TableFunction DuckLakeTableEntry::GetScanFunctionById(ClientContext &context, unique_ptr<FunctionData> &bind_data,
+                                                      const EntryLookupInfo &lookup_info) {
 	auto function = DuckLakeFunctions::GetDuckLakeScanFunction(*context.db);
 	auto &transaction = DuckLakeTransaction::Get(context, ParentCatalog());
 	auto function_info =
@@ -392,14 +406,6 @@ TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique
 	function.function_info = std::move(function_info);
 	if (!lookup_info.GetAtClause() && transaction.IsDeleted(*this)) {
 		throw BinderException("Table with name %s does not exist", name);
-	}
-	if (!lookup_info.GetAtClause() && transaction.IsRenamed(*this)) {
-		auto schema_id = ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId();
-		auto local_entry =
-		    transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY, schema_id, name.GetIdentifierName());
-		if (!local_entry || local_entry->Cast<DuckLakeTableEntry>().GetTableId() != GetTableId()) {
-			throw BinderException("Table with name %s does not exist", name);
-		}
 	}
 
 	bind_data = DuckLakeFunctions::BindDuckLakeScan(context, function);

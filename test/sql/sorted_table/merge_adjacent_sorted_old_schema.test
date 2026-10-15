@@ -338,7 +338,7 @@ SELECT id FROM lake.mc
 3
 1
 
-# a subquery in the sort key after an unrelated column was renamed
+# a subquery in the sort key is rejected when the files are merged
 statement ok
 CREATE TABLE lake.sq (id BIGINT, v BIGINT, other BIGINT)
 
@@ -354,19 +354,17 @@ ALTER TABLE lake.sq RENAME COLUMN other TO other2
 statement ok
 ALTER TABLE lake.sq SET SORTED BY ((SELECT v))
 
-query II
+statement error
 SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'sq')
 ----
-2	1
+subqueries are not allowed in ORDER_BY
 
-query I
-SELECT id FROM lake.sq
+query II
+SELECT count(*), (SELECT count(*) FROM ducklake_list_files('lake', 'sq')) FROM lake.sq
 ----
-2
-3
-1
+3	2
 
-# subqueries next to a promoted and a moved column
+# subqueries next to a promoted column are rejected too
 statement ok
 CREATE TABLE lake.nq (id BIGINT, v INTEGER)
 
@@ -382,10 +380,15 @@ ALTER TABLE lake.nq ALTER COLUMN v TYPE BIGINT
 statement ok
 ALTER TABLE lake.nq SET SORTED BY (((SELECT v) = ANY (SELECT 10)), id)
 
-query II
+statement error
 SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'nq')
 ----
-2	1
+subqueries are not allowed in ORDER_BY
+
+query II
+SELECT count(*), (SELECT count(*) FROM ducklake_list_files('lake', 'nq')) FROM lake.nq
+----
+3	2
 
 statement ok
 CREATE TABLE lake.uq (a BIGINT, id BIGINT, v BIGINT)
@@ -402,17 +405,15 @@ ALTER TABLE lake.uq DROP COLUMN a
 statement ok
 ALTER TABLE lake.uq SET SORTED BY (v + (SELECT 0))
 
-query II
+statement error
 SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'uq')
 ----
-2	1
+subqueries are not allowed in ORDER_BY
 
-query I
-SELECT id FROM lake.uq
+query II
+SELECT count(*), (SELECT count(*) FROM ducklake_list_files('lake', 'uq')) FROM lake.uq
 ----
-2
-3
-1
+3	2
 
 # a positional sort key refers to the column at its position in the latest table
 statement ok

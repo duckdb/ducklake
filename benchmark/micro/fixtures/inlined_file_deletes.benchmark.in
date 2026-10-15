@@ -8,20 +8,21 @@ cache_file ${lake}_ready.marker
 
 # A row limit of 10 keeps the 2048-row inserts in files and inlines the deletions
 load
-EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
-COPY (SELECT stmt FROM (
-SELECT 0 AS o, k, 'CREATE TABLE lake.t' || k || ' AS SELECT i AS id FROM range(2048) t(i);' AS stmt FROM range(20) t(k)
-UNION ALL
-SELECT 1, k, 'INSERT INTO lake.t' || k || ' SELECT i FROM range(2048, 4096) t(i);' FROM range(20) t(k)
-UNION ALL
-SELECT 2, 0, 'COMMIT; BEGIN;'
-UNION ALL
-SELECT 3, k, 'DELETE FROM lake.t' || k || ' WHERE id = 0;' FROM range(20) t(k)
-) ORDER BY o, k) TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
 @create ${lake}_pristine
 @attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
 CALL lake.set_option('data_inlining_row_limit', 10);
-IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+BEGIN;
+@for k in range(20)
+CREATE TABLE lake.t@{k} AS SELECT i AS id FROM range(2048) t(i);
+@end
+@for k in range(20)
+INSERT INTO lake.t@{k} SELECT i FROM range(2048, 4096) t(i);
+@end
+COMMIT; BEGIN;
+@for k in range(20)
+DELETE FROM lake.t@{k} WHERE id = 0;
+@end
+COMMIT;
 SET VARIABLE delete_targets = (SELECT list('lake.t' || k) FROM range(20) t(k));
 SET VARIABLE inlined_delete_tables = (SELECT list('__ducklake_metadata_lake.ducklake_inlined_delete_' || table_id)
 FROM __ducklake_metadata_lake.ducklake_table);

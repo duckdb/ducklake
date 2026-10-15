@@ -1,0 +1,22 @@
+# name: benchmark/micro/time_travel/table_insertions_many_files.benchmark
+# description: table_insertions over 4096 data files that each have a delete file of a later snapshot
+# group: [time_travel]
+
+name Table Insertions Many Files
+group micro
+subgroup time_travel
+
+require ducklake
+
+require parquet
+
+argument work table_insertions_many_files_work
+
+include benchmark/micro/fixtures/delete_files.benchmark.in
+
+run
+SELECT snapshot_id, count(*) AS cnt, sum(id) AS sum_id FROM ducklake_table_insertions('lake', 'main', 'bg', 0, 4)
+GROUP BY ALL ORDER BY ALL;
+
+result III
+1	8388608	35184367894528
