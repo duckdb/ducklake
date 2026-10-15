@@ -10,16 +10,18 @@ require postgres_scanner
 
 require-env DUCKLAKE_CI
 
+require-env DUCKLAKE_CONNECTION
+
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
 
 statement ok
 CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS dev_migration_failure CASCADE')
 
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
 (DATA_PATH '{DATA_PATH}/dev_migration_failure', METADATA_SCHEMA 'dev_migration_failure', DUCKLAKE_VERSION '1.1-dev1')
 
 statement ok
@@ -33,13 +35,13 @@ statement ok
 CALL postgres_execute('pg', 'ALTER TABLE dev_migration_failure.ducklake_metadata ADD CONSTRAINT reject_version_update CHECK (key <> ''version'') NOT VALID')
 
 statement error
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
 (METADATA_SCHEMA 'dev_migration_failure', AUTOMATIC_MIGRATION TRUE)
 ----
 reject_version_update
 
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl (METADATA_SCHEMA 'dev_migration_failure')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_SCHEMA 'dev_migration_failure')
 
 query I
 SELECT * FROM dl.t

@@ -12,6 +12,9 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 test-env DATA_PATH {TEST_DIR}
 
+# a locked database fails the test instead of skipping it
+set ignore_error_messages
+
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/deletion_inlining_concurrent_retry', DATA_INLINING_ROW_LIMIT 10, METADATA_CATALOG 'ducklake_meta')
 
@@ -38,21 +41,20 @@ endloop
 # lose their inlined file deletion metadata.
 concurrentloop tableid 0 3
 
-loop rowid 0 5
+loop rowid 0 40
 
-statement maybe
+statement ok
 DELETE FROM ducklake.t{tableid} WHERE a = {rowid}
-----
 
 endloop
 
 endloop
 
-# Every table should have rows 0-4 deleted.
+# Every table should have rows 0-39 deleted.
 loop i 0 3
 
 query I
-SELECT COUNT(*) FROM ducklake.t{i} WHERE a < 5
+SELECT COUNT(*) FROM ducklake.t{i} WHERE a < 40
 ----
 0
 

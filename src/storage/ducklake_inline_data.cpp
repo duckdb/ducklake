@@ -11,6 +11,7 @@
 #include "duckdb/common/vector/list_vector.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
 #include "duckdb/common/vector/map_vector.hpp"
+#include "duckdb/common/types/variant/parquet_variant_iterator.hpp"
 
 namespace duckdb {
 
@@ -343,6 +344,47 @@ void DuckLakeInlineData::RecomputeColumnStats(DuckLakeTableEntry &table, DuckLak
 	inlined_data.outdated_stats_table = nullptr;
 }
 
+//! Refuse VARIANT values that a data file cannot store, such as INTERVAL members, so they never get stuck inlined
+static void VerifyParquetVariants(Vector &data, idx_t count) {
+	auto &type = data.GetType();
+	switch (type.id()) {
+	case LogicalTypeId::VARIANT: {
+		child_list_t<LogicalType> parquet_variant {{"metadata", LogicalType::BLOB}, {"value", LogicalType::BLOB}};
+		Vector encoded(LogicalType::STRUCT(std::move(parquet_variant)), count);
+		ParquetVariantConversion::ToParquetVariant(data, count, encoded);
+		break;
+	}
+	case LogicalTypeId::STRUCT:
+		for (auto &child : StructVector::GetEntries(data)) {
+			VerifyParquetVariants(child, count);
+		}
+		break;
+	case LogicalTypeId::LIST:
+	case LogicalTypeId::MAP:
+		VerifyParquetVariants(ListVector::GetChildMutable(data), ListVector::GetListSize(data));
+		break;
+	default:
+		break;
+	}
+}
+
+static void VerifyParquetVariants(ColumnDataCollection &data) {
+	vector<column_t> variant_columns;
+	for (idx_t c = 0; c < data.ColumnCount(); c++) {
+		if (TypeVisitor::Contains(data.Types()[c], LogicalTypeId::VARIANT)) {
+			variant_columns.push_back(c);
+		}
+	}
+	if (variant_columns.empty()) {
+		return;
+	}
+	for (auto &chunk : data.Chunks(variant_columns)) {
+		for (auto &column : chunk.data) {
+			VerifyParquetVariants(column, chunk.size());
+		}
+	}
+}
+
 OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                                              OperatorFinalizeInput &input) const {
 	// push inlined data to transaction
@@ -414,6 +456,10 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 
 	// push the inlined data into the transaction
 	auto &transaction = DuckLakeTransaction::Get(context, table.ParentCatalog());
+	// other catalogs store VARIANT in the Parquet encoding, which refuses such values at commit
+	if (transaction.GetMetadataManager().TypeIsNativelySupported(LogicalType::VARIANT())) {
+		VerifyParquetVariants(*result->data);
+	}
 	auto &catalog = table.ParentCatalog().Cast<DuckLakeCatalog>();
 	if (table.GetInlinedDataTables().empty() ||
 	    !table.HasCurrentInlinedDataTable(

@@ -144,6 +144,16 @@ DuckLakeColumnStats DuckLakeInsert::ParseColumnStats(const LogicalType &type, co
 	return column_stats;
 }
 
+static bool IsLeafColumnStats(const vector<Value> &col_stats) {
+	// only leaf columns report a size
+	for (auto &stat : col_stats) {
+		if (StringValue::Get(StructValue::GetChildren(stat)[0]) == "column_size_bytes") {
+			return true;
+		}
+	}
+	return false;
+}
+
 void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, DataChunk &chunk,
                                      const string &encryption_key, optional_idx partition_id, bool set_snapshot_id) {
 	auto skipped_fields = global_state.table.GetSkippedStatsFields();
@@ -179,6 +189,9 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 			auto &struct_children = StructValue::GetChildren(map_children[col_idx]);
 			auto &col_name = StringValue::Get(struct_children[0]);
 			auto &col_stats = MapValue::GetChildren(struct_children[1]);
+			if (!IsLeafColumnStats(col_stats)) {
+				continue;
+			}
 			auto column_names = DuckLakeUtil::ParseQuotedList(col_name, '.');
 			// FIXME: this should be checked differently
 			if (column_names[0] == "_ducklake_internal_snapshot_id") {
@@ -531,6 +544,11 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 			info->options[option.second].emplace_back(option_value);
 		}
 	}
+	// the writer accepts a compression level only for ZSTD, which a table can override
+	auto compression = info->options.find("compression");
+	if (compression == info->options.end() || !StringUtil::CIEquals(compression->second[0].ToString(), "zstd")) {
+		info->options.erase("compression_level");
+	}
 	string per_thread_output_str;
 	bool per_thread_output = false;
 	if (catalog.TryGetConfigOption("per_thread_output", per_thread_output_str, schema_id, table_id,
@@ -632,12 +650,19 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
 	copy.SetEstimatedCardinality(1);
 	copy.ResolveOperatorTypes();
 	auto &physical_copy = planner.CreatePlan(copy, *plan).Cast<PhysicalCopyToFile>();
-	if (copy_input.ordered_input && copy.function.execution_mode) {
-		// the rows are sorted and the batch copy operator does not rotate files by size
-		auto execution_mode = copy.function.execution_mode(true, false);
-		physical_copy.parallel = execution_mode == CopyFunctionExecutionMode::PARALLEL_COPY_TO_FILE;
+	if (copy_input.ordered_input) {
+		PreserveSortedOrder(physical_copy);
 	}
 	return physical_copy;
+}
+
+void DuckLakeInsert::PreserveSortedOrder(PhysicalCopyToFile &physical_copy) {
+	if (!physical_copy.function.execution_mode) {
+		return;
+	}
+	// the rows are sorted and the batch copy operator does not rotate files by size
+	auto execution_mode = physical_copy.function.execution_mode(true, false);
+	physical_copy.parallel = execution_mode == CopyFunctionExecutionMode::PARALLEL_COPY_TO_FILE;
 }
 
 PhysicalOperator &DuckLakeInsert::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner,

@@ -162,6 +162,12 @@ PostgresMetadataManager::PostgresMetadataManager(DuckLakeTransaction &transactio
     : DuckLakeMetadataManager(transaction) {
 }
 
+bool PostgresMetadataManager::InsertsInlinedRowsAfterBatch(idx_t row_count) const {
+	// the copy of a separate insert costs more round trips than parsing the VALUES text of a few rows
+	static constexpr idx_t MAX_INLINED_ROWS_IN_BATCH = 100;
+	return row_count > MAX_INLINED_ROWS_IN_BATCH;
+}
+
 bool PostgresMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	switch (type.id()) {
 	// Unnamed composite types are not supported.
@@ -340,7 +346,7 @@ unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapsh
 }
 
 void PostgresMetadataManager::ClearCache() {
-	auto result = transaction.ExecuteRaw("CALL pg_clear_cache();");
+	auto result = transaction.ExecuteRaw("CALL postgres_clear_cache();");
 	result->ThrowIfError("Failed to clear the PostgreSQL metadata cache: ");
 }
 

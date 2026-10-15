@@ -1,0 +1,27 @@
+# name: benchmark/micro/write/insert_inlined_variant.benchmark
+# description: INSERT 10000 VARIANT rows into an inlined table in a transaction that is rolled back, without the commit
+# group: [write]
+
+name Insert Inlined Variant
+group micro
+subgroup write
+
+require ducklake
+
+argument work inlined_variant_work
+
+include benchmark/micro/fixtures/inlined_variant.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+BEGIN;
+INSERT INTO lake.t SELECT i, {'a': i, 'b': 'value_' || i, 'c': [i, i + 1]}::VARIANT FROM range(10000) t(i);
+SELECT count(*) AS inlined, (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**')) AS files FROM lake.t;
+ROLLBACK;
+
+# The rows were inlined without data files in the transaction and rolled back
+result_query III
+SELECT (SELECT inlined FROM __answer), (SELECT files FROM __answer), (SELECT count(*) FROM lake.t)
+----
+10000	0	0

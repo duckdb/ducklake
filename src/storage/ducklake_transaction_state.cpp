@@ -1766,6 +1766,9 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 
 			// remap the table in the commit state
 			commit_state.committed_tables.emplace(old_table_id, new_table_id);
+			if (local_change.type == LocalChangeType::RENAMED) {
+				commit_state.replaced_inlined_tables.insert(new_table_id);
+			}
 
 			// create an inlined data table entry with the latest columns
 			// (uses tables.front() to get the most up-to-date schema including any ALTER TABLE changes)
@@ -1826,6 +1829,7 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			}
 		}
 		if (!already_added) {
+			commit_state.replaced_inlined_tables.insert(committed_id);
 			DuckLakeTableInfo table_entry;
 			table_entry.id = committed_id;
 			table_entry.schema_id = table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId();
@@ -2188,7 +2192,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::WriteExpiredColumnTags(expired_column_tags);
 		batch_queries += DuckLakeMetadataManager::WriteNewColumns(result.new_columns);
 		batch_queries += WriteAddedFieldStats(result.added_fields, stats, context);
-		batch_queries += context.write_inlined_tables(commit_snapshot, result.new_inlined_data_tables);
+		batch_queries += context.write_inlined_tables(commit_snapshot, result.new_inlined_data_tables,
+		                                              commit_state.replaced_inlined_tables);
 		batch_queries += DuckLakeMetadataManager::WriteNewSortKeys(existing_catalog.sorts, result.new_sort_keys);
 		new_tables_result = result.new_tables;
 		new_inlined_data_tables_result = result.new_inlined_data_tables;
@@ -2500,21 +2505,15 @@ WHERE idt.schema_version < (
 	bool dropped = false;
 	unique_ptr<QueryResult> failed_drop;
 	for (auto &candidate : candidates) {
-		auto count_result = context.query_metadata(
-		    StringUtil::Format("SELECT COUNT(*) FROM {METADATA_CATALOG}.%s;", SQLIdentifier(candidate.table_name)));
-		count_result->ThrowIfError("Failed to check emptiness of superseded inlined-data table in DuckLake: ");
-		idx_t row_count = 0;
-		for (auto &row : *count_result) {
-			row_count = row.GetValue<idx_t>(0);
-		}
-		if (row_count != 0) {
+		auto rows_result =
+		    context.query_metadata(DuckLakeMetadataManager::InlinedTableHasRowsQuery(candidate.table_name));
+		rows_result->ThrowIfError("Failed to check emptiness of superseded inlined-data table in DuckLake: ");
+		if (rows_result->begin() != rows_result->end()) {
 			continue;
 		}
 		// keep the registration if the drop fails
-		auto res = context.execute_in_transaction(StringUtil::Format(
-		    "DELETE FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id=%d AND schema_version=%d;"
-		    "DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;",
-		    candidate.table_id, candidate.schema_version, SQLIdentifier(candidate.table_name)));
+		auto res = context.execute_in_transaction(DuckLakeMetadataManager::DropInlinedTableSql(
+		    candidate.table_id, candidate.schema_version, candidate.table_name));
 		if (res->HasError()) {
 			if (!failed_drop) {
 				failed_drop = std::move(res);
@@ -2615,8 +2614,9 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			} catch (std::exception &) { // NOLINT
 			}
 			retryable_metadata_error = retryable_metadata_error || context.is_retryable_metadata_error(error.Message());
+			// a retryable metadata error in the conflict check is retried, a conflict that it finds is not
 			bool retry_on_error =
-			    can_retry && (retryable_metadata_error || DuckLakeTransaction::RetryOnError(error.Message()));
+			    retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error.Message()));
 			// We perform one initial attempt plus up to max_retry_count retries. Since i is the
 			// zero-based attempt index, we are done retrying once i reaches max_retry_count.
 			bool finished_retrying = i >= retry_config.max_retry_count;

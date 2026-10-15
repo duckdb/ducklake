@@ -24,6 +24,10 @@ public:
 	bool SupportsAppender() const override {
 		return false;
 	}
+	bool DroppedTablesStayReadable() const override {
+		return false;
+	}
+	bool InsertsInlinedRowsAfterBatch(idx_t row_count) const override;
 	idx_t MaxIdentifierLength() const override {
 		return 63;
 	}

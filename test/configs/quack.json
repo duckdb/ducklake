@@ -20,6 +20,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "Only DuckDB catalogs drop the empty inlined data table that an ALTER supersedes",
+      "paths": [
+        "test/sql/alter/alter_drops_empty_inlined_tables.test"
+      ]
+    },
+    {
       "reason": "Bespoke test starts and stops its own quack server",
       "paths": [
         "test/sql/quack/quack_basic.test"
@@ -91,12 +97,6 @@
       "reason": "Uses the S3 test server",
       "paths": [
         "test/sql/delete/delete_metadata.test"
-      ]
-    },
-    {
-      "reason": "mode skip in the test itself",
-      "paths": [
-        "test/sql/general/prepared_statement.test"
       ]
     },
     {
@@ -183,6 +183,12 @@
       "reason": "The commit batch of a quack catalog is sent through quack_query_by_name, so the number of column inserts cannot be counted",
       "paths": [
         "test/sql/issues/issue_1146_column_insert_batches.test"
+      ]
+    },
+    {
+      "reason": "A quack catalog commits each statement, so its commits keep sending inlined rows as SQL text",
+      "paths": [
+        "test/sql/data_inlining/inlined_commit_append.test"
       ]
     }
   ]

@@ -10,10 +10,12 @@ require postgres_scanner
 
 require-env DUCKLAKE_CI
 
+require-env DUCKLAKE_CONNECTION
+
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
 
 loop round 0 6
 
@@ -24,7 +26,7 @@ CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS concurrent_attach_new_migrate
 concurrentforeach i,version 0,1.0 1,1.1-dev1 2,1.1-dev1 3,1.1-dev1
 
 statement maybe
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl_{i}
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl_{i}
 (DATA_PATH '{DATA_PATH}/concurrent_attach_new_migrate', METADATA_SCHEMA 'concurrent_attach_new_migrate',
 DUCKLAKE_VERSION '{version}', AUTOMATIC_MIGRATION TRUE)
 ----
