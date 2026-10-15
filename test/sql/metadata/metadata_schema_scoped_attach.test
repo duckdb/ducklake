@@ -8,11 +8,15 @@ require parquet
 
 require postgres_scanner
 
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
 test-env DATA_PATH {TEST_DIR}
 
 # set up an unrelated schema in the metadata database - it should not be reflected by DuckLake attaches
 statement ok
-ATTACH 'postgres:dbname=ducklakedb' AS pg_setup
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg_setup
 
 statement ok
 CALL postgres_execute('pg_setup', 'DROP SCHEMA IF EXISTS junk_1064 CASCADE')
@@ -31,7 +35,7 @@ DETACH pg_setup
 
 # create a new DuckLake in a METADATA_SCHEMA that does not exist yet in Postgres
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS lake (DATA_PATH '{DATA_PATH}/scoped_files', METADATA_SCHEMA 'scoped_meta_1064', METADATA_CATALOG 'pgmeta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/scoped_files', METADATA_SCHEMA 'scoped_meta_1064', METADATA_CATALOG 'pgmeta')
 
 statement ok
 CREATE TABLE lake.tbl(i INTEGER);
@@ -60,7 +64,7 @@ DETACH lake
 
 # re-attaching an existing DuckLake is scoped as well
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS lake2 (DATA_PATH '{DATA_PATH}/scoped_files', METADATA_SCHEMA 'scoped_meta_1064', METADATA_CATALOG 'pgmeta2')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake2 (DATA_PATH '{DATA_PATH}/scoped_files', METADATA_SCHEMA 'scoped_meta_1064', METADATA_CATALOG 'pgmeta2')
 
 query I
 SELECT * FROM lake2.tbl
@@ -77,7 +81,7 @@ DETACH lake2
 
 # an explicit META_SCHEMA passthrough keeps working
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS lake3 (DATA_PATH '{DATA_PATH}/scoped_files', METADATA_SCHEMA 'scoped_meta_1064', METADATA_CATALOG 'pgmeta3', META_SCHEMA 'scoped_meta_1064')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake3 (DATA_PATH '{DATA_PATH}/scoped_files', METADATA_SCHEMA 'scoped_meta_1064', METADATA_CATALOG 'pgmeta3', META_SCHEMA 'scoped_meta_1064')
 
 query I
 SELECT * FROM lake3.tbl
@@ -94,7 +98,7 @@ DETACH lake3
 
 # the metadata database is shared between tests - leave no schemas behind
 statement ok
-ATTACH 'postgres:dbname=ducklakedb' AS pg_cleanup
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg_cleanup
 
 statement ok
 CALL postgres_execute('pg_cleanup', 'DROP SCHEMA IF EXISTS junk_1064 CASCADE')

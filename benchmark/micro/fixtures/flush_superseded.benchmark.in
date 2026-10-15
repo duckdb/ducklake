@@ -6,25 +6,24 @@ argument lake flush_superseded
 
 cache_file ${lake}_ready.marker
 
-# Three import transactions create the tables with inlined rows, add a column, then inline more rows
+# Three transactions create the tables with inlined rows, add a column, then inline more rows
 load
-EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
-COPY (SELECT stmt FROM (
-SELECT 0 AS o, k, 'CREATE TABLE lake.s' || k
-|| ' AS SELECT r AS id, r * 3 + ' || k || ' AS v FROM range(50) t(r);' AS stmt FROM range(20) t(k)
-UNION ALL
-SELECT 1, 0, 'COMMIT; BEGIN;'
-UNION ALL
-SELECT 2, k, 'ALTER TABLE lake.s' || k || ' ADD COLUMN w INTEGER;' FROM range(20) t(k)
-UNION ALL
-SELECT 3, 0, 'COMMIT; BEGIN;'
-UNION ALL
-SELECT 4, k, 'INSERT INTO lake.s' || k || ' SELECT r, r, r FROM range(50, 100) t(r);' FROM range(20) t(k)
-) ORDER BY o, k) TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
 @create ${lake}_pristine
 @attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
 CALL lake.set_option('data_inlining_row_limit', 100);
-IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+BEGIN;
+@for k in range(20)
+CREATE TABLE lake.s@{k} AS SELECT r AS id, r * 3 + @{k} AS v FROM range(50) t(r);
+@end
+COMMIT; BEGIN;
+@for k in range(20)
+ALTER TABLE lake.s@{k} ADD COLUMN w INTEGER;
+@end
+COMMIT; BEGIN;
+@for k in range(20)
+INSERT INTO lake.s@{k} SELECT r, r, r FROM range(50, 100) t(r);
+@end
+COMMIT;
 SELECT CASE WHEN (SELECT count(*) <> 40 FROM __ducklake_metadata_lake.ducklake_inlined_data_tables)
 OR (SELECT count(*) <> 100 FROM lake.s19)
 THEN error('unexpected flush superseded fixture') END;

@@ -10,10 +10,12 @@ require postgres_scanner
 
 require-env DUCKLAKE_CI
 
+require-env DUCKLAKE_CONNECTION
+
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
 
 statement ok
 CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS postgres_column_limit CASCADE')
@@ -22,7 +24,7 @@ statement ok
 DETACH pg
 
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
 (DATA_PATH '{DATA_PATH}/pg_column_limit', METADATA_SCHEMA 'postgres_column_limit', DATA_INLINING_ROW_LIMIT 10)
 
 # 1597 columns and the three inlining columns fill the 1600 columns postgres allows
