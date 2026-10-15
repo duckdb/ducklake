@@ -67,6 +67,47 @@ class CatalogOperationTest(unittest.TestCase):
                 render("x.benchmark", "load\n" + line + "\n", catalog, False)
 
 
+class BlockTest(unittest.TestCase):
+    def test_loops_and_conditions_repeat_their_lines_and_operations(self):
+        text = """load
+BEGIN;
+@for k in range(2)
+  @for j in range(k, 3)
+    @if (k + j) % 2 == 0 and not j == 2
+INSERT INTO lake.t_@{k * 10 + j} SELECT @{j} + i FROM range(${rows}) t(i);
+    @end
+  @end
+@create s@{k}
+COMMIT; BEGIN;
+@end
+COMMIT;
+"""
+        lines = render("x.benchmark", text, PostgresCatalog("bench"), False).splitlines()
+        self.assertEqual(lines[:3], ["load", "BEGIN;", "INSERT INTO lake.t_0 SELECT 0 + i FROM range(${rows}) t(i);"])
+        self.assertEqual(lines[3:6], expand(PostgresCatalog("bench"), "create", "s0"))
+        self.assertEqual(lines[6:8], ["COMMIT; BEGIN;", "INSERT INTO lake.t_11 SELECT 1 + i FROM range(${rows}) t(i);"])
+        self.assertEqual(lines[8:], expand(PostgresCatalog("bench"), "create", "s1") + ["COMMIT; BEGIN;", "COMMIT;"])
+
+    def test_invalid_blocks(self):
+        cases = [
+            ("@end", 2, "bare @end"),
+            ("@for k in range(2)\nSELECT 1;", 2, "without @end"),
+            ("@if 1\nSELECT 1;\n@end;", 4, "bare @end"),
+            ("@for k range(2)\n@end", 2, "expected @for NAME in range"),
+            ("@for k in range(1, 2, 3, 4)\n@end", 2, "range expected at most 3 arguments"),
+            ("@for k in range(${rows})\n@end", 2, "invalid expression"),
+            ("@if j\n@end", 2, "unknown loop variable j"),
+            ("@if 1 // 0\n@end", 2, "by zero"),
+            ("@if __import__('os')\n@end", 2, "invalid expression"),
+            ("SELECT @{k};", 2, "unknown loop variable k"),
+            ("@for k in range(1)\nSELECT @{(k).real};\n@end", 3, "invalid expression"),
+            ("@while 1", 2, "unknown catalog operation @while"),
+        ]
+        for text, line, message in cases:
+            with self.subTest(text=text), self.assertRaisesRegex(ValueError, rf"^x\.benchmark:{line}: .*{message}"):
+                render("x.benchmark", "load\n" + text + "\n", DuckDBCatalog(), False)
+
+
 class RenderRootTest(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory()

@@ -141,9 +141,8 @@ class ComparisonProcessTest(unittest.TestCase):
                 lines.append(line)
                 raise KeyboardInterrupt
 
-            with mock.patch.object(run, "RUNNER", comparison), mock.patch("builtins.print", side_effect=interrupted):
-                with self.assertRaises(KeyboardInterrupt):
-                    run.run(directory, [], "micro.csv")
+            with mock.patch("builtins.print", side_effect=interrupted), self.assertRaises(KeyboardInterrupt):
+                run.run(comparison, directory, [], "micro.csv")
             pids = [int(pid) for pid in lines[0].split()]
             deadline = time.monotonic() + 10
             while any(running(pid) for pid in pids) and time.monotonic() < deadline:
@@ -230,7 +229,7 @@ class RegressionRunTest(unittest.TestCase):
 
     def test_other_arguments_reach_the_comparison(self):
         self.assertEqual(self.main("--threads", "2", "--benchmark-argument", "sf=1"), 0)
-        self.assertEqual(self.compare.call_args.args[1][4:], ["--threads", "2", "--benchmark-argument", "sf=1"])
+        self.assertEqual(self.compare.call_args.args[2][4:], ["--threads", "2", "--benchmark-argument", "sf=1"])
 
     def test_interrupt_drops_databases(self):
         self.compare.side_effect = KeyboardInterrupt
@@ -248,7 +247,7 @@ class RegressionRunTest(unittest.TestCase):
         self.assertIs(signal.getsignal(signal.SIGTERM), handler)
 
     def test_databases_survive_until_confirmation_finishes(self):
-        def compare(root, passthrough, benchmarks):
+        def compare(script, root, passthrough, benchmarks):
             self.mocks["drop_database"].assert_not_called()
             self.assertEqual(len(self.created()), 2)
             return 0, {"benchmark/example.benchmark"}
@@ -256,7 +255,8 @@ class RegressionRunTest(unittest.TestCase):
         self.compare.side_effect = compare
         self.assertEqual(self.main(), 1)
         self.assertEqual(self.compare.call_count, 2)
-        self.assertEqual(self.compare.call_args_list[0].args[1], self.compare.call_args_list[1].args[1])
+        self.assertEqual(self.compare.call_args_list[0].args[2], self.compare.call_args_list[1].args[2])
+        self.assertEqual([call.args[0] for call in self.compare.call_args_list], [run.COMPARE, run.RUNNER])
         self.assertEqual(self.dropped(), self.created()[::-1])
         self.assertIn(
             "::error::benchmark/example.benchmark (micro_postgres) is 10% or more slower in two runs in a row",

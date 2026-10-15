@@ -27,6 +27,9 @@ public:
 	bool ReadsInlinedDataInPages() const override {
 		return false;
 	}
+	bool DroppedTablesStayReadable() const override {
+		return false;
+	}
 	idx_t MaxColumnCount() const override {
 		// the default SQLITE_MAX_COLUMN
 		return 2000;

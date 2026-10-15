@@ -6,14 +6,8 @@ argument lake sorted_v1
 
 cache_file ${lake}_ready.marker
 
-# Every generated line commits 10000 random keys into frag and every 10th line also 15000 inlined rows into inl
+# Every iteration commits 10000 random keys into frag and every 10th iteration also 15000 inlined rows into inl
 load
-EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
-COPY (SELECT 'INSERT INTO lake.frag SELECT hash(i) % 100000000, ''v'' || i, i * 0.5 FROM range(' || (f * 10000) || ', '
-|| (f * 10000 + 10000) || ') t(i); ' || CASE WHEN f % 10 = 0 THEN 'INSERT INTO lake.inl SELECT hash(i) % 100000000, '
-|| '''v'' || i, i * 0.5 FROM range(' || (f * 1500) || ', ' || (f * 1500 + 15000) || ') t(i); ' ELSE '' END
-|| 'COMMIT; BEGIN;' FROM range(200) t(f) ORDER BY f)
-TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
 @create ${lake}_pristine
 @attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
 CALL lake.set_option('data_inlining_row_limit', 0);
@@ -30,7 +24,14 @@ CALL lake.set_option('target_file_size', '4MB', table_name => 'probe');
 CALL lake.set_option('data_inlining_row_limit', 1000000, table_name => 'inl');
 INSERT INTO lake.probe SELECT (i * 7919) % 5000000, 'v' || i, i * 0.5 FROM range(5000000) t(i);
 BEGIN;
-IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+@for f in range(200)
+INSERT INTO lake.frag SELECT hash(i) % 100000000, 'v' || i, i * 0.5
+FROM range(@{f} * 10000, @{f} * 10000 + 10000) t(i);
+@if f % 10 == 0
+INSERT INTO lake.inl SELECT hash(i) % 100000000, 'v' || i, i * 0.5 FROM range(@{f} * 1500, @{f} * 1500 + 15000) t(i);
+@end
+COMMIT; BEGIN;
+@end
 COMMIT;
 SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 'frag')) <> 200
 OR (SELECT count(*) FROM lake.frag) <> 2000000

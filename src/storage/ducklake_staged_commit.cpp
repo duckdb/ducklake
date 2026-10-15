@@ -307,6 +307,8 @@ string DuckLakeStagedCommit::EmitInlinedData(const LocalTableChanges &local_chan
 		                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::INLINED_DATA), table_id.index,
 		                          DuckLakeUtil::BoolLiteral(has_preserved));
 		auto rows = DuckLakeUtil::InlinedDataToSQL(transaction, *inlined.data);
+		vector<string> staged_rows;
+		staged_rows.reserve(rows.size());
 		for (idx_t row_order = 0; row_order < rows.size(); row_order++) {
 			string tuple = "(" + rows[row_order] + ")";
 			string preserved_row_id = "NULL";
@@ -316,10 +318,11 @@ string DuckLakeStagedCommit::EmitInlinedData(const LocalTableChanges &local_chan
 					preserved_row_id = std::to_string(rid);
 				}
 			}
-			sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %llu, %s, %s);",
-			                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::INLINED_ROW),
-			                          table_id.index, row_order, preserved_row_id, SQLString(tuple));
+			staged_rows.push_back(StringUtil::Format("(%llu, %llu, %s, %s)", table_id.index, row_order,
+			                                         preserved_row_id, SQLString(tuple)));
 		}
+		sql += DuckLakeMetadataManager::InsertValuesIntoSql(
+		    DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::INLINED_ROW), staged_rows);
 		for (auto &stat : inlined.column_stats) {
 			EmitInlinedColumnStatsRow(sql, table_id, stat.first, stat.second);
 		}
@@ -328,25 +331,24 @@ string DuckLakeStagedCommit::EmitInlinedData(const LocalTableChanges &local_chan
 }
 
 string DuckLakeStagedCommit::EmitInlinedDeletes(const LocalTableChanges &local_changes) const {
-	string sql;
+	vector<string> staged_deletes;
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = entry.first;
 		auto &table_changes = entry.second;
 		for (auto &deletes_entry : table_changes.new_inlined_data_deletes) {
-			auto &inlined_table_name = deletes_entry.first;
-			auto &deletes = *deletes_entry.second;
-			for (auto &row_id : deletes.rows) {
-				sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %s, %llu);",
-				                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::INLINED_DELETE),
-				                          table_id.index, SQLString(inlined_table_name), row_id);
+			auto inlined_table_name = SQLString(deletes_entry.first);
+			for (auto &row_id : deletes_entry.second->rows) {
+				staged_deletes.push_back(
+				    StringUtil::Format("(%llu, %s, %llu)", table_id.index, inlined_table_name, row_id));
 			}
 		}
 	}
-	return sql;
+	return DuckLakeMetadataManager::InsertValuesIntoSql(
+	    DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::INLINED_DELETE), staged_deletes);
 }
 
 string DuckLakeStagedCommit::EmitInlinedFileDeletes(const LocalTableChanges &local_changes) const {
-	string sql;
+	vector<string> staged_deletes;
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = entry.first;
 		auto &table_changes = entry.second;
@@ -356,13 +358,12 @@ string DuckLakeStagedCommit::EmitInlinedFileDeletes(const LocalTableChanges &loc
 		for (auto &file_entry : table_changes.new_inlined_file_deletes->file_deletes) {
 			auto file_id = file_entry.first;
 			for (auto &row_id : file_entry.second) {
-				sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %llu, %llu);",
-				                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::INLINED_FILE_DELETE),
-				                          table_id.index, file_id, row_id);
+				staged_deletes.push_back(StringUtil::Format("(%llu, %llu, %llu)", table_id.index, file_id, row_id));
 			}
 		}
 	}
-	return sql;
+	return DuckLakeMetadataManager::InsertValuesIntoSql(
+	    DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::INLINED_FILE_DELETE), staged_deletes);
 }
 
 string DuckLakeStagedCommit::EmitDeleteFiles(const LocalTableChanges &local_changes) const {

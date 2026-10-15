@@ -22,6 +22,7 @@
 #include "functions/ducklake_compaction_functions.hpp"
 #include "duckdb/planner/operator/logical_order.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/operator/logical_set_operation.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/planner/expression_binder/order_binder.hpp"
@@ -541,9 +542,8 @@ DuckLakeCompactor::ResolvePartitionSpecTable(DuckLakeTableEntry &table, const Du
 
 DuckLakeTableEntry &DuckLakeCompactor::GetLatestTableEntry(DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
                                                            const DuckLakeTableEntry &table) {
-	auto schema_id = table.schema.Cast<DuckLakeSchemaEntry>().GetSchemaId();
-	auto latest_entry =
-	    transaction.GetTransactionLocalEntry(CatalogType::TABLE_ENTRY, schema_id, table.name.GetIdentifierName());
+	// by id, since the table can have been renamed and its old name taken by another table
+	auto latest_entry = transaction.GetLocalEntryById(table.GetTableId());
 	if (!latest_entry) {
 		latest_entry = catalog.GetEntryById(transaction, transaction.GetSnapshot(), table.GetTableId());
 		if (!latest_entry) {
@@ -561,7 +561,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::PlanRewriteScan(
 	auto table_idx = binder.GenerateTableIndex();
 	unique_ptr<FunctionData> bind_data;
 	EntryLookupInfo info(CatalogType::TABLE_ENTRY, QualifiedName(table.name));
-	auto scan_function = table.GetScanFunction(context, bind_data, info);
+	auto scan_function = table.GetScanFunctionById(context, bind_data, info);
 	auto &multi_file_bind_data = bind_data->Cast<MultiFileBindData>();
 	auto &read_info = scan_function.function_info->Cast<DuckLakeFunctionInfo>();
 	multi_file_bind_data.file_list = create_file_list(read_info);
@@ -773,8 +773,11 @@ static unique_ptr<LogicalOperator> GenerateCompactionOperator(TableFunctionBindI
 		compactions[0]->Cast<DuckLakeLogicalCompaction>().table_index = bind_index;
 		return std::move(compactions[0]);
 	}
-	return input.binder->UnionOperators(std::move(compactions), DuckLakeLogicalCompaction::GetResultTypes().size(),
-	                                    bind_index);
+	auto result = input.binder->UnionOperators(std::move(compactions),
+	                                           DuckLakeLogicalCompaction::GetResultTypes().size(), bind_index);
+	// the compactions are independent, so their pipelines may run concurrently
+	result->Cast<LogicalSetOperation>().allow_out_of_order = true;
+	return result;
 }
 
 static void GenerateCompaction(ClientContext &context, DuckLakeTransaction &transaction,

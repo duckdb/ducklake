@@ -19,6 +19,13 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS maintainer (DATA_PATH '{DATA_PATH}/is
 statement ok
 CREATE TABLE writer.events (id INTEGER, part INTEGER)
 
+# a deleted row keeps the first inlined table when the partitioning supersedes it
+statement ok
+INSERT INTO writer.events VALUES (100, 0)
+
+statement ok
+DELETE FROM writer.events WHERE id = 100
+
 statement ok
 ALTER TABLE writer.events SET PARTITIONED BY (part)
 
