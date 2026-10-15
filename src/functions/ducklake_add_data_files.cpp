@@ -715,6 +715,19 @@ static void CollapseRepeatedGroup(unique_ptr<ParquetColumn> &element) {
 	}
 }
 
+//! The reader appends _1, _2 and so on to the names of siblings that differ only in case
+static void RenameCaseCollisions(vector<unique_ptr<ParquetColumn>> &columns) {
+	case_insensitive_map_t<idx_t> name_collision_count;
+	for (auto &column : columns) {
+		auto &name = column->name;
+		while (name_collision_count.find(name) != name_collision_count.end()) {
+			name_collision_count[name] += 1;
+			name = name + "_" + to_string(name_collision_count[name]);
+		}
+		name_collision_count[name] = 0;
+	}
+}
+
 //! A repeated column without a LIST annotation is the only element of its own list
 void DuckLakeFileProcessor::WrapRepeatedColumn(ParquetFileMetadata &file_metadata, ParquetColumn &column) {
 	auto element = make_uniq<ParquetColumn>();
@@ -971,6 +984,7 @@ DuckLakeColumnStats DuckLakeFileProcessor::ConstantColumnStats(const ParquetFile
 vector<unique_ptr<DuckLakeNameMapEntry>> DuckLakeFileProcessor::MapColumns(
     ParquetFileMetadata &file_metadata, vector<unique_ptr<ParquetColumn>> &parquet_columns,
     const vector<unique_ptr<DuckLakeFieldId>> &field_ids, const string &prefix, bool repeated) {
+	RenameCaseCollisions(parquet_columns);
 	// create a top-level map of columns
 	case_insensitive_map_t<const_reference<DuckLakeFieldId>> field_id_map;
 	for (auto &field_id : field_ids) {
