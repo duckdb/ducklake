@@ -318,7 +318,7 @@ protected:
 	void SubstituteTransactionPlaceholders(DuckLakeSnapshot snapshot, string &query) const;
 
 public:
-	static void SubstituteSnapshotPlaceholders(const DuckLakeSnapshot &snapshot, string &query);
+	static vector<pair<string, string>> SnapshotPlaceholders(const DuckLakeSnapshot &snapshot);
 	//! Pure SQL templates (use `{METADATA_CATALOG}` placeholder) — caller substitutes + executes.
 	//! Both used by the regular metadata-manager methods and by server-side commit, which runs the
 	//! SQL on a fresh Connection without going through the metadata-manager wrapper.
@@ -608,7 +608,8 @@ protected:
 
 	static string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
 	                                             const string &metadata_table_prefix);
-	virtual string GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
+	virtual string GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
+	                                     const FilterPushdownInfo *filter_info,
 	                                     const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
 	                                     const vector<idx_t> &runtime_filter_stats_columns,
 	                                     FileListType file_list_type = FileListType::SCAN,

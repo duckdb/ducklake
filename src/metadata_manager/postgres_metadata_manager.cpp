@@ -351,22 +351,23 @@ void PostgresMetadataManager::ClearCache() {
 }
 
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
-	return R"(
-	SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL},
-		'SELECT snapshot_id, schema_version, next_catalog_id, next_file_id,
-		 (SELECT MAX(value) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_metadata WHERE key = ''version'')
-		 FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot WHERE snapshot_id = (
-		     SELECT MAX(snapshot_id) FROM {METADATA_SCHEMA_ESCAPED}.ducklake_snapshot
-		 );')
-	)";
+	auto remote_query = LatestSnapshotQuery();
+	SubstituteCatalogPlaceholders(remote_query,
+	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
+	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
+	                          SQLString(remote_query));
 }
 
-string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
+string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
+                                                      const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
                                                       const vector<idx_t> &runtime_filter_stats_columns,
                                                       FileListType file_list_type, const string &) {
-	auto remote_query = DuckLakeMetadataManager::GenerateFileListQuery(
-	    table, filter_info, dynamic_filters, runtime_filter_stats_columns, file_list_type, "{METADATA_SCHEMA_ESCAPED}");
+	auto remote_query = DuckLakeMetadataManager::GenerateFileListQuery(table, snapshot, filter_info, dynamic_filters,
+	                                                                   runtime_filter_stats_columns, file_list_type);
+	remote_query = DuckLakeUtil::ReplaceSkippingQuotes(remote_query, SnapshotPlaceholders(snapshot));
+	SubstituteCatalogPlaceholders(remote_query,
+	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 
 	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
 	                          SQLString(remote_query));

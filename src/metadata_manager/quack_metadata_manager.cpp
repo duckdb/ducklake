@@ -16,8 +16,7 @@ unique_ptr<QueryResult> QuackMetadataManager::Query(string &query) {
 	auto &ducklake_catalog = transaction.GetCatalog();
 	lock_guard<std::recursive_mutex> guard(ducklake_catalog.GetMetadataQueryLock());
 	auto schema_identifier = SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataSchemaName());
-	query = StringUtil::Replace(query, "{METADATA_CATALOG}", schema_identifier);
-	SubstituteCatalogPlaceholders(query);
+	SubstituteCatalogPlaceholders(query, schema_identifier);
 
 	auto metadata_catalog_name_literal = SQLString::ToString(ducklake_catalog.MetadataDatabaseName());
 	auto wrapper = StringUtil::Format("CALL system.main.quack_query_by_name(%s, %s)", metadata_catalog_name_literal,

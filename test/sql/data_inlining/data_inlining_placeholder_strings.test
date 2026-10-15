@@ -1,0 +1,146 @@
+# name: test/sql/data_inlining/data_inlining_placeholder_strings.test
+# description: strings that look like metadata query placeholders are stored verbatim
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/placeholder_strings_files', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t (s VARCHAR);
+
+statement ok
+INSERT INTO ducklake.t VALUES ('a{SNAPSHOT_ID}b');
+
+statement ok
+INSERT INTO ducklake.t VALUES ('c{METADATA_CATALOG}d');
+
+query I
+FROM ducklake.t ORDER BY s
+----
+a{SNAPSHOT_ID}b
+c{METADATA_CATALOG}d
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake');
+
+query I
+FROM ducklake.t ORDER BY s
+----
+a{SNAPSHOT_ID}b
+c{METADATA_CATALOG}d
+
+# the filter is pushed into the file list query
+query I
+FROM ducklake.t WHERE s = 'a{SNAPSHOT_ID}b'
+----
+a{SNAPSHOT_ID}b
+
+# the test runner replaces {DATA_PATH} itself, so the placeholder is built by concatenation
+statement ok
+INSERT INTO ducklake.t VALUES ('e{' || 'DATA_PATH}f');
+
+statement ok
+COMMENT ON TABLE ducklake.t IS 'g{NEXT_FILE_ID}h';
+
+query I
+SELECT s = 'e{' || 'DATA_PATH}f' FROM ducklake.t ORDER BY s
+----
+false
+false
+true
+
+query I
+SELECT comment FROM duckdb_tables() WHERE database_name = 'ducklake' AND table_name = 't'
+----
+g{NEXT_FILE_ID}h
+
+# partition values
+statement ok
+CREATE TABLE ducklake.p (k VARCHAR, v INTEGER);
+
+statement ok
+ALTER TABLE ducklake.p SET PARTITIONED BY (k);
+
+statement ok
+INSERT INTO ducklake.p VALUES ('{SNAPSHOT_ID}', 1), ('x''{METADATA_CATALOG}', 2);
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'p');
+
+query II
+FROM ducklake.p ORDER BY v
+----
+{SNAPSHOT_ID}	1
+x'{METADATA_CATALOG}	2
+
+query I
+SELECT partition_value FROM __ducklake_metadata_ducklake.ducklake_file_partition_value ORDER BY ALL
+----
+x'{METADATA_CATALOG}
+{SNAPSHOT_ID}
+
+# schema, table, column and struct field names, and column defaults
+statement ok
+CREATE SCHEMA ducklake."{SNAPSHOT_ID}";
+
+statement ok
+CREATE TABLE ducklake."{SNAPSHOT_ID}"."{METADATA_CATALOG}" ("{NEXT_FILE_ID}" VARCHAR DEFAULT '{SCHEMA_VERSION}', "{NEXT_CATALOG_ID}" STRUCT("{AUTHOR}" INTEGER));
+
+statement ok
+INSERT INTO ducklake."{SNAPSHOT_ID}"."{METADATA_CATALOG}" ("{NEXT_CATALOG_ID}") VALUES ({'{AUTHOR}': 1});
+
+query II
+FROM ducklake."{SNAPSHOT_ID}"."{METADATA_CATALOG}"
+----
+{SCHEMA_VERSION}	{'{AUTHOR}': 1}
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', schema_name => '{SNAPSHOT_ID}', table_name => '{METADATA_CATALOG}');
+
+query II
+FROM ducklake."{SNAPSHOT_ID}"."{METADATA_CATALOG}"
+----
+{SCHEMA_VERSION}	{'{AUTHOR}': 1}
+
+# view and macro definitions
+statement ok
+CREATE VIEW ducklake.v AS SELECT '{SNAPSHOT_ID}' AS x;
+
+query I
+FROM ducklake.v
+----
+{SNAPSHOT_ID}
+
+statement ok
+CREATE MACRO ducklake.m(p := '{NEXT_FILE_ID}') AS p || '{METADATA_CATALOG}';
+
+query I
+SELECT ducklake.m()
+----
+{NEXT_FILE_ID}{METADATA_CATALOG}
+
+# commit info
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t VALUES ('i');
+
+statement ok
+CALL ducklake.set_commit_message('{COMMIT_MESSAGE}', '{SNAPSHOT_ID}', extra_info => '{AUTHOR}');
+
+statement ok
+COMMIT
+
+query III
+SELECT author, commit_message, commit_extra_info FROM ducklake_snapshots('ducklake') ORDER BY snapshot_id DESC LIMIT 1
+----
+{COMMIT_MESSAGE}	{SNAPSHOT_ID}	{AUTHOR}

@@ -2,6 +2,7 @@
 
 #include "common/ducklake_row_helpers.hpp"
 #include "common/ducklake_types.hpp"
+#include "common/ducklake_util.hpp"
 #include "common/ducklake_version.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -726,11 +727,11 @@ bool DuckLakeServerSideCommit::InlinedFileDeletionTableExists(TableIndex table_i
 }
 
 string DuckLakeServerSideCommit::SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const {
-	sql = StringUtil::Replace(sql, "{METADATA_CATALOG}", schema_id);
-	sql = StringUtil::Replace(sql, "{METADATA_CATALOG_NAME_LITERAL}", "(SELECT current_database())");
-	sql = StringUtil::Replace(sql, "{METADATA_SCHEMA_NAME_LITERAL}", SQLString::ToString(metadata_schema_name));
-	DuckLakeMetadataManager::SubstituteSnapshotPlaceholders(snapshot, sql);
-	return sql;
+	auto replacements = DuckLakeMetadataManager::SnapshotPlaceholders(snapshot);
+	replacements.emplace_back("{METADATA_CATALOG}", schema_id);
+	replacements.emplace_back("{METADATA_CATALOG_NAME_LITERAL}", "(SELECT current_database())");
+	replacements.emplace_back("{METADATA_SCHEMA_NAME_LITERAL}", SQLString::ToString(metadata_schema_name));
+	return DuckLakeUtil::ReplaceSkippingQuotes(sql, replacements);
 }
 
 unique_ptr<QueryResult> DuckLakeServerSideCommit::RunQuery(const string &query, const char *what) {

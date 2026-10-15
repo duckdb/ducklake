@@ -2077,7 +2077,8 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 	return StringUtil::Format("(data.partition_id IS DISTINCT FROM %d OR (%s))", partition_data->partition_id, result);
 }
 
-string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, const FilterPushdownInfo *filter_info,
+string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot,
+                                                      const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
                                                       const vector<idx_t> &runtime_filter_stats_columns,
                                                       FileListType file_list_type,
@@ -2211,7 +2212,8 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 		}
 	}
 
-	auto query = GenerateFileListQuery(table, filter_info, dynamic_filter_columns, runtime_filter_stats_columns);
+	auto query =
+	    GenerateFileListQuery(table, snapshot, filter_info, dynamic_filter_columns, runtime_filter_stats_columns);
 	auto result = Query(snapshot, query);
 	result->ThrowIfError("Failed to get data file list from DuckLake: ");
 
@@ -2537,7 +2539,7 @@ WHERE begin_snapshot < %d AND file_id IN (%s)
 vector<DuckLakeFileListExtendedEntry>
 DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                                                   const FilterPushdownInfo *filter_info) {
-	auto query = GenerateFileListQuery(table, filter_info, {}, {}, FileListType::EXTENDED);
+	auto query = GenerateFileListQuery(table, snapshot, filter_info, {}, {}, FileListType::EXTENDED);
 	auto result = Query(snapshot, query);
 	result->ThrowIfError("Failed to get extended data file list from DuckLake: ");
 	vector<DuckLakeFileListExtendedEntry> files;
@@ -2827,34 +2829,27 @@ void DuckLakeMetadataManager::SubstituteCatalogPlaceholders(string &query, const
 	auto &ducklake_catalog = transaction.GetCatalog();
 	auto catalog_identifier = SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataDatabaseName());
 	auto catalog_literal = SQLString::ToString(ducklake_catalog.MetadataDatabaseName());
-	auto schema_identifier = SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataSchemaName());
-	auto schema_identifier_escaped = StringUtil::Replace(schema_identifier, "'", "''");
 	auto schema_literal = SQLString::ToString(ducklake_catalog.MetadataSchemaName().GetIdentifierName());
 	auto metadata_path = SQLString::ToString(ducklake_catalog.MetadataPath());
 	auto data_path = SQLString::ToString(ducklake_catalog.DataPath());
 
-	query = StringUtil::Replace(query, "{METADATA_CATALOG_NAME_LITERAL}", catalog_literal);
-	query = StringUtil::Replace(query, "{METADATA_CATALOG_NAME_IDENTIFIER}", catalog_identifier);
-	query = StringUtil::Replace(query, "{METADATA_SCHEMA_NAME_LITERAL}", schema_literal);
-	query = StringUtil::Replace(query, "{METADATA_CATALOG}", metadata_catalog);
-	query = StringUtil::Replace(query, "{METADATA_SCHEMA_ESCAPED}", schema_identifier_escaped);
-	query = StringUtil::Replace(query, "{METADATA_PATH}", metadata_path);
-	query = StringUtil::Replace(query, "{DATA_PATH}", data_path);
+	query = DuckLakeUtil::ReplaceSkippingQuotes(query, {{"{METADATA_CATALOG_NAME_LITERAL}", catalog_literal},
+	                                                    {"{METADATA_CATALOG_NAME_IDENTIFIER}", catalog_identifier},
+	                                                    {"{METADATA_SCHEMA_NAME_LITERAL}", schema_literal},
+	                                                    {"{METADATA_CATALOG}", metadata_catalog},
+	                                                    {"{METADATA_PATH}", metadata_path},
+	                                                    {"{DATA_PATH}", data_path}});
 }
 
-void DuckLakeMetadataManager::SubstituteSnapshotPlaceholders(const DuckLakeSnapshot &snapshot, string &query) {
-	query = StringUtil::Replace(query, "{SNAPSHOT_ID}", to_string(snapshot.snapshot_id));
-	query = StringUtil::Replace(query, "{SCHEMA_VERSION}", to_string(snapshot.schema_version));
-	query = StringUtil::Replace(query, "{NEXT_CATALOG_ID}", to_string(snapshot.next_catalog_id));
-	query = StringUtil::Replace(query, "{NEXT_FILE_ID}", to_string(snapshot.next_file_id));
+vector<pair<string, string>> DuckLakeMetadataManager::SnapshotPlaceholders(const DuckLakeSnapshot &snapshot) {
+	return {{"{SNAPSHOT_ID}", to_string(snapshot.snapshot_id)},
+	        {"{SCHEMA_VERSION}", to_string(snapshot.schema_version)},
+	        {"{NEXT_CATALOG_ID}", to_string(snapshot.next_catalog_id)},
+	        {"{NEXT_FILE_ID}", to_string(snapshot.next_file_id)}};
 }
 
 void DuckLakeMetadataManager::SubstituteTransactionPlaceholders(DuckLakeSnapshot snapshot, string &query) const {
-	auto &commit_info = transaction.GetCommitInfo();
-	SubstituteSnapshotPlaceholders(snapshot, query);
-	query = StringUtil::Replace(query, "{AUTHOR}", commit_info.author.ToSQLString());
-	query = StringUtil::Replace(query, "{COMMIT_MESSAGE}", commit_info.commit_message.ToSQLString());
-	query = StringUtil::Replace(query, "{COMMIT_EXTRA_INFO}", commit_info.commit_extra_info.ToSQLString());
+	query = DuckLakeUtil::ReplaceSkippingQuotes(query, SnapshotPlaceholders(snapshot));
 }
 
 unique_ptr<QueryResult> DuckLakeMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
