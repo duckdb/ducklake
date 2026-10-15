@@ -8,14 +8,6 @@ cache_file ${lake}_ready.marker
 
 # Row group size 2048 and a 4KB target give one file per 2048 rows, and t_k deletions of up to 10 rows are inlined
 load
-EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
-COPY (SELECT stmt FROM (
-SELECT 0 AS o, k, 'CREATE TABLE lake.t_' || k || ' AS SELECT i AS id FROM range(4096) t(i);' AS stmt FROM range(20) t(k)
-UNION ALL
-SELECT 1, 0, 'COMMIT; BEGIN; CALL lake.set_option(''data_inlining_row_limit'', 10); COMMIT; BEGIN;'
-UNION ALL
-SELECT 2, k, 'DELETE FROM lake.t_' || k || ' WHERE id = 0;' FROM range(20) t(k)
-) ORDER BY o, k) TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
 @create ${lake}_pristine
 @attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
 CALL lake.set_option('data_inlining_row_limit', 0);
@@ -23,7 +15,17 @@ CALL lake.set_option('parquet_row_group_size', 2048);
 SET ducklake_target_file_size = '4KB';
 CREATE TABLE lake.bg AS SELECT i AS id FROM range(4096 * 2048) t(i);
 DELETE FROM lake.bg WHERE id % 2048 = 0;
-IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+BEGIN;
+@for k in range(20)
+CREATE TABLE lake.t_@{k} AS SELECT i AS id FROM range(4096) t(i);
+@end
+COMMIT; BEGIN;
+CALL lake.set_option('data_inlining_row_limit', 10);
+COMMIT; BEGIN;
+@for k in range(20)
+DELETE FROM lake.t_@{k} WHERE id = 0;
+@end
+COMMIT;
 RESET ducklake_target_file_size;
 SET VARIABLE delete_targets = (SELECT list('lake.t_' || k) FROM range(20) t(k));
 SELECT CASE WHEN (SELECT count(*) <> 4136 OR min(record_count) <> 2048 OR max(record_count) <> 2048

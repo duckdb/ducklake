@@ -10,16 +10,18 @@ require postgres_scanner
 
 require-env DUCKLAKE_CI
 
+require-env DUCKLAKE_CONNECTION
+
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
 
 statement ok
 CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS sdrop CASCADE')
 
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
 (DATA_PATH '{DATA_PATH}/sdrop', METADATA_SCHEMA 'sdrop', DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
@@ -66,7 +68,7 @@ SELECT table_name FROM __ducklake_metadata_dl.ducklake_inlined_data_tables ORDER
 ducklake_inlined_data_1_2
 
 statement ok
-CALL pg_clear_cache()
+CALL postgres_clear_cache()
 
 statement error
 SELECT count(*) FROM pg.sdrop.ducklake_inlined_data_1_1

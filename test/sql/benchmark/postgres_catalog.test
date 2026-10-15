@@ -8,6 +8,10 @@ require parquet
 
 require postgres_scanner
 
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
 statement ok
 SET VARIABLE catalog_sql = (SELECT content FROM read_text('.github/regression/postgres_catalog.sql'))
 
@@ -19,7 +23,7 @@ SET VARIABLE copy_sql = getvariable('catalog_sql')
 || ' SELECT pg_temp.ducklake_regression_copy(''regression_seed'', ''regression_work'')'
 
 statement ok
-ATTACH 'postgres:dbname=ducklakedb' AS pg
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
 
 statement ok
 CALL postgres_execute('pg',
@@ -27,7 +31,7 @@ CALL postgres_execute('pg',
 
 # The seed holds inlined rows, a Parquet file and a delete file
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS lake
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake
 (METADATA_SCHEMA 'regression_seed', DATA_PATH '{TEST_DIR}/regression_catalog_files')
 
 statement ok
@@ -69,7 +73,7 @@ WHERE relnamespace = ''regression_work''::regnamespace AND relkind = ''r''')
 0
 
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS lake (METADATA_SCHEMA 'regression_work')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (METADATA_SCHEMA 'regression_work')
 
 query IIII
 SELECT (SELECT sum(id) FROM lake.inlined), (SELECT count(*) FROM lake.files),
@@ -90,7 +94,7 @@ DETACH lake
 endloop
 
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS seed (METADATA_SCHEMA 'regression_seed', READ_ONLY)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS seed (METADATA_SCHEMA 'regression_seed', READ_ONLY)
 
 query III
 SELECT (SELECT sum(id) FROM seed.inlined), (SELECT count(*) FROM seed.files),
@@ -103,7 +107,7 @@ DETACH seed
 
 # A rolled-back mutation is discarded physically too, while the lake stays attached
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS lake (METADATA_SCHEMA 'regression_work')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (METADATA_SCHEMA 'regression_work')
 
 statement ok
 BEGIN
@@ -169,7 +173,7 @@ SELECT view_dropped, snapshot_oid <> getvariable('snapshot_table') FROM postgres
 true	true
 
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS lake (METADATA_SCHEMA 'regression_work')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (METADATA_SCHEMA 'regression_work')
 
 query III
 SELECT (SELECT sum(id) FROM lake.inlined), (SELECT count(*) FROM lake.files),

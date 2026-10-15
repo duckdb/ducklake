@@ -20,15 +20,17 @@ CALL ducklake.set_option('parquet_row_group_size_bytes', '10KB')
 statement ok
 SET threads=1
 
-# FIXME: this should not be necessary
-statement ok
-SET preserve_insertion_order=false;
-
 statement ok
 CREATE TABLE ducklake.tbl AS SELECT i, 'hello world' || i str FROM range(100000) t(i)
 
 query I
 SELECT COUNT(DISTINCT row_group_id)>10 FROM parquet_metadata('{DATA_PATH}/ducklake_parquet_row_group_size_bytes/**')
+----
+true
+
+# chunks larger than the limit are split as well
+query I
+SELECT max(row_group_num_rows) < 2048 FROM parquet_metadata('{DATA_PATH}/ducklake_parquet_row_group_size_bytes/**')
 ----
 true
 

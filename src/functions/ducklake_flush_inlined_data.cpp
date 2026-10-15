@@ -21,6 +21,7 @@
 #include "duckdb/planner/operator/logical_empty_result.hpp"
 #include "storage/ducklake_flush_data.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/operator/logical_set_operation.hpp"
 #include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
@@ -70,8 +71,12 @@ DuckLakeFlushData::DuckLakeFlushData(PhysicalPlan &physical_plan, const vector<L
 SourceResultType DuckLakeFlushData::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
                                                     OperatorSourceInput &input) const {
 	auto &gstate = this->sink_state->Cast<DuckLakeInsertGlobalState>();
-	chunk.data[0].Append(Value(table.schema.GetSchemaName()));
-	chunk.data[1].Append(Value(table.name.GetIdentifierName()));
+	// the table can have been renamed since its rows were inlined
+	auto &catalog = table.ParentCatalog().Cast<DuckLakeCatalog>();
+	auto &transaction = DuckLakeTransaction::Get(context.client, catalog);
+	auto &latest_table = DuckLakeCompactor::GetLatestTableEntry(catalog, transaction, table);
+	chunk.data[0].Append(Value(latest_table.schema.GetSchemaName()));
+	chunk.data[1].Append(Value(latest_table.name.GetIdentifierName()));
 	chunk.data[2].Append(Value::BIGINT(static_cast<int64_t>(gstate.rows_flushed)));
 	chunk.SetChildCardinality(1);
 	return SourceResultType::FINISHED;
@@ -194,8 +199,9 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 		global_state.rows_flushed += file.row_count;
 	}
 
+	bool wrote_files = !global_state.written_files.empty();
 	transaction.AppendFiles(global_state.table.GetTableId(), std::move(global_state.written_files));
-	transaction.MarkInlinedDataForDeletion(inlined_table, snapshot.snapshot_id);
+	transaction.MarkInlinedDataForDeletion(inlined_table, snapshot.snapshot_id, wrote_files);
 	return SinkFinalizeType::READY;
 }
 
@@ -533,6 +539,10 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 	}
 
 	auto child = input.binder->UnionOperators(std::move(flushes), 3);
+	if (child->type == LogicalOperatorType::LOGICAL_UNION) {
+		// the flushes are independent, so their pipelines may run concurrently
+		child->Cast<LogicalSetOperation>().allow_out_of_order = true;
+	}
 	// We want to construct the query tree equivalent to the SQL query below.
 	// That way we can return the number of rows that were flushed for each table
 	//

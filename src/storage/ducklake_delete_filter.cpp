@@ -320,9 +320,15 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 				    "Invalid delete data - delete index read from file %s is out of range for data file %s",
 				    delete_scan.delete_file.path, delete_scan.file.path);
 			}
+			bool has_snapshot = i < current_deletes.snapshot_ids.size();
+			auto delete_snapshot = has_snapshot ? current_deletes.snapshot_ids[i] : delete_scan.snapshot_id.GetIndex();
+			if (delete_scan.insert_snapshot.IsValid() && delete_snapshot == delete_scan.insert_snapshot.GetIndex()) {
+				// a row deleted in the snapshot that inserted it was never visible
+				continue;
+			}
 			rows_to_scan[delete_idx] = true;
-			if (i < current_deletes.snapshot_ids.size()) {
-				position_to_snapshot[delete_idx] = current_deletes.snapshot_ids[i];
+			if (has_snapshot) {
+				position_to_snapshot[delete_idx] = delete_snapshot;
 			}
 		}
 	} else if (delete_scan.file_deleted) {

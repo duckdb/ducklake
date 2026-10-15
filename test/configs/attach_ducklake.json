@@ -181,7 +181,9 @@
         "test/sql/cte/materialized/materialized_cte_order_preservation.test",
         "test/sql/cte/materialized/materialized_cte_parallel_buffered.test",
         "test/optimizer/partial_aggregate_pushdown.test",
-        "test/sql/optimizer/pushdown_extract_reapplied.test"
+        "test/sql/optimizer/pushdown_extract_reapplied.test",
+        "test/sql/optimizer/variant_json_cast_pushdown.test",
+        "test/sql/aggregate/grouping_sets/grouping_sets_sum_having.test"
       ]
     },
     {
@@ -205,7 +207,10 @@
         "test/optimizer/joins/join_filter_build_side.test",
         "test/sql/sql_export/compression_fallbacks.test",
         "test/sql/sql_export/compression_fallbacks_plan.test",
-        "test/sql/sql_export/rewritten_functions.test"
+        "test/sql/sql_export/rewritten_functions.test",
+        "test/optimizer/statistics/statistics_early_join_range.test",
+        "test/sql/serialization/logical_operator_serialization.test",
+        "test/sql/parser/reject_unknown_option_values.test"
       ]
     },
     {
@@ -270,7 +275,8 @@
         "test/sql/alter/rename_table/test_rename_table_view.test",
         "test/sql/alter/alter_schema_set_schema_options.test",
         "test/sql/create/create_schema_options.test",
-        "test/sql/alter/drop_col/test_drop_col_dotted_name.test"
+        "test/sql/alter/drop_col/test_drop_col_dotted_name.test",
+        "test/sql/parser/parsed_data_statement_roundtrip.test"
       ]
     },
     {
@@ -307,7 +313,8 @@
         "test/sql/storage/wal/wal_uhugeint_storage.test",
         "test/sql/transactions/types/test_uhugeint_transactions.test",
         "test/sql/transactions/types/test_hugeint_transactions.test",
-        "test/sql/types/hugeint/test_hugeint_ops.test"
+        "test/sql/types/hugeint/test_hugeint_ops.test",
+        "test/sql/types/bignum/test_int_varchar_bignum_compatibility.test"
       ]
     },
     {
@@ -395,7 +402,8 @@
         "test/sql/storage/icu_collation.test",
         "test/sql/attach/attach_read_only.test",
         "test/sql/storage/checkpoint/checkpoint_with_outstanding_insertions.test",
-        "test/sql/storage/temp_directory/test_runner_temp_directory.test"
+        "test/sql/storage/temp_directory/test_runner_temp_directory.test",
+        "test/sql/collate/collation_invalid_utf8.test"
       ]
     },
     {
@@ -658,18 +666,22 @@
         "test/sql/optimizer/multiple_column_stats_pruning.test",
         "test/sql/optimizer/struct_segment_pruning.test",
         "test/optimizer/joins/always_true_scan_filter_estimate.test",
-        "test/sql/sql_export/pushed_column_paths.test"
+        "test/sql/sql_export/pushed_column_paths.test",
+        "test/sql/optimizer/plan/dense_or_filter_pushdown.test",
+        "test/sql/storage/distinct_statistics_sample.test",
+        "test/sql/explain/tree_renderer_branches.test"
       ]
     },
     {
-      "reason": "Asserts DuckDB-native BASE_TABLE memory accounting via duckdb_memory().",
+      "reason": "Asserts DuckDB-native table memory accounting (BASE_TABLE, IN_MEMORY_TABLE) via duckdb_memory().",
       "paths": [
         "test/sql/storage/prefetch/async_native_scan_read_ahead_pruning.test",
         "test/sql/delete/bulk_delete_version_info_memory.test",
         "test/sql/delete/delete_compression_blocked_by_old_snapshot.test",
         "test/sql/delete/partial_delete_version_info_memory.test",
         "test/sql/storage/partial_delete_pending_compress.test",
-        "test/sql/storage/partial_delete_checkpoint_mask.test"
+        "test/sql/storage/partial_delete_checkpoint_mask.test",
+        "test/sql/storage/adaptive_segment_rollback.test"
       ]
     },
     {
@@ -721,7 +733,10 @@
         "test/sql/storage/compression/constant/constant_negative_zero.test",
         "test/sql/types/geo/geometry_shred_limit.test",
         "test/sql/types/geo/geometry_shred.test",
-        "test/sql/storage/types/variant/variant_shredding_omit_untyped.test"
+        "test/sql/storage/types/variant/variant_shredding_omit_untyped.test",
+        "test/sql/storage/compression/rle/rle_select_force_fetch_row.test",
+        "test/sql/storage/compression/constant/constant_numeric_types.test",
+        "test/sql/storage/reclaim_space/test_reclaim_space_update_large_string.test"
       ]
     },
     {
@@ -804,7 +819,51 @@
     {
       "reason": "Asserts insertion order of a large parallel CTAS copy via LIMIT/OFFSET without ORDER BY; DuckLake does not preserve it.",
       "paths": [
-        "test/sql/parallelism/intraquery/test_transaction_local_parallelism.test"
+        "test/sql/parallelism/intraquery/test_transaction_local_parallelism.test",
+        "test/sql/cte/materialized/materialized_cte_parallel_scan.test"
+      ]
+    },
+    {
+      "reason": "Asserts DuckDB-native VARIANT shredding statistics and vector types, which differ for VARIANT values stored in Parquet.",
+      "paths": [
+        "test/issues/general/test_24298.test"
+      ]
+    },
+    {
+      "reason": "EXPLAIN (SQL) cannot render UPDATE or DELETE of a DuckLake table, which identifies rows by data file and row number instead of a single row-id column.",
+      "paths": [
+        "test/sql/sql_export/dml_statements.test"
+      ]
+    },
+    {
+      "reason": "FIXME: GEOMETRY columns lose their CRS, so typeof returns GEOMETRY instead of GEOMETRY('OGC:CRS84') (pdet/ducklake_internal#74)",
+      "paths": [
+        "test/sql/types/geo/geometry_crs_persist.test"
+      ]
+    },
+    {
+      "reason": "FIXME: fails on DuckDB itself, a small GROUP BY runs out of memory at 3 or 4 threads with operator_memory_limit and no temp directory (pdet/ducklake_internal#180)",
+      "paths": [
+        "test/sql/settings/operator_memory_limit.test",
+        "test/sql/storage/test_eviction_queue_dead_nodes_underflow.test"
+      ]
+    },
+    {
+      "reason": "FIXME: txid_current() raises an INTERNAL error when a DuckLake catalog is the default database (pdet/ducklake_internal#85)",
+      "paths": [
+        "test/sql/index/art/create_index_session_dependent.test"
+      ]
+    },
+    {
+      "reason": "FIXME: fails on DuckDB itself, its Parquet writer stores shredded VARIANT DECIMALs of another scale unscaled (pdet/ducklake_internal#201)",
+      "paths": [
+        "test/sql/types/variant/variant_stats_merge_decimal.test"
+      ]
+    },
+    {
+      "reason": "FIXME: fails on DuckDB itself, timestamps in the lowest hours of the int64 range cannot be converted to strings for statistics (pdet/ducklake_internal#202)",
+      "paths": [
+        "test/sql/optimizer/monotone_preimage_tz.test"
       ]
     }
   ]

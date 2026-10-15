@@ -20,28 +20,27 @@ CASE WHEN version = ' AT (VERSION => 1)' THEN 1000 ELSE 850 - k END AS hi
 FROM range(10) t(k), (VALUES (''), (' AT (VERSION => 3)'), (' AT (VERSION => 2)'), (' AT (VERSION => 1)')) v(version))
 ));
 
-# Three import transactions create the data, Parquet deletions, then inlined deletions; every table differs by k
+# Three transactions create the data, Parquet deletions, then inlined deletions, and every table differs by k
 load
-EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
-COPY (SELECT stmt FROM (
-SELECT 0 AS o, k, 'CREATE TABLE lake.i' || k
-|| ' AS SELECT r AS id, r * 3 + ' || k || ' AS v FROM range(100) t(r);' AS stmt FROM range(40) t(k)
-UNION ALL
-SELECT 1, k, 'CREATE TABLE lake.f' || k
-|| ' AS SELECT r AS id, r * 3 + ' || k || ' AS v FROM range(1000) t(r);' FROM range(10) t(k)
-UNION ALL
-SELECT 2, 0, 'COMMIT; BEGIN;'
-UNION ALL
-SELECT 3, k, 'DELETE FROM lake.f' || k || ' WHERE id >= ' || (850 - k) || ';' FROM range(10) t(k)
-UNION ALL
-SELECT 4, 0, 'COMMIT; BEGIN;'
-UNION ALL
-SELECT 5, k, 'DELETE FROM lake.f' || k || ' WHERE id < ' || (5 + k) || ';' FROM range(10) t(k)
-) ORDER BY o, k) TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
 @create ${lake}_pristine
 @attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
 CALL lake.set_option('data_inlining_row_limit', 100);
-IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+BEGIN;
+@for k in range(40)
+CREATE TABLE lake.i@{k} AS SELECT r AS id, r * 3 + @{k} AS v FROM range(100) t(r);
+@end
+@for k in range(10)
+CREATE TABLE lake.f@{k} AS SELECT r AS id, r * 3 + @{k} AS v FROM range(1000) t(r);
+@end
+COMMIT; BEGIN;
+@for k in range(10)
+DELETE FROM lake.f@{k} WHERE id >= 850 - @{k};
+@end
+COMMIT; BEGIN;
+@for k in range(10)
+DELETE FROM lake.f@{k} WHERE id < 5 + @{k};
+@end
+COMMIT;
 SET VARIABLE flush_delete_tables = (SELECT list('__ducklake_metadata_lake.ducklake_inlined_delete_' || table_id)
 FROM __ducklake_metadata_lake.ducklake_table WHERE table_name LIKE 'f%');
 SELECT CASE WHEN (SELECT count(*) <> 4 OR max(snapshot_id) <> 3 FROM lake.snapshots())

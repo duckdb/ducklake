@@ -20,6 +20,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "Only DuckDB catalogs drop the empty inlined data table that an ALTER supersedes",
+      "paths": [
+        "test/sql/alter/alter_drops_empty_inlined_tables.test"
+      ]
+    },
+    {
       "reason": "Bespoke test starts and stops its own quack server",
       "paths": [
         "test/sql/quack/quack_basic.test"
@@ -91,12 +97,6 @@
       "reason": "Uses the S3 test server",
       "paths": [
         "test/sql/delete/delete_metadata.test"
-      ]
-    },
-    {
-      "reason": "mode skip in the test itself",
-      "paths": [
-        "test/sql/general/prepared_statement.test"
       ]
     },
     {
