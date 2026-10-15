@@ -9,18 +9,27 @@ cache_file ${lake}_ready.marker
 # Every ALTER commits on its own, so each insert target has 31 schema versions and an inlined table for the last one
 # The targets end with the columns of the commit fixture, so the run reuses its INSERTs
 load
-EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
-COPY (SELECT stmt FROM (
-SELECT 0 AS o, i AS k, 'CREATE TABLE lake.main.bg_' || i || ' (id INTEGER, v VARCHAR);' AS stmt FROM range(200) t(i)
-UNION ALL SELECT 1, i, 'CREATE TABLE lake.main.ins_' || i || ' (id BIGINT, v VARCHAR);' FROM range(10) t(i)
-UNION ALL SELECT 2 + j, i, 'COMMIT; BEGIN; ALTER TABLE lake.main.ins_' || i || CASE WHEN j % 2 = 0
-THEN ' ADD COLUMN c INTEGER;' ELSE ' DROP COLUMN c;' END FROM range(10) t(i), range(30) s(j)
-) ORDER BY o, k) TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
 @create ${lake}_pristine
 @attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
 CALL lake.set_option('data_inlining_row_limit', 10);
 BEGIN;
-IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+@for i in range(200)
+CREATE TABLE lake.main.bg_@{i} (id INTEGER, v VARCHAR);
+@end
+@for i in range(10)
+CREATE TABLE lake.main.ins_@{i} (id BIGINT, v VARCHAR);
+@end
+@for j in range(30)
+@for i in range(10)
+COMMIT; BEGIN;
+@if j % 2 == 0
+ALTER TABLE lake.main.ins_@{i} ADD COLUMN c INTEGER;
+@end
+@if j % 2 == 1
+ALTER TABLE lake.main.ins_@{i} DROP COLUMN c;
+@end
+@end
+@end
 COMMIT;
 SELECT CASE WHEN (SELECT count(*) <> 310 FROM __ducklake_metadata_lake.ducklake_schema_versions sv
 JOIN __ducklake_metadata_lake.ducklake_table t USING (table_id) WHERE t.table_name LIKE 'ins_%')

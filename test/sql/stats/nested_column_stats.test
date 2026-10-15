@@ -1,0 +1,50 @@
+# name: test/sql/stats/nested_column_stats.test
+# description: File statistics of nested columns are only stored for their leaf columns
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nested_column_stats', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (s STRUCT(i INTEGER, l INTEGER[]), m MAP(VARCHAR, INTEGER), v VARIANT)
+
+statement ok
+INSERT INTO dl.t VALUES
+	({'i': 1, 'l': [1, 2]}, MAP {'a': 1}, {'a': 1, 'b': [1, 2]}::VARIANT),
+	(NULL, NULL, NULL),
+	({'i': NULL, 'l': NULL}, MAP {}, {'a': 3, 'b': []::INTEGER[]}::VARIANT)
+
+query TIITT
+SELECT c.column_name, s.value_count, s.null_count, s.min_value, s.max_value
+FROM __ducklake_metadata_dl.ducklake_file_column_stats s
+JOIN __ducklake_metadata_dl.ducklake_column c USING (table_id, column_id)
+ORDER BY s.column_id
+----
+i	1	2	1	1
+element	2	2	1	2
+key	1	2	a	a
+value	1	2	1	1
+v	NULL	NULL	NULL	NULL
+
+query TTTI
+SELECT variant_path, min_value, max_value, value_count
+FROM __ducklake_metadata_dl.ducklake_file_variant_stats
+ORDER BY variant_path
+----
+"a"	1	3	2
+"b".element	1	2	2
+
+query IIIIII
+SELECT count(*) FILTER (s IS NULL), count(*) FILTER (s.i IS NULL), count(*) FILTER (s.l IS NULL),
+	count(*) FILTER (m IS NULL), count(*) FILTER (v IS NULL), count(*) FILTER (v.a::INTEGER = 3)
+FROM dl.t
+----
+1	2	2	1	1	1

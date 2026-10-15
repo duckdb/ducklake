@@ -1,6 +1,7 @@
-"""Renders the regression benchmarks for one DuckLake metadata catalog by expanding their catalog operations"""
+"""Renders the regression benchmarks for one DuckLake metadata catalog by expanding their @ directives"""
 
 import argparse
+import ast
 import glob
 import os
 import re
@@ -16,6 +17,12 @@ REFERENCE = re.compile(r"^\s*(?:include|template)\s+(\S+)", re.IGNORECASE | re.M
 VERBATIM = re.compile(r"^\s*(?:load|run|init|cleanup|reload)\s+(\S+)\s*$", re.IGNORECASE | re.MULTILINE)
 PLACEHOLDER = re.compile(r"\$\{\w+\}")
 DATABASE = re.compile(r"[a-z0-9_-]+")
+BLOCK = re.compile(r"@(for|if|end)\b\s*(.*?)")
+LOOP = re.compile(r"(\w+)\s+in\s+range\((.*)\)")
+SUBSTITUTION = re.compile(r"@\{([^}]*)\}")
+# Integer arithmetic, comparisons and logic of loop variables, without calls or attributes
+EXPRESSION = (ast.Expression, ast.Load, ast.Name, ast.Constant, ast.BinOp, ast.BoolOp, ast.Compare, ast.UnaryOp)
+OPERATOR = (ast.operator, ast.boolop, ast.cmpop, ast.unaryop)
 
 
 def sql_string(value):
@@ -127,22 +134,82 @@ def expand(catalog, operation, arguments):
     raise ValueError(f"unknown catalog operation @{operation}")
 
 
+def evaluate(expression, variables):
+    """Evaluates an integer expression of the loop variables"""
+    try:
+        tree = ast.parse(expression.strip(), mode="eval")
+    except SyntaxError:
+        raise ValueError(f"invalid expression {expression}") from None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and node.id not in variables:
+            raise ValueError(f"unknown loop variable {node.id}")
+        allowed = isinstance(node, EXPRESSION + OPERATOR)
+        if not allowed or isinstance(node, ast.Constant) and type(node.value) is not int:
+            raise ValueError(f"invalid expression {expression}")
+    return eval(compile(tree, "expression", "eval"), {"__builtins__": {}}, variables)
+
+
+def iterations(directive, arguments, variables):
+    """Returns the loop variables of every pass through the body of a block"""
+    if directive == "if":
+        return [variables] if evaluate(arguments, variables) else []
+    loop = LOOP.fullmatch(arguments)
+    if not loop:
+        raise ValueError("expected @for NAME in range(BOUNDS)")
+    bounds = [evaluate(bound, variables) for bound in loop.group(2).split(",")]
+    return [{**variables, loop.group(1): value} for value in range(*bounds)]
+
+
+def render_line(line, catalog, variables):
+    line = SUBSTITUTION.sub(lambda value: str(evaluate(value.group(1), variables)), line)
+    stripped = line.strip()
+    if "'ducklake:" in stripped:
+        raise ValueError("attach DuckLake catalogs with @attach, so every metadata catalog can render them")
+    if not stripped.startswith("@"):
+        return [line]
+    operation = OPERATION.fullmatch(stripped)
+    if not operation:
+        raise ValueError("expected @OPERATION ARGUMENTS")
+    return expand(catalog, *operation.groups())
+
+
+def blocks(path, text):
+    """Nests the numbered lines of a file in the @for and @if blocks around them"""
+    nested = [(0, [])]
+    for number, line in enumerate(text.splitlines(), start=1):
+        block = BLOCK.fullmatch(line.strip())
+        if not block:
+            nested[-1][1].append((number, line))
+        elif block.group(1) != "end":
+            body = []
+            nested[-1][1].append((number, block.group(1), block.group(2), body))
+            nested.append((number, body))
+        elif len(nested) == 1 or block.group(2):
+            raise ValueError(f"{path}:{number}: expected a bare @end that closes a @for or @if")
+        else:
+            nested.pop()
+    if len(nested) > 1:
+        raise ValueError(f"{path}:{nested[-1][0]}: @for or @if without @end")
+    return nested[0][1]
+
+
+def render_lines(path, items, catalog, variables, lines):
+    for item in items:
+        try:
+            if len(item) == 2:
+                lines.extend(render_line(item[1], catalog, variables))
+                continue
+            _, directive, arguments, body = item
+            scopes = iterations(directive, arguments, variables)
+        except (ArithmeticError, TypeError, ValueError) as error:
+            raise ValueError(f"{path}:{item[0]}: {error}") from None
+        for scope in scopes:
+            render_lines(path, body, catalog, scope, lines)
+
+
 def render(path, text, catalog, header):
     lines = catalog.header() if header else []
-    for number, line in enumerate(text.splitlines(), start=1):
-        stripped = line.strip()
-        try:
-            if "'ducklake:" in stripped:
-                raise ValueError("attach DuckLake catalogs with @attach, so every metadata catalog can render them")
-            if not stripped.startswith("@"):
-                lines.append(line)
-                continue
-            operation = OPERATION.fullmatch(stripped)
-            if not operation:
-                raise ValueError("expected @OPERATION ARGUMENTS")
-            lines.extend(expand(catalog, *operation.groups()))
-        except ValueError as error:
-            raise ValueError(f"{path}:{number}: {error}") from None
+    render_lines(path, blocks(path, text), catalog, {}, lines)
     return "\n".join(lines) + "\n"
 
 

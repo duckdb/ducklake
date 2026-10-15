@@ -1,0 +1,100 @@
+# name: test/sql/data_inlining/flush_renamed_in_transaction.test
+# description: Flushing the inlined rows of a table renamed earlier in the same transaction
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/flush_renamed_in_transaction', DATA_INLINING_ROW_LIMIT 5)
+
+statement ok
+CREATE TABLE lake.t (i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1), (2)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.t RENAME TO t2
+
+query TI
+SELECT table_name, rows_flushed FROM ducklake_flush_inlined_data('lake')
+----
+t2	2
+
+statement ok
+ROLLBACK
+
+query I
+SELECT count(*) FROM ducklake_list_files('lake', 't')
+----
+0
+
+statement ok
+INSERT INTO lake.t VALUES (3)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.t RENAME TO t2
+
+statement ok
+ALTER TABLE lake.t2 SET SORTED BY (i DESC)
+
+query TTI
+SELECT schema_name, table_name, rows_flushed FROM ducklake_flush_inlined_data('lake', table_name => 't2')
+----
+main	t2	3
+
+statement ok
+COMMIT
+
+query I
+SELECT i FROM lake.t2
+----
+3
+2
+1
+
+query I
+SELECT count(*) FROM ducklake_list_files('lake', 't2')
+----
+1
+
+# a compaction cannot commit with the rename, but fails at commit with the reason
+statement ok
+CREATE TABLE lake.m (i INTEGER)
+
+statement ok
+INSERT INTO lake.m SELECT range FROM range(10)
+
+statement ok
+INSERT INTO lake.m SELECT range FROM range(10, 20)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.m RENAME TO m2
+
+statement ok
+CALL ducklake_merge_adjacent_files('lake')
+
+statement error
+COMMIT
+----
+Transactions can either make changes OR perform compaction - not both
+
+query II
+SELECT count(*), sum(i) FROM lake.m
+----
+20	190

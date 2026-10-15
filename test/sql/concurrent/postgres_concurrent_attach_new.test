@@ -10,13 +10,15 @@ require postgres_scanner
 
 require-env DUCKLAKE_CI
 
+require-env DUCKLAKE_CONNECTION
+
 test-env DATA_PATH {TEST_DIR}
 
 # the catalog does not exist yet, so an attach may have to create it
 concurrentloop i 0 4
 
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl_{i}
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl_{i}
 (DATA_PATH '{DATA_PATH}/concurrent_attach_new', METADATA_SCHEMA 'concurrent_attach_new')
 
 statement ok
@@ -28,7 +30,7 @@ INSERT INTO dl_{i}.t_{i} VALUES ({i})
 endloop
 
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
 (DATA_PATH '{DATA_PATH}/concurrent_attach_new', METADATA_SCHEMA 'concurrent_attach_new')
 
 query I
@@ -46,7 +48,7 @@ statement ok
 DETACH dl
 
 statement ok
-ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
 
 statement ok
 CALL postgres_execute('pg', 'DROP SCHEMA concurrent_attach_new CASCADE')

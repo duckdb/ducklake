@@ -10,16 +10,18 @@ require postgres_scanner
 
 require-env DUCKLAKE_CI
 
+require-env DUCKLAKE_CONNECTION
+
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
 
 statement ok
 CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS localized_retry CASCADE')
 
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
 (DATA_PATH '{DATA_PATH}/localized_retry', METADATA_SCHEMA 'localized_retry')
 
 statement ok

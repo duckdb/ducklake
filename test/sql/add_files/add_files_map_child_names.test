@@ -1,0 +1,45 @@
+# name: test/sql/add_files/add_files_map_child_names.test
+# description: Adding a file whose MAP children are named value and key maps the first child to the key
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_files_map_child_names', METADATA_CATALOG 'ducklake_meta')
+
+# the children of this MAP are named value and key, in this order
+statement ok
+CREATE TABLE ducklake.swapped (m MAP(INTEGER, INTEGER))
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'swapped', 'data/parquet/map_swapped_children.parquet')
+
+query III
+SELECT c.column_name, s.min_value, s.max_value
+FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_column c USING (table_id, column_id)
+WHERE c.parent_column IS NOT NULL ORDER BY c.column_id
+----
+key	1	3
+value	10	30
+
+query I
+SELECT count(*) FROM ducklake.swapped WHERE m[1] = 10
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.swapped WHERE m[3] = 30
+----
+1
+
+query I
+SELECT m FROM ducklake.swapped ORDER BY m[1] NULLS LAST
+----
+{1=10, 2=20}
+{3=30}

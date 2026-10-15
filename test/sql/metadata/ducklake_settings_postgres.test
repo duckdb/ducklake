@@ -8,13 +8,14 @@ require parquet
 
 require postgres_scanner
 
-#FIXME: ADD THIS TO PG CI WHEN IT GETS BACK
 require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
 
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS ducklake (DATA_PATH '{DATA_PATH}/files')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/files')
 
 statement ok
 use ducklake

@@ -1,0 +1,187 @@
+# name: test/sql/alter/alter_drops_empty_inlined_tables.test
+# description: An ALTER drops the empty inlined data tables of the table that its new inlined data table supersedes
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/alter_drops_empty_inlined_tables', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.p AS SELECT range::INTEGER AS i FROM range(1000)
+
+statement ok
+CREATE TABLE ducklake.r (i INTEGER)
+
+statement ok
+INSERT INTO ducklake.r VALUES (1), (2), (3)
+
+loop k 0 20
+
+statement ok
+ALTER TABLE ducklake.p ADD COLUMN c INTEGER
+
+statement ok
+ALTER TABLE ducklake.p DROP COLUMN c
+
+statement ok
+ALTER TABLE ducklake.r ADD COLUMN c{k} INTEGER
+
+endloop
+
+statement ok
+ALTER TABLE ducklake.p RENAME TO p_renamed
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.p_renamed ADD COLUMN c INTEGER
+
+statement ok
+ALTER TABLE ducklake.p_renamed RENAME TO p
+
+statement ok
+COMMIT
+
+statement ok
+ALTER TABLE ducklake.p DROP COLUMN c
+
+# p keeps only its current inlined data table, r also keeps the one that holds its rows
+query II
+SELECT table_id, count(*) FROM ducklake_meta.ducklake_inlined_data_tables GROUP BY ALL ORDER BY ALL
+----
+1	1
+2	2
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT sum(i) FROM ducklake.p
+----
+499500
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) <= 2 FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_inlined_data_1_%'
+----
+true
+
+query II
+SELECT sum(i), count(c19) FROM ducklake.r
+----
+6	0
+
+statement ok
+INSERT INTO ducklake.r (i, c19) VALUES (4, 40)
+
+query II
+SELECT i, c19 FROM ducklake.r ORDER BY i
+----
+1	NULL
+2	NULL
+3	NULL
+4	40
+
+# a snapshot before the ALTERs still reads the rows of r
+query I
+SELECT sum(i) FROM ducklake.r AT (VERSION => 3)
+----
+6
+
+query II
+SELECT table_id, count(*) FROM ducklake_meta.ducklake_inlined_data_tables GROUP BY ALL ORDER BY ALL
+----
+1	1
+2	2
+
+# a flush in the same transaction as the ALTER or RENAME still writes to the table it flushes
+statement ok
+CREATE TABLE ducklake.e (i INTEGER)
+
+statement ok
+CREATE TABLE ducklake.s (i INTEGER)
+
+statement ok
+INSERT INTO ducklake.s VALUES (1)
+
+foreach tbl e s
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => '${tbl}')
+
+statement ok
+ALTER TABLE ducklake.${tbl} ADD COLUMN j INTEGER
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.${tbl} ADD COLUMN k INTEGER
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => '${tbl}')
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => '${tbl}')
+
+statement ok
+ALTER TABLE ducklake.${tbl} RENAME TO ${tbl}_renamed
+
+statement ok
+COMMIT
+
+endloop
+
+query III
+SELECT (SELECT count(*) FROM ducklake.e_renamed), (SELECT sum(i) FROM ducklake.s_renamed), (SELECT count(k) FROM ducklake.s_renamed)
+----
+0	1	0
+
+# a concurrent ALTER drops the empty inlined table that a pending flush did not write to
+statement ok
+CREATE TABLE ducklake.c (i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'c')
+
+statement ok con1
+CREATE TABLE ducklake.unrelated (i INTEGER)
+
+statement ok con2
+ALTER TABLE ducklake.c ADD COLUMN j INTEGER
+
+statement ok con1
+COMMIT
+
+statement ok
+INSERT INTO ducklake.c VALUES (1, 2)
+
+query II
+SELECT i, j FROM ducklake.c
+----
+1	2

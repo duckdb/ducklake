@@ -10,30 +10,16 @@ cache_file ${lake}_ready.marker
 
 # Each of the first 50 generated commits creates tables / 50 main tables and 2 inl tables, then 10 frag tables get
 # three files each and 300 commits insert one inlined row each
+# The tables argument sets the number of main tables per commit, so a generated script per commit creates them
 load
-EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
-COPY (SELECT stmt FROM (
-SELECT c AS o, 0 AS k, n AS i, 'CREATE TABLE lake.main.bg_' || n || ' AS SELECT r AS c0, r * 2 AS c1, r * 3 AS c2, '
+@for c in range(50)
+EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen_@{c}';
+COPY (SELECT 'CREATE TABLE lake.main.bg_' || n || ' AS SELECT r AS c0, r * 2 AS c1, r * 3 AS c2, '
 || 'r * 4 AS c3, r * 0.5 AS c4, r * 0.25 AS c5, r * 0.125 AS c6, ''a'' || r AS c7, ''b'' || r AS c8, '
-|| '''c'' || r AS c9 FROM range(' || n || ', ' || (n + 2) || ') t(r);' AS stmt
-FROM (SELECT c, c * (${tables} // 50) + j AS n FROM range(50) t(c), range(${tables} // 50) u(j))
-UNION ALL
-SELECT c, 1, n, 'CREATE TABLE lake.inl.t_' || n || ' AS SELECT r AS id, r * 3 + ' || n || ' AS v FROM range(5) t(r);'
-FROM (SELECT c, c * 2 + j AS n FROM range(50) t(c), range(2) u(j))
-UNION ALL
-SELECT c, 2, 0, 'COMMIT; BEGIN;' FROM range(50) t(c)
-UNION ALL
-SELECT 50, 0, f, 'CREATE TABLE lake.main.frag_' || f || ' (id BIGINT, v VARCHAR);' FROM range(10) t(f)
-UNION ALL
-SELECT 50 + p, 1, f, 'INSERT INTO lake.main.frag_' || f || ' SELECT r, ''v'' || r FROM range(' || (p * 1000) || ', '
-|| (p * 1000 + 1000) || ') t(r);' FROM range(10) t(f), range(1, 4) u(p)
-UNION ALL
-SELECT 50 + p, 2, 0, 'COMMIT; BEGIN;' FROM range(4) t(p)
-UNION ALL
-SELECT 54 + s, 0, 0, 'INSERT INTO lake.inl.t_' || (s % 100) || ' VALUES (' || (100 + s) || ', ' || s || '); '
-|| 'COMMIT; BEGIN;'
-FROM range(300) t(s)
-) ORDER BY o, k, i) TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
+|| '''c'' || r AS c9 FROM range(' || n || ', ' || (n + 2) || ') t(r);'
+FROM (SELECT @{c} * (${tables} // 50) + j AS n FROM range(${tables} // 50) u(j)) ORDER BY n)
+TO '${BENCHMARK_DIR}/${lake}_gen_@{c}/schema.sql' (HEADER false, QUOTE '');
+@end
 EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_create500';
 COPY (SELECT 'CREATE TABLE lake.main.created_' || i || ' (' || (SELECT string_agg('c' || j || ' '
 || ['BIGINT', 'DOUBLE', 'VARCHAR', 'DATE'][j % 4 + 1], ', ' ORDER BY j) FROM range(20) u(j)) || ');'
@@ -44,7 +30,26 @@ CALL lake.set_option('data_inlining_row_limit', 0);
 CREATE SCHEMA lake.inl;
 CALL lake.set_option('data_inlining_row_limit', 100, schema => 'inl');
 BEGIN;
-IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+@for c in range(50)
+IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen_@{c}';
+@for n in range(c * 2, c * 2 + 2)
+CREATE TABLE lake.inl.t_@{n} AS SELECT r AS id, r * 3 + @{n} AS v FROM range(5) t(r);
+@end
+COMMIT; BEGIN;
+@end
+@for f in range(10)
+CREATE TABLE lake.main.frag_@{f} (id BIGINT, v VARCHAR);
+@end
+COMMIT; BEGIN;
+@for p in range(1, 4)
+@for f in range(10)
+INSERT INTO lake.main.frag_@{f} SELECT r, 'v' || r FROM range(@{p} * 1000, @{p} * 1000 + 1000) t(r);
+@end
+COMMIT; BEGIN;
+@end
+@for s in range(300)
+INSERT INTO lake.inl.t_@{s % 100} VALUES (100 + @{s}, @{s}); COMMIT; BEGIN;
+@end
 COMMIT;
 SELECT CASE WHEN (SELECT count(*) FROM duckdb_tables() WHERE database_name = 'lake') <> ${tables} + 110
 OR (SELECT count(*) FROM lake.snapshots()) <> 356
