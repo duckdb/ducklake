@@ -239,6 +239,23 @@ static bool VectorContainsNaN(Vector &input_vec, idx_t row_count) {
 	return false;
 }
 
+//! Inlined rows are flushed to Parquet files, which cannot hold negative intervals
+static void ThrowIfNegativeInterval(Vector &input_vec, idx_t row_count) {
+	UnifiedVectorFormat fmt;
+	input_vec.ToUnifiedFormat(fmt);
+	auto data = UnifiedVectorFormat::GetData<interval_t>(fmt);
+	for (idx_t i = 0; i < row_count; i++) {
+		auto idx = fmt.sel->get_index(i);
+		if (!fmt.validity.RowIsValid(idx)) {
+			continue;
+		}
+		auto &interval = data[idx];
+		if (interval.months < 0 || interval.days < 0 || interval.micros < 0) {
+			throw InvalidInputException("Parquet files do not support negative intervals");
+		}
+	}
+}
+
 DuckLakeColumnStats GetVectorStats(Vector &input_vec, idx_t row_count) {
 	auto &type = input_vec.GetType();
 	Vector str_vector(LogicalType::VARCHAR, row_count);
@@ -299,6 +316,9 @@ void UpdateStats(vector<DuckLakeBaseColumnStats> &stats, idx_t c, Vector &data, 
 			throw InternalException("FIXME: unsupported nested type");
 		}
 		return;
+	}
+	if (type.id() == LogicalTypeId::INTERVAL) {
+		ThrowIfNegativeInterval(data, row_count);
 	}
 	auto new_stats = GetVectorStats(data, row_count);
 	if (skipped_fields.count(field_id.GetFieldIndex().index)) {

@@ -1,0 +1,55 @@
+# name: test/sql/add_files/add_files_hive_nested_field_name.test
+# description: a hive partition key only maps to a top-level column, not to a nested field of the same name
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_files_hive_nested_field_name', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+COPY (SELECT {'a': 7, 'b': 8} AS s, MAP {'x': 9} AS m, 1 AS a, 'p' AS key) TO '{DATA_PATH}/add_files_hive_nested_field_name_src' (FORMAT parquet, PARTITION_BY (a, key))
+
+statement ok
+CREATE TABLE ducklake.t (s STRUCT(a INTEGER, b INTEGER), m MAP(VARCHAR, INTEGER), a INTEGER, key VARCHAR)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/add_files_hive_nested_field_name_src/**/*.parquet', hive_partitioning => true)
+
+query IIII
+SELECT s, m, a, key FROM ducklake.t
+----
+{'a': 7, 'b': 8}	{x=9}	1	p
+
+# without a top-level column of that name, and with the default hive partitioning
+statement ok
+CREATE TABLE ducklake.t2 (s STRUCT(a INTEGER, b INTEGER))
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't2', '{DATA_PATH}/add_files_hive_nested_field_name_src/**/*.parquet', ignore_extra_columns => true)
+
+query I
+SELECT s FROM ducklake.t2
+----
+{'a': 7, 'b': 8}
+
+# a nested field that the file lacks is missing, not the hive value
+statement ok
+COPY (SELECT {'b': 8} AS s, 1 AS a) TO '{DATA_PATH}/add_files_hive_nested_field_name_missing' (FORMAT parquet, PARTITION_BY (a))
+
+statement ok
+CREATE TABLE ducklake.t3 (s STRUCT(a INTEGER, b INTEGER), a INTEGER)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't3', '{DATA_PATH}/add_files_hive_nested_field_name_missing/**/*.parquet', hive_partitioning => true, allow_missing => true)
+
+query II
+SELECT s, a FROM ducklake.t3
+----
+{'a': NULL, 'b': 8}	1

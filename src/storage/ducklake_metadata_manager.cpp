@@ -1920,6 +1920,36 @@ string DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const map<idx
 	return "WITH " + StringUtil::Join(ctes, ",\n") + "\n";
 }
 
+//! Whether equal values can hash to other buckets, as for NaNs and for zeros inside nested values
+static bool EqualsValuesInOtherBuckets(const Value &value, bool nested) {
+	if (value.IsNull()) {
+		return false;
+	}
+	switch (value.type().InternalType()) {
+	case PhysicalType::FLOAT:
+	case PhysicalType::DOUBLE: {
+		auto number = value.GetValue<double>();
+		return Value::IsNan(number) || (nested && number == 0);
+	}
+	case PhysicalType::STRUCT:
+		for (auto &child : StructValue::GetChildren(value)) {
+			if (EqualsValuesInOtherBuckets(child, true)) {
+				return true;
+			}
+		}
+		return false;
+	case PhysicalType::LIST:
+		for (auto &child : ListValue::GetChildren(value)) {
+			if (EqualsValuesInOtherBuckets(child, true)) {
+				return true;
+			}
+		}
+		return false;
+	default:
+		return false;
+	}
+}
+
 //! Fold a single constant through the bucket() transform, returning the resulting partition_value
 //! string ("6", "3", ...) that matches what the writer stores. Returns empty optional on any failure
 //! (cast error, evaluation error, NULL) so the caller can skip this filter and fall back to zone maps.
@@ -1929,7 +1959,7 @@ static optional_idx FoldBucketValue(ClientContext &context, const Value &constan
 		return optional_idx();
 	}
 	auto cast = constant.DefaultTryCastAs(col_type);
-	if (!cast) {
+	if (!cast || EqualsValuesInOtherBuckets(*cast, false)) {
 		return optional_idx();
 	}
 	auto const_expr = make_uniq<BoundConstantExpression>(std::move(*cast));

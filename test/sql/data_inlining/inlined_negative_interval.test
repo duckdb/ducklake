@@ -1,0 +1,68 @@
+# name: test/sql/data_inlining/inlined_negative_interval.test
+# description: inlined rows refuse negative intervals like Parquet files do, so the catalog can still be flushed
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/inlined_negative_interval')
+
+statement ok
+CREATE TABLE lake.t (i INTEGER, iv INTERVAL);
+
+statement ok
+CREATE TABLE lake.u (j INTEGER);
+
+statement error
+INSERT INTO lake.t VALUES (1, INTERVAL '-3 days');
+----
+Parquet files do not support negative intervals
+
+statement ok
+INSERT INTO lake.t VALUES (2, INTERVAL '3 days');
+
+statement error
+UPDATE lake.t SET iv = -iv;
+----
+Parquet files do not support negative intervals
+
+statement ok
+CREATE TABLE lake.n (s STRUCT(iv INTERVAL)[]);
+
+statement error
+INSERT INTO lake.n VALUES ([{'iv': INTERVAL '-1 month'}]);
+----
+Parquet files do not support negative intervals
+
+statement ok
+INSERT INTO lake.n VALUES ([{'iv': NULL}]);
+
+statement ok
+INSERT INTO lake.u VALUES (10);
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+statement ok
+CHECKPOINT lake
+
+query II
+SELECT (SELECT count(*) FROM ducklake_list_files('lake', 'u')), (SELECT count(*) FROM ducklake_list_files('lake', 't'))
+----
+1	1
+
+query II
+SELECT * FROM lake.t
+----
+2	3 days
+
+query I
+SELECT * FROM lake.n
+----
+[{'iv': NULL}]

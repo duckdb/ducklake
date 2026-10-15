@@ -6,6 +6,8 @@
 #include "storage/ducklake_transaction_changes.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_scan.hpp"
+#include "storage/ducklake_multi_file_reader.hpp"
+#include "duckdb/main/query_result.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 
 namespace duckdb {
@@ -32,7 +34,15 @@ static unique_ptr<FunctionData> DuckLakeTableChangesBind(ClientContext &context,
 	input.table_function = BoundTableFunction(table.GetScanFunction(context, bind_data, lookup));
 
 	auto &function_info = input.table_function.function_info->Cast<DuckLakeFunctionInfo>();
-	names = StringsToIdentifiers(function_info.column_names);
+	// a column of the table named like the snapshot id or row id of the changes would hide them
+	auto virtual_columns = table.GetVirtualColumns();
+	vector<Identifier> output_names {virtual_columns.at(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID).name,
+	                                 virtual_columns.at(COLUMN_IDENTIFIER_ROW_ID).name};
+	for (const auto &column_name : function_info.column_names) {
+		output_names.emplace_back(column_name);
+	}
+	QueryResult::DeduplicateColumns(output_names);
+	names.assign(output_names.begin() + 2, output_names.end());
 	return_types = function_info.column_types;
 	function_info.start_snapshot =
 	    make_uniq<DuckLakeSnapshot>(transaction.GetSnapshot(start_at_clause, SnapshotBound::LOWER_BOUND));

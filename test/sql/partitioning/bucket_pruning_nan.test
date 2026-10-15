@@ -1,0 +1,151 @@
+# name: test/sql/partitioning/bucket_pruning_nan.test
+# description: bucket pruning keeps the files of values that equal the constant but have another bucket
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/bucket_pruning_nan', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake
+
+# every NaN compares equal, but a NaN with the sign bit set has another bucket
+foreach type DOUBLE FLOAT
+
+statement ok
+CREATE TABLE f (d {type}, k INTEGER)
+
+statement ok
+ALTER TABLE f SET PARTITIONED BY (bucket(8, d))
+
+statement ok
+INSERT INTO f VALUES ('nan'::{type}, 1)
+
+statement ok
+INSERT INTO f SELECT -('nan'::{type}), 2
+
+query I
+SELECT k FROM f WHERE d = 'nan'::{type} ORDER BY k
+----
+1
+2
+
+query I
+SELECT k FROM f WHERE d IN ('nan'::{type}, 1.5, 2.5) ORDER BY k
+----
+1
+2
+
+query I
+SELECT k FROM f WHERE d IN (1.5, 'nan'::{type}) AND d <> 7.5 ORDER BY k
+----
+1
+2
+
+query I
+SELECT k FROM f WHERE d = -('nan'::{type}) ORDER BY k
+----
+1
+2
+
+statement ok
+DROP TABLE f
+
+endloop
+
+# nested values hash their text, which keeps the sign of a NaN and of a zero
+statement ok
+CREATE TABLE l (d DOUBLE[], k INTEGER)
+
+statement ok
+ALTER TABLE l SET PARTITIONED BY (bucket(8, d))
+
+statement ok
+INSERT INTO l SELECT [-('nan'::DOUBLE)], 1
+
+statement ok
+INSERT INTO l SELECT [-(0.0::DOUBLE)], 2
+
+query I
+SELECT k FROM l WHERE d = ['nan'::DOUBLE]
+----
+1
+
+query I
+SELECT k FROM l WHERE d = [0.0::DOUBLE]
+----
+2
+
+statement ok
+CREATE TABLE s (d STRUCT(a FLOAT), k INTEGER)
+
+statement ok
+ALTER TABLE s SET PARTITIONED BY (bucket(8, d))
+
+statement ok
+INSERT INTO s SELECT {'a': -(0.0::FLOAT)}, 1
+
+query I
+SELECT k FROM s WHERE d = {'a': 0.0::FLOAT}
+----
+1
+
+statement ok
+CREATE TABLE m (d MAP(INTEGER, DOUBLE), k INTEGER)
+
+statement ok
+ALTER TABLE m SET PARTITIONED BY (bucket(8, d))
+
+statement ok
+INSERT INTO m SELECT MAP {1: -(0.0::DOUBLE)}, 1
+
+query I
+SELECT k FROM m WHERE d = MAP {1: 0.0::DOUBLE}
+----
+1
+
+# other constants and a top-level zero are still pruned
+statement ok
+CREATE TABLE p (d DOUBLE, k INTEGER)
+
+statement ok
+ALTER TABLE p SET PARTITIONED BY (bucket(16, d))
+
+statement ok
+INSERT INTO p SELECT i - 32, i FROM range(64) t(i)
+
+query II
+EXPLAIN ANALYZE SELECT k FROM p WHERE d = 0
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1\s.*
+
+query II
+EXPLAIN ANALYZE SELECT k FROM p WHERE d = -(0.0::DOUBLE)
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1\s.*
+
+query II
+EXPLAIN ANALYZE SELECT k FROM p WHERE d IN (0, NULL)
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1\s.*
+
+statement ok
+CREATE TABLE q (l DOUBLE[], k INTEGER)
+
+statement ok
+ALTER TABLE q SET PARTITIONED BY (bucket(16, l))
+
+statement ok
+INSERT INTO q SELECT [i + 0.5], i FROM range(64) t(i)
+
+query II
+EXPLAIN ANALYZE SELECT k FROM q WHERE l = [5.5]
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1\s.*
