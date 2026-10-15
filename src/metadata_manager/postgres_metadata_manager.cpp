@@ -177,7 +177,8 @@ bool PostgresMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	case LogicalTypeId::UBIGINT:
 	case LogicalTypeId::HUGEINT:
 	case LogicalTypeId::UHUGEINT:
-	// Postgres timestamp/date ranges are narrower than DuckDB's
+	// Postgres timestamp/date ranges are narrower than DuckDB's, and its TIME keeps only microseconds
+	case LogicalTypeId::TIME_NS:
 	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIMESTAMP_TZ:
@@ -218,6 +219,7 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	case LogicalTypeId::UBIGINT:
 	case LogicalTypeId::HUGEINT:
 	case LogicalTypeId::UHUGEINT:
+	case LogicalTypeId::TIME_NS:
 	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIMESTAMP_TZ:

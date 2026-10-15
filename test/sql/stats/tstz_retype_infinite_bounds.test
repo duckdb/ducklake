@@ -1,0 +1,112 @@
+# name: test/sql/stats/tstz_retype_infinite_bounds.test
+# description: Table statistics with only one known bound leave the other side of the range unknown
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET TimeZone = 'UTC'
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/tstz_retype_infinite_bounds', DATA_INLINING_ROW_LIMIT 0)
+
+# the bound without an offset becomes unknown on the next insert, the infinite one stays
+statement ok
+CREATE TABLE lake.t (c TIMESTAMP)
+
+statement ok
+INSERT INTO lake.t VALUES ('infinity'), ('1970-01-01')
+
+statement ok
+ALTER TABLE lake.t ALTER COLUMN c TYPE TIMESTAMPTZ
+
+statement ok
+INSERT INTO lake.t VALUES ('2020-01-01 07:00:00+00')
+
+query II
+SELECT (SELECT count(*) FROM lake.t WHERE c < TIMESTAMPTZ '2000-01-01 00:00:00+00'),
+	(SELECT count(*) FROM lake.t WHERE c > TIMESTAMPTZ '2000-01-01 00:00:00+00')
+----
+1	2
+
+query II
+SELECT min(c), max(c) FROM lake.t
+----
+1970-01-01 00:00:00+00	infinity
+
+# the null count stays known
+query II
+SELECT (stats(c)).has_null, (stats(c)).has_no_null FROM lake.t LIMIT 1
+----
+false	true
+
+query II
+EXPLAIN SELECT count(*) FROM lake.t WHERE c IS NULL
+----
+physical_plan	<REGEX>:.*Empty Result.*
+
+statement ok
+CREATE TABLE lake.n (c TIMESTAMP)
+
+statement ok
+INSERT INTO lake.n VALUES ('-infinity'), ('1970-01-01')
+
+statement ok
+ALTER TABLE lake.n ALTER COLUMN c TYPE TIMESTAMPTZ
+
+statement ok
+INSERT INTO lake.n VALUES ('2020-01-01 07:00:00+00')
+
+query II
+SELECT (SELECT count(*) FROM lake.n WHERE c < TIMESTAMPTZ '2000-01-01 00:00:00+00'),
+	(SELECT count(*) FROM lake.n WHERE c > TIMESTAMPTZ '2000-01-01 00:00:00+00')
+----
+2	1
+
+query II
+SELECT min(c), max(c) FROM lake.n
+----
+-infinity	2020-01-01 07:00:00+00
+
+# inlined rows
+statement ok
+CREATE TABLE lake.i (c TIMESTAMP)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10, table_name => 'i')
+
+statement ok
+INSERT INTO lake.i VALUES ('infinity'), ('1970-01-01')
+
+statement ok
+ALTER TABLE lake.i ALTER COLUMN c TYPE TIMESTAMPTZ
+
+statement ok
+INSERT INTO lake.i VALUES ('2020-01-01 07:00:00+00')
+
+query III
+SELECT (SELECT count(*) FROM lake.i WHERE c < TIMESTAMPTZ '2000-01-01 00:00:00+00'), min(c), max(c) FROM lake.i
+----
+1	1970-01-01 00:00:00+00	infinity
+
+# retyped by DuckDB 1.5.6, which stores the bounds without an offset, and inserted into after the migration
+unzip data/old_ducklake/tstz_infinite_bounds.db.gz {TEST_DIR}/tstz_infinite_bounds_legacy.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/tstz_infinite_bounds_legacy.db' AS legacy (DATA_PATH 'data/old_ducklake/tstz_infinite_bounds/', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+INSERT INTO legacy.t VALUES ('2020-01-01 07:00:00+00')
+
+query III
+SELECT (SELECT count(*) FROM legacy.t WHERE c < TIMESTAMPTZ '2000-01-01 00:00:00+00'), min(c), max(c) FROM legacy.t
+----
+1	1970-01-01 00:00:00+00	infinity

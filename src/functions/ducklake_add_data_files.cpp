@@ -41,6 +41,10 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 	auto schema_name = DuckLakeTableFunctionUtil::GetStringOption(input, "schema");
 	const auto table_name = StringValue::Get(input.inputs[1]);
 	auto &table = DuckLakeBaseMetadataFunction::GetTableEntry(context, catalog, schema_name, table_name);
+	if (catalog.IsEncrypted()) {
+		// every data file of an encrypted catalog is read with its own key, which an added file does not have
+		throw NotImplementedException("ducklake_add_data_files is not supported for an encrypted DuckLake catalog");
+	}
 
 	auto result = make_uniq<DuckLakeAddDataFilesData>(catalog, table);
 	auto &file_list = input.inputs[2];
@@ -185,8 +189,8 @@ private:
 	                                        const LogicalType &field_type, const Value &value) const;
 	unique_ptr<DuckLakeNameMapEntry> MapHiveColumn(ParquetFileMetadata &file_metadata, const DuckLakeFieldId &field_id,
 	                                               const string &hive_key, const Value &hive_value);
-	bool TryMapHiveColumn(ParquetFileMetadata &file_metadata, const string &name, const DuckLakeFieldId &field_id,
-	                      vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps);
+	bool TryMapHiveColumn(ParquetFileMetadata &file_metadata, const string &prefix, const string &name,
+	                      const DuckLakeFieldId &field_id, vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps);
 	void DetermineMapping(ParquetFileMetadata &file);
 	void MapPartitionColumns(ParquetFileMetadata &file);
 	void WrapRepeatedColumn(ParquetFileMetadata &file_metadata, ParquetColumn &column);
@@ -860,9 +864,13 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFil
 	return result;
 }
 
-bool DuckLakeFileProcessor::TryMapHiveColumn(ParquetFileMetadata &file_metadata, const string &name,
-                                             const DuckLakeFieldId &field_id,
+bool DuckLakeFileProcessor::TryMapHiveColumn(ParquetFileMetadata &file_metadata, const string &prefix,
+                                             const string &name, const DuckLakeFieldId &field_id,
                                              vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps) {
+	// hive partitions only name top-level columns
+	if (!prefix.empty()) {
+		return false;
+	}
 	auto identity_key = identity_hive_keys.find(field_id.GetFieldIndex().index);
 	auto &hive_key = identity_key == identity_hive_keys.end() ? name : identity_key->second;
 	auto hive_entry = hive_partitions.find(hive_key);
@@ -996,7 +1004,7 @@ vector<unique_ptr<DuckLakeNameMapEntry>> DuckLakeFileProcessor::MapColumns(
 			                            prefix.empty() ? prefix : prefix + ".", col->name, file_metadata.filepath,
 			                            table.name.GetIdentifierName());
 		}
-		if (!TryMapHiveColumn(file_metadata, col->name, entry->second.get(), column_maps)) {
+		if (!TryMapHiveColumn(file_metadata, prefix, col->name, entry->second.get(), column_maps)) {
 			column_maps.push_back(MapColumn(file_metadata, *col, entry->second.get(), prefix, repeated));
 		}
 		field_id_map.erase(entry);
@@ -1004,7 +1012,7 @@ vector<unique_ptr<DuckLakeNameMapEntry>> DuckLakeFileProcessor::MapColumns(
 	for (auto &entry : field_id_map) {
 		auto &field_id = entry.second.get();
 		// column does not exist in the file - check hive partitions
-		if (TryMapHiveColumn(file_metadata, field_id.Name(), field_id, column_maps)) {
+		if (TryMapHiveColumn(file_metadata, prefix, field_id.Name(), field_id, column_maps)) {
 			continue;
 		}
 		// column does not exist - check if we are ignoring missing columns
