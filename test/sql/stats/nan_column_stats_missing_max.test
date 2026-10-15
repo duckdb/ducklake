@@ -1,0 +1,54 @@
+# name: test/sql/stats/nan_column_stats_missing_max.test
+# description: a FLOAT or DOUBLE column with NaN and no stored max keeps its min
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/nan_column_stats_missing_max.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nan_column_stats_missing_max',
+    DATA_INLINING_ROW_LIMIT 0)
+
+foreach type FLOAT DOUBLE
+
+statement ok
+CREATE TABLE dl.t (x {type})
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), ('nan')
+
+statement ok
+UPDATE __ducklake_metadata_dl.ducklake_table_column_stats SET max_value = NULL
+WHERE table_id = (SELECT table_id FROM ducklake_table_info('dl') WHERE table_name = 't')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nan_column_stats_missing_max',
+    DATA_INLINING_ROW_LIMIT 0)
+
+query II
+SELECT (stats(x)).min, (stats(x)).has_null FROM dl.t LIMIT 1
+----
+1.0	false
+
+query II
+EXPLAIN SELECT count(*) FROM dl.t WHERE x < 0
+----
+physical_plan	<REGEX>:.*Empty Result.*
+
+query II
+SELECT count(*) FILTER (x < 10), count(*) FILTER (x > 10) FROM dl.t
+----
+2	1
+
+statement ok
+DROP TABLE dl.t
+
+endloop

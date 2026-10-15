@@ -1,0 +1,112 @@
+# name: test/sql/add_files/add_files_type_check_reader_types.test
+# description: Adding Parquet files with TIME_NS, TIMESTAMPTZ_NS and FLOAT16 columns
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+require icu
+
+statement ok
+SET TimeZone = 'UTC'
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/add_files_type_check_reader_types', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+COPY (SELECT TIME_NS '12:34:56.123456789' AS t) TO '{DATA_PATH}/reader_types_time_ns.parquet'
+
+statement ok
+COPY (SELECT TIMESTAMPTZ_NS '2020-01-01 12:34:56.123456789+00' AS t) TO '{DATA_PATH}/reader_types_tstz_ns.parquet'
+
+statement ok
+CREATE TABLE dl.time_ns (t TIME_NS)
+
+statement ok
+CALL ducklake_add_data_files('dl', 'time_ns', '{DATA_PATH}/reader_types_time_ns.parquet')
+
+query I
+SELECT t FROM dl.time_ns WHERE t > TIME_NS '12:34:56.123456788'
+----
+12:34:56.123456789
+
+statement ok
+CREATE TABLE dl.tstz_ns (t TIMESTAMPTZ_NS)
+
+statement ok
+CALL ducklake_add_data_files('dl', 'tstz_ns', '{DATA_PATH}/reader_types_tstz_ns.parquet')
+
+query I
+SELECT t FROM dl.tstz_ns WHERE t > TIMESTAMPTZ_NS '2020-01-01 12:34:56.123456788+00'
+----
+2020-01-01 12:34:56.123456789+00
+
+# TIMESTAMPTZ columns accept TIMESTAMPTZ_NS files, like TIMESTAMP columns accept TIMESTAMP_NS files
+statement ok
+CREATE TABLE dl.tstz_ns_as_tstz (t TIMESTAMPTZ)
+
+statement ok
+CALL ducklake_add_data_files('dl', 'tstz_ns_as_tstz', '{DATA_PATH}/reader_types_tstz_ns.parquet')
+
+query I
+SELECT t FROM dl.tstz_ns_as_tstz
+----
+2020-01-01 12:34:56.123457+00
+
+statement ok
+CREATE TABLE dl.float16 (f FLOAT)
+
+statement ok
+CALL ducklake_add_data_files('dl', 'float16', 'data/parquet/float16.parquet')
+
+query I
+SELECT f FROM dl.float16 ORDER BY f NULLS LAST
+----
+1.5
+2.5
+NULL
+
+query I
+SELECT count(*) FROM dl.float16 WHERE f > 2
+----
+1
+
+# columns of a different type reject the files instead of failing every later scan
+statement ok
+CREATE TABLE dl.time_as_bigint (t BIGINT)
+
+statement error
+CALL ducklake_add_data_files('dl', 'time_as_bigint', '{DATA_PATH}/reader_types_time_ns.parquet')
+----
+found type TIME_NS
+
+statement ok
+CREATE TABLE dl.float16_as_blob (f BLOB)
+
+statement error
+CALL ducklake_add_data_files('dl', 'float16_as_blob', 'data/parquet/float16.parquet')
+----
+found type FLOAT
+
+# a FLOAT16 annotation on a column that is not two bytes wide is read as BLOB
+statement ok
+CREATE TABLE dl.float16_one_byte (f FLOAT)
+
+statement error
+CALL ducklake_add_data_files('dl', 'float16_one_byte', 'data/parquet/float16_one_byte.parquet')
+----
+found type BLOB
+
+# a GEOMETRY annotation on a column that is not BYTE_ARRAY is not read as GEOMETRY
+statement ok
+CREATE TABLE dl.geometry_float (g GEOMETRY)
+
+statement error
+CALL ducklake_add_data_files('dl', 'geometry_float', 'data/parquet/geometry_float.parquet')
+----
+Expected type "GEOMETRY" but found type "FLOAT"

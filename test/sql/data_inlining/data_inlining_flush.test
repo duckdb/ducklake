@@ -146,17 +146,12 @@ FROM ducklake.table_changes('test', 2, 5) ORDER BY ALL
 4	2	insert	2
 5	3	insert	3
 
-# FIXME: this does not work correctly
-mode skip
-
 query IIII
 FROM ducklake.table_changes('test', 3, 5) ORDER BY ALL
 ----
 3	1	insert	1
 4	2	insert	2
 5	3	insert	3
-
-mode unskip
 
 query III
 SELECT rowid, snapshot_id, * FROM ducklake.test AT (version => 4) ORDER BY ALL

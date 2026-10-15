@@ -1,0 +1,28 @@
+# name: benchmark/micro/fixtures/altered_scan.benchmark.in
+# description: Read-only lake with a table of 1000 rows in one file after 200 ALTERs and a table without ALTERs
+# group: [fixtures]
+
+argument lake altered_scan
+
+cache_file ${lake}_ready.marker
+
+# Each line adds and drops a column of p, so p gets a new schema version for every ALTER
+load
+EXPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+COPY (SELECT 'ALTER TABLE lake.p ADD COLUMN c INTEGER; COMMIT; BEGIN; ALTER TABLE lake.p DROP COLUMN c; COMMIT; BEGIN;'
+FROM range(100) t(i))
+TO '${BENCHMARK_DIR}/${lake}_gen/schema.sql' (HEADER false, QUOTE '');
+@create ${lake}
+@attach ${lake} AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CREATE TABLE lake.p AS SELECT range::INTEGER AS i FROM range(1000);
+CREATE TABLE lake.q AS SELECT range::INTEGER AS i FROM range(1000);
+BEGIN;
+IMPORT DATABASE '${BENCHMARK_DIR}/${lake}_gen';
+COMMIT;
+DETACH lake;
+@seal ${lake}
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+@attach ${lake} AS lake (READ_ONLY)
+
+reload
+@attach ${lake} AS lake (READ_ONLY)

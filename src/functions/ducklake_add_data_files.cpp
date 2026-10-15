@@ -44,6 +44,10 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 	auto schema_name = DuckLakeTableFunctionUtil::GetStringOption(input, "schema");
 	const auto table_name = StringValue::Get(input.inputs[1]);
 	auto &table = DuckLakeBaseMetadataFunction::GetTableEntry(context, catalog, schema_name, table_name);
+	if (catalog.IsEncrypted()) {
+		// every data file of an encrypted catalog is read with its own key, which an added file does not have
+		throw NotImplementedException("ducklake_add_data_files is not supported for an encrypted DuckLake catalog");
+	}
 
 	auto result = make_uniq<DuckLakeAddDataFilesData>(catalog, table);
 	auto &file_list = input.inputs[2];
@@ -85,6 +89,7 @@ struct ParquetColumn {
 	optional_idx precision;
 	optional_idx field_id;
 	string logical_type;
+	optional_idx type_length;
 	//! Set when the field mapping is made - see the skip_stats_columns option
 	bool skip_bounds = false;
 	//! A root group that the Parquet reader reads as VARIANT
@@ -187,8 +192,8 @@ private:
 	                                        const LogicalType &field_type, const Value &value) const;
 	unique_ptr<DuckLakeNameMapEntry> MapHiveColumn(ParquetFileMetadata &file_metadata, const DuckLakeFieldId &field_id,
 	                                               const string &hive_key, const Value &hive_value);
-	bool TryMapHiveColumn(ParquetFileMetadata &file_metadata, const string &name, const DuckLakeFieldId &field_id,
-	                      vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps);
+	bool TryMapHiveColumn(ParquetFileMetadata &file_metadata, const string &prefix, const string &name,
+	                      const DuckLakeFieldId &field_id, vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps);
 	void DetermineMapping(ParquetFileMetadata &file);
 	void MapPartitionColumns(ParquetFileMetadata &file);
 	void MarkVariantColumns(ParquetFileMetadata &file, const string &filepath);
@@ -256,7 +261,8 @@ SELECT
         "scale" := x."scale",
         "precision" := x."precision",
         field_id := x.field_id,
-        logical_type := x.logical_type
+        logical_type := x.logical_type,
+        type_length := TRY_CAST(x.type_length AS BIGINT)
     )) AS parquet_schema
 FROM parquet_full_metadata(%s)
 )",
@@ -268,7 +274,7 @@ FROM parquet_full_metadata(%s)
 	using ParquetStatsRow = VectorStructType<int64_t, string_t, string_t, int64_t, int64_t, int64_t, ParquetBBoxRow,
 	                                         VectorListType<string_t>, bool, bool>;
 	using ParquetSchemaRow =
-	    VectorStructType<string_t, string_t, int64_t, string_t, int64_t, int64_t, int64_t, string_t>;
+	    VectorStructType<string_t, string_t, int64_t, string_t, int64_t, int64_t, int64_t, string_t, int64_t>;
 	for (auto &row : *result) {
 		auto &chunk = row.GetChunk();
 		auto row_idx = row.GetRowInChunk();
@@ -338,6 +344,7 @@ FROM parquet_full_metadata(%s)
 			column->precision = GetOptionalIndex(schema_entry.GetChildValue<5>());
 			column->field_id = GetOptionalIndex(schema_entry.GetChildValue<6>());
 			column->logical_type = GetStringOrEmpty(schema_entry.GetChildValue<7>());
+			column->type_length = GetOptionalIndex(schema_entry.GetChildValue<8>());
 
 			if (child_count == 0) {
 				column->column_id = next_column_id++;
@@ -476,6 +483,7 @@ private:
 	void CheckUnsignedInteger();
 	void CheckFloatingPoints();
 	void CheckTimestamp();
+	void CheckTimestampWithTimeZone();
 	void CheckDecimal();
 
 	//! Called when a check fails
@@ -511,6 +519,9 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 		if (s_ele.logical_type ==
 		    "TimeType(isAdjustedToUTC=0, unit=TimeUnit(MILLIS=<null>, MICROS=MicroSeconds(), NANOS=<null>))") {
 			return LogicalType::TIME;
+		} else if (s_ele.logical_type ==
+		           "TimeType(isAdjustedToUTC=0, unit=TimeUnit(MILLIS=<null>, MICROS=<null>, NANOS=NanoSeconds()))") {
+			return LogicalType::TIME_NS;
 		} else if (s_ele.logical_type == "TimestampType(isAdjustedToUTC=0, unit=TimeUnit(MILLIS=<null>, "
 		                                 "MICROS=MicroSeconds(), NANOS=<null>))") {
 			return LogicalType::TIMESTAMP;
@@ -520,6 +531,9 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 		} else if (s_ele.logical_type == "TimestampType(isAdjustedToUTC=0, unit=TimeUnit(MILLIS=<null>, MICROS=<null>, "
 		                                 "NANOS=NanoSeconds()))") {
 			return LogicalType::TIMESTAMP_NS;
+		} else if (s_ele.logical_type == "TimestampType(isAdjustedToUTC=1, unit=TimeUnit(MILLIS=<null>, MICROS=<null>, "
+		                                 "NANOS=NanoSeconds()))") {
+			return LogicalType::TIMESTAMP_TZ_NS;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "TimestampType(isAdjustedToUTC=1")) {
 			return LogicalType::TIMESTAMP_TZ;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "TimeType(isAdjustedToUTC=1")) {
@@ -528,8 +542,12 @@ LogicalType DuckLakeParquetTypeChecker::DeriveLogicalType(const ParquetColumn &s
 			return LogicalType::UUID;
 		} else if (StringUtil::StartsWith(s_ele.logical_type, "NullType()")) {
 			return LogicalType::SQLNULL;
-		} else if (StringUtil::StartsWith(s_ele.logical_type, "Geometry")) {
+		} else if (StringUtil::StartsWith(s_ele.logical_type, "Geometry") && s_ele.type == "BYTE_ARRAY") {
 			return LogicalType::GEOMETRY();
+		} else if (StringUtil::StartsWith(s_ele.logical_type, "Float16Type()") &&
+		           s_ele.type == "FIXED_LEN_BYTE_ARRAY" && s_ele.type_length.IsValid() &&
+		           s_ele.type_length.GetIndex() == 2) {
+			return LogicalType::FLOAT;
 		}
 	}
 	if (!s_ele.converted_type.empty()) {
@@ -707,6 +725,12 @@ void DuckLakeParquetTypeChecker::CheckTimestamp() {
 	}
 }
 
+void DuckLakeParquetTypeChecker::CheckTimestampWithTimeZone() {
+	if (!CheckTypes({LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_TZ_NS})) {
+		Fail();
+	}
+}
+
 void DuckLakeParquetTypeChecker::CheckDecimal() {
 	if (source_type.id() != LogicalTypeId::DECIMAL) {
 		failures.push_back(StringUtil::Format("Expected type \"DECIMAL\" but found type \"%s\"", source_type));
@@ -777,6 +801,9 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 	case LogicalTypeId::TIMESTAMP_NS:
 		CheckTimestamp();
 		break;
+	case LogicalTypeId::TIMESTAMP_TZ:
+		CheckTimestampWithTimeZone();
+		break;
 	case LogicalTypeId::DECIMAL:
 		CheckDecimal();
 		break;
@@ -785,7 +812,6 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 	case LogicalTypeId::BLOB:
 	case LogicalTypeId::DATE:
 	case LogicalTypeId::TIME:
-	case LogicalTypeId::TIMESTAMP_TZ:
 	default:
 		// by default just verify that the type matches exactly
 		if (!CheckType(type)) {
@@ -843,12 +869,17 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 			}
 
 			break;
-		case LogicalTypeId::MAP:
-			// for maps we don't need to do any name mapping - the child elements are always key/value
-			// (1) Parquet has an extra element in between the list and its child ("REPEATED") - strip it
-			map_entry->child_entries =
-			    MapColumns(file_metadata, column.child_columns[0]->child_columns, field_id.Children(), prefix, true);
+		case LogicalTypeId::MAP: {
+			// skip the repeated element between the map and its children, the first of which is the key
+			auto &key_value = column.child_columns[0]->child_columns;
+			if (key_value.size() == 2 && StringUtil::CIEquals(key_value[0]->name, field_children[1]->Name()) &&
+			    StringUtil::CIEquals(key_value[1]->name, field_children[0]->Name())) {
+				key_value[0]->name = field_children[0]->Name();
+				key_value[1]->name = field_children[1]->Name();
+			}
+			map_entry->child_entries = MapColumns(file_metadata, key_value, field_id.Children(), prefix, true);
 			break;
+		}
 		default:
 			throw InvalidInputException("Unsupported nested type %s for add files", field_id.Type());
 		}
@@ -996,9 +1027,13 @@ static void CheckHiveValueIsExact(ClientContext &context, const DuckLakeFieldId 
 	}
 }
 
-bool DuckLakeFileProcessor::TryMapHiveColumn(ParquetFileMetadata &file_metadata, const string &name,
-                                             const DuckLakeFieldId &field_id,
+bool DuckLakeFileProcessor::TryMapHiveColumn(ParquetFileMetadata &file_metadata, const string &prefix,
+                                             const string &name, const DuckLakeFieldId &field_id,
                                              vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps) {
+	// hive partitions only name top-level columns
+	if (!prefix.empty()) {
+		return false;
+	}
 	auto identity_key = identity_hive_keys.find(field_id.GetFieldIndex().index);
 	auto &hive_key = identity_key == identity_hive_keys.end() ? name : identity_key->second;
 	auto hive_entry = hive_partitions.find(hive_key);
@@ -1133,7 +1168,7 @@ vector<unique_ptr<DuckLakeNameMapEntry>> DuckLakeFileProcessor::MapColumns(
 			                            prefix.empty() ? prefix : prefix + ".", col->name, file_metadata.filepath,
 			                            table.name.GetIdentifierName());
 		}
-		if (!TryMapHiveColumn(file_metadata, col->name, entry->second.get(), column_maps)) {
+		if (!TryMapHiveColumn(file_metadata, prefix, col->name, entry->second.get(), column_maps)) {
 			column_maps.push_back(MapColumn(file_metadata, *col, entry->second.get(), prefix, repeated));
 		}
 		field_id_map.erase(entry);
@@ -1141,7 +1176,7 @@ vector<unique_ptr<DuckLakeNameMapEntry>> DuckLakeFileProcessor::MapColumns(
 	for (auto &entry : field_id_map) {
 		auto &field_id = entry.second.get();
 		// column does not exist in the file - check hive partitions
-		if (TryMapHiveColumn(file_metadata, field_id.Name(), field_id, column_maps)) {
+		if (TryMapHiveColumn(file_metadata, prefix, field_id.Name(), field_id, column_maps)) {
 			continue;
 		}
 		// column does not exist - check if we are ignoring missing columns

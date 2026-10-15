@@ -1,6 +1,7 @@
 name: Regression
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches:
       - main
@@ -19,6 +20,7 @@ defaults:
 
 jobs:
   regression:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 150

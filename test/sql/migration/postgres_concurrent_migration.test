@@ -10,6 +10,8 @@ require postgres_scanner
 
 require-env DUCKLAKE_CI
 
+require-env DUCKLAKE_CONNECTION
+
 test-env DATA_PATH {TEST_DIR}
 
 unzip data/old_ducklake/v01.db.gz {TEST_DIR}/concurrent_migration_v01.db
@@ -18,7 +20,7 @@ statement ok
 ATTACH '{TEST_DIR}/concurrent_migration_v01.db' AS old_metadata (READ_ONLY)
 
 statement ok
-ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
 
 statement ok
 CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS concurrent_migration CASCADE')
@@ -40,7 +42,7 @@ DETACH old_metadata
 concurrentloop i 0 4
 
 statement ok
-ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl_${i}
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl_${i}
 (DATA_PATH '{DATA_PATH}/concurrent_migration', METADATA_SCHEMA 'concurrent_migration', OVERRIDE_DATA_PATH TRUE,
 AUTOMATIC_MIGRATION TRUE)
 

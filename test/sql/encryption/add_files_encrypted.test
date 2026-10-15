@@ -1,0 +1,40 @@
+# name: test/sql/encryption/add_files_encrypted.test
+# description: ducklake_add_data_files refuses an encrypted catalog, whose files are all read with their own key
+# group: [encryption]
+
+require ducklake
+
+require parquet
+
+require httpfs
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/add_files_encrypted', ENCRYPTED, DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t (i INTEGER, s VARCHAR);
+
+statement ok
+INSERT INTO lake.t VALUES (1, 'a');
+
+statement ok
+COPY (SELECT 7 AS i, 'z' AS s) TO '{DATA_PATH}/add_files_encrypted_f1.parquet';
+
+statement error
+CALL ducklake_add_data_files('lake', 't', '{DATA_PATH}/add_files_encrypted_f1.parquet');
+----
+not supported for an encrypted DuckLake catalog
+
+query II
+SELECT * FROM lake.t ORDER BY ALL
+----
+1	a
+
+query I
+SELECT count(*) FROM ducklake_list_files('lake', 't')
+----
+1

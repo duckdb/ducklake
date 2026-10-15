@@ -18,7 +18,7 @@ static constexpr DuckLakeOptionMetadata DUCKLAKE_OPTIONS[] = {
     {"parquet_compression",
      "Compression algorithm for Parquet files (uncompressed, snappy, gzip, zstd, brotli, lz4, lz4_raw)"},
     {"parquet_version", "Parquet format version (1 or 2)"},
-    {"parquet_compression_level", "Compression level for Parquet files"},
+    {"parquet_compression_level", "Compression level for Parquet files written with zstd"},
     {"parquet_row_group_size", "Number of rows per row group in Parquet files"},
     {"parquet_row_group_size_bytes", "Number of bytes per row group in Parquet files"},
     {"hive_file_pattern", "If partitioned data should be written in a hive-like folder structure"},

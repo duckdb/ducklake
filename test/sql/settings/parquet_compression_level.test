@@ -1,0 +1,80 @@
+# name: test/sql/settings/parquet_compression_level.test
+# description: set_option refuses compression levels that the Parquet writer refuses, and inserts with other codecs work
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/parquet_compression_level', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+# the level is only used with zstd, so the default codec ignores it
+statement ok
+CALL dl.set_option('parquet_compression_level', 3)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('{DATA_PATH}/parquet_compression_level/main/t/**')
+----
+SNAPPY
+
+statement ok
+CALL dl.set_option('parquet_compression', 'zstd')
+
+foreach level 23 -131073
+
+statement error
+CALL dl.set_option('parquet_compression_level', {level})
+----
+Compression level must be between
+
+endloop
+
+statement error
+CREATE TABLE dl.t2 (i INTEGER) WITH (parquet_compression_level = 23)
+----
+Compression level must be between
+
+statement ok
+CALL dl.set_option('parquet_compression_level', -5)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('{DATA_PATH}/parquet_compression_level/main/t/**') ORDER BY ALL
+----
+SNAPPY
+ZSTD
+
+query II
+SELECT option_name, value FROM dl.options() WHERE option_name = 'parquet_compression_level'
+----
+parquet_compression_level	-5
+
+# a table that overrides the codec keeps working with the global level
+statement ok
+CREATE TABLE dl.g (i INTEGER) WITH (parquet_compression = 'gzip')
+
+statement ok
+INSERT INTO dl.g VALUES (3)
+
+query I
+SELECT DISTINCT compression FROM parquet_metadata('{DATA_PATH}/parquet_compression_level/main/g/**')
+----
+GZIP
+
+query I
+SELECT sum(i) FROM (SELECT i FROM dl.t UNION ALL SELECT i FROM dl.g)
+----
+6

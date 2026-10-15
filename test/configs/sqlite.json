@@ -20,6 +20,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "Only DuckDB catalogs drop the empty inlined data table that an ALTER supersedes",
+      "paths": [
+        "test/sql/alter/alter_drops_empty_inlined_tables.test"
+      ]
+    },
+    {
       "reason": "Test requires a Quack metadata catalog",
       "paths": [
         "test/sql/quack/inlined_superseded_drop_failure.test"
@@ -128,12 +134,6 @@
       "reason": "Current transaction is aborted (please ROLLBACK)",
       "paths": [
         "test/sql/deletion_inlining/test_deletion_inlining_concurrent.test"
-      ]
-    },
-    {
-      "reason": "FIXME: 3-writer concurrent delete-retry test is nondeterministic under sqlite single-writer locking with current duckdb main; failed deletes error loudly (\"database is locked\", swallowed by statement maybe) so rows legitimately remain - no silent loss.",
-      "paths": [
-        "test/sql/deletion_inlining/test_deletion_inlining_concurrent_retry.test"
       ]
     },
     {

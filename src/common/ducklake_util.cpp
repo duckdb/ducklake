@@ -24,6 +24,9 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/common/type_visitor.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_scan.hpp"
+#include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
+#include "duckdb/parser/parsed_data/copy_info.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/common/types/interval.hpp"
@@ -610,6 +613,19 @@ static string ParseUnsignedInteger(ClientContext &, const string &, const Value 
 	return to_string(val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>());
 }
 
+static string ParseCompressionLevel(ClientContext &context, const string &, const Value &val) {
+	auto level = val.DefaultCastAs(LogicalType::BIGINT);
+	// the Parquet writer checks the level, which inserts pass to it only for ZSTD
+	CopyInfo info;
+	info.format = "parquet";
+	info.options["compression"].emplace_back("zstd");
+	info.options["compression_level"].push_back(level);
+	CopyFunctionBindInput bind_input(info);
+	auto &copy_fun = DuckLakeFunctions::GetCopyFunction(context, "parquet");
+	copy_fun.function.copy_to_bind(context, bind_input, {Identifier("i")}, {LogicalType::INTEGER});
+	return level.ToString();
+}
+
 static string ParseRowGroupSize(ClientContext &, const string &, const Value &val) {
 	auto row_group_size = val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
 	if (row_group_size == 0) {
@@ -619,7 +635,7 @@ static string ParseRowGroupSize(ClientContext &, const string &, const Value &va
 }
 
 static string ParseRowGroupSizeBytes(ClientContext &, const string &, const Value &val) {
-	auto row_group_size_bytes = DBConfig::ParseMemoryLimit(val.ToString());
+	auto row_group_size_bytes = DBConfig::ParseMemoryLimitOrMaximum(val.ToString());
 	if (row_group_size_bytes == 0) {
 		throw NotImplementedException("Row group size bytes cannot be 0");
 	}
@@ -627,7 +643,7 @@ static string ParseRowGroupSizeBytes(ClientContext &, const string &, const Valu
 }
 
 static string ParseMemorySize(ClientContext &, const string &, const Value &val) {
-	return to_string(DBConfig::ParseMemoryLimit(val.ToString()));
+	return to_string(DBConfig::ParseMemoryLimitOrMaximum(val.ToString()));
 }
 
 static string ParseBooleanLiteral(ClientContext &, const string &, const Value &val) {
@@ -666,7 +682,7 @@ static const unordered_map<string, config_option_parser_t> &ConfigOptionParsers(
 	static const unordered_map<string, config_option_parser_t> parsers {
 	    {"parquet_compression", ParseParquetCompression},
 	    {"parquet_version", ParseParquetVersion},
-	    {"parquet_compression_level", ParseUnsignedInteger},
+	    {"parquet_compression_level", ParseCompressionLevel},
 	    {"data_inlining_row_limit", ParseUnsignedInteger},
 	    {"parquet_row_group_size", ParseRowGroupSize},
 	    {"parquet_row_group_size_bytes", ParseRowGroupSizeBytes},

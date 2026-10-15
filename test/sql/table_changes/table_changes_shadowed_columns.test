@@ -1,0 +1,83 @@
+# name: test/sql/table_changes/table_changes_shadowed_columns.test
+# description: the data change feed of a table with columns named rowid or snapshot_id pairs the right rows
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/table_changes_shadowed_columns', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t (rowid BIGINT, v INTEGER);
+
+statement ok
+INSERT INTO lake.t VALUES (0, 1), (0, 2), (0, 3);
+
+statement ok
+UPDATE lake.t SET v = v + 10;
+
+query III
+SELECT change_type, count(*), sum(v) FROM ducklake_table_changes('lake', 'main', 't', 3, 3) GROUP BY ALL ORDER BY ALL
+----
+update_postimage	3	36
+update_preimage	3	6
+
+query IIIII
+SELECT * FROM ducklake_table_changes('lake', 'main', 't', 3, 3) WHERE rowid = 1 ORDER BY ALL
+----
+3	1	update_postimage	0	12
+3	1	update_preimage	0	2
+
+statement ok
+CREATE TABLE lake.u (snapshot_id BIGINT, v INTEGER);
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10, table_name => 'u');
+
+statement ok
+INSERT INTO lake.u VALUES (0, 1), (0, 2);
+
+statement ok
+DELETE FROM lake.u WHERE v = 1;
+
+statement ok
+UPDATE lake.u SET v = 20 WHERE v = 2;
+
+query IIIII
+SELECT * FROM ducklake_table_changes('lake', 'main', 'u', 5, 7) ORDER BY ALL
+----
+5	0	insert	0	1
+5	1	insert	0	2
+6	0	delete	0	1
+7	1	update_postimage	0	20
+7	1	update_preimage	0	2
+
+# the insertions and deletions show the column of the table under another name
+query IIII
+SELECT snapshot_id, rowid, snapshot_id_1, v FROM ducklake_table_deletions('lake', 'main', 'u', 5, 7) ORDER BY ALL
+----
+6	0	0	1
+7	1	0	2
+
+statement ok
+CREATE TABLE lake.w (rowid_1 INTEGER, rowid BIGINT, v INTEGER);
+
+statement ok
+INSERT INTO lake.w VALUES (7, 0, 1), (8, 0, 2);
+
+statement ok
+UPDATE lake.w SET v = v + 10;
+
+query IIIIII
+SELECT * FROM ducklake_table_changes('lake', 'main', 'w', 10, 10) ORDER BY ALL
+----
+10	0	update_postimage	7	0	11
+10	0	update_preimage	7	0	1
+10	1	update_postimage	8	0	12
+10	1	update_preimage	8	0	2

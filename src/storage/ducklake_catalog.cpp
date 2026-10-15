@@ -357,6 +357,11 @@ void DuckLakeCatalog::FinalizeLoad(optional_ptr<ClientContext> context) {
 }
 
 static bool CanGeneratePathFromName(const string &name) {
+	// file systems allow at most 255 bytes in a file name
+	static constexpr idx_t MAX_FILE_NAME_LENGTH = 255;
+	if (name.size() > MAX_FILE_NAME_LENGTH) {
+		return false;
+	}
 	for (auto c : name) {
 		if (StringUtil::CharacterIsAlphaNumeric(c)) {
 			continue;
@@ -370,7 +375,7 @@ static bool CanGeneratePathFromName(const string &name) {
 }
 
 string DuckLakeCatalog::GeneratePathFromName(const string &uuid, const string &name) {
-	// if the name has special characters we fallback to uuid
+	// if the name has special characters or is too long we fall back to the uuid
 	if (CanGeneratePathFromName(name)) {
 		return name + separator;
 	}
@@ -1259,7 +1264,7 @@ idx_t DuckLakeCatalog::GetTargetFileSize(ClientContext &context, SchemaIndex sch
 	Value setting_val;
 	if (context.TryGetCurrentSetting("ducklake_target_file_size", setting_val) && !setting_val.IsNull() &&
 	    !setting_val.ToString().empty()) {
-		return DBConfig::ParseMemoryLimit(setting_val.ToString());
+		return DBConfig::ParseMemoryLimitOrMaximum(setting_val.ToString());
 	}
 	return GetConfigOption<idx_t>("target_file_size", schema_id, table_id, DEFAULT_TARGET_FILE_SIZE, table_options);
 }

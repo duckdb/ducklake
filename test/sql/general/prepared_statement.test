@@ -9,9 +9,6 @@ require parquet
 statement ok
 SET parquet_metadata_cache=true;
 
-# FIXME: succeeds on v1.3 branch but fails on v1.3.0 release
-mode skip
-
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 test-env DATA_PATH {TEST_DIR}
@@ -26,7 +23,28 @@ CREATE TABLE ducklake.tbl AS FROM range(1000) t(i);
 statement ok
 PREPARE v1 AS SELECT * FROM ducklake.tbl LIMIT 3
 
-statement error
+query I
 EXECUTE v1
 ----
-this use case is not yet supported
+0
+1
+2
+
+statement ok
+PREPARE v2 AS SELECT count(*) FROM ducklake.tbl
+
+statement ok
+INSERT INTO ducklake.tbl VALUES (1000)
+
+query I
+EXECUTE v2
+----
+1001
+
+statement ok
+DELETE FROM ducklake.tbl WHERE i < 500
+
+query I
+EXECUTE v2
+----
+501
