@@ -514,23 +514,23 @@ DuckLakeMetadataManager::GetMetadataTableColumns(const vector<string> &table_nam
 void DuckLakeMetadataManager::ValidateMetadataTables(bool allow_missing_v1_1_dev1_additions) {
 	auto parser = Parser::GetBuiltinParser();
 	parser.ParseQuery(StringUtil::Replace(GetCreateTableStatements(), "{METADATA_CATALOG}.", ""));
-	vector<reference<CreateTableInfo>> expected_tables;
+	vector<const_reference<CreateTableInfo>> expected_tables;
 	vector<string> table_names;
 	for (auto &statement : parser.statements) {
 		if (statement->type != StatementType::CREATE_STATEMENT) {
 			continue;
 		}
-		auto &create_info = *statement->Cast<CreateStatement>().info;
+		const auto &create_info = *statement->Cast<CreateStatement>().info;
 		if (create_info.type != CatalogType::TABLE_ENTRY) {
 			continue;
 		}
-		auto &info = create_info.Cast<CreateTableInfo>();
+		const auto &info = create_info.Cast<CreateTableInfo>();
 		expected_tables.push_back(info);
 		table_names.push_back(info.GetTableName().GetIdentifierName());
 	}
 	auto actual_tables = GetMetadataTableColumns(table_names);
 	for (auto &expected_table : expected_tables) {
-		auto &info = expected_table.get();
+		const auto &info = expected_table.get();
 		auto table_name = info.GetTableName().GetIdentifierName();
 		auto entry = actual_tables.find(table_name);
 		if (entry == actual_tables.end()) {
