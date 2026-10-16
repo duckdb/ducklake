@@ -224,7 +224,7 @@ public:
 	                                      const set<DataFileIndex> &removed_source_ids,
 	                                      const DuckLakeCommitContext &context);
 	//! Recover column bounds after a full-file drop without changing table totals or row IDs
-	void RecomputeColumnStatsAfterFileDrop(string &batch_query, TableIndex table_id,
+	bool RecomputeColumnStatsAfterFileDrop(string &batch_query, TableIndex table_id,
 	                                       const DroppedDataFileStats &dropped_stats, const NewDataInfo &new_data,
 	                                       const DuckLakeCommitContext &context);
 	//! Merge the remaining files and inlined rows only when they account for all live data

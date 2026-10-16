@@ -1199,7 +1199,7 @@ bool DuckLakeTransactionState::ApplyDroppedFileStats(
 		return false;
 	}
 	auto &stats = new_stats.stats;
-	auto dropped_stats = entry->second;
+	const auto &dropped_stats = entry->second;
 	if (!stats.record_count_unknown) {
 		stats.record_count = SubtractDroppedFileStat(stats.record_count, dropped_stats.row_count);
 	}
@@ -1224,12 +1224,12 @@ bool DuckLakeTransactionState::ApplyDroppedFileStats(
 	return live_rows_remain;
 }
 
-void DuckLakeTransactionState::RecomputeColumnStatsAfterFileDrop(string &batch_query, TableIndex table_id,
+bool DuckLakeTransactionState::RecomputeColumnStatsAfterFileDrop(string &batch_query, TableIndex table_id,
                                                                  const DroppedDataFileStats &dropped_stats,
                                                                  const NewDataInfo &new_data,
                                                                  const DuckLakeCommitContext &context) {
 	if (SchemaChangesMade() || !flushed_inlined_tables.empty() || tables_changed_by_others.count(table_id)) {
-		return;
+		return false;
 	}
 	for (auto &entry : local_changes.Changes()) {
 		if (entry.first != table_id) {
@@ -1238,17 +1238,17 @@ void DuckLakeTransactionState::RecomputeColumnStatsAfterFileDrop(string &batch_q
 		auto &changes = entry.second;
 		if (!changes.new_delete_files.empty() || !changes.new_inlined_data_deletes.empty() ||
 		    (changes.new_inlined_file_deletes && !changes.new_inlined_file_deletes->file_deletes.empty())) {
-			return;
+			return false;
 		}
 		for (auto &file : changes.new_data_files) {
 			if (!file.delete_files.empty() || file.max_partial_file_snapshot.IsValid()) {
-				return;
+				return false;
 			}
 		}
 	}
 	auto expected_rows = context.get_net_data_file_row_count(table_id);
 	if (dropped_stats.live_row_count > expected_rows) {
-		return;
+		return false;
 	}
 	expected_rows -= dropped_stats.live_row_count;
 	for (auto &file : new_data.new_files) {
@@ -1259,7 +1259,7 @@ void DuckLakeTransactionState::RecomputeColumnStatsAfterFileDrop(string &batch_q
 	DuckLakeTableStats new_stats;
 	if (!TryRecomputeGlobalStats(table_id, context.get_snapshot(), new_data.new_files, new_data.new_inlined_data,
 	                             dropped_stats.data_file_ids, expected_rows, context, new_stats)) {
-		return;
+		return false;
 	}
 	// Nested containers have no file bounds, only their leaves have statistics.
 	for (auto entry = new_stats.column_stats.begin(); entry != new_stats.column_stats.end();) {
@@ -1275,6 +1275,7 @@ void DuckLakeTransactionState::RecomputeColumnStatsAfterFileDrop(string &batch_q
 	batch_query += DeleteTableColumnStatsSql(table_id);
 	batch_query += DuckLakeMetadataManager::InsertTableColumnStatsSql(
 	    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals), context.supports_v1_1_metadata);
+	return true;
 }
 
 void DuckLakeTransactionState::InitializeGlobalStats(TableIndex table_id, const DuckLakeTableStats &current_stats,
@@ -2424,7 +2425,10 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	}
 
 	for (auto &entry : dropped_file_stats) {
-		RecomputeColumnStatsAfterFileDrop(batch_queries, entry.first, entry.second, new_data, context);
+		if (RecomputeColumnStatsAfterFileDrop(batch_queries, entry.first, entry.second, new_data, context)) {
+			// Older readers cache bounds by next_file_id.
+			commit_snapshot.next_file_id++;
+		}
 	}
 
 	// Tracking for tables that had schema changes

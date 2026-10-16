@@ -1000,7 +1000,7 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStatsInternal(DuckLakeTr
 	idx_t latest_snapshot_id = DConstants::INVALID_INDEX;
 	auto global_stats = transaction.GetMetadataManager().GetGlobalTableStats(snapshot, latest_snapshot_id);
 	if (!global_stats.empty() && latest_snapshot_id != snapshot.snapshot_id) {
-		// Global stats are mutable: older snapshots must not consume newer, narrowed bounds.
+		// Global stats are mutable, so older snapshots must not use newer, narrower bounds
 		if (retry_on_snapshot_mismatch) {
 			throw TransactionException("Transaction conflict - concurrent DuckLake commit changed table statistics");
 		}

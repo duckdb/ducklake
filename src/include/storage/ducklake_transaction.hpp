@@ -62,9 +62,9 @@ struct FlushedInlinedTableInfo {
 
 struct DroppedDataFileStats {
 	set<DataFileIndex> data_file_ids;
-	//! Gross rows in dropped data files; used to maintain ducklake_table_stats.record_count.
+	//! Gross rows of the dropped data files
 	idx_t row_count = 0;
-	//! Rows from dropped data files that were live at the transaction snapshot; used for recompute exactness checks.
+	//! Rows of the dropped data files that were live at the transaction snapshot
 	idx_t live_row_count = 0;
 	idx_t file_size_bytes = 0;
 };
