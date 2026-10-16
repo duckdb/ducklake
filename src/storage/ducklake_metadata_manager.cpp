@@ -1401,8 +1401,7 @@ static string TableStatsQuery(const string &select_list, bool include_column_sta
 	return query + ";\n";
 }
 
-string DuckLakeMetadataManager::GlobalTableStatsQuery(bool include_exactness, optional_idx table_id,
-                                                      bool include_snapshot_id) {
+string DuckLakeMetadataManager::GlobalTableStatsQuery(bool include_exactness, bool include_snapshot_id) {
 	string select_list =
 	    "table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, "
 	    "max_value, extra_stats";
@@ -1412,7 +1411,7 @@ string DuckLakeMetadataManager::GlobalTableStatsQuery(bool include_exactness, op
 	if (include_snapshot_id) {
 		select_list += ", (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot) AS latest_snapshot_id";
 	}
-	return TableStatsQuery(select_list, true, table_id);
+	return TableStatsQuery(select_list, true);
 }
 
 vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::ParseGlobalTableStats(QueryResult &result) {
@@ -1458,7 +1457,7 @@ GROUP BY table_id;)",
 vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot,
                                                                              idx_t &latest_snapshot_id) {
 	auto result =
-	    Query(snapshot, GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata(), optional_idx(), true));
+	    Query(snapshot, GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata(), true));
 	result->ThrowIfError("Failed to get global stats information from DuckLake: ");
 	vector<DuckLakeGlobalStatsInfo> global_stats;
 	bool has_exactness = ResultHasColumn(*result, "min_is_exact");
