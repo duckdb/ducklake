@@ -65,12 +65,12 @@ COPY t_2 to '{DATA_PATH}/checkpoint_ducklake/main/t/bla.parquet';
 query II
 SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file
 ----
-4	3
+5	3
 
 query II
 SELECT delete_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_delete_file
 ----
-5	3
+6	3
 
 # t has the orphan, all data is inlined, t_2 has the data, and deletion, test has the data, we have 4 files in total.
 query I
@@ -87,15 +87,15 @@ CHECKPOINT;
 query II
 SELECT data_file_id, table_id FROM __ducklake_metadata_ducklake.ducklake_data_file ORDER BY ALL
 ----
-4	3
-6	2
-7	3
+5	3
+7	2
+8	3
 
 # We do not delete the deletion file after the checkpointing anymore
 query IIII
 SELECT delete_file_id, table_id, begin_snapshot, end_snapshot FROM __ducklake_metadata_ducklake.ducklake_delete_file
 ----
-5	3	11	13
+6	3	11	13
 
 query I
 SELECT COUNT(*)
