@@ -1,0 +1,143 @@
+# name: test/sql/retry/postgres_cleanup_overlap.test
+# description: A row-count refresh and cleanup of a registered inlined table can both commit
+# group: [retry]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS cleanup_overlap CASCADE')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/cleanup_overlap', METADATA_SCHEMA 'cleanup_overlap', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+SET ducklake_retry_wait_ms = 1
+
+statement ok
+SET ducklake_max_retry_count = 20
+
+statement ok
+CREATE TABLE dl.t (i INT, s STRUCT(a INT))
+
+statement ok
+INSERT INTO dl.t VALUES (1, {'a': 1}), (2, {'a': 2})
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN j INT
+
+statement ok
+INSERT INTO dl.t VALUES (3, {'a': 3}, 3), (4, {'a': 4}, 4)
+
+# Keep the empty superseded table registered until the concurrent cleanup below.
+statement ok
+CALL postgres_execute('pg', 'CREATE VIEW cleanup_overlap.blocker AS SELECT * FROM cleanup_overlap.ducklake_inlined_data_1_1')
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+# Nested inlined data prevents the exact statistics recompute, so commit refreshes the total.
+statement ok
+INSERT INTO dl.t VALUES (5, {'a': 5}, 5)
+
+statement ok
+CALL postgres_execute('pg', 'DROP VIEW cleanup_overlap.blocker')
+
+query I
+SELECT count(*) FROM __ducklake_metadata_dl.cleanup_overlap.ducklake_inlined_data_tables
+----
+2
+
+# Pause the registration lookup after the committer has read the old physical table.
+# The cleanup then deletes its registration and waits to DROP that table.
+statement ok
+CALL postgres_execute('pg', 'CREATE SEQUENCE cleanup_overlap.attempts;
+CREATE FUNCTION cleanup_overlap.pause_names() RETURNS boolean AS $$
+DECLARE deadline timestamptz := clock_timestamp() + interval ''15 seconds'';
+BEGIN
+    IF current_query() LIKE ''%FOR KEY SHARE%'' AND nextval(''cleanup_overlap.attempts'') = 1 THEN
+        LOOP
+            PERFORM pg_stat_clear_snapshot();
+            EXIT WHEN EXISTS (SELECT 1 FROM pg_stat_activity
+                WHERE application_name = ''ducklake_cleanup_overlap'' AND wait_event = ''relation'');
+            IF clock_timestamp() > deadline THEN
+                RAISE EXCEPTION ''cleanup did not wait to drop the inlined table'';
+            END IF;
+            PERFORM pg_sleep(0.01);
+        END LOOP;
+    END IF;
+    RETURN TRUE;
+END $$ LANGUAGE plpgsql;
+ALTER TABLE cleanup_overlap.ducklake_inlined_data_tables RENAME TO inline_registry;
+CREATE VIEW cleanup_overlap.ducklake_inlined_data_tables AS
+SELECT * FROM cleanup_overlap.inline_registry WHERE cleanup_overlap.pause_names();
+CREATE FUNCTION cleanup_overlap.clean_old() RETURNS integer AS $$
+DECLARE deadline timestamptz := clock_timestamp() + interval ''15 seconds'';
+BEGIN
+    PERFORM set_config(''application_name'', ''ducklake_cleanup_overlap'', true);
+    PERFORM set_config(''lock_timeout'', ''15s'', true);
+    LOOP
+        EXIT WHEN (SELECT is_called FROM cleanup_overlap.attempts);
+        IF clock_timestamp() > deadline THEN
+            RAISE EXCEPTION ''committer did not reach the registration lookup'';
+        END IF;
+        PERFORM pg_sleep(0.01);
+    END LOOP;
+    DELETE FROM cleanup_overlap.inline_registry WHERE table_name = ''ducklake_inlined_data_1_1'';
+    DROP TABLE cleanup_overlap.ducklake_inlined_data_1_1;
+    RETURN 1;
+END $$ LANGUAGE plpgsql', prepare = false)
+
+concurrentloop worker 0 2
+
+onlyif worker=0
+statement ok
+CALL ducklake_rewrite_data_files('dl', 't', delete_threshold => 0)
+
+onlyif worker=1
+query I
+SELECT * FROM postgres_query('pg', 'SELECT cleanup_overlap.clean_old()')
+----
+1
+
+endloop
+
+query II
+SELECT record_count, next_row_id FROM __ducklake_metadata_dl.cleanup_overlap.ducklake_table_stats
+----
+4	5
+
+query III
+SELECT count(DISTINCT rowid), min(i), max(i) FROM dl.t
+----
+4	2	5
+
+query I
+SELECT count(*) FROM __ducklake_metadata_dl.cleanup_overlap.ducklake_inlined_data_tables
+----
+1
+
+query I
+SELECT * FROM postgres_query('pg', 'SELECT to_regclass(''cleanup_overlap.ducklake_inlined_data_1_1'') IS NULL')
+----
+true
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA cleanup_overlap CASCADE')

@@ -1,0 +1,57 @@
+# name: test/sql/compaction/compaction_totals_concurrent_bounds.test
+# description: A retried rewrite cannot make stale bounds exact when it refreshes the gross row count
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/compaction_totals_concurrent_bounds.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/compaction_totals_concurrent_bounds', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+INSERT INTO lake.t SELECT range FROM range(100)
+
+statement ok
+INSERT INTO lake.t SELECT range FROM range(1000, 1100)
+
+statement ok
+DELETE FROM lake.t WHERE i = 0
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_rewrite_data_files('lake', 't', delete_threshold => 0)
+
+statement ok con2
+INSERT INTO lake.t VALUES (2000)
+
+statement ok con1
+COMMIT
+
+query II
+SELECT record_count, next_row_id FROM meta.ducklake_table_stats
+----
+200	201
+
+query III
+SELECT count(*), min(i), max(i) FROM lake.t
+----
+200	1	2000
+
+# A later insert must not make the deleted minimum exact again.
+statement ok
+INSERT INTO lake.t VALUES (2001)
+
+query III
+SELECT count(*), min(i), max(i) FROM lake.t
+----
+201	1	2001
