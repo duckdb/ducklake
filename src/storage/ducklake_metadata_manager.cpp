@@ -1456,8 +1456,7 @@ GROUP BY table_id;)",
 
 vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot,
                                                                              idx_t &latest_snapshot_id) {
-	auto result =
-	    Query(snapshot, GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata(), true));
+	auto result = Query(snapshot, GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata(), true));
 	result->ThrowIfError("Failed to get global stats information from DuckLake: ");
 	vector<DuckLakeGlobalStatsInfo> global_stats;
 	bool has_exactness = ResultHasColumn(*result, "min_is_exact");
