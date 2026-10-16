@@ -24,7 +24,7 @@ statement ok
 CALL enable_logging('PostgresQueryLog')
 
 statement ok
-CALL pg_clear_cache()
+CALL postgres_clear_cache()
 
 query I
 SELECT i FROM lake.t
