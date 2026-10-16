@@ -1,0 +1,19 @@
+{
+  "description": "Run PostgreSQL autoload tests without preloading the metadata extension.",
+  "autoloading": "available",
+  "statically_loaded_extensions": [
+    "core_functions",
+    "parquet",
+    "ducklake"
+  ],
+  "test_env": [
+    {
+      "env_name": "DUCKLAKE_POSTGRES_AUTOLOAD",
+      "env_value": "true"
+    },
+    {
+      "env_name": "DUCKLAKE_CONNECTION",
+      "env_value": "postgres:dbname=ducklakedb"
+    }
+  ]
+}

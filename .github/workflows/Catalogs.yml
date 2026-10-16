@@ -91,7 +91,11 @@ jobs:
       env:
         PGSERVICE: postgres
         LOCAL_EXTENSION_REPO: ${{ github.workspace }}/build/release/repository
+        DUCKLAKE_POSTGRES_AUTOLOAD_DATA_PATH: ${{ runner.temp }}/ducklake_postgres_autoload
         DUCKDB_TPCH_ANSWERS_DIR: ${{ github.workspace }}/duckdb/extension/tpch/dbgen/answers
       run: |
         createdb ducklakedb
         build/release/test/unittest --test-config test/configs/postgres.json --test-dir ./ "test/sql/*"
+        # Use separate processes so the metadata extension starts unregistered.
+        build/release/test/unittest --test-config test/configs/postgres_autoload.json --test-dir ./ "test/sql/autoloading/postgres_array_types_setup.test"
+        build/release/test/unittest --test-config test/configs/postgres_autoload.json --test-dir ./ "test/sql/autoloading/postgres_array_types.test"
