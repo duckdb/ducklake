@@ -576,6 +576,10 @@ public:
 	virtual void MigrateV10(bool from_dev1 = false);
 	//! Whether the catalog already has every metadata table and column of v1.1
 	bool HasV1_1Additions();
+	//! Create the indexes a catalog backend needs for its metadata lookups, when they are missing. Runs on every
+	//! read-write attach of an existing catalog, so it must cost nothing once they exist.
+	virtual void CreateLookupIndexes() {
+	}
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
 	//! Renames the given (old name, new name) columns of each inlined table

@@ -131,4 +131,21 @@ string SQLiteMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequiremen
 	                          select_list, SQLString(native_query));
 }
 
+//! Covering, so the per-column stats lookups behind file pruning read only the index. IF NOT EXISTS takes no
+//! write lock once the index exists; building it holds the lock for as long as the stats table is large.
+static string LookupIndexStatement() {
+	return "SELECT * FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, 'CREATE INDEX IF NOT EXISTS "
+	       "ducklake_file_column_stats_lookup ON ducklake_file_column_stats(table_id, column_id, data_file_id, "
+	       "value_count, null_count, contains_nan, min_value, max_value)');";
+}
+
+string SQLiteMetadataManager::GetCreateTableStatements() {
+	return DuckLakeMetadataManager::GetCreateTableStatements() + LookupIndexStatement();
+}
+
+void SQLiteMetadataManager::CreateLookupIndexes() {
+	auto result = Execute(LookupIndexStatement());
+	result->ThrowIfError("Failed to create the DuckLake file column stats index:");
+}
+
 } // namespace duckdb

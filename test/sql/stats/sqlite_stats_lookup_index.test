@@ -1,0 +1,82 @@
+# name: test/sql/stats/sqlite_stats_lookup_index.test
+# description: A SQLite catalog gets a covering index for the per-column file stats lookups, new or existing
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_stats_lookup_index.db' AS ducklake (DATA_PATH '{TEST_DIR}/sqlite_stats_lookup_index')
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, 'a' || i FROM range(100) r(i)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, 'b' || i FROM range(100, 200) r(i)
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH '{TEST_DIR}/sqlite_stats_lookup_index.db' AS meta (TYPE sqlite)
+
+query I
+SELECT count(*) FROM sqlite_query('meta', 'SELECT name FROM sqlite_master WHERE type = ''index'' AND name = ''ducklake_file_column_stats_lookup''')
+----
+1
+
+# the lookup the file list issues for one filtered column is answered from the index alone
+query I
+SELECT count(*) FROM sqlite_query('meta', 'EXPLAIN QUERY PLAN SELECT data_file_id, value_count, null_count, contains_nan, min_value, max_value FROM ducklake_file_column_stats WHERE column_id = 1 AND table_id = 1') WHERE detail LIKE '%USING COVERING INDEX ducklake_file_column_stats_lookup%'
+----
+1
+
+# a catalog made before the index existed
+statement ok
+SELECT * FROM sqlite_query('meta', 'DROP INDEX ducklake_file_column_stats_lookup')
+
+statement ok
+DETACH meta
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_stats_lookup_index.db' AS ducklake (READ_ONLY)
+
+query II
+SELECT count(*), min(s) FROM ducklake.t WHERE i >= 150
+----
+50	b150
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH '{TEST_DIR}/sqlite_stats_lookup_index.db' AS meta (TYPE sqlite, READ_ONLY)
+
+# a read-only attach writes nothing
+query I
+SELECT count(*) FROM sqlite_query('meta', 'SELECT name FROM sqlite_master WHERE type = ''index'' AND name = ''ducklake_file_column_stats_lookup''')
+----
+0
+
+statement ok
+DETACH meta
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_stats_lookup_index.db' AS ducklake
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH '{TEST_DIR}/sqlite_stats_lookup_index.db' AS meta (TYPE sqlite, READ_ONLY)
+
+query I
+SELECT count(*) FROM sqlite_query('meta', 'SELECT name FROM sqlite_master WHERE type = ''index'' AND name = ''ducklake_file_column_stats_lookup''')
+----
+1
