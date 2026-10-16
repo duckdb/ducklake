@@ -227,6 +227,8 @@ public:
 	bool ExecuteRetrialsServerSide() const;
 	//! Whether the client can skip the snapshot fetch and let the server read it.
 	virtual bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const;
+	virtual void ResetCommitAttempt() {
+	}
 	virtual bool IsRetryableCommitError(const string &) {
 		return false;
 	}
@@ -380,7 +382,7 @@ public:
 	static string InsertValuesSql(const string &table_name, const vector<string> &values);
 	//! The inserts of the given rows into the given table, in batches
 	static string InsertValuesIntoSql(const string &qualified_table_name, const vector<string> &values);
-	unordered_set<string> GetInlinedTableNames(TableIndex table_id);
+	virtual unordered_set<string> GetInlinedTableNames(TableIndex table_id);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
 	virtual vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter);
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type);

@@ -38,8 +38,10 @@ public:
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
 	bool InlinedDeletionTableExists(const string &table_name) override;
+	unordered_set<string> GetInlinedTableNames(TableIndex table_id) override;
 	unique_ptr<QueryResult> GetInlinedTablesForCommit(const set<TableIndex> &table_ids) override;
 	void MigrateInlinedDataTypes() override;
+	void ResetCommitAttempt() override;
 	bool IsRetryableCommitError(const string &message) override;
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
@@ -47,8 +49,9 @@ public:
 	void ClearCache() override;
 
 private:
+	set<string> read_inlined_tables;
 	set<string> failed_inlined_table_locks;
-	bool RemovedInlinedTableAfterRollback();
+	bool RemovedInlinedTableAfterRollback(const string &message);
 
 protected:
 	string GetLatestSnapshotQuery() const override;

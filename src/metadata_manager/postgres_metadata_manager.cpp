@@ -1,5 +1,6 @@
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "common/ducklake_util.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/main/database.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -286,13 +287,18 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	}
 }
 
+void PostgresMetadataManager::ResetCommitAttempt() {
+	read_inlined_tables.clear();
+	failed_inlined_table_locks.clear();
+}
+
 bool PostgresMetadataManager::IsRetryableCommitError(const string &message) {
-	if (RemovedInlinedTableAfterRollback()) {
-		return true;
-	}
 	// the server error follows the failed query, which can contain any text
 	auto server_error_start = message.rfind("\": ");
 	auto server_error = server_error_start == string::npos ? message : message.substr(server_error_start);
+	if (RemovedInlinedTableAfterRollback(server_error)) {
+		return true;
+	}
 	// constraint names are not translated, so a conflict on a metadata primary key is found in any language
 	for (auto end = server_error.find("_pkey"); end != string::npos; end = server_error.find("_pkey", end + 1)) {
 		auto start = end;
@@ -305,6 +311,12 @@ bool PostgresMetadataManager::IsRetryableCommitError(const string &message) {
 		}
 	}
 	return false;
+}
+
+unordered_set<string> PostgresMetadataManager::GetInlinedTableNames(TableIndex table_id) {
+	auto names = DuckLakeMetadataManager::GetInlinedTableNames(table_id);
+	read_inlined_tables.insert(names.begin(), names.end());
+	return names;
 }
 
 unique_ptr<QueryResult> PostgresMetadataManager::GetInlinedTablesForCommit(const set<TableIndex> &table_ids) {
@@ -333,13 +345,36 @@ SELECT NULL, NULL WHERE (SELECT COUNT(*) FROM locked) <> (SELECT COUNT(*) FROM (
 	return result;
 }
 
-bool PostgresMetadataManager::RemovedInlinedTableAfterRollback() {
-	if (failed_inlined_table_locks.empty()) {
+static bool MentionsInlinedTable(const string &message, const string &table_name) {
+	auto is_identifier_char = [](char c) {
+		return StringUtil::CharacterIsAlphaNumeric(c) || c == '_' || c == '$';
+	};
+	for (auto pos = message.find(table_name); pos != string::npos;
+	     pos = message.find(table_name, pos + table_name.size())) {
+		auto end = pos + table_name.size();
+		if ((pos == 0 || !is_identifier_char(message[pos - 1])) &&
+		    (end == message.size() || !is_identifier_char(message[end]))) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool PostgresMetadataManager::RemovedInlinedTableAfterRollback(const string &message) {
+	if (transaction.GetConnection().context->transaction.HasActiveTransaction()) {
 		return false;
 	}
-	// A cleanup committed after our snapshot can make locking fail with a localized serialization error.
 	auto names = std::move(failed_inlined_table_locks);
-	failed_inlined_table_locks.clear();
+	for (auto &name : read_inlined_tables) {
+		if (MentionsInlinedTable(message, name)) {
+			names.insert(name);
+		}
+	}
+	ResetCommitAttempt();
+	if (names.empty()) {
+		return false;
+	}
+	// After rollback, missing registrations prove cleanup committed beyond our metadata snapshot.
 	auto query = StringUtil::Format(
 	    "SELECT DISTINCT table_name FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_name IN (%s)",
 	    StringUtil::Join(names, ",", [](const string &name) { return SQLString::ToString(name); }));
