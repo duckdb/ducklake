@@ -614,17 +614,25 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 			// LCOV_EXCL_STOP
 		}
 		auto setting_index = option.setting_index.GetIndex();
-		// these change the types read from the metadata and data files
-		if (entry.first == "sqlite_all_varchar" || entry.first == "binary_as_string") {
-			to.config.user_settings.SetUserSetting(setting_index, Value::BOOLEAN(false));
-			continue;
-		}
 		if (!from.config.user_settings.IsSet(setting_index)) {
 			continue;
 		}
 		Value value;
 		from.TryGetCurrentUserSetting(setting_index, value);
 		to.config.user_settings.SetUserSetting(setting_index, std::move(value));
+	}
+	SetNativeExtensionTypes(to);
+}
+
+void DuckLakeUtil::SetNativeExtensionTypes(ClientContext &context) {
+	auto &db_config = DBConfig::GetConfig(context);
+	for (auto name : {"sqlite_all_varchar", "binary_as_string", "pg_array_as_varchar"}) {
+		ExtensionOption option;
+		if (!db_config.TryGetExtensionOption(Identifier(name), option) || !option.setting_index.IsValid()) {
+			continue;
+		}
+		// Keep metadata/data types stable without callbacks that clear shared catalog caches.
+		context.config.user_settings.SetUserSetting(option.setting_index.GetIndex(), Value::BOOLEAN(false));
 	}
 }
 
