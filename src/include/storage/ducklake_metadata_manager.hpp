@@ -414,6 +414,8 @@ public:
 	                                     const map<TableIndex, set<FieldIndex>> &cleared_columns, idx_t next_file_id);
 	static string WriteExpiredColumnTags(const vector<DuckLakeDroppedColumn> &dropped_columns);
 	static string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns);
+	//! Columns added and dropped in the same commit, which begin and end in its snapshot
+	static string WriteDroppedNewColumns(const vector<DuckLakeNewColumn> &columns);
 	static string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);
 	static string WriteNewTableOptions(const vector<DuckLakeConfigOption> &new_options);
 	static string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags);
@@ -567,8 +569,12 @@ public:
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool from_dev1 = false);
+	//! Whether the catalog already has every metadata table and column of v1.1
+	bool HasV1_1Additions();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
+	//! Renames the given (old name, new name) columns of each inlined table
+	virtual void RenameInlinedColumns(const map<string, vector<pair<string, string>>> &renames);
 	//! Adds the schema version rows of inlined tables that older versions registered without one
 	void MigrateInlinedSchemaVersions();
 	//! Restores the defaults that older versions dropped when they renamed a struct field

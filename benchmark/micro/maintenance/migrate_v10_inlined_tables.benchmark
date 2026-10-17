@@ -1,0 +1,53 @@
+# name: benchmark/micro/maintenance/migrate_v10_inlined_tables.benchmark
+# description: Attach a v1.0 lake of 200 tables with three inlined tables each, migrating it to v1.1
+# group: [maintenance]
+
+name Migrate v1.0 Inlined Tables
+group micro
+subgroup maintenance
+
+require ducklake
+
+require parquet
+
+argument lake migrate_v10_inlined_v1
+
+argument work migrate_v10_inlined_work
+
+cache_file ${lake}_ready.marker
+
+# Every table has an inlined table for each of its three schema versions
+load
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files', DUCKLAKE_VERSION '1.0', DATA_INLINING_ROW_LIMIT 100)
+@for k in range(200)
+CREATE TABLE lake.t@{k} (id INTEGER, v VARCHAR);
+INSERT INTO lake.t@{k} VALUES (1, 'a');
+ALTER TABLE lake.t@{k} ADD COLUMN w INTEGER;
+INSERT INTO lake.t@{k} VALUES (2, 'b', 2);
+ALTER TABLE lake.t@{k} ADD COLUMN x VARCHAR;
+INSERT INTO lake.t@{k} VALUES (3, 'c', 3, 'x');
+@end
+SELECT CASE WHEN (SELECT count(*) <> 600 FROM __ducklake_metadata_lake.ducklake_inlined_data_tables)
+THEN error('unexpected migration fixture') END;
+DETACH lake;
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+@copy ${lake}_pristine TO ${work}
+
+reload
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+
+cleanup
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+
+run
+@attach ${work} AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
+
+result_query III
+SELECT (SELECT value FROM __ducklake_metadata_lake.ducklake_metadata WHERE key = 'version'), count(*), sum(id)
+FROM lake.t199
+----
+1.1	3	6

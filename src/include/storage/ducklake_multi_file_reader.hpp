@@ -105,6 +105,9 @@ public:
 
 	static vector<MultiFileColumnDefinition> ColumnsFromFieldData(const DuckLakeFieldData &field_data,
 	                                                              bool emit_key_value = false);
+	//! The columns an inlined data reader reads from a committed inlined table, false if its schema is gone
+	static bool GetInlinedTableColumns(DuckLakeFunctionInfo &read_info, optional_idx schema_version,
+	                                   vector<MultiFileColumnDefinition> &columns);
 
 private:
 	shared_ptr<BaseFileReader> TryCreateInlinedDataReader(const OpenFileInfo &file);

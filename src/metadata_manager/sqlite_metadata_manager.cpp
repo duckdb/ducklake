@@ -47,4 +47,25 @@ string SQLiteMetadataManager::GetColumnTypeInternal(const LogicalType &column_ty
 	}
 }
 
+void SQLiteMetadataManager::RenameInlinedColumns(const map<string, vector<pair<string, string>>> &renames) {
+	// SQLite parses its whole schema for every renamed column, so the tables are copied with the new names instead
+	string query;
+	for (auto &table : renames) {
+		auto table_name = SQLIdentifier(table.first);
+		vector<string> renamed_columns;
+		for (auto &column : table.second) {
+			renamed_columns.push_back(StringUtil::Format("%s AS %s", column.first, column.second));
+		}
+		query += StringUtil::Format(
+		    "CREATE TEMP TABLE ducklake_renamed_inlined AS SELECT * FROM {METADATA_CATALOG}.%s;", table_name);
+		query += StringUtil::Format("DROP TABLE {METADATA_CATALOG}.%s;", table_name);
+		query += StringUtil::Format(
+		    "CREATE TABLE {METADATA_CATALOG}.%s AS SELECT * RENAME (%s) FROM temp.ducklake_renamed_inlined;",
+		    table_name, StringUtil::Join(renamed_columns, ", "));
+		query += "DROP TABLE temp.ducklake_renamed_inlined;";
+	}
+	auto result = Execute(query);
+	result->ThrowIfError("Failed to rename inlined-data metadata columns while migrating to v1.1: ");
+}
+
 } // namespace duckdb

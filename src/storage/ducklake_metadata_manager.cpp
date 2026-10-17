@@ -468,18 +468,32 @@ static constexpr const DuckLakeAddedColumn V1_1_ADDED_COLUMNS[] = {
     {"ducklake_table_column_stats", "max_is_exact", "BOOLEAN DEFAULT NULL"},
     {"ducklake_schema", "parent_schema_id", "BIGINT"}};
 
-static string V1_1MigrationQuery() {
+static string V1_1MigrationQuery(bool has_additions) {
 	string query;
-	for (auto &added : V1_1_ADDED_COLUMNS) {
-		query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s ADD COLUMN {IF_NOT_EXISTS} %s %s;\n",
-		                            added.table, added.column, added.type);
-	}
-	query += R"(CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
+	if (!has_additions) {
+		for (auto &added : V1_1_ADDED_COLUMNS) {
+			query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s ADD COLUMN {IF_NOT_EXISTS} %s %s;\n",
+			                            added.table, added.column, added.type);
+		}
+		query += R"(CREATE TABLE {IF_NOT_EXISTS} {METADATA_CATALOG}.ducklake_view_column_tag(
 	view_id BIGINT, column_name VARCHAR, begin_snapshot BIGINT, end_snapshot BIGINT, key VARCHAR, value VARCHAR
 );
-UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1' WHERE key = 'version';
 )";
+	}
+	query += "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.1' WHERE key = 'version';\n";
 	return query;
+}
+
+bool DuckLakeMetadataManager::HasV1_1Additions() {
+	string probe = "SELECT 1 FROM (SELECT * FROM {METADATA_CATALOG}.ducklake_view_column_tag LIMIT 0)";
+	idx_t alias_index = 0;
+	for (auto &added : V1_1_ADDED_COLUMNS) {
+		// a qualified column cannot resolve to the same column of an earlier subquery
+		auto alias = "added_" + to_string(alias_index++);
+		probe += StringUtil::Format(", (SELECT %s.%s FROM {METADATA_CATALOG}.%s %s LIMIT 0)", alias, added.column,
+		                            added.table, alias);
+	}
+	return !Query(probe)->HasError();
 }
 
 void DuckLakeMetadataManager::MigrateInlinedSchemaVersions() {
@@ -533,7 +547,9 @@ void DuckLakeMetadataManager::MigrateV10(bool from_dev1) {
 	MigrateInlinedSchemaVersions();
 	MigrateRenamedFieldDefaults();
 	MigrateInlinedDataTypes();
-	ExecuteMigration(V1_1MigrationQuery(), from_dev1, from_dev1 ? "1.1-dev1" : "1.0", "1.1");
+	// DDL locks the metadata tables exclusively on Postgres, skip it when a dev catalog has every addition
+	auto has_additions = from_dev1 && HasV1_1Additions();
+	ExecuteMigration(V1_1MigrationQuery(has_additions), from_dev1, from_dev1 ? "1.1-dev1" : "1.0", "1.1");
 }
 
 void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {
@@ -568,6 +584,7 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 	if (probe_renamed && !Query(renamed_probe)->HasError()) {
 		return;
 	}
+	map<string, vector<pair<string, string>>> renames;
 	for (auto &inlined_table : inlined_tables) {
 		auto &table_name = inlined_table.first;
 		auto &user_table_name = inlined_table.second;
@@ -581,7 +598,7 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 		for (idx_t i = col_renames.size(); i < names.size(); i++) {
 			user_columns.insert(names[i].GetIdentifierName());
 		}
-		string renames;
+		vector<pair<string, string>> table_renames;
 		bool unexpected_layout = names.size() < col_renames.size();
 		for (idx_t i = 0; i < col_renames.size() && !unexpected_layout; i++) {
 			auto &entry = col_renames[i];
@@ -600,8 +617,7 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 				    "ducklake_flush_inlined_data() before migrating",
 				    user_table_name, entry.second);
 			}
-			renames += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN %s TO %s;",
-			                              SQLIdentifier(table_name), entry.first, entry.second);
+			table_renames.push_back(entry);
 		}
 		if (unexpected_layout) {
 			throw InvalidInputException(
@@ -609,13 +625,28 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 			    "an unexpected column layout",
 			    table_name);
 		}
-		if (renames.empty()) {
-			continue;
+		if (!table_renames.empty()) {
+			renames.emplace(table_name, std::move(table_renames));
 		}
-		auto result = Execute(renames);
-		result->ThrowIfError(StringUtil::Format(
-		    "Failed to rename inlined-data metadata columns of \"%s\" while migrating to v1.1: ", table_name));
 	}
+	if (!renames.empty()) {
+		RenameInlinedColumns(renames);
+	}
+}
+
+void DuckLakeMetadataManager::RenameInlinedColumns(const map<string, vector<pair<string, string>>> &renames) {
+	// one batch for all tables, as every metadata DDL statement can reload the catalog
+	string query;
+	for (auto &table : renames) {
+		for (auto &column : table.second) {
+			query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN %s TO %s;",
+			                            SQLIdentifier(table.first), column.first, column.second);
+		}
+	}
+	// with a snapshot Postgres runs the batch on the server, instead of reloading its catalog after every statement
+	auto result = Execute(DuckLakeSnapshot(), query);
+	result->ThrowIfError("Failed to rename inlined-data metadata columns while migrating to v1.1: ");
+	ClearCache();
 }
 
 DuckLakeMetadata DuckLakeMetadataManager::LoadDuckLake() {
@@ -2990,7 +3021,7 @@ string DuckLakeMetadataManager::WriteNewSchemas(const vector<DuckLakeSchemaInfo>
 }
 
 static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex table_id, optional_idx parent,
-                                 vector<string> &result) {
+                                 const string &end_snapshot, vector<string> &result) {
 	string parent_idx = DuckLakeUtil::OptionalIdxOrNull(parent);
 
 	string initial_default_val =
@@ -3028,12 +3059,12 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 	auto column_order = column_id;
 
 	auto nulls_allowed = DuckLakeUtil::BoolLiteral(column.nulls_allowed);
-	result.push_back(StringUtil::Format("(%d, {SNAPSHOT_ID}, NULL, %d, %d, %s, %s, %s, %s, %s, %s, %s, %s)", column_id,
-	                                    table_id.index, column_order, SQLString(column.name), SQLString(column.type),
-	                                    initial_default_val, default_val, nulls_allowed, parent_idx, default_val_type,
-	                                    default_val_system));
+	result.push_back(StringUtil::Format("(%d, {SNAPSHOT_ID}, %s, %d, %d, %s, %s, %s, %s, %s, %s, %s, %s)", column_id,
+	                                    end_snapshot, table_id.index, column_order, SQLString(column.name),
+	                                    SQLString(column.type), initial_default_val, default_val, nulls_allowed,
+	                                    parent_idx, default_val_type, default_val_system));
 	for (auto &child : column.children) {
-		ColumnToSQLRecursive(child, table_id, column_id, result);
+		ColumnToSQLRecursive(child, table_id, column_id, end_snapshot, result);
 	}
 }
 
@@ -3203,7 +3234,7 @@ string DuckLakeMetadataManager::WriteNewTables(const vector<DuckLakeTableInfo> &
 		    "(%d, '%s', {SNAPSHOT_ID}, NULL, %d, %s, %s, %s)", table.id.index, table.uuid, table.schema_id.index,
 		    SQLString(table.name), SQLString(path.path), DuckLakeUtil::BoolLiteral(path.path_is_relative)));
 		for (auto &column : table.columns) {
-			ColumnToSQLRecursive(column, table.id, optional_idx(), column_values);
+			ColumnToSQLRecursive(column, table.id, optional_idx(), "NULL", column_values);
 		}
 	}
 	return InsertValuesSql("ducklake_table", table_values) + InsertValuesSql("ducklake_column", column_values);
@@ -3397,17 +3428,23 @@ string DuckLakeMetadataManager::WriteExpiredColumnTags(const vector<DuckLakeDrop
 	return ExpireDroppedColumns(dropped_columns, "ducklake_column_tag");
 }
 
-string DuckLakeMetadataManager::WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns) {
+static string InsertColumnsSql(const vector<DuckLakeNewColumn> &new_columns, const string &end_snapshot) {
 	if (new_columns.empty()) {
 		return {};
 	}
 	vector<string> column_values;
 	for (auto &new_col : new_columns) {
-		ColumnToSQLRecursive(new_col.column_info, new_col.table_id, new_col.parent_idx, column_values);
+		ColumnToSQLRecursive(new_col.column_info, new_col.table_id, new_col.parent_idx, end_snapshot, column_values);
 	}
+	return DuckLakeMetadataManager::InsertValuesSql("ducklake_column", column_values);
+}
 
-	// insert column entries
-	return InsertValuesSql("ducklake_column", column_values);
+string DuckLakeMetadataManager::WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns) {
+	return InsertColumnsSql(new_columns, "NULL");
+}
+
+string DuckLakeMetadataManager::WriteDroppedNewColumns(const vector<DuckLakeNewColumn> &columns) {
+	return InsertColumnsSql(columns, "{SNAPSHOT_ID}");
 }
 
 string DuckLakeMetadataManager::WriteNewViews(const vector<DuckLakeViewInfo> &new_views) {

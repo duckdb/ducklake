@@ -1,0 +1,131 @@
+# name: test/sql/migration/inlined_column_rename_batches.test
+# description: migrating a v1.0 catalog renames the inlined metadata columns of all tables in one batch
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/inlined_column_rename_batches.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_rename_batches', METADATA_CATALOG 'dlmeta', DUCKLAKE_VERSION '1.0', DATA_INLINING_ROW_LIMIT 10)
+
+loop i 0 3
+
+statement ok
+CREATE TABLE dl.t{i} (i INTEGER, d DOUBLE, b BLOB, s VARCHAR, dt DATE)
+
+statement ok
+INSERT INTO dl.t{i} VALUES ({i}, 1.5, '\x00\x01'::BLOB, 'it''s', DATE '2020-01-01'), (NULL, NULL, NULL, NULL, NULL)
+
+statement ok
+ALTER TABLE dl.t{i} ADD COLUMN n INTEGER
+
+statement ok
+INSERT INTO dl.t{i} VALUES ({i} + 10, -2.5, ''::BLOB, '', DATE '2021-02-03', 7)
+
+endloop
+
+statement ok
+DELETE FROM dl.t1 WHERE i = 11
+
+# a flushed table keeps an empty inlined table
+statement ok
+CREATE TABLE dl.flushed (i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO dl.flushed VALUES (1, 'a')
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'flushed')
+
+statement ok
+CREATE TABLE inlined_columns AS
+SELECT table_name, column_index, column_name, data_type FROM duckdb_columns()
+WHERE database_name = 'dlmeta' AND schema_name IN ('main', 'public') AND regexp_full_match(table_name, 'ducklake_inlined_data_[0-9]+_[0-9]+')
+
+query I
+SELECT count(DISTINCT table_name) FROM inlined_columns
+----
+7
+
+statement ok
+DETACH dl
+
+statement ok
+CALL enable_logging(level => 'debug')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_rename_batches', METADATA_CATALOG 'dlmeta', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
+
+# one statement batch renames the columns, also on the Postgres server, and SQLite rebuilds the tables instead
+query I
+SELECT CASE WHEN (SELECT type FROM duckdb_databases() WHERE database_name = 'dlmeta') = 'sqlite'
+	THEN count(*) = 0 ELSE count(*) <= 1 END
+FROM duckdb_logs WHERE type IN ('DuckLakeMetadata', 'PostgresQueryLog') AND contains(message, 'RENAME COLUMN')
+----
+true
+
+# the tables keep their columns and types, with the metadata columns renamed
+query I
+SELECT count(*) FROM inlined_columns old
+JOIN duckdb_columns() new ON new.database_name = 'dlmeta' AND new.schema_name IN ('main', 'public')
+	AND new.table_name = old.table_name AND new.column_index = old.column_index
+WHERE new.data_type = old.data_type AND new.column_name = CASE old.column_name
+	WHEN 'row_id' THEN '_ducklake_row_id' WHEN 'begin_snapshot' THEN '_ducklake_begin_snapshot'
+	WHEN 'end_snapshot' THEN '_ducklake_end_snapshot' ELSE old.column_name END
+----
+56
+
+query IIIIIII
+SELECT rowid, i, d, b, s, dt, n FROM dl.t1 ORDER BY rowid
+----
+0	1	1.5	\x00\x01	it's	2020-01-01	NULL
+1	NULL	NULL	NULL	NULL	NULL	NULL
+
+query IIIIII
+SELECT i, d, b, s, dt, n FROM dl.t2 ORDER BY i
+----
+2	1.5	\x00\x01	it's	2020-01-01	NULL
+12	-2.5	(empty)	(empty)	2021-02-03	7
+NULL	NULL	NULL	NULL	NULL	NULL
+
+statement ok
+INSERT INTO dl.t0 VALUES (20, 3.5, 'x'::BLOB, 'y', DATE '2022-03-04', 8)
+
+statement ok
+DELETE FROM dl.t0 WHERE i = 0
+
+query II
+SELECT i, n FROM dl.t0 ORDER BY i
+----
+10	7
+20	8
+NULL	NULL
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query II
+SELECT i, n FROM dl.t0 ORDER BY i
+----
+10	7
+20	8
+NULL	NULL
+
+query II
+SELECT i, s FROM dl.flushed
+----
+1	a
+
+statement ok
+INSERT INTO dl.flushed VALUES (2, 'b')
+
+query II
+SELECT i, s FROM dl.flushed ORDER BY i
+----
+1	a
+2	b

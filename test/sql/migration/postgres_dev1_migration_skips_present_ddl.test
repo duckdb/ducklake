@@ -1,0 +1,81 @@
+# name: test/sql/migration/postgres_dev1_migration_skips_present_ddl.test
+# description: migrating a Postgres 1.1-dev1 catalog that has every v1.1 addition only sets the version
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS dev1_skips_present_ddl CASCADE')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/dev1_skips_present_ddl', METADATA_SCHEMA 'dev1_skips_present_ddl', DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DETACH dl
+
+# A catalog that lacks an addition still gets it
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_delete_file DROP COLUMN row_group_count')
+
+statement ok
+CALL postgres_execute('pg', 'UPDATE dev1_skips_present_ddl.ducklake_metadata SET value = ''1.1-dev1'' WHERE key = ''version''')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_SCHEMA 'dev1_skips_present_ddl', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+DETACH dl
+
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT 1 FROM information_schema.columns WHERE table_schema = ''dev1_skips_present_ddl'' AND table_name = ''ducklake_delete_file'' AND column_name = ''row_group_count''')
+----
+1
+
+statement ok
+CALL postgres_execute('pg', 'UPDATE dev1_skips_present_ddl.ducklake_metadata SET value = ''1.1-dev1'' WHERE key = ''version''')
+
+# ALTER TABLE fails on a view even when the column exists
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_delete_file RENAME TO delete_file_data')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE VIEW dev1_skips_present_ddl.ducklake_delete_file AS SELECT * FROM dev1_skips_present_ddl.delete_file_data')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_SCHEMA 'dev1_skips_present_ddl', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+1.1
+
+query I
+SELECT * FROM dl.t
+----
+42
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA dev1_skips_present_ddl CASCADE')
+
+statement ok
+DETACH pg

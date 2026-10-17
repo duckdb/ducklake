@@ -643,6 +643,27 @@ InsertionOrderPreservingMap<string> DuckLakeDelete::ParamsToString() const {
 	return result;
 }
 
+DuckLakeFileListExtendedEntry DuckLakeDeleteMap::GetExtendedFileInfo(const string &filename) {
+	lock_guard<mutex> guard(lock);
+	auto delete_entry = file_map.find(filename);
+	if (delete_entry == file_map.end() && file_list) {
+		for (auto &file_entry : file_list->Cast<DuckLakeMultiFileList>().GetFilesExtended()) {
+			auto path = file_entry.file.path;
+			file_map.emplace(std::move(path), std::move(file_entry));
+		}
+		delete_entry = file_map.find(filename);
+		if (delete_entry == file_map.end()) {
+			throw TransactionException("Transaction conflict - attempting to delete from file \"%s\" - but another "
+			                           "transaction has rewritten it",
+			                           filename);
+		}
+	}
+	if (delete_entry == file_map.end()) {
+		throw InternalException("Could not find matching file for written delete file");
+	}
+	return delete_entry->second;
+}
+
 static optional_ptr<PhysicalTableScan> FindDeleteSource(PhysicalOperator &plan) {
 	if (plan.type == PhysicalOperatorType::MERGE_ACTION_SOURCE) {
 		// the rows of a merge action are pushed into the source by the merge into - look for the scan in the plan
@@ -684,6 +705,7 @@ PhysicalOperator &DuckLakeDelete::PlanDelete(ClientContext &context, PhysicalPla
 		for (auto &file_entry : files) {
 			delete_map->AddExtendedFileInfo(std::move(file_entry));
 		}
+		delete_map->file_list = bind_data.file_list;
 		reader.delete_map = delete_map;
 	}
 	return planner.Make<DuckLakeDelete>(table, child_plan, std::move(delete_map), std::move(row_id_indexes),

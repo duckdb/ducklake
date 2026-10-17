@@ -71,3 +71,4 @@ benchmark/micro/read/load_nested_catalog.benchmark
 benchmark/micro/write/create_tables_quoted_columns.benchmark
 benchmark/micro/read/snapshots_listing_limit.benchmark
 benchmark/micro/read/snapshots_listing_changes.benchmark
+benchmark/micro/maintenance/migrate_v10_inlined_tables.benchmark
