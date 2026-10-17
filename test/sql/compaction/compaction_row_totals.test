@@ -1,0 +1,187 @@
+# name: test/sql/compaction/compaction_row_totals.test
+# description: File-set changes refresh gross row totals without making stale column bounds exact
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/compaction_row_totals.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/compaction_row_totals', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.r(i INTEGER, g GEOMETRY)
+
+statement ok
+INSERT INTO lake.r VALUES (1, 'POINT(1 1)'), (2, 'POINT(2 2)')
+
+statement ok
+INSERT INTO lake.r VALUES (3, 'POINT(3 3)'), (4, 'POINT(4 4)'), (5, 'POINT(5 5)'), (6, 'POINT(6 6)')
+
+statement ok
+DELETE FROM lake.r WHERE i IN (1, 3)
+
+statement ok
+CALL ducklake_rewrite_data_files('lake', 'r', delete_threshold => 0.4)
+
+# The unrewritten file still stores one deleted row.
+query II
+SELECT record_count, next_row_id FROM meta.ducklake_table_stats
+----
+5	6
+
+query III
+SELECT count(*), min(i), max(i) FROM lake.r
+----
+4	2	6
+
+query I
+SELECT vertex_extract(g, 'x') FROM lake.r ORDER BY i
+----
+2.0
+4.0
+5.0
+6.0
+
+statement ok
+CALL ducklake_rewrite_data_files('lake', 'r', delete_threshold => 0)
+
+query II
+SELECT record_count, next_row_id FROM meta.ducklake_table_stats
+----
+4	6
+
+query TT
+SELECT min_value, max_value FROM meta.ducklake_table_column_stats WHERE column_id = 1
+----
+2	6
+
+statement ok
+INSERT INTO lake.r VALUES (7, 'POINT(7 7)')
+
+statement ok
+UPDATE meta.ducklake_table_stats SET record_count = NULL, file_size_bytes = NULL
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/compaction_row_totals', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CALL ducklake_merge_adjacent_files('lake', 'r')
+
+query II
+SELECT record_count, next_row_id FROM meta.ducklake_table_stats
+----
+5	7
+
+query I
+SELECT vertex_extract(g, 'x') FROM lake.r ORDER BY i
+----
+2.0
+4.0
+5.0
+6.0
+7.0
+
+# New files and a newly created inlined table are included once in the commit's totals.
+statement ok
+CREATE TABLE lake.s(i INTEGER)
+
+statement ok
+INSERT INTO lake.s VALUES (1), (2)
+
+statement ok
+INSERT INTO lake.s VALUES (3), (4)
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM lake.s WHERE i <= 2
+
+statement ok
+INSERT INTO lake.s VALUES (5), (6)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+INSERT INTO lake.s VALUES (999)
+
+statement ok
+COMMIT
+
+statement ok
+SET VARIABLE s_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 's')
+
+statement ok
+SET VARIABLE before_delete = (SELECT max(snapshot_id) FROM lake.snapshots())
+
+query II
+SELECT record_count, next_row_id FROM meta.ducklake_table_stats WHERE table_id = getvariable('s_id')
+----
+5	7
+
+query II
+SELECT count(*), count(DISTINCT rowid) FROM lake.s
+----
+5	5
+
+statement ok
+DELETE FROM lake.s WHERE i = 999
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+INSERT INTO lake.s VALUES (7), (8)
+
+statement ok
+CALL ducklake_merge_adjacent_files('lake', 's')
+
+# Deleted inlined rows still count while they remain stored for time travel.
+query II
+SELECT record_count, next_row_id FROM meta.ducklake_table_stats WHERE table_id = getvariable('s_id')
+----
+7	9
+
+query III
+SELECT count(*), min(i), max(i) FROM lake.s
+----
+6	3	8
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 's')
+
+statement ok
+CALL ducklake_merge_adjacent_files('lake', 's')
+
+# Merging retains the flushed historical row until a delete rewrite removes it.
+query II
+SELECT record_count, next_row_id FROM meta.ducklake_table_stats WHERE table_id = getvariable('s_id')
+----
+7	9
+
+statement ok
+CALL ducklake_rewrite_data_files('lake', 's', delete_threshold => 0)
+
+query II
+SELECT record_count, next_row_id FROM meta.ducklake_table_stats WHERE table_id = getvariable('s_id')
+----
+6	9
+
+query III
+SELECT count(*), min(i), max(i) FROM lake.s
+----
+6	3	8
+
+query II
+SELECT count(*), max(i) FROM lake.s AT (VERSION => getvariable('before_delete'))
+----
+5	999

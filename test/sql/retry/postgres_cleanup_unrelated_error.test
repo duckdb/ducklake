@@ -1,0 +1,93 @@
+# name: test/sql/retry/postgres_cleanup_unrelated_error.test
+# description: Removing an obsolete registration does not make an unrelated commit error retryable
+# group: [retry]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS cleanup_unrelated CASCADE')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/cleanup_unrelated', METADATA_SCHEMA 'cleanup_unrelated', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+SET ducklake_retry_wait_ms = 1
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN j INTEGER
+
+statement ok
+INSERT INTO dl.t VALUES (3, 3), (4, 4)
+
+statement ok
+CALL postgres_execute('pg', 'CREATE VIEW cleanup_unrelated.blocker AS SELECT * FROM cleanup_unrelated.ducklake_inlined_data_1_1')
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+INSERT INTO dl.t VALUES (5, 5)
+
+statement ok
+CALL postgres_execute('pg', 'CREATE SEQUENCE cleanup_unrelated.commit_attempts;
+CREATE FUNCTION cleanup_unrelated.fail_commit() RETURNS trigger AS $$
+BEGIN
+    PERFORM nextval(''cleanup_unrelated.commit_attempts'');
+    RAISE EXCEPTION ''synthetic unretryable commit failure'';
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER fail_commit BEFORE INSERT ON cleanup_unrelated.ducklake_snapshot
+FOR EACH ROW EXECUTE FUNCTION cleanup_unrelated.fail_commit()', prepare = false)
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM dl.t
+----
+5
+
+# The earlier scan observed this registration, but the commit does not depend on it.
+statement ok
+CALL postgres_execute('pg', 'DELETE FROM cleanup_unrelated.ducklake_inlined_data_tables WHERE table_name = ''ducklake_inlined_data_1_1''')
+
+statement ok con1
+INSERT INTO dl.t VALUES (6, 6)
+
+statement error con1
+COMMIT
+----
+synthetic unretryable commit failure
+
+query I
+SELECT * FROM postgres_query('pg', 'SELECT last_value FROM cleanup_unrelated.commit_attempts')
+----
+1
+
+query I
+SELECT count(*) FROM dl.t
+----
+5
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA cleanup_unrelated CASCADE')

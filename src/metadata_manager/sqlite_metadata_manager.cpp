@@ -28,7 +28,7 @@ bool SQLiteMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	}
 }
 
-bool SQLiteMetadataManager::IsRetryableCommitError(const string &message) const {
+bool SQLiteMetadataManager::IsRetryableCommitError(const string &message) {
 	auto lower_message = StringUtil::Lower(message);
 	StringUtil::Trim(lower_message);
 	return StringUtil::EndsWith(lower_message, "database is locked") &&
