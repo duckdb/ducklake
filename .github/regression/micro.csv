@@ -66,6 +66,8 @@ benchmark/micro/write/insert_commits_retyped_column.benchmark
 benchmark/micro/read/scan_after_alters.benchmark
 benchmark/micro/write/insert_inlined_rows.benchmark
 benchmark/micro/compaction/merge_adjacent_inlined_deletions.benchmark
+benchmark/micro/write/insert_large_file_commit.benchmark
+benchmark/micro/write/insert_small_file_commits.benchmark
 benchmark/micro/write/insert_inlined_variant.benchmark
 benchmark/micro/read/load_nested_catalog.benchmark
 benchmark/micro/write/create_tables_quoted_columns.benchmark

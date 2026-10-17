@@ -1,0 +1,26 @@
+# name: test/sql/data_inlining/sqlite_superseded_inlined_tables.test
+# description: SQLite retains superseded inlined tables for transactions that started earlier
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_superseded.db' AS dl (DATA_PATH '{TEST_DIR}/sqlite_superseded_files', METADATA_CATALOG 'dl_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.p AS SELECT range::INTEGER AS i FROM range(1000)
+
+statement ok
+ALTER TABLE dl.p ADD COLUMN c INTEGER
+
+statement ok
+ALTER TABLE dl.p DROP COLUMN c
+
+query I
+SELECT count(*) FROM dl_meta.ducklake_inlined_data_tables
+----
+3

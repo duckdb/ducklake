@@ -272,6 +272,39 @@ class RegressionRunTest(unittest.TestCase):
         self.assertEqual(self.dropped(), self.created()[::-1])
         self.assertEqual(stderr.getvalue().count("failed to drop the PostgreSQL database"), 2)
 
+    def test_sqlite_omits_only_the_unsupported_retry_benchmarks(self):
+        retry = [
+            "benchmark/micro/write/delete_commits_retry.benchmark",
+            "benchmark/micro/write/delete_commits_inlined_retry.benchmark",
+            "benchmark/micro/write/delete_commits_rewrite_retry.benchmark",
+        ]
+        supported = [
+            "benchmark/micro/write/insert_large_file_commit.benchmark",
+            "benchmark/micro/write/insert_small_file_commits.benchmark",
+        ]
+        benchmarks = retry + supported
+        (self.directory / "micro.csv").write_text("\n".join(benchmarks) + "\n")
+        for catalog in ("sqlite", "duckdb", "postgres"):
+            with self.subTest(catalog=catalog):
+                expected = supported if catalog == "sqlite" else benchmarks
+
+                def compare(script, root, passthrough, listing):
+                    self.assertEqual(listing.read_text().split(), expected)
+                    return 0, set()
+
+                self.compare.side_effect = compare
+                self.assertEqual(self.main(catalog=catalog), 0)
+                self.assertEqual(self.mocks["render_root"].call_args.args[2], expected)
+        for benchmark in retry:
+            self.assertIn(f"Skipping {benchmark}:", self.stdout.getvalue())
+
+    def test_sqlite_rejects_a_list_with_no_supported_benchmarks(self):
+        (self.directory / "micro.csv").write_text("benchmark/micro/write/delete_commits_retry.benchmark\n")
+        with self.assertRaisesRegex(SystemExit, "No benchmarks support the SQLite catalog"):
+            self.main(catalog="sqlite")
+        self.compare.assert_not_called()
+        self.mocks["render_root"].assert_not_called()
+
     def test_duckdb_does_not_create_postgres_databases(self):
         self.assertEqual(self.main(catalog="duckdb"), 0)
         self.mocks["create_database"].assert_not_called()

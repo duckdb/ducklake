@@ -1,0 +1,24 @@
+# name: benchmark/micro/fixtures/metadata_commit.benchmark.in
+# description: Empty partitioned table for committing file metadata
+# group: [fixtures]
+
+argument lake metadata_commit
+
+cache_file ${lake}_ready.marker
+
+load
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files', DATA_INLINING_ROW_LIMIT 0)
+CALL lake.set_option('data_inlining_row_limit', 0);
+CREATE TABLE lake.t (p BIGINT, a BIGINT, b DOUBLE, c VARCHAR, d TIMESTAMP);
+ALTER TABLE lake.t SET PARTITIONED BY (p);
+DETACH lake;
+@seal ${lake}_pristine
+COPY (SELECT 0) TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+
+reload
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
