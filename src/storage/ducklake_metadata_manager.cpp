@@ -2826,14 +2826,14 @@ void DuckLakeMetadataManager::SubstituteCatalogPlaceholders(string &query, const
 
 vector<pair<string, string>> DuckLakeMetadataManager::CatalogPlaceholders(const string &metadata_catalog) const {
 	auto &ducklake_catalog = transaction.GetCatalog();
-	return {{"{METADATA_CATALOG_NAME_LITERAL}", SQLString::ToString(ducklake_catalog.MetadataDatabaseName())},
-	        {"{METADATA_CATALOG_NAME_IDENTIFIER}",
-	         SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataDatabaseName())},
-	        {"{METADATA_SCHEMA_NAME_LITERAL}",
-	         SQLString::ToString(ducklake_catalog.MetadataSchemaName().GetIdentifierName())},
-	        {"{METADATA_CATALOG}", metadata_catalog},
-	        {"{METADATA_PATH}", SQLString::ToString(ducklake_catalog.MetadataPath())},
-	        {"{DATA_PATH}", SQLString::ToString(ducklake_catalog.DataPath())}};
+	return {
+	    {"{METADATA_CATALOG_NAME_LITERAL}", SQLString::ToString(ducklake_catalog.MetadataDatabaseName())},
+	    {"{METADATA_CATALOG_NAME_IDENTIFIER}", SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataDatabaseName())},
+	    {"{METADATA_SCHEMA_NAME_LITERAL}",
+	     SQLString::ToString(ducklake_catalog.MetadataSchemaName().GetIdentifierName())},
+	    {"{METADATA_CATALOG}", metadata_catalog},
+	    {"{METADATA_PATH}", SQLString::ToString(ducklake_catalog.MetadataPath())},
+	    {"{DATA_PATH}", SQLString::ToString(ducklake_catalog.DataPath())}};
 }
 
 vector<pair<string, string>> DuckLakeMetadataManager::SnapshotPlaceholders(const DuckLakeSnapshot &snapshot) {
