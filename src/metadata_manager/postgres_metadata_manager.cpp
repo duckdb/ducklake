@@ -327,10 +327,17 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 	}
 }
 
+void PostgresMetadataManager::SubstituteRemotePlaceholders(DuckLakeSnapshot snapshot, string &query) const {
+	auto replacements = SnapshotPlaceholders(snapshot);
+	auto catalog_placeholders =
+	    CatalogPlaceholders(SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
+	replacements.insert(replacements.end(), catalog_placeholders.begin(), catalog_placeholders.end());
+	query = DuckLakeUtil::ReplaceSkippingQuotes(query, replacements);
+}
+
 unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
-	SubstituteTransactionPlaceholders(snapshot, query);
+	SubstituteRemotePlaceholders(snapshot, query);
 	auto &ducklake_catalog = transaction.GetCatalog();
-	SubstituteCatalogPlaceholders(query, SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataSchemaName()));
 	auto catalog_literal = SQLString::ToString(ducklake_catalog.MetadataDatabaseName());
 	// casts of float bounds to text keep their exact value
 	query = "SET LOCAL extra_float_digits = 3;" + query;
@@ -359,9 +366,7 @@ string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
                                                       FileListType file_list_type, const string &) {
 	auto remote_query = DuckLakeMetadataManager::GenerateFileListQuery(table, snapshot, filter_info, dynamic_filters,
 	                                                                   runtime_filter_stats_columns, file_list_type);
-	remote_query = DuckLakeUtil::ReplaceSkippingQuotes(remote_query, SnapshotPlaceholders(snapshot));
-	SubstituteCatalogPlaceholders(remote_query,
-	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
+	SubstituteRemotePlaceholders(snapshot, remote_query);
 
 	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
 	                          SQLString(remote_query));

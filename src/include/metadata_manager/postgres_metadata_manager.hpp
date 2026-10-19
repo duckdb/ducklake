@@ -49,6 +49,9 @@ protected:
 	                             const string &metadata_table_prefix) override;
 	string CastValueToTarget(const Value &value, const LogicalType &type) override;
 	string CastStatsToTarget(const string &stats, const LogicalType &type, StatsCastType cast_type) override;
+
+private:
+	void SubstituteRemotePlaceholders(DuckLakeSnapshot snapshot, string &query) const;
 };
 
 } // namespace duckdb

@@ -88,10 +88,9 @@
       ]
     },
     {
-      "reason": "Test appends a suffix to DUCKLAKE_CONNECTION, which needs a second postgres database.",
+      "reason": "Test appends a suffix to DUCKLAKE_CONNECTION (needs a second postgres database 'ducklakedb_del').",
       "paths": [
-        "test/sql/data_inlining/partition_inlining.test",
-        "test/sql/data_inlining/data_inlining_placeholder_data_path.test"
+        "test/sql/data_inlining/partition_inlining.test"
       ]
     },
     {

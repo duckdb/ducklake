@@ -307,6 +307,7 @@ public:
 protected:
 	void SubstituteCatalogPlaceholders(string &query) const;
 	void SubstituteCatalogPlaceholders(string &query, const string &metadata_catalog) const;
+	vector<pair<string, string>> CatalogPlaceholders(const string &metadata_catalog) const;
 	void SubstituteTransactionPlaceholders(DuckLakeSnapshot snapshot, string &query) const;
 
 public:

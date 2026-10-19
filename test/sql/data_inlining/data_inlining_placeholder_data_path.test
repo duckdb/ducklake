@@ -6,13 +6,13 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/placeholder_data_path.db
 
 test-env DATA_PATH {TEST_DIR}
 
 # the test runner replaces {DATA_PATH} itself, so the placeholder is built by concatenation
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}_path' AS path_lake (DATA_PATH '{DATA_PATH}/placeholder_strings_{SNAPSHOT_ID}''{' || 'METADATA_CATALOG}', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS path_lake (DATA_PATH '{DATA_PATH}/placeholder_strings_{SNAPSHOT_ID}''{' || 'METADATA_CATALOG}', DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 CREATE TABLE path_lake.t (s VARCHAR);
@@ -22,6 +22,13 @@ INSERT INTO path_lake.t VALUES ('a');
 
 statement ok
 CALL ducklake_flush_inlined_data('path_lake');
+
+statement ok
+DETACH path_lake
+
+# without DATA_PATH the stored data path is read back
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS path_lake
 
 query I
 FROM path_lake.t

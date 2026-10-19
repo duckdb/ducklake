@@ -2821,19 +2821,19 @@ void DuckLakeMetadataManager::SubstituteCatalogPlaceholders(string &query) const
 }
 
 void DuckLakeMetadataManager::SubstituteCatalogPlaceholders(string &query, const string &metadata_catalog) const {
-	auto &ducklake_catalog = transaction.GetCatalog();
-	auto catalog_identifier = SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataDatabaseName());
-	auto catalog_literal = SQLString::ToString(ducklake_catalog.MetadataDatabaseName());
-	auto schema_literal = SQLString::ToString(ducklake_catalog.MetadataSchemaName().GetIdentifierName());
-	auto metadata_path = SQLString::ToString(ducklake_catalog.MetadataPath());
-	auto data_path = SQLString::ToString(ducklake_catalog.DataPath());
+	query = DuckLakeUtil::ReplaceSkippingQuotes(query, CatalogPlaceholders(metadata_catalog));
+}
 
-	query = DuckLakeUtil::ReplaceSkippingQuotes(query, {{"{METADATA_CATALOG_NAME_LITERAL}", catalog_literal},
-	                                                    {"{METADATA_CATALOG_NAME_IDENTIFIER}", catalog_identifier},
-	                                                    {"{METADATA_SCHEMA_NAME_LITERAL}", schema_literal},
-	                                                    {"{METADATA_CATALOG}", metadata_catalog},
-	                                                    {"{METADATA_PATH}", metadata_path},
-	                                                    {"{DATA_PATH}", data_path}});
+vector<pair<string, string>> DuckLakeMetadataManager::CatalogPlaceholders(const string &metadata_catalog) const {
+	auto &ducklake_catalog = transaction.GetCatalog();
+	return {{"{METADATA_CATALOG_NAME_LITERAL}", SQLString::ToString(ducklake_catalog.MetadataDatabaseName())},
+	        {"{METADATA_CATALOG_NAME_IDENTIFIER}",
+	         SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataDatabaseName())},
+	        {"{METADATA_SCHEMA_NAME_LITERAL}",
+	         SQLString::ToString(ducklake_catalog.MetadataSchemaName().GetIdentifierName())},
+	        {"{METADATA_CATALOG}", metadata_catalog},
+	        {"{METADATA_PATH}", SQLString::ToString(ducklake_catalog.MetadataPath())},
+	        {"{DATA_PATH}", SQLString::ToString(ducklake_catalog.DataPath())}};
 }
 
 vector<pair<string, string>> DuckLakeMetadataManager::SnapshotPlaceholders(const DuckLakeSnapshot &snapshot) {
