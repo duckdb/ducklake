@@ -388,6 +388,11 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 	}
 }
 
+string PostgresMetadataManager::NewConfigOptionLockSql() const {
+	// the row lock of the version row makes a concurrent insert of an option wait for this one, then fail or find it
+	return "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = value WHERE key = 'version' AND scope IS NULL;";
+}
+
 unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
 	SubstituteTransactionPlaceholders(snapshot, query);
 	auto &ducklake_catalog = transaction.GetCatalog();

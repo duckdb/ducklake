@@ -5838,11 +5838,16 @@ WHERE key = %s AND %s
 
 	auto count = result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
 	if (count == 0) {
-		// option does not yet exist - insert the value
-		result = Execute(StringUtil::Format(R"(
-INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES (%s, %s, %s, %s)
+		// option does not yet exist, unless a concurrent transaction inserted it after the count
+		result = Execute(NewConfigOptionLockSql() + StringUtil::Format(R"(
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value=%s WHERE key=%s AND %s;
+INSERT INTO {METADATA_CATALOG}.ducklake_metadata SELECT %s, %s, %s, %s
+WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_metadata WHERE key=%s AND %s);
 )",
-		                                    SQLString(option_key), SQLString(option_value), scope, scope_id));
+		                                                               SQLString(option_value), SQLString(option_key),
+		                                                               scope_filter, SQLString(option_key),
+		                                                               SQLString(option_value), scope, scope_id,
+		                                                               SQLString(option_key), scope_filter));
 	} else {
 		// option already exists - update it
 		result = Execute(StringUtil::Format(R"(

@@ -234,6 +234,10 @@ public:
 	virtual string CommitErrorHint(const string &) const {
 		return string();
 	}
+	//! SQL run before an option is inserted, so concurrent inserts of an option cannot both succeed
+	virtual string NewConfigOptionLockSql() const {
+		return string();
+	}
 
 	//! Run the commit retry loop with the metadata server handling retries.
 	virtual void FlushChangesServerSide(DuckLakeTransaction &transaction, DuckLakeSnapshot transaction_snapshot,

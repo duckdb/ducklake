@@ -1,0 +1,66 @@
+# name: test/sql/settings/set_option_concurrent_insert.test
+# description: a new option that two transactions set at once on a Postgres catalog is stored once
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/set_option_concurrent_insert')
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+# con2 reads the catalog before con1 sets the option
+statement ok con2
+BEGIN
+
+statement ok con2
+SELECT count(*) FROM dl.t
+
+statement ok con1
+CALL dl.set_option('data_inlining_row_limit', 100, table_name => 't')
+
+statement error con2
+CALL dl.set_option('data_inlining_row_limit', 200, table_name => 't')
+----
+could not serialize access
+
+statement ok con2
+ROLLBACK
+
+query II
+SELECT count(*), max(value) FROM dl.options() WHERE option_name = 'data_inlining_row_limit'
+----
+1	100
+
+# an option that exists is updated as before while another transaction inserts a new one
+statement ok con3
+BEGIN
+
+statement ok con3
+SELECT count(*) FROM dl.t
+
+statement ok con1
+CALL dl.set_option('target_file_size', '1MB', table_name => 't')
+
+statement ok con3
+CALL dl.set_option('data_inlining_row_limit', 300, table_name => 't')
+
+statement ok con3
+COMMIT
+
+query II
+SELECT option_name, value FROM dl.options() WHERE scope = 'TABLE' ORDER BY ALL
+----
+data_inlining_row_limit	300
+target_file_size	1000000
