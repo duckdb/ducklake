@@ -59,6 +59,9 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "dry_run", "boolean", dry_run)) {
 		result->dry_run = BooleanValue::Get(dry_run);
 	}
+	if (!result->dry_run) {
+		ducklake_catalog.VerifyWritable();
+	}
 	bool cleanup_all = false;
 	Value cleanup_all_value;
 	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "cleanup_all", "boolean", cleanup_all_value)) {

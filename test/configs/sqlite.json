@@ -116,13 +116,15 @@
         "test/sql/migration/postgres_dev_migration_failure.test",
         "test/sql/migration/postgres_dev1_migration_skips_present_ddl.test",
         "test/sql/data_inlining/postgres_identifier_limit.test",
+        "test/sql/metadata/postgres_text_protocol.test",
         "test/sql/data_inlining/postgres_column_limit.test",
         "test/sql/benchmark/postgres_catalog.test",
         "test/sql/issues/issue_843_postgres_legacy_inlined_types.test",
         "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test",
         "test/sql/compaction/compaction_idle_metadata_transaction.test",
         "test/sql/compaction/postgres_expire_snapshots_time_zone.test",
-        "test/sql/settings/set_option_concurrent_insert.test"
+        "test/sql/settings/set_option_concurrent_insert.test",
+        "test/sql/transaction/postgres_failed_rollback_releases_transaction.test"
       ]
     },
     {

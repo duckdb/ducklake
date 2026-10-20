@@ -828,6 +828,7 @@ static unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableF
 	return_names.push_back("files_created");
 
 	auto &ducklake_catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
+	ducklake_catalog.VerifyWritable();
 	auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
 	uint64_t max_files = NumericLimits<uint64_t>::Maximum() - 1;
 	Value max_files_value;

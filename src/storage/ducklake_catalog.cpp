@@ -1311,6 +1311,13 @@ bool DuckLakeCatalog::AutoCompactEnabled(DuckLakeTableEntry &table) const {
 	return AutoCompactEnabled(schema.GetSchemaId(), table.GetTableId());
 }
 
+void DuckLakeCatalog::VerifyWritable() const {
+	if (GetAttached().IsReadOnly()) {
+		throw InvalidInputException("Cannot write to \"%s\", which is attached in read-only mode",
+		                            GetName().GetIdentifierName());
+	}
+}
+
 bool DuckLakeCatalog::WriteDeletionVectors(DuckLakeTableEntry &table) const {
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
 	return WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());

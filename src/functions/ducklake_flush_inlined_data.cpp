@@ -508,6 +508,7 @@ WHERE del.begin_snapshot <= {SNAPSHOT_ID}
 static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, TableFunctionBindInput &input,
                                                         TableIndex bind_index, vector<Identifier> &return_names) {
 	auto &ducklake_catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
+	ducklake_catalog.VerifyWritable();
 	auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
 
 	auto schema = DuckLakeTableFunctionUtil::GetStringOption(input, "schema_name");

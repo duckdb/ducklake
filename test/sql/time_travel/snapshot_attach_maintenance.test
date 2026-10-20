@@ -1,0 +1,117 @@
+# name: test/sql/time_travel/snapshot_attach_maintenance.test
+# description: Maintenance on an attach at a snapshot commits nothing
+# group: [time_travel]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/snapshot_attach_maintenance.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/snapshot_attach_maintenance')
+
+statement ok
+CREATE TABLE lake.obs (i INTEGER)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10, table_name => 'obs')
+
+statement ok
+INSERT INTO lake.obs VALUES (1)
+
+statement ok
+CREATE TABLE lake.big (i INTEGER)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0, table_name => 'big')
+
+statement ok
+INSERT INTO lake.big VALUES (1)
+
+statement ok
+INSERT INTO lake.big VALUES (2)
+
+query I
+SELECT max(snapshot_id) FROM lake.snapshots()
+----
+5
+
+statement ok
+COPY (SELECT 3 AS i) TO '{TEST_DIR}/snapshot_attach_maintenance_added.parquet'
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (SNAPSHOT_VERSION 5)
+
+statement error
+CALL ducklake_flush_inlined_data('lake')
+----
+which is attached in read-only mode
+
+statement error
+CALL ducklake_merge_adjacent_files('lake')
+----
+which is attached in read-only mode
+
+statement error
+CALL ducklake_rewrite_data_files('lake')
+----
+which is attached in read-only mode
+
+statement error
+CALL ducklake_add_data_files('lake', 'big', '{TEST_DIR}/snapshot_attach_maintenance_added.parquet')
+----
+which is attached in read-only mode
+
+# refused at the call, before any file is written
+statement ok
+BEGIN
+
+statement error
+CALL ducklake_flush_inlined_data('lake')
+----
+which is attached in read-only mode
+
+statement ok
+ROLLBACK
+
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('lake', versions => [1], dry_run => true)
+----
+1
+
+statement error
+CALL ducklake_expire_snapshots('lake', versions => [1])
+----
+which is attached in read-only mode
+
+statement error
+CALL lake.set_option('data_inlining_row_limit', 5)
+----
+which is attached in read-only mode
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake
+
+query II
+SELECT count(*), max(snapshot_id) FROM lake.snapshots()
+----
+6	5
+
+query I
+SELECT count(*) FROM lake.options() WHERE option_name = 'data_inlining_row_limit' AND value = '5'
+----
+0
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/snapshot_attach_maintenance/**/*.parquet')
+----
+2

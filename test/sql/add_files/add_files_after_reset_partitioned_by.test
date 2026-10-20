@@ -1,0 +1,135 @@
+# name: test/sql/add_files/add_files_after_reset_partitioned_by.test
+# description: files added after RESET PARTITIONED BY in the same transaction are added like to a table that is not partitioned
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/add_files_after_reset/', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+COPY (SELECT 9 AS id, 90 AS v) TO '{DATA_PATH}/add_files_after_reset_plain.parquet'
+
+statement ok
+COPY (SELECT 8 AS id, 80 AS v) TO '{DATA_PATH}/add_files_after_reset_hive' (FORMAT parquet, PARTITION_BY (id))
+
+statement ok
+CREATE TABLE lake.t (id INTEGER, v INTEGER)
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (id)
+
+statement ok
+INSERT INTO lake.t VALUES (1, 10)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.t RESET PARTITIONED BY
+
+statement ok
+CALL ducklake_add_data_files('lake', 't', '{DATA_PATH}/add_files_after_reset_plain.parquet')
+
+statement ok
+COMMIT
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (id)
+
+statement ok
+INSERT INTO lake.t VALUES (2, 20)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.t RESET PARTITIONED BY
+
+# a file in a Hive directory is taken as on a table that is not partitioned
+statement ok
+CALL ducklake_add_data_files('lake', 't', '{DATA_PATH}/add_files_after_reset_hive/**/*.parquet', hive_partitioning => true)
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM lake.t ORDER BY id
+----
+1	10
+2	20
+8	80
+9	90
+
+# the inserted files keep their partitions, the added files have none
+query II
+SELECT count(*) FILTER (WHERE partition_id IS NOT NULL), count(*) FILTER (WHERE partition_id IS NULL)
+FROM meta.ducklake_data_file
+WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't') AND end_snapshot IS NULL
+----
+2	2
+
+query II
+SELECT * FROM lake.t WHERE id = 9
+----
+9	90
+
+# a spec with a transform is reset the same way
+statement ok
+CREATE TABLE lake.b (id INTEGER, v INTEGER)
+
+statement ok
+ALTER TABLE lake.b SET PARTITIONED BY (bucket(4, id))
+
+statement ok
+INSERT INTO lake.b VALUES (1, 10)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.b RESET PARTITIONED BY
+
+statement ok
+CALL ducklake_add_data_files('lake', 'b', '{DATA_PATH}/add_files_after_reset_plain.parquet')
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM lake.b ORDER BY id
+----
+1	10
+9	90
+
+# a rolled back RESET leaves the table partitioned and adds nothing
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (id)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.t RESET PARTITIONED BY
+
+statement ok
+CALL ducklake_add_data_files('lake', 't', '{DATA_PATH}/add_files_after_reset_plain.parquet')
+
+statement ok
+ROLLBACK
+
+statement ok
+INSERT INTO lake.t VALUES (3, 30)
+
+query II
+SELECT count(*), count(*) FILTER (WHERE partition_id IS NOT NULL)
+FROM meta.ducklake_data_file
+WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't') AND end_snapshot IS NULL
+----
+5	3

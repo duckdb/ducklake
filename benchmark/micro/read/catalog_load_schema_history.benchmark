@@ -1,0 +1,61 @@
+# name: benchmark/micro/read/catalog_load_schema_history.benchmark
+# description: Load the catalog of 10 tables of 40 columns, one dropped and recreated 300 times, one altered 200 times
+# group: [read]
+
+name Catalog Load Schema History
+group micro
+subgroup read
+
+require ducklake
+
+cache_file catalog_load_schema_history_ready.marker
+
+# Each iteration commits one or two snapshots
+load
+@create catalog_load_schema_history
+@attach catalog_load_schema_history AS lake (DATA_PATH '${BENCHMARK_DIR}/catalog_load_schema_history_files')
+BEGIN;
+@for k in range(310)
+@if k < 10
+CREATE TABLE lake.t@{k} (
+@end
+@if k >= 10
+DROP TABLE lake.t0;
+COMMIT; BEGIN;
+CREATE TABLE lake.t0 (
+@end
+@for j in range(39)
+c@{j} INTEGER,
+@end
+c39 INTEGER);
+COMMIT; BEGIN;
+@end
+@for k in range(100)
+ALTER TABLE lake.t1 ADD COLUMN x INTEGER;
+COMMIT; BEGIN;
+ALTER TABLE lake.t1 DROP COLUMN x;
+COMMIT; BEGIN;
+@end
+COMMIT;
+SELECT CASE WHEN (SELECT count(*) <> 811 FROM lake.snapshots())
+THEN error('catalog_load_schema_history: expected 811 snapshots') END;
+DETACH lake;
+@seal catalog_load_schema_history
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/catalog_load_schema_history_ready.marker' (FORMAT CSV);
+@attach catalog_load_schema_history AS lake (READ_ONLY)
+
+reload
+@attach catalog_load_schema_history AS lake (READ_ONLY)
+
+run
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'lake';
+
+# Reattaching clears the catalog cache
+cleanup
+DETACH lake;
+@attach catalog_load_schema_history AS lake (READ_ONLY)
+
+result_query I
+SELECT * FROM __answer
+----
+400

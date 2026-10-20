@@ -614,9 +614,12 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 			// LCOV_EXCL_STOP
 		}
 		auto setting_index = option.setting_index.GetIndex();
-		// these change the types read from the metadata and data files
-		if (entry.first == "sqlite_all_varchar" || entry.first == "binary_as_string") {
-			to.config.user_settings.SetUserSetting(setting_index, Value::BOOLEAN(false));
+		// these change the types or values read from the metadata and data files
+		static const case_insensitive_set_t READ_SETTINGS {
+		    "sqlite_all_varchar", "binary_as_string",    "pg_use_text_protocol", "pg_query_mode",
+		    "pg_use_binary_copy", "pg_array_as_varchar", "pg_numeric_as_varchar"};
+		if (READ_SETTINGS.count(entry.first.GetIdentifierName())) {
+			to.config.user_settings.SetUserSetting(setting_index, option.default_value);
 			continue;
 		}
 		if (!from.config.user_settings.IsSet(setting_index)) {
