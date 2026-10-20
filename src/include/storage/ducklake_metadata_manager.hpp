@@ -235,7 +235,7 @@ public:
 		return string();
 	}
 	//! SQL run before an option is inserted, so concurrent inserts of an option cannot both succeed
-	virtual string NewConfigOptionLockSql() const {
+	virtual string NewConfigOptionLockSql(const DuckLakeConfigOption &) const {
 		return string();
 	}
 

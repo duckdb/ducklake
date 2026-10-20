@@ -388,9 +388,20 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 	}
 }
 
-string PostgresMetadataManager::NewConfigOptionLockSql() const {
-	// the row lock of the version row makes a concurrent insert of an option wait for this one, then fail or find it
-	return "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = value WHERE key = 'version' AND scope IS NULL;";
+string PostgresMetadataManager::NewConfigOptionLockSql(const DuckLakeConfigOption &option) const {
+	// the row lock of the scope makes a concurrent insert of an option in it wait for this one, then fail or find it
+	if (option.table_id.IsValid()) {
+		return StringUtil::Format(
+		    "UPDATE {METADATA_CATALOG}.ducklake_table SET table_id = table_id WHERE table_id = %d "
+		    "AND end_snapshot IS NULL;\n",
+		    option.table_id.index);
+	}
+	if (option.schema_id.IsValid()) {
+		return StringUtil::Format("UPDATE {METADATA_CATALOG}.ducklake_schema SET schema_id = schema_id WHERE schema_id "
+		                          "= %d AND end_snapshot IS NULL;\n",
+		                          option.schema_id.index);
+	}
+	return "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = value WHERE key = 'version' AND scope IS NULL;\n";
 }
 
 unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {

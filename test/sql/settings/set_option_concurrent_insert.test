@@ -20,6 +20,9 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/set_option
 statement ok
 CREATE TABLE dl.t (i INTEGER)
 
+statement ok
+CREATE TABLE dl.u (i INTEGER)
+
 # con2 reads the catalog before con1 sets the option
 statement ok con2
 BEGIN
@@ -43,7 +46,7 @@ SELECT count(*), max(value) FROM dl.options() WHERE option_name = 'data_inlining
 ----
 1	100
 
-# an option that exists is updated as before while another transaction inserts a new one
+# an option that exists is updated while another transaction inserts a new one
 statement ok con3
 BEGIN
 
@@ -64,3 +67,24 @@ SELECT option_name, value FROM dl.options() WHERE scope = 'TABLE' ORDER BY ALL
 ----
 data_inlining_row_limit	300
 target_file_size	1000000
+
+# a new option of another table is set at the same time
+statement ok con4
+BEGIN
+
+statement ok con4
+SELECT count(*) FROM dl.u
+
+statement ok con1
+CALL dl.set_option('parquet_row_group_size', 1000, table_name => 't')
+
+statement ok con4
+CALL dl.set_option('parquet_row_group_size', 2000, table_name => 'u')
+
+statement ok con4
+COMMIT
+
+query II
+SELECT count(*), sum(value::INTEGER) FROM dl.options() WHERE option_name = 'parquet_row_group_size'
+----
+2	3000
