@@ -40,7 +40,6 @@ private:
 	ClientContext &context;
 	DuckLakeCatalog &catalog;
 	DuckLakeOptions &options;
-	//! Whether the load is migrating the catalog
 	bool migrating = false;
 };
 

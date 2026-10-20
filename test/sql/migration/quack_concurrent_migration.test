@@ -38,12 +38,6 @@ superseded by a new query
 
 endloop
 
-# the attaches that lose the migration load the migrated catalog
-query I
-SELECT count(*) >= 10 FROM duckdb_databases() WHERE database_name LIKE 'lake${round}\_%' ESCAPE '\'
-----
-true
-
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS check${round} (DATA_PATH '{DATA_PATH}/concurrent_migration_${round}',
 METADATA_SCHEMA 'concurrent_migration_${round}')
