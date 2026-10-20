@@ -280,6 +280,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				catalog_version = DuckLakeVersion::V1_0;
 			}
 			if (catalog_version >= target_version) {
+				migrating = false;
 				resolved_version = catalog_version;
 				continue;
 			}
@@ -287,6 +288,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				metadata_manager.MigrateV10(catalog_version == DuckLakeVersion::V1_1_DEV_1);
 				catalog_version = DuckLakeVersion::V1_1;
 			}
+			migrating = false;
 			if (catalog_version != target_version) {
 				// LCOV_EXCL_START
 				throw NotImplementedException("Unsupported DuckLake version '%s'",

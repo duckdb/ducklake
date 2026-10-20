@@ -43,7 +43,13 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS check${round} (DATA_PATH '{DATA_PATH}
 METADATA_SCHEMA 'concurrent_migration_${round}')
 
 query I
-SELECT count(*) FROM check${round}.t
+SELECT value FROM __ducklake_metadata_check${round}.concurrent_migration_${round}.ducklake_metadata
+WHERE key = 'version' AND scope IS NULL
+----
+1.1
+
+query I
+SELECT a FROM check${round}.t
 ----
 1
 
