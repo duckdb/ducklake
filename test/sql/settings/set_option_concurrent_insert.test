@@ -23,6 +23,12 @@ CREATE TABLE dl.t (i INTEGER)
 statement ok
 CREATE TABLE dl.u (i INTEGER)
 
+statement ok
+CREATE TABLE dl.w (i INTEGER)
+
+statement ok
+CREATE TABLE dl.x (i INTEGER)
+
 # con2 reads the catalog before con1 sets the option
 statement ok con2
 BEGIN
@@ -117,3 +123,43 @@ SELECT scope, value FROM dl.options() WHERE option_name = 'target_file_size' ORD
 GLOBAL	3000000
 SCHEMA	3000000
 TABLE	1000000
+
+# a writer waits for an open transaction that inserts the same option, and inserts it after the rollback,
+# while the option of another table is set without waiting
+concurrentloop threadid 0 3
+
+onlyif threadid=0
+statement ok
+BEGIN
+
+onlyif threadid=0
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10, table_name => 'w')
+
+onlyif threadid=0
+statement ok
+SELECT sleep_ms(1500)
+
+onlyif threadid=0
+statement ok
+ROLLBACK
+
+skipif threadid=0
+statement ok
+SELECT sleep_ms(500)
+
+onlyif threadid=1
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 20, table_name => 'w')
+
+onlyif threadid=2
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 30, table_name => 'x')
+
+endloop
+
+query I
+SELECT list(value ORDER BY value) FROM dl.options()
+WHERE option_name = 'data_inlining_row_limit' AND value IN ('10', '20', '30')
+----
+[20, 30]
