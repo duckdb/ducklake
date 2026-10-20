@@ -5847,7 +5847,7 @@ WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_metadata WHERE key=%
 )",
 		                                SQLString(option_key), SQLString(option_value), scope, scope_id,
 		                                SQLString(option_key), scope_filter);
-		// with a snapshot Postgres runs the statements on the server, where the lock is taken
+		// the overload with a snapshot runs the statements on a Postgres server, where the lock is taken
 		result = Execute(DuckLakeSnapshot(), query);
 	} else {
 		result = Execute(update);

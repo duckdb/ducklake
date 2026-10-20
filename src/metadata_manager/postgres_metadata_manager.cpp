@@ -389,7 +389,7 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 }
 
 string PostgresMetadataManager::NewConfigOptionLockSql(const DuckLakeConfigOption &option) const {
-	// the row lock of the scope makes a concurrent insert of an option in it wait for this one, then fail or find it
+	// a concurrent insert into the same scope waits for this one, then fails or finds the option
 	if (option.table_id.IsValid()) {
 		return StringUtil::Format(
 		    "UPDATE {METADATA_CATALOG}.ducklake_table SET table_id = table_id WHERE table_id = %d "

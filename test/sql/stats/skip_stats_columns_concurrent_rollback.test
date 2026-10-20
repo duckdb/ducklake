@@ -1,0 +1,44 @@
+# name: test/sql/stats/skip_stats_columns_concurrent_rollback.test
+# description: a rolled back skip_stats_columns does not take away the value another transaction set meanwhile
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/skip_stats_columns_concurrent_rollback.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok con1
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/skip_stats_columns_concurrent_rollback', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+# a rollback must not take away a value another transaction set in the meantime. Updating an
+# existing row conflicts in the metadata catalog, so the two only meet when there is no row yet
+statement ok con1
+CREATE TABLE ducklake.cc(id INTEGER, s VARCHAR)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('skip_stats_columns', 'id', table_name => 'cc')
+
+statement ok con2
+CALL ducklake.set_option('skip_stats_columns', 's', table_name => 'cc')
+
+statement ok con1
+ROLLBACK
+
+statement ok con1
+INSERT INTO ducklake.cc VALUES (1, 'aaa')
+
+# con2 committed 's', so its bounds are the ones that must be missing
+query III con1
+SELECT f.column_id, f.min_value IS NULL, f.max_value IS NULL
+FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='cc' AND end_snapshot IS NULL)
+ORDER BY f.column_id
+----
+1	false	false
+2	true	true

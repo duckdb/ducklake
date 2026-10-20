@@ -88,3 +88,32 @@ query II
 SELECT count(*), sum(value::INTEGER) FROM dl.options() WHERE option_name = 'parquet_row_group_size'
 ----
 2	3000
+
+# the same for an option of a schema and a global option
+foreach scope schema global
+
+statement ok con5
+BEGIN
+
+statement ok con5
+SELECT count(*) FROM dl.t
+
+statement ok con1
+CALL dl.set_option('target_file_size', '3MB', schema => CASE WHEN '{scope}' = 'schema' THEN 'main' END)
+
+statement error con5
+CALL dl.set_option('target_file_size', '4MB', schema => CASE WHEN '{scope}' = 'schema' THEN 'main' END)
+----
+could not serialize access
+
+statement ok con5
+ROLLBACK
+
+endloop
+
+query II
+SELECT scope, value FROM dl.options() WHERE option_name = 'target_file_size' ORDER BY ALL
+----
+GLOBAL	3000000
+SCHEMA	3000000
+TABLE	1000000
