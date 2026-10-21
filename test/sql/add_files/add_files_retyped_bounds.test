@@ -1,0 +1,154 @@
+# name: test/sql/add_files/add_files_retyped_bounds.test
+# description: Filters and stats on files whose columns the reader casts to the type of the table
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+require icu
+
+statement ok
+SET TimeZone='UTC';
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_add_files_retyped_bounds')
+
+statement ok
+COPY (FROM (VALUES (TIMESTAMP_NS '2020-01-01 12:34:56.123456789'), (TIMESTAMP_NS '2021-01-01')) v(t)) TO '{DATA_PATH}/retyped_ts_ns.parquet'
+
+statement ok
+COPY (FROM (VALUES (TIMESTAMPTZ_NS '2020-01-01 12:34:56.123456789+00'), (TIMESTAMPTZ_NS '2021-01-01 00:00:00+00')) v(t)) TO '{DATA_PATH}/retyped_tstz_ns.parquet'
+
+statement ok
+COPY (SELECT 0.1::FLOAT AS f) TO '{DATA_PATH}/retyped_float.parquet'
+
+statement ok
+COPY (FROM (VALUES (TIMESTAMP '2020-01-01 12:34:56.123789'), (TIMESTAMP '2021-01-01')) v(t)) TO '{DATA_PATH}/retyped_ts_us.parquet'
+
+# nanoseconds read as microseconds round
+statement ok
+CREATE TABLE ducklake.ts (t TIMESTAMP)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'ts', '{DATA_PATH}/retyped_ts_ns.parquet')
+
+query I
+SELECT count(*) FROM ducklake.ts WHERE t = TIMESTAMP '2020-01-01 12:34:56.123457'
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.ts WHERE t >= TIMESTAMP '2020-01-01 12:34:56.123457'
+----
+2
+
+query II
+SELECT min(t), max(t) FROM ducklake.ts
+----
+2020-01-01 12:34:56.123457	2021-01-01 00:00:00
+
+statement ok
+CREATE TABLE ducklake.tstz (t TIMESTAMPTZ)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'tstz', '{DATA_PATH}/retyped_tstz_ns.parquet')
+
+query I
+SELECT count(*) FROM ducklake.tstz WHERE t = TIMESTAMPTZ '2020-01-01 12:34:56.123457+00'
+----
+1
+
+query I
+SELECT min(t) FROM ducklake.tstz
+----
+2020-01-01 12:34:56.123457+00
+
+# the max bound rounds up like the value it bounds
+statement ok
+COPY (SELECT TIMESTAMPTZ_NS '2020-01-01 12:34:56.123456789+00' AS t) TO '{DATA_PATH}/retyped_tstz_ns_one.parquet'
+
+statement ok
+CREATE TABLE ducklake.tstz_one (t TIMESTAMPTZ)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'tstz_one', '{DATA_PATH}/retyped_tstz_ns_one.parquet')
+
+query I
+SELECT count(*) FROM ducklake.tstz_one WHERE t >= TIMESTAMPTZ '2020-01-01 12:34:56.123457+00'
+----
+1
+
+query II
+SELECT min(t), max(t) FROM ducklake.tstz_one
+----
+2020-01-01 12:34:56.123457+00	2020-01-01 12:34:56.123457+00
+
+# a FLOAT widens to the DOUBLE nearest to it
+statement ok
+CREATE TABLE ducklake.dbl (f DOUBLE)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'dbl', '{DATA_PATH}/retyped_float.parquet')
+
+query I
+SELECT count(*) FROM ducklake.dbl WHERE f = 0.10000000149011612
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.dbl WHERE f > 0.1
+----
+1
+
+# microseconds read as milliseconds round
+statement ok
+CREATE TABLE ducklake.ms (t TIMESTAMP_MS)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'ms', '{DATA_PATH}/retyped_ts_us.parquet')
+
+query I
+SELECT count(*) FROM ducklake.ms WHERE t = TIMESTAMP_MS '2020-01-01 12:34:56.124'
+----
+1
+
+query I
+SELECT min(t) FROM ducklake.ms
+----
+2020-01-01 12:34:56.124
+
+# a bound that does not cast to the type of the table is dropped
+statement ok
+COPY (FROM (VALUES (TIMESTAMP '2020-01-01'), (TIMESTAMP '294247-01-10 04:00:54.775806')) v(t)) TO '{DATA_PATH}/retyped_ts_max.parquet'
+
+statement ok
+CREATE TABLE ducklake.ms_max (t TIMESTAMP_MS)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'ms_max', '{DATA_PATH}/retyped_ts_max.parquet')
+
+query I
+SELECT count(*) FROM ducklake.ms_max WHERE t < TIMESTAMP_MS '2019-01-01'
+----
+0
+
+statement error
+SELECT count(*) FROM ducklake.ms_max WHERE t < TIMESTAMP_MS '2021-01-01'
+----
+can't be cast to the destination type
+
+# the bounds are stored as values of the table type
+query III
+SELECT table_id, min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_file_column_stats ORDER BY table_id
+----
+1	2020-01-01 12:34:56.123457	2021-01-01 00:00:00
+2	2020-01-01 12:34:56.123457+00	2021-01-01 00:00:00+00
+3	2020-01-01 12:34:56.123457+00	2020-01-01 12:34:56.123457+00
+4	0.10000000149011612	0.10000000149011612
+5	2020-01-01 12:34:56.124	2021-01-01 00:00:00
+6	2020-01-01 00:00:00	NULL

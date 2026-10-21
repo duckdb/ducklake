@@ -1,0 +1,68 @@
+# name: test/sql/catalog/catalog_load_columns_postgres.test
+# description: Postgres catalogs receive the snapshot filter of the column rows when loading the catalog
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/catalog_load_columns_postgres')
+
+statement ok
+CREATE TABLE ducklake.t (a INTEGER, b INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN x INTEGER
+
+statement ok
+SET VARIABLE with_x = (SELECT max(snapshot_id) FROM ducklake.snapshots())
+
+statement ok
+ALTER TABLE ducklake.t DROP COLUMN b
+
+statement ok
+SET VARIABLE latest = (SELECT max(snapshot_id) FROM ducklake.snapshots())
+
+statement ok
+DETACH ducklake
+
+statement ok
+CALL enable_logging(level = 'debug', storage = 'memory')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/catalog_load_columns_postgres')
+
+query I
+SELECT column_name FROM (DESCRIBE ducklake.t)
+----
+a
+x
+
+query I
+SELECT column_name FROM (DESCRIBE FROM ducklake.t AT (VERSION => getvariable('with_x')))
+----
+a
+b
+x
+
+statement ok
+USE ducklake
+
+# Every scan of ducklake_column sent to Postgres has the snapshot filter of a loaded catalog
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
+	(SELECT bool_or(contains(query, printf('"begin_snapshot" <= %d AND ("end_snapshot" > %d OR "end_snapshot" IS NULL)',
+	                                       getvariable('latest'), getvariable('latest'))))
+	    AND bool_or(contains(query, printf('"begin_snapshot" <= %d AND ("end_snapshot" > %d OR "end_snapshot" IS NULL)',
+	                                       getvariable('with_x'), getvariable('with_x'))))
+	    AND bool_and(contains(query, '"begin_snapshot" <= '))
+	 FROM (SELECT message AS query FROM duckdb_logs WHERE type = 'PostgresQueryLog') logs
+	 WHERE contains(query, '"ducklake_column" '))
+	ELSE true END
+----
+true

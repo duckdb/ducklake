@@ -1,0 +1,67 @@
+# name: test/sql/alter/add_struct_field_non_literal_default.test
+# description: adding a struct field with a non-literal default fails like adding a column, instead of reading NULL
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/add_struct_field_non_literal_default')
+
+statement ok
+CREATE TABLE dl.t (id INTEGER, s STRUCT(a INTEGER))
+
+statement ok
+INSERT INTO dl.t VALUES (1, {'a': 1})
+
+statement error
+ALTER TABLE dl.t ADD COLUMN s.f INTEGER DEFAULT 1 + 1
+----
+We cannot add a struct field with a non-literal default value
+
+statement error
+ALTER TABLE dl.t ADD COLUMN s.f VARCHAR DEFAULT concat('a', 'b')
+----
+We cannot add a struct field with a non-literal default value
+
+statement error
+ALTER TABLE dl.t ADD COLUMN s.f VARIANT DEFAULT 1 + 1
+----
+We cannot add a struct field with a non-literal default value
+
+# nested fields support no default at all
+statement error
+ALTER TABLE dl.t ADD COLUMN s.l INTEGER[] DEFAULT [1, 2]
+----
+Default value for LIST type not supported
+
+statement error
+ALTER TABLE dl.t ADD COLUMN s.n STRUCT(x INTEGER) DEFAULT {'x': 1}
+----
+Default value for STRUCT type not supported
+
+query II
+SELECT * FROM dl.t
+----
+1	{'a': 1}
+
+# literal and cast defaults still fill the existing rows
+statement ok
+ALTER TABLE dl.t ADD COLUMN s.f INTEGER DEFAULT 2
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN s.g INTEGER DEFAULT CAST('3' AS INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (2, {'a': 4, 'f': 5, 'g': 6})
+
+query II
+SELECT * FROM dl.t ORDER BY id
+----
+1	{'a': 1, 'f': 2, 'g': 3}
+2	{'a': 4, 'f': 5, 'g': 6}

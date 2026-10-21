@@ -1,0 +1,83 @@
+# name: test/sql/cleanup/read_only_attach_cleanup.test
+# description: File cleanup on a read-only attach deletes no file
+# group: [cleanup]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/read_only_attach_cleanup.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/read_only_attach_cleanup')
+
+statement ok
+CREATE TABLE lake.big (i INTEGER)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0, table_name => 'big')
+
+statement ok
+INSERT INTO lake.big VALUES (1)
+
+statement ok
+INSERT INTO lake.big VALUES (2)
+
+# two files of big are scheduled for deletion
+statement ok
+CALL ducklake_merge_adjacent_files('lake')
+
+statement ok
+CALL ducklake_expire_snapshots('lake', older_than => now())
+
+query I
+SELECT count(*) FROM __ducklake_metadata_lake.ducklake_files_scheduled_for_deletion
+----
+2
+
+# a file that belongs to no table
+statement ok
+COPY (SELECT 1 AS i) TO '{DATA_PATH}/read_only_attach_cleanup/main/big/orphan.parquet'
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (READ_ONLY)
+
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('lake', cleanup_all => true, dry_run => true)
+----
+2
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('lake', cleanup_all => true, dry_run => true)
+----
+1
+
+statement error
+CALL ducklake_cleanup_old_files('lake', cleanup_all => true)
+----
+read-only mode
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/read_only_attach_cleanup/**/*.parquet')
+----
+4
+
+statement error
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true)
+----
+read-only mode
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/read_only_attach_cleanup/**/*.parquet')
+----
+4
+
+query I
+SELECT count(*) FROM __ducklake_metadata_lake.ducklake_files_scheduled_for_deletion
+----
+2

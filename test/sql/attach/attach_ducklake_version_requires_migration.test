@@ -20,12 +20,18 @@ statement ok
 DETACH ducklake
 
 statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_version_requires_migration', DUCKLAKE_VERSION '1.1-dev1')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_version_requires_migration', DUCKLAKE_VERSION '1.1')
 ----
-DuckLake catalog version mismatch: catalog version is 1.0, but the extension requires version 1.1-dev1
+DuckLake catalog version mismatch: catalog version is 1.0, but the extension requires version 1.1.
+
+# dev versions cannot be requested
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_version_requires_migration', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+----
+ducklake_version must be '1.0' or '1.1', got '1.1-dev1'
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_version_requires_migration', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_version_requires_migration', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 query I
 FROM ducklake.t
@@ -35,4 +41,4 @@ FROM ducklake.t
 query I
 SELECT value FROM ducklake.options() WHERE option_name = 'version'
 ----
-1.1-dev1
+1.1

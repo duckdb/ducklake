@@ -1,5 +1,5 @@
 # name: test/sql/migration/inlined_column_rename_hint.test
-# description: a plain attach heals legacy named inlined tables on a dev1 catalog, a read-only attach hints at the migration
+# description: migrating a dev1 catalog renames legacy named inlined tables, a read-only attach hints at the migration
 # group: [migration]
 
 require ducklake
@@ -52,21 +52,15 @@ ALTER TABLE meta.ducklake_schema ADD COLUMN parent_schema_id BIGINT;
 statement ok
 DETACH meta
 
-# a read-only attach cannot migrate in place - reading the inlined data fails with a hint at the migration
-statement ok
-ATTACH 'ducklake:{TEST_DIR}/dev1_hint.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_hint_files', READ_ONLY)
-
+# a read-only attach cannot migrate, it hints at the migration
 statement error
-SELECT * FROM dl.t
+ATTACH 'ducklake:{TEST_DIR}/dev1_hint.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_hint_files', READ_ONLY)
 ----
 AUTOMATIC_MIGRATION
 
+# the migration renames the legacy named inlined tables
 statement ok
-DETACH dl
-
-# a plain attach re-runs the dev migration in place and heals the catalog
-statement ok
-ATTACH 'ducklake:{TEST_DIR}/dev1_hint.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_hint_files')
+ATTACH 'ducklake:{TEST_DIR}/dev1_hint.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_hint_files', AUTOMATIC_MIGRATION TRUE)
 
 query II
 SELECT * FROM dl.t ORDER BY i
@@ -92,7 +86,7 @@ SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_nam
 statement ok
 DETACH meta
 
-# the explicit migration is a no-op afterwards
+# a second migration is a no-op
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/dev1_hint.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_hint_files', AUTOMATIC_MIGRATION TRUE)
 

@@ -35,6 +35,7 @@ struct DuckLakeAddDataFilesData : public TableFunctionData {
 static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context, TableFunctionBindInput &input,
                                                          vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
+	catalog.VerifyWritable();
 	if (input.inputs[1].IsNull()) {
 		throw InvalidInputException("Table name cannot be NULL");
 	}
@@ -90,6 +91,8 @@ struct ParquetColumn {
 	LogicalType duckdb_type;
 	//! Set when the field mapping is made - see the skip_stats_columns option
 	bool skip_bounds = false;
+	//! Set when the field mapping is made if the bounds are in a type that the reader casts to the field type
+	LogicalType bounds_type;
 	//! A root group that the Parquet reader reads as VARIANT
 	bool is_variant = false;
 	vector<DuckLakeColumnStats> column_stats;
@@ -421,6 +424,9 @@ FROM parquet_full_metadata(%s)
 				auto max_is_exact = stats_entry.GetChildValue<9>();
 				stats.max_is_exact = max_is_exact.IsValid() && max_is_exact.GetValue();
 			}
+			if (column.bounds_type.id() != LogicalTypeId::INVALID) {
+				stats.CastBoundsFrom(column.bounds_type);
+			}
 
 			stats.has_null_count = TryGetCount(stats_entry.GetChildValue<3>(), stats.null_count);
 			stats.has_num_values = TryGetCount(stats_entry.GetChildValue<4>(), stats.num_values);
@@ -430,25 +436,32 @@ FROM parquet_full_metadata(%s)
 				stats.column_size_bytes = compressed_size.GetValue();
 			}
 
-			auto geo_bbox = stats_entry.GetChildValue<6>();
-			if (geo_bbox.IsValid() && stats.extra_stats) {
-				auto &extent = stats.extra_stats->Cast<DuckLakeColumnGeoStats>().extent;
-				double *bounds[] = {&extent.x_min, &extent.x_max, &extent.y_min, &extent.y_max,
-				                    &extent.z_min, &extent.z_max, &extent.m_min, &extent.m_max};
-				idx_t bound_idx = 0;
-				geo_bbox.ForEach([&](const VectorIterator<double>::ValueEntry &bound) {
-					if (bound.IsValid()) {
-						*bounds[bound_idx] = bound.GetValue();
-					}
-					bound_idx++;
-				});
-			}
-
-			auto geo_types = stats_entry.GetChildValue<7>();
-			if (geo_types.IsValid() && stats.extra_stats) {
+			if (stats.extra_stats && stats.extra_stats->GetStatsType() == DuckLakeExtraStatsType::GEOMETRY) {
 				auto &geo_stats = stats.extra_stats->Cast<DuckLakeColumnGeoStats>();
-				for (auto geo_type : geo_types.GetChildValues()) {
-					geo_stats.geo_types.insert(geo_type.GetValue().GetString());
+				auto geo_bbox = stats_entry.GetChildValue<6>();
+				if (geo_bbox.IsValid()) {
+					auto &extent = geo_stats.extent;
+					double *bounds[] = {&extent.x_min, &extent.x_max, &extent.y_min, &extent.y_max,
+					                    &extent.z_min, &extent.z_max, &extent.m_min, &extent.m_max};
+					idx_t bound_idx = 0;
+					geo_bbox.ForEach([&](const VectorIterator<double>::ValueEntry &bound) {
+						if (bound.IsValid()) {
+							*bounds[bound_idx] = bound.GetValue();
+						}
+						bound_idx++;
+					});
+				} else {
+					geo_stats.SetUnknownExtent();
+				}
+				auto geo_types = stats_entry.GetChildValue<7>();
+				if (geo_types.IsValid()) {
+					for (auto geo_type : geo_types.GetChildValues()) {
+						geo_stats.geo_types.insert(geo_type.GetValue().GetString());
+					}
+				}
+				// an empty list of types means that they are unknown
+				if (geo_stats.geo_types.empty()) {
+					geo_stats.SetUnknownTypes();
 				}
 			}
 
@@ -775,6 +788,11 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 		file_metadata.variant_columns.emplace_back(field_id.GetFieldIndex(), column);
 	}
 	column.skip_bounds = skipped_fields.count(field_id.GetFieldIndex().index) > 0;
+	auto &field_type = field_id.Type();
+	if (!field_id.HasChildren() && !column.skip_bounds && column.duckdb_type != field_type &&
+	    !DuckLakeColumnStats::BoundsSurviveTypePromotion(column.duckdb_type, field_type)) {
+		column.bounds_type = column.duckdb_type;
+	}
 
 	// recursively remap children (if any)
 	if (field_id.HasChildren()) {
@@ -1128,7 +1146,8 @@ DuckLakeDataFile DuckLakeFileProcessor::AddFileToTable(ParquetFileMetadata &file
 	result.mapping_id = transaction.AddNameMap(std::move(name_map));
 
 	const auto partition_data = table.GetPartitionData().get();
-	if (partition_data) {
+	// RESET PARTITIONED BY leaves a spec without fields until its commit, files added after it are not partitioned
+	if (partition_data && !partition_data->fields.empty()) {
 		bool invalid_partition = false;
 		if (file.hive_partition_values.size() != partition_data->fields.size()) {
 			invalid_partition = true;

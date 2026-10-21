@@ -47,3 +47,21 @@ statement error
 CREATE TABLE ducklake.test(ts STRUCT(x INT[3]));
 ----
 unsupported type
+
+statement error
+CREATE TABLE ducklake.test AS SELECT [1, 2, 3]::INT[3] AS a;
+----
+unsupported type
+
+statement ok
+CREATE TABLE ducklake.test(s STRUCT(x INT));
+
+statement error
+ALTER TABLE ducklake.test ADD COLUMN a INT[3];
+----
+unsupported type
+
+statement error
+ALTER TABLE ducklake.test ADD COLUMN s.y UNION(i INT, j VARCHAR);
+----
+unsupported type

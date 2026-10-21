@@ -120,16 +120,18 @@ static DeletedRowVersions GetDeletedRowVersions(DuckLakeMetadataManager &metadat
 }
 
 //! Partitioned writes can reorder rows, so positions come from the written file
-static set<PositionWithSnapshot> GetWrittenFileDeletes(ClientContext &context, const DuckLakeDataFile &file,
-                                                       const string &encryption_key,
+static set<PositionWithSnapshot> GetWrittenFileDeletes(ClientContext &context, const DuckLakeTableEntry &table,
+                                                       const DuckLakeDataFile &file, const string &encryption_key,
                                                        const DeletedRowVersions &deleted_rows) {
 	DuckLakeFileData file_data;
 	file_data.path = file.file_name;
 	file_data.encryption_key = encryption_key;
 	file_data.file_size_bytes = file.file_size_bytes;
 	ParquetFileScanner scanner(context, file_data, true);
-	auto row_id_column = scanner.FindColumn("_ducklake_internal_row_id");
-	auto snapshot_column = scanner.FindColumn("_ducklake_internal_snapshot_id");
+	auto row_id_column =
+	    scanner.FindColumn(DuckLakeInsert::InternalColumnName(table.GetFieldData(), "_ducklake_internal_row_id"));
+	auto snapshot_column =
+	    scanner.FindColumn(DuckLakeInsert::InternalColumnName(table.GetFieldData(), "_ducklake_internal_snapshot_id"));
 	if (!row_id_column.IsValid() || !snapshot_column.IsValid()) {
 		throw InternalException("Flushed file \"%s\" has no embedded row or snapshot ids", file.file_name);
 	}
@@ -164,7 +166,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 		auto deleted_rows = GetDeletedRowVersions(metadata_manager, snapshot, table, inlined_table.table_name);
 		if (!deleted_rows.empty()) {
 			for (auto &file : global_state.written_files) {
-				auto deletes = GetWrittenFileDeletes(context, file, encryption_key, deleted_rows);
+				auto deletes = GetWrittenFileDeletes(context, table, file, encryption_key, deleted_rows);
 				if (!deletes.empty()) {
 					deletes_per_file.emplace(file.file_name, std::move(deletes));
 				}
@@ -508,6 +510,7 @@ WHERE del.begin_snapshot <= {SNAPSHOT_ID}
 static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, TableFunctionBindInput &input,
                                                         TableIndex bind_index, vector<Identifier> &return_names) {
 	auto &ducklake_catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
+	ducklake_catalog.VerifyWritable();
 	auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
 
 	auto schema = DuckLakeTableFunctionUtil::GetStringOption(input, "schema_name");

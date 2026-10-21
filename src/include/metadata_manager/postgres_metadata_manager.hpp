@@ -35,8 +35,12 @@ public:
 	idx_t MaxColumnCount() const override {
 		return 1600;
 	}
+	vector<string> SystemColumnNames() const override {
+		return {"tableoid", "xmin", "cmin", "xmax", "cmax", "ctid"};
+	}
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
+	string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const override;
 	bool InlinedDeletionTableExists(const string &table_name) override;
 	void MigrateInlinedDataTypes() override;
 	bool IsRetryableCommitError(const string &message) const override;

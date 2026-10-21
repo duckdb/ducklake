@@ -126,6 +126,8 @@ public:
 	static unique_ptr<CopyInfo> GetParquetCopyInfo(const string &file_path, Value field_ids,
 	                                               const string &encryption_key);
 	static DuckLakeCopyOptions GetCopyOptions(ClientContext &context, DuckLakeCopyInput &copy_input);
+	//! The name under which a file stores an internal column, one that no column of the table has
+	static string InternalColumnName(const DuckLakeFieldData &field_data, const string &name);
 	static DuckLakeInsertPipeline PlanInsertPipeline(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                                 PhysicalOperator &plan, SchemaCatalogEntry &schema,
 	                                                 const ColumnList &columns, const Identifier &table_name,

@@ -36,4 +36,3 @@ ALTER TABLE lake.t SET PARTITIONED BY (p)
 
 statement ok
 INSERT INTO lake.t VALUES (1), (2)
-

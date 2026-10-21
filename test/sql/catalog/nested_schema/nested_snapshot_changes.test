@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/nested_changes_files', METADATA_CATALOG 'ducklake_meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DUCKLAKE_VERSION '1.1', DATA_PATH '{DATA_PATH}/nested_changes_files', METADATA_CATALOG 'ducklake_meta')
 
 statement ok
 CREATE SCHEMA ducklake.s1;

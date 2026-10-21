@@ -1,5 +1,5 @@
 # name: test/sql/migration/postgres_dev_migration_failure.test
-# description: Plain attach recovers from an aborted development migration
+# description: an aborted migration of a development catalog leaves it untouched and can be retried
 # group: [migration]
 
 require ducklake
@@ -22,13 +22,16 @@ CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS dev_migration_failure CASCADE
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
-(DATA_PATH '{DATA_PATH}/dev_migration_failure', METADATA_SCHEMA 'dev_migration_failure', DUCKLAKE_VERSION '1.1-dev1')
+(DATA_PATH '{DATA_PATH}/dev_migration_failure', METADATA_SCHEMA 'dev_migration_failure', DUCKLAKE_VERSION '1.1')
 
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
 
 statement ok
 DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'UPDATE dev_migration_failure.ducklake_metadata SET value = ''1.1-dev1'' WHERE key = ''version''')
 
 # Reject migration writes while keeping existing metadata readable
 statement ok
@@ -40,8 +43,16 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
 ----
 reject_version_update
 
+query I
+SELECT * FROM postgres_query('pg', 'SELECT value FROM dev_migration_failure.ducklake_metadata WHERE key = ''version''')
+----
+1.1-dev1
+
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_SCHEMA 'dev_migration_failure')
+CALL postgres_execute('pg', 'ALTER TABLE dev_migration_failure.ducklake_metadata DROP CONSTRAINT reject_version_update')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_SCHEMA 'dev_migration_failure', AUTOMATIC_MIGRATION TRUE)
 
 query I
 SELECT * FROM dl.t

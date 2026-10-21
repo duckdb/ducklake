@@ -48,7 +48,7 @@ DETACH meta
 
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/inlined_column_rename_resume.db' AS dl
-(DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+(DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 query II
 SELECT 't1', i FROM dl.t1 UNION ALL SELECT 't2', i FROM dl.t2 ORDER BY ALL

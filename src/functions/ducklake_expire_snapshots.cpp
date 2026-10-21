@@ -27,6 +27,9 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "dry_run", "boolean", dry_run)) {
 		result->dry_run = BooleanValue::Get(dry_run);
 	}
+	if (!result->dry_run) {
+		ducklake_catalog.VerifyWritable();
+	}
 	vector<string> snapshot_ids;
 	auto versions_entry = input.named_parameters.find("versions");
 	bool has_versions = versions_entry != input.named_parameters.end();

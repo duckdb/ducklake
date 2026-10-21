@@ -1,0 +1,149 @@
+# name: test/sql/merge/merge_file_row_number_large_source.test
+# description: a delete that joins another DuckLake table on file_row_number deletes the rows of its own table
+# group: [merge]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/merge_file_row_number_large_source', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.s (a INTEGER)
+
+statement ok
+INSERT INTO lake.s SELECT range FROM range(100000)
+
+# the large source is scanned before the target
+statement ok
+CREATE TABLE lake.t (a INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (10), (20)
+
+query I
+MERGE INTO lake.t AS t USING lake.s AS s ON t.file_row_number = s.file_row_number WHEN MATCHED THEN DELETE
+----
+2
+
+query I
+SELECT count(*) FROM lake.t
+----
+0
+
+statement ok
+INSERT INTO lake.t VALUES (30), (40)
+
+query I
+MERGE INTO lake.t AS t USING lake.s AS s ON t.file_row_number = s.file_row_number WHEN MATCHED THEN UPDATE SET a = t.a + s.a
+----
+2
+
+query I
+SELECT a FROM lake.t ORDER BY a
+----
+30
+41
+
+query I
+DELETE FROM lake.t USING lake.s WHERE t.file_row_number = s.file_row_number AND s.a = 0
+----
+1
+
+query I
+SELECT a FROM lake.t
+----
+41
+
+# both sides scan the target
+query I
+MERGE INTO lake.t AS t USING (SELECT file_row_number AS row_number FROM lake.t) AS s ON t.file_row_number = s.row_number WHEN MATCHED THEN DELETE
+----
+1
+
+query II
+SELECT (SELECT count(*) FROM lake.t), (SELECT count(*) FROM lake.s)
+----
+0	100000
+
+# a source that reads an older version of the target keeps the deletes made since
+statement ok
+CREATE TABLE lake.h (a INTEGER)
+
+statement ok
+INSERT INTO lake.h SELECT range FROM range(10)
+
+statement ok
+DELETE FROM lake.h WHERE a = 1
+
+statement ok
+SET VARIABLE one_deleted = (SELECT max(snapshot_id) FROM lake.snapshots())
+
+statement ok
+DELETE FROM lake.h WHERE a = 2
+
+query I
+MERGE INTO lake.h AS t USING (SELECT file_row_number AS row_number FROM lake.h AT (VERSION => getvariable('one_deleted'))) AS s
+ON t.file_row_number = s.row_number AND s.row_number = 5 WHEN MATCHED THEN DELETE
+----
+1
+
+query I
+SELECT a FROM lake.h ORDER BY a
+----
+0
+3
+4
+6
+7
+8
+9
+
+# the source scans the target with a filter that prunes one of its two files
+statement ok
+CREATE TABLE lake.two_files (a INTEGER)
+
+statement ok
+INSERT INTO lake.two_files SELECT range FROM range(10)
+
+statement ok
+INSERT INTO lake.two_files SELECT range FROM range(100, 110)
+
+query I
+MERGE INTO lake.two_files AS t USING (SELECT file_row_number AS row_number FROM lake.two_files WHERE a >= 100) AS s
+ON t.file_row_number = s.row_number WHEN MATCHED THEN DELETE
+----
+20
+
+query I
+SELECT count(*) FROM lake.two_files
+----
+0
+
+# the first tables of two lakes have the same table id
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/merge_file_row_number_first.db' AS first_lake (DATA_PATH '{DATA_PATH}/merge_file_row_number_first', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/merge_file_row_number_second.db' AS second_lake (DATA_PATH '{DATA_PATH}/merge_file_row_number_second', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE first_lake.t AS SELECT range AS a FROM range(2)
+
+statement ok
+CREATE TABLE second_lake.t AS SELECT range AS a FROM range(100000)
+
+query I
+MERGE INTO first_lake.t AS t USING second_lake.t AS s ON t.file_row_number = s.file_row_number WHEN MATCHED THEN DELETE
+----
+2
+
+query II
+SELECT (SELECT count(*) FROM first_lake.t), (SELECT count(*) FROM second_lake.t)
+----
+0	100000

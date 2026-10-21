@@ -339,7 +339,7 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 		col_names.end_snapshot = names[2].GetIdentifierName();
 		vector<string> select_list;
 		for (idx_t i = 0; i < 3; i++) {
-			select_list.push_back(SQLIdentifier::ToString(names[i].GetIdentifierName()));
+			select_list.push_back(SQLQuotedIdentifier::ToString(names[i].GetIdentifierName()));
 		}
 		string column_defs;
 		bool rewrite = false;
@@ -364,7 +364,7 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 				auto storage_type = UnboundType::TryParseAndDefaultBind(storage_type_name);
 				convert = stored_type != storage_type && stored_type == native_type;
 			}
-			auto column_name = SQLIdentifier::ToString(name);
+			auto column_name = SQLQuotedIdentifier::ToString(name);
 			column_defs += StringUtil::Format("%s%s %s", column_defs.empty() ? "" : ", ", column_name,
 			                                  convert ? storage_type_name : stored_type.ToString());
 			select_list.push_back(convert ? DuckLakeUtil::InlinedStorageExpression(*this, column_name, type)
@@ -405,12 +405,26 @@ void PostgresMetadataManager::ClearCache() {
 	result->ThrowIfError("Failed to clear the PostgreSQL metadata cache: ");
 }
 
+static string PostgresQuery(const string &remote_query) {
+	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
+	                          SQLString(remote_query));
+}
+
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	auto remote_query = LatestSnapshotQuery();
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
-	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
-	                          SQLString(remote_query));
+	return PostgresQuery(remote_query);
+}
+
+string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot,
+                                                                   bool include_exactness) const {
+	// one statement reads the latest snapshot and the table stats from the same state at any isolation level
+	auto remote_query = SnapshotAndStatsAndChangesQuery(include_exactness);
+	SubstituteCatalogPlaceholders(remote_query,
+	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
+	SubstituteSnapshotPlaceholders(snapshot, remote_query);
+	return PostgresQuery(remote_query);
 }
 
 string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
@@ -423,8 +437,7 @@ string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 	    table, snapshot, filter_info, dynamic_filters, runtime_filter_stats_columns, file_list_type, schema);
 	// placeholders inside the literal are not replaced later
 	SubstituteSnapshotPlaceholders(snapshot, remote_query);
-	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
-	                          SQLString(remote_query));
+	return PostgresQuery(remote_query);
 }
 
 } // namespace duckdb

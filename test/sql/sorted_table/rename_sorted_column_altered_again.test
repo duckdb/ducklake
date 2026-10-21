@@ -1,0 +1,89 @@
+# name: test/sql/sorted_table/rename_sorted_column_altered_again.test
+# description: Renaming a sorted column and altering it again in one transaction keeps the sort on the new name
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/rename_sorted_column_altered_again', DATA_INLINING_ROW_LIMIT 0)
+
+# the rename is followed by another change of the same column
+statement ok
+CREATE TABLE ducklake.t(a INTEGER) SORTED BY (a)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t RENAME COLUMN a TO b
+
+statement ok
+ALTER TABLE ducklake.t ALTER COLUMN b SET DEFAULT 0
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO ducklake.t VALUES (2), (1)
+
+query I
+SELECT list(b ORDER BY file_row_number) FROM ducklake.t
+----
+[1, 2]
+
+# an identical SET SORTED BY after both changes
+statement ok
+CREATE TABLE ducklake.s(a INTEGER) SORTED BY (a)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.s RENAME COLUMN a TO b
+
+statement ok
+ALTER TABLE ducklake.s ALTER COLUMN b SET DEFAULT 0
+
+statement ok
+ALTER TABLE ducklake.s SET SORTED BY (b)
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO ducklake.s VALUES (2), (1)
+
+query I
+SELECT list(b ORDER BY file_row_number) FROM ducklake.s
+----
+[1, 2]
+
+# a table created in the same transaction
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.created(a INTEGER) SORTED BY (a)
+
+statement ok
+ALTER TABLE ducklake.created RENAME COLUMN a TO b
+
+statement ok
+ALTER TABLE ducklake.created ALTER COLUMN b SET DEFAULT 0
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO ducklake.created VALUES (2), (1)
+
+query I
+SELECT list(b ORDER BY file_row_number) FROM ducklake.created
+----
+[1, 2]

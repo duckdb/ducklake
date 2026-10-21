@@ -1,0 +1,87 @@
+# name: test/sql/quack/flush_between_scan_reads.test
+# description: A scan on a Quack catalog sees the rows that a concurrent flush moves from inlined data to a file
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION
+
+require quack
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/flush_between_reads', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+SET threads = 1
+
+statement ok
+CREATE TABLE dl.flush_0 (i INTEGER)
+
+statement ok
+CREATE TABLE dl.flush_1 (i INTEGER)
+
+statement ok
+INSERT INTO dl.flush_1 SELECT range FROM range(3000000)
+
+statement ok
+INSERT INTO dl.flush_1 VALUES (-1), (-2)
+
+# the first connection scans the file of flush_1 for seconds before it reads the inlined rows
+statement ok
+CREATE VIEW step_0 AS SELECT count(*) AS c FROM dl.flush_1 WHERE md5(md5(md5(md5(i::VARCHAR)))) <> 'x'
+
+# the second connection waits, then flushes the inlined rows of flush_1 while that scan runs
+statement ok
+CREATE VIEW step_1 AS SELECT 3000002 + count(*) - 2000000 AS c FROM range(2000000) WHERE md5(md5(range::VARCHAR)) <> 'x'
+
+concurrentloop t 0 2
+
+statement ok
+SELECT CASE WHEN c = 3000002 THEN true ELSE error('scan read ' || c || ' rows') END FROM step_{t}
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'flush_{t}')
+
+endloop
+
+query II
+SELECT count(*), count(*) FILTER (WHERE i < 0) FROM dl.flush_1
+----
+3000002	2
+
+statement ok
+INSERT INTO dl.flush_1 VALUES (-3), (-4)
+
+# the first connection fills its delete map, then builds the join for seconds before its scan lists the files
+statement ok
+CREATE VIEW delete_0 AS SELECT -3 - (range % 2) AS v FROM range(6000000)
+WHERE (CASE WHEN md5(md5(range::VARCHAR)) <> 'x' THEN range ELSE -1 END) < 2
+
+# the second connection deletes nothing, then flushes the rows that the first one deletes
+statement ok
+CREATE VIEW delete_1 AS SELECT -100 AS v FROM range(2000000)
+WHERE (CASE WHEN md5(md5(range::VARCHAR)) <> 'x' THEN range ELSE -1 END) < 0
+
+concurrentloop t 0 2
+
+statement maybe
+DELETE FROM dl.flush_1 WHERE i IN (SELECT v FROM delete_{t})
+----
+Transaction conflict
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'flush_{t}')
+
+endloop
+
+# the delete either committed or conflicted with the flush
+query III
+SELECT count(*) FILTER (WHERE i >= -2), count(*) FILTER (WHERE i IN (-1, -2)),
+       count(*) FILTER (WHERE i < -2) IN (0, 2)
+FROM dl.flush_1
+----
+3000002	2	true

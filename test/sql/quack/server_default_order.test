@@ -1,0 +1,85 @@
+# name: test/sql/quack/server_default_order.test
+# description: metadata queries keep their ascending order when the Quack server sets default_order to DESC
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
+
+require quack
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/server_default_order')
+
+statement ok
+CALL quack_query_by_name('__ducklake_metadata_lake', 'SET GLOBAL default_order = ''DESC''')
+
+statement ok
+CREATE TABLE lake.t (a INTEGER, b VARCHAR, c DOUBLE)
+
+statement ok
+INSERT INTO lake.t VALUES (1, 'x', 1.5)
+
+statement ok
+INSERT INTO lake.t VALUES (2, 'y', 2.5)
+
+query III
+SELECT * FROM lake.t ORDER BY a
+----
+1	x	1.5
+2	y	2.5
+
+query I
+SELECT column_name FROM information_schema.columns WHERE table_catalog = 'lake' AND table_name = 't' ORDER BY ordinal_position
+----
+a
+b
+c
+
+# the partition keys keep their order
+statement ok
+CREATE TABLE lake.p (k INTEGER, a INTEGER, b VARCHAR)
+
+statement ok
+ALTER TABLE lake.p SET PARTITIONED BY (a, b)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0, table_name => 'p')
+
+statement ok
+INSERT INTO lake.p VALUES (1, 10, 'x'), (2, 20, 'y')
+
+query I
+SELECT count(*) FROM ducklake_list_files('lake', 'p') WHERE data_file LIKE '%a=10/b=x/%' OR data_file LIKE '%a=20/b=y/%'
+----
+2
+
+query III
+SELECT * FROM lake.p ORDER BY k
+----
+1	10	x
+2	20	y
+
+# deletes find their rows in inlined data and in data files
+statement ok
+DELETE FROM lake.t WHERE a = 1
+
+statement ok
+DELETE FROM lake.p WHERE k = 2
+
+query III
+SELECT * FROM lake.t
+----
+2	y	2.5
+
+query III
+SELECT * FROM lake.p
+----
+1	10	x
+
+statement ok
+CALL quack_query_by_name('__ducklake_metadata_lake', 'RESET GLOBAL default_order')

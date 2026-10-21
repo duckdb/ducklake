@@ -1,0 +1,59 @@
+# name: test/sql/transaction/conflict_check_single_read.test
+# description: Postgres catalogs read the latest snapshot and the table stats of a conflict check in one statement
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/conflict_check_single_read')
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE TABLE ducklake.t (i INTEGER)
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage = 'memory')
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.t VALUES (1)
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (2)
+
+statement ok con1
+COMMIT
+
+# the second commit checks for conflicts with the first one and retries
+statement ok con2
+COMMIT
+
+query II
+SELECT count(*), sum(i) FROM ducklake.t
+----
+2	3
+
+statement ok
+USE ducklake
+
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
+	(SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+	 WHERE regexp_replace(query, '\s+', ' ', 'g')
+	       LIKE '%postgres_query(%ducklake_snapshot_changes%ducklake_table_stats%')
+	ELSE true END
+----
+true

@@ -51,7 +51,7 @@ statement ok
 ATTACH '{TEST_DIR}/reverse_hint.db' AS meta;
 
 statement ok
-UPDATE meta.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
+UPDATE meta.ducklake_metadata SET value = '1.1' WHERE key = 'version';
 
 statement ok
 DETACH meta

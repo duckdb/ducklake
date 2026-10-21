@@ -626,13 +626,14 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 
 void DuckLakeUtil::SetNativeExtensionTypes(ClientContext &context) {
 	auto &db_config = DBConfig::GetConfig(context);
-	for (auto name : {"sqlite_all_varchar", "binary_as_string", "pg_array_as_varchar"}) {
+	for (auto name : {"sqlite_all_varchar", "binary_as_string", "pg_use_text_protocol", "pg_query_mode",
+	                  "pg_use_binary_copy", "pg_array_as_varchar", "pg_numeric_as_varchar"}) {
 		ExtensionOption option;
 		if (!db_config.TryGetExtensionOption(Identifier(name), option) || !option.setting_index.IsValid()) {
 			continue;
 		}
 		// Keep metadata/data types stable without callbacks that clear shared catalog caches.
-		context.config.user_settings.SetUserSetting(option.setting_index.GetIndex(), Value::BOOLEAN(false));
+		context.config.user_settings.SetUserSetting(option.setting_index.GetIndex(), option.default_value);
 	}
 }
 
@@ -816,11 +817,20 @@ bool DuckLakeUtil::TryGetLiteralValue(const ParsedExpression &expr, Value &resul
 	return true;
 }
 
+bool DuckLakeUtil::TryReadTextAs(const Value &text, const LogicalType &type, Value &result) {
+	auto typed_value = text.DefaultTryCastAs(type);
+	if (!typed_value || typed_value->ToString() != text.ToString()) {
+		return false;
+	}
+	result = std::move(*typed_value);
+	return true;
+}
+
 unique_ptr<ParsedExpression> DuckLakeUtil::LiteralDefaultExpression(const Value &text, const LogicalType &type) {
 	// keep the text when the column type would print it differently, as for a rounded value or a time zone
-	auto typed_value = text.DefaultTryCastAs(type);
-	if (typed_value && typed_value->ToString() == text.ToString()) {
-		return ConstantExpression::FromValue(*typed_value);
+	Value typed_value;
+	if (TryReadTextAs(text, type, typed_value)) {
+		return ConstantExpression::FromValue(typed_value);
 	}
 	return ConstantExpression::FromValue(text);
 }

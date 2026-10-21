@@ -10,7 +10,7 @@ require parquet
 unzip data/old_ducklake/inlined_schema_versions.db.gz {TEST_DIR}/v10_inlined_schema_versions.db
 
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 # n was never altered and keeps its only row
 query III
@@ -42,7 +42,7 @@ DETACH lake
 
 # a migration of the v1.1 catalog adds no row
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 query I
 SELECT count(*) FROM meta.ducklake_schema_versions
@@ -114,7 +114,7 @@ statement ok
 DETACH lake
 
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions_expired.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions_expired', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_schema_versions_expired.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_schema_versions_expired', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 query III
 SELECT tbl.table_name, sv.begin_snapshot, sv.schema_version

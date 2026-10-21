@@ -1,0 +1,31 @@
+# name: test/sql/macros/macro_parameter_order.test
+# description: macro parameters keep their positions whatever order the metadata database returns their rows in
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/macro_parameter_order.db' AS lake (DATA_PATH '{DATA_PATH}/macro_parameter_order')
+
+statement ok
+CREATE MACRO lake.subtract_args(a, b) AS a - b
+
+# rows have no order of their own, so store them in reverse
+statement ok
+CREATE OR REPLACE TABLE __ducklake_metadata_lake.ducklake_macro_parameters AS
+SELECT * FROM __ducklake_metadata_lake.ducklake_macro_parameters ORDER BY column_id DESC
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/macro_parameter_order.db' AS lake (DATA_PATH '{DATA_PATH}/macro_parameter_order')
+
+query I
+SELECT lake.subtract_args(10, 3)
+----
+7

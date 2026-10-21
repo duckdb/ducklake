@@ -55,7 +55,7 @@ string DuckLakeMetadataManagerV1_1<Base>::GetCreateTableStatements() {
 
 template <typename Base>
 string DuckLakeMetadataManagerV1_1<Base>::GetVersionString() {
-	constexpr auto VERSION = DuckLakeVersion::V1_1_DEV_1;
+	constexpr auto VERSION = DuckLakeVersion::V1_1;
 	return DuckLakeVersionToString(VERSION);
 }
 

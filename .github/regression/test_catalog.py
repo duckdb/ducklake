@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from catalog import DuckDBCatalog, PostgresCatalog, expand, render, render_root
+from catalog import DuckDBCatalog, PostgresCatalog, SQLiteCatalog, create_catalog, expand, render, render_root
 
 
 class CatalogOperationTest(unittest.TestCase):
@@ -27,6 +27,36 @@ class CatalogOperationTest(unittest.TestCase):
         self.assertIn("TO '${BENCHMARK_DIR}/warm.db' (FORMAT blob);", expand(catalog, "create", "warm"))
         self.assertEqual(expand(catalog, "seal", "warm"), [])
         self.assertEqual(expand(catalog, "rollback", "${lake}_pristine TO ${work}"), ["ROLLBACK;"])
+
+    def test_sqlite_operations(self):
+        catalog = create_catalog("sqlite", "unused")
+        self.assertIsInstance(catalog, SQLiteCatalog)
+        self.assertEqual(catalog.header(), ["require sqlite_scanner", ""])
+        self.assertEqual(
+            expand(catalog, "attach", "IF NOT EXISTS ${work} AS lake (READ_ONLY)"),
+            ["ATTACH IF NOT EXISTS 'ducklake:sqlite:${BENCHMARK_DIR}/${work}.db' AS lake (READ_ONLY);"],
+        )
+        self.assertEqual(
+            expand(catalog, "create", "warm"),
+            [
+                "COPY (SELECT ''::BLOB AS content) TO '${BENCHMARK_DIR}/warm.db-journal' (FORMAT blob);",
+                "COPY (SELECT ''::BLOB AS content) TO '${BENCHMARK_DIR}/warm.db-wal' (FORMAT blob);",
+                "COPY (SELECT ''::BLOB AS content) TO '${BENCHMARK_DIR}/warm.db-shm' (FORMAT blob);",
+                "COPY (SELECT ''::BLOB AS content) TO '${BENCHMARK_DIR}/warm.db' (FORMAT blob);",
+            ],
+        )
+        self.assertEqual(
+            expand(catalog, "copy", "seed TO work"),
+            [
+                "COPY (SELECT ''::BLOB AS content) TO '${BENCHMARK_DIR}/work.db-journal' (FORMAT blob);",
+                "COPY (SELECT ''::BLOB AS content) TO '${BENCHMARK_DIR}/work.db-wal' (FORMAT blob);",
+                "COPY (SELECT ''::BLOB AS content) TO '${BENCHMARK_DIR}/work.db-shm' (FORMAT blob);",
+                "COPY (SELECT content FROM read_blob('${BENCHMARK_DIR}/seed.db'))",
+                "TO '${BENCHMARK_DIR}/work.db' (FORMAT blob);",
+            ],
+        )
+        self.assertEqual(expand(catalog, "seal", "warm"), [])
+        self.assertEqual(expand(catalog, "rollback", "seed TO work"), ["ROLLBACK;"])
 
     def test_postgres_operations(self):
         catalog = PostgresCatalog("bench")

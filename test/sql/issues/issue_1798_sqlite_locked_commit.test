@@ -1,0 +1,103 @@
+# name: test/sql/issues/issue_1798_sqlite_locked_commit.test
+# description: A commit that another open transaction blocks on a SQLite catalog points to the WAL journal mode
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+# the SQLite config skips errors about locks, this test checks them
+set ignore_error_messages
+
+test-env DATA_PATH {TEST_DIR}/issue_1798_data
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/issue_1798.sqlite' AS lk (DATA_PATH '{DATA_PATH}/rollback', META_BUSY_TIMEOUT 100)
+
+statement ok
+CREATE TABLE lk.t(k INTEGER)
+
+statement ok
+CREATE TABLE lk.t2(k INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+INSERT INTO lk.t VALUES (1)
+
+statement ok con2
+INSERT INTO lk.t2 VALUES (1)
+
+statement error con1
+COMMIT
+----
+Attach the catalog with META_JOURNAL_MODE 'WAL'
+
+statement ok con2
+COMMIT
+
+query II con3
+SELECT (SELECT count(*) FROM lk.t), (SELECT count(*) FROM lk.t2)
+----
+0	1
+
+# a commit that only sets an option gets the same advice
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL lk.set_option('parquet_compression', 'zstd')
+
+statement ok con2
+SELECT count(*) FROM lk.t
+
+statement error con1
+COMMIT
+----
+Attach the catalog with META_JOURNAL_MODE 'WAL'
+
+statement ok con2
+COMMIT
+
+# in WAL mode an open transaction does not block the commit of another
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/issue_1798_wal.sqlite' AS wal (DATA_PATH '{DATA_PATH}/wal', META_BUSY_TIMEOUT 100,
+    META_JOURNAL_MODE 'WAL')
+
+statement ok
+CREATE TABLE wal.t(k INTEGER)
+
+statement ok
+CREATE TABLE wal.t2(k INTEGER)
+
+statement ok con4
+BEGIN
+
+statement ok con5
+BEGIN
+
+statement ok con4
+INSERT INTO wal.t VALUES (1)
+
+statement ok con5
+INSERT INTO wal.t2 VALUES (1)
+
+statement ok con4
+COMMIT
+
+statement ok con5
+COMMIT
+
+query II con6
+SELECT (SELECT count(*) FROM wal.t), (SELECT count(*) FROM wal.t2)
+----
+1	1

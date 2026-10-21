@@ -1,4 +1,5 @@
 #include "storage/ducklake_catalog.hpp"
+#include "duckdb/logging/logger.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/main/database_manager.hpp"
@@ -565,6 +566,60 @@ static LogicalType ParseMacroParameterType(const string &type) {
 	return DuckLakeTypes::IsNested(result) ? LogicalType::UNKNOWN : result;
 }
 
+//! The type of constants inside list and struct literals, the form in which DuckLake 1.0 wrote some nested values
+static bool TryGetNestedLiteralType(ClientContext &context, const ParsedExpression &expr, LogicalType &result) {
+	if (expr.GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
+		result = expr.Cast<ConstantExpression>().GetLiteral().ToValue().type();
+		return true;
+	}
+	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
+		return false;
+	}
+	auto &function = expr.Cast<FunctionExpression>();
+	auto &name = function.FunctionName().GetIdentifierName();
+	bool is_list = name == "list_value";
+	if (function.IsOperator() || (!is_list && name != "struct_pack")) {
+		return false;
+	}
+	LogicalType child_type = LogicalType::SQLNULL;
+	child_list_t<LogicalType> child_types;
+	for (auto &argument : function.GetArguments()) {
+		LogicalType argument_type;
+		if (!TryGetNestedLiteralType(context, argument.GetExpression(), argument_type)) {
+			return false;
+		}
+		if (!is_list) {
+			child_types.emplace_back(argument.GetName().GetIdentifierName(), argument_type);
+		} else if (!LogicalType::TryGetMaxLogicalType(context, child_type, argument_type, child_type)) {
+			return false;
+		}
+	}
+	result = is_list ? LogicalType::LIST(child_type) : LogicalType::STRUCT(std::move(child_types));
+	return true;
+}
+
+//! DuckLake 1.0 stored a nested default as the text of its value, which does not quote most strings
+static unique_ptr<ParsedExpression> LegacyNestedDefault(ClientContext &context, const string &macro_name,
+                                                        const DuckLakeMacroParameters &param) {
+	try {
+		auto expr = Parser::GetBuiltinParser().ParseSingleExpression(StringValue::Get(param.default_value));
+		LogicalType type;
+		Value value;
+		if (TryGetNestedLiteralType(context, *expr, type) &&
+		    DuckLakeUtil::TryReadTextAs(param.default_value, type, value)) {
+			return ConstantExpression::FromValue(value);
+		}
+	} catch (std::exception &) {
+	}
+	// the macro stays usable when the parameter is passed
+	vector<unique_ptr<ParsedExpression>> children;
+	children.push_back(ConstantExpression::FromValue(Value(macro_name)));
+	children.push_back(ConstantExpression::FromValue(Value(param.parameter_name)));
+	QualifiedName function_name(Identifier(SYSTEM_CATALOG), Identifier(DEFAULT_SCHEMA),
+	                            Identifier("ducklake_unreadable_macro_default"));
+	return make_uniq<FunctionExpression>(function_name, std::move(children));
+}
+
 unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, DuckLakeMacroInfo &macro,
                                                         string schema_name) {
 	CatalogType type;
@@ -599,10 +654,16 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 				continue;
 			}
 			auto expr_type = DuckLakeTypes::FromString(param.default_value_type);
+			bool null_default = StringValue::Get(param.default_value) == "NULL";
+			if (DuckLakeTypes::IsNested(expr_type) && !null_default) {
+				macro_function->default_parameters.insert(Identifier(param.parameter_name),
+				                                          LegacyNestedDefault(context, macro.macro_name, param));
+				continue;
+			}
 			if (expr_type.id() != LogicalTypeId::UNKNOWN) {
 				Value casted_value;
 				// typed NULL defaults are stored as the text NULL
-				if (StringValue::Get(param.default_value) == "NULL" && !DuckLakeTypes::IsStringType(expr_type)) {
+				if (null_default && !DuckLakeTypes::IsStringType(expr_type)) {
 					// nested types are stored without their child types
 					casted_value = expr_type.IsNested() ? Value() : Value(expr_type);
 				} else {
@@ -1269,20 +1330,23 @@ idx_t DuckLakeCatalog::GetTargetFileSize(ClientContext &context, DuckLakeTableEn
 
 idx_t DuckLakeCatalog::GetInliningLimit(ClientContext &context, DuckLakeTableEntry &table) {
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
-	return GetInliningLimit(context, schema.GetSchemaId(), table.GetTableId(), table.GetColumns(),
+	return GetInliningLimit(context, table.name, schema.GetSchemaId(), table.GetTableId(), table.GetColumns(),
 	                        &table.GetTableOptions());
 }
 
-idx_t DuckLakeCatalog::GetInliningLimit(ClientContext &context, SchemaIndex schema_id, TableIndex table_id,
-                                        const ColumnList &columns,
+idx_t DuckLakeCatalog::GetInliningLimit(ClientContext &context, const Identifier &table_name, SchemaIndex schema_id,
+                                        TableIndex table_id, const ColumnList &columns,
                                         optional_ptr<const map<string, string>> table_options) {
 	idx_t limit = DataInliningRowLimit(context, schema_id, table_id, table_options);
 	if (limit == 0) {
 		return 0;
 	}
 	auto &transaction = DuckLakeTransaction::Get(context, *this);
-	auto &metadata_manager = transaction.GetMetadataManager();
-	if (!metadata_manager.CanInlineColumns(columns)) {
+	auto obstacle = transaction.GetMetadataManager().GetInliningObstacle(columns);
+	if (!obstacle.empty()) {
+		DUCKDB_LOG_WARNING(context,
+		                   "DuckLake writes the rows of table %s to files instead of inlining them, because %s",
+		                   table_name, obstacle);
 		return 0;
 	}
 	return limit;
@@ -1305,6 +1369,13 @@ bool DuckLakeCatalog::AutoCompactEnabled(SchemaIndex schema_id, TableIndex table
 bool DuckLakeCatalog::AutoCompactEnabled(DuckLakeTableEntry &table) const {
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
 	return AutoCompactEnabled(schema.GetSchemaId(), table.GetTableId());
+}
+
+void DuckLakeCatalog::VerifyWritable() const {
+	if (GetAttached().IsReadOnly()) {
+		throw InvalidInputException("Cannot write to \"%s\", which is attached in read-only mode",
+		                            GetName().GetIdentifierName());
+	}
 }
 
 bool DuckLakeCatalog::WriteDeletionVectors(DuckLakeTableEntry &table) const {
