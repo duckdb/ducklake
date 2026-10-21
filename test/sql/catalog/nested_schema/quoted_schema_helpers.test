@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/quoted_schema_helpers');
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1', DATA_PATH '{DATA_PATH}/quoted_schema_helpers');
 
 statement ok
 CREATE SCHEMA dl.s;
@@ -42,7 +42,7 @@ statement ok
 DETACH dl;
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/quoted_schema_helpers');
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1', DATA_PATH '{DATA_PATH}/quoted_schema_helpers');
 
 query I
 SELECT i FROM dl.s."quo""ted".t;

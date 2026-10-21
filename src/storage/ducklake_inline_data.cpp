@@ -323,7 +323,8 @@ void UpdateStats(vector<DuckLakeBaseColumnStats> &stats, idx_t c, Vector &data, 
 			break;
 		}
 		default:
-			throw InternalException("FIXME: unsupported nested type");
+			// CheckSupportedType rejects the other nested types before rows of them can be inlined
+			throw InternalException("Inlined rows of unsupported nested type %s", type);
 		}
 		return;
 	}

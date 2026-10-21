@@ -1,0 +1,82 @@
+# name: test/sql/partitioning/reset_partitioning_insert_transaction.test
+# description: Inserts after resetting partitioning in a transaction write unpartitioned files
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/reset_partitioning_insert_transaction.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/reset_partitioning_insert_transaction', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (id)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t VALUES (2)
+
+statement ok
+ALTER TABLE ducklake.t RESET PARTITIONED BY
+
+statement ok
+INSERT INTO ducklake.t VALUES (3)
+
+statement ok
+COMMIT
+
+query I rowsort
+SELECT * FROM ducklake.t
+----
+1
+2
+3
+
+query II
+SELECT count(*) FILTER (WHERE partition_id IS NOT NULL), count(*) FILTER (WHERE partition_id IS NULL) FROM meta.ducklake_data_file WHERE end_snapshot IS NULL
+----
+2	1
+
+query I
+SELECT count(*) FROM meta.ducklake_partition_info JOIN meta.ducklake_partition_column USING (partition_id) WHERE end_snapshot IS NULL
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_data_file f WHERE f.partition_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_info p WHERE p.partition_id = f.partition_id AND p.table_id = f.table_id)
+----
+0
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/reset_partitioning_insert_transaction', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+INSERT INTO ducklake.t VALUES (4)
+
+query I rowsort
+SELECT * FROM ducklake.t
+----
+1
+2
+3
+4
+
+query II
+SELECT count(*) FILTER (WHERE partition_id IS NOT NULL), count(*) FILTER (WHERE partition_id IS NULL) FROM meta.ducklake_data_file WHERE end_snapshot IS NULL
+----
+2	2

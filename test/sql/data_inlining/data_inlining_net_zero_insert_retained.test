@@ -1,0 +1,48 @@
+# name: test/sql/data_inlining/data_inlining_net_zero_insert_retained.test
+# description: A committed delete in the same transaction keeps the table change when every local row is deleted
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/data_inlining_net_zero_insert_retained', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE retained AS SELECT 1 AS id
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO retained VALUES (2)
+
+statement ok
+DELETE FROM retained WHERE id = 1
+
+statement ok
+DELETE FROM retained WHERE id = 2
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM retained
+----
+0
+
+query II
+SELECT changes['inlined_insert'] IS NULL, len(changes['inlined_delete'])
+FROM ducklake_snapshots('ducklake')
+ORDER BY snapshot_id DESC
+LIMIT 1
+----
+true	1

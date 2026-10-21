@@ -230,7 +230,7 @@ void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction
 	}
 }
 
-void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction, bool skip_dev_migration) {
+void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction) {
 	// load the data path from the existing duck lake
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto metadata = metadata_manager.LoadDuckLake();
@@ -276,29 +276,15 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction,
 				metadata_manager.MigrateV04();
 				catalog_version = DuckLakeVersion::V1_0;
 			}
-			if (catalog_version == DuckLakeVersion::V1_1_DEV_1) {
-				// dev schemas evolve in place, re-run the v1.1 migration so older dev catalogs get every addition
-				if (options.automatic_migration) {
-					// an explicitly requested migration fails loudly
-					metadata_manager.MigrateV10(true);
-				} else if (options.access_mode != AccessMode::READ_ONLY && !skip_dev_migration) {
-					metadata_manager.MigrateV10Dev();
-					if (ValidChecker::IsInvalidated(transaction.GetConnection().context->ActiveTransaction())) {
-						RestartMetadataTransaction(transaction);
-						LoadExistingDuckLake(transaction, true);
-						return;
-					}
-				}
-			}
 			if (catalog_version >= target_version) {
 				resolved_version = catalog_version;
 				continue;
 			}
-			if (catalog_version == DuckLakeVersion::V1_0) {
-				metadata_manager.MigrateV10();
-				catalog_version = DuckLakeVersion::V1_1_DEV_1;
+			if (catalog_version == DuckLakeVersion::V1_0 || catalog_version == DuckLakeVersion::V1_1_DEV_1) {
+				metadata_manager.MigrateV10(catalog_version == DuckLakeVersion::V1_1_DEV_1);
+				catalog_version = DuckLakeVersion::V1_1;
 			}
-			if (catalog_version != DUCKLAKE_LATEST_VERSION) {
+			if (catalog_version != target_version) {
 				// LCOV_EXCL_START
 				throw NotImplementedException("Unsupported DuckLake version '%s'",
 				                              DuckLakeVersionToString(catalog_version));
@@ -353,11 +339,11 @@ DuckLakeVersion DuckLakeInitializer::ResolveTargetVersion(DuckLakeVersion catalo
 		// If automatic_migration is on, use to latest
 		return DUCKLAKE_LATEST_VERSION;
 	}
-	if (catalog_version >= DuckLakeVersion::V1_0) {
-		// otherwise, use the catalog's current version (must be >= V1_0)
+	if (catalog_version == DuckLakeVersion::V1_0 || catalog_version == DuckLakeVersion::V1_1) {
+		// otherwise, use the catalog's current version
 		return catalog_version;
 	}
-	// pre-1.0 catalogs always require migration
+	// pre-1.0 and dev catalogs always require migration
 	throw InvalidInputException("DuckLake catalog version mismatch: catalog version is %s, but the extension requires "
 	                            "version %s. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
 	                            catalog_version_str, DuckLakeVersionToString(DUCKLAKE_LATEST_VERSION));
@@ -371,7 +357,7 @@ void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &trans
 	}
 	auto &current = transaction.GetMetadataManager();
 	unique_ptr<DuckLakeMetadataManager> new_manager;
-	if (version == DuckLakeVersion::V1_1_DEV_1) {
+	if (version == DuckLakeVersion::V1_1) {
 		if (dynamic_cast<QuackMetadataManager *>(&current)) {
 			new_manager = make_uniq<DuckLakeMetadataManagerV1_1<QuackMetadataManager>>(transaction);
 		} else if (dynamic_cast<PostgresMetadataManager *>(&current)) {

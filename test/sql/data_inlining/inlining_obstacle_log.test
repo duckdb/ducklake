@@ -1,0 +1,47 @@
+# name: test/sql/data_inlining/inlining_obstacle_log.test
+# description: A table whose rows cannot be inlined logs why its rows are written to files
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET ducklake_default_data_inlining_row_limit = 0
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlining_obstacle_log', DUCKLAKE_VERSION '1.0')
+
+# inlining is off, so the 1.0 internal name row_id is allowed
+statement ok
+CREATE TABLE dl.t (id INTEGER, row_id BIGINT)
+
+statement ok
+CREATE TABLE dl.u (id INTEGER, val BIGINT)
+
+statement ok
+SET ducklake_default_data_inlining_row_limit = 100
+
+statement ok
+CALL enable_logging(level => 'warning')
+
+statement ok
+INSERT INTO dl.t VALUES (1, 10)
+
+statement ok
+INSERT INTO dl.u VALUES (1, 10)
+
+query II
+SELECT table_name, file_count FROM ducklake_table_info('dl') ORDER BY table_name
+----
+t	1
+u	0
+
+query I
+SELECT message FROM duckdb_logs WHERE message LIKE 'DuckLake writes the rows of table%'
+----
+DuckLake writes the rows of table "t" to files instead of inlining them, because column "row_id" has the name of an internal column of inlined data tables

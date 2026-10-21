@@ -10,7 +10,7 @@ require parquet
 unzip data/old_ducklake/renamed_field_default.db.gz {TEST_DIR}/v10_renamed_field_defaults.db
 
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/v10_renamed_field_defaults.db' AS lake (DATA_PATH 'data/old_ducklake/renamed_field_default/', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{TEST_DIR}/v10_renamed_field_defaults.db' AS lake (DATA_PATH 'data/old_ducklake/renamed_field_default/', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 # the row of t is in a Parquet file, the row of u is inlined
 query II
@@ -46,7 +46,7 @@ statement ok
 DETACH lake
 
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/v10_renamed_field_defaults.db' AS lake (DATA_PATH 'data/old_ducklake/renamed_field_default/', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1')
+ATTACH 'ducklake:{TEST_DIR}/v10_renamed_field_defaults.db' AS lake (DATA_PATH 'data/old_ducklake/renamed_field_default/', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1')
 
 query I
 SELECT s FROM lake.t
@@ -82,7 +82,7 @@ statement ok
 DETACH config_lake
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS config_lake (DATA_PATH '{DATA_PATH}/v10_renamed_field_defaults_files', METADATA_CATALOG 'config_meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS config_lake (DATA_PATH '{DATA_PATH}/v10_renamed_field_defaults_files', METADATA_CATALOG 'config_meta', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 query I
 SELECT s FROM config_lake.t
@@ -103,10 +103,13 @@ UPDATE config_meta.ducklake_column SET initial_default = NULL, default_value = '
 WHERE column_name = 'g';
 
 statement ok
+UPDATE config_meta.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
+
+statement ok
 DETACH config_lake
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS config_lake (DATA_PATH '{DATA_PATH}/v10_renamed_field_defaults_files', METADATA_CATALOG 'config_meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS config_lake (DATA_PATH '{DATA_PATH}/v10_renamed_field_defaults_files', METADATA_CATALOG 'config_meta', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 query I
 SELECT s FROM config_lake.t

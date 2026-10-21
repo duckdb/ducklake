@@ -1,0 +1,302 @@
+# name: test/sql/view/ducklake_view_replace_noop_state.test
+# description: A view replacement is only skipped when it would not change the view
+# group: [view]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/ducklake_view_replace_noop_state.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_view_replace_noop_state')
+
+# the replacement drops the comment
+statement ok
+CREATE VIEW ducklake.c AS SELECT 42
+
+statement ok
+COMMENT ON VIEW ducklake.c IS 'documented'
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.c AS SELECT 42
+
+query I
+SELECT comment FROM duckdb_views() WHERE database_name = 'ducklake' AND view_name = 'c'
+----
+NULL
+
+# the replacement changes the spelling of the name
+statement ok
+CREATE VIEW ducklake.n AS SELECT 42
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.N AS SELECT 42
+
+query I
+SELECT view_name FROM duckdb_views() WHERE database_name = 'ducklake' AND lower(view_name) = 'n'
+----
+N
+
+# the replacement changes the spelling of an alias
+statement ok
+CREATE VIEW ducklake.a(answer) AS SELECT 42
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.a(Answer) AS SELECT 42
+
+query I
+SELECT column_name FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'a'
+----
+Answer
+
+# the replacement binds the columns the query returns now
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+CREATE VIEW ducklake.b AS SELECT * FROM ducklake.t
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN j VARCHAR
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.b AS SELECT * FROM ducklake.t
+
+query II
+SELECT column_name, data_type FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'b' ORDER BY column_index
+----
+i	INTEGER
+j	VARCHAR
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.u(i INTEGER)
+
+statement ok
+CREATE VIEW ducklake.ub AS SELECT * FROM ducklake.u
+
+statement ok
+ALTER TABLE ducklake.u ALTER COLUMN i TYPE BIGINT
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.ub AS SELECT * FROM ducklake.u
+
+query II
+SELECT column_name, data_type FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'ub'
+----
+i	BIGINT
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.st(s STRUCT(a INTEGER))
+
+statement ok
+CREATE VIEW ducklake.sv AS SELECT * FROM ducklake.st
+
+statement ok
+DROP TABLE ducklake.st
+
+statement ok
+CREATE TABLE ducklake.st(s STRUCT(A INTEGER))
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.sv AS SELECT * FROM ducklake.st
+
+query I
+SELECT data_type FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'sv'
+----
+STRUCT(A INTEGER)
+
+statement ok
+COMMIT
+
+statement ok
+CREATE TABLE memory.source(s VARCHAR COLLATE NOCASE)
+
+statement ok
+CREATE VIEW ducklake.cv AS SELECT * FROM memory.source
+
+statement ok
+SELECT * FROM ducklake.cv
+
+statement ok
+DROP TABLE memory.source
+
+statement ok
+CREATE TABLE memory.source(s VARCHAR)
+
+statement ok
+SET VARIABLE snapshot = (SELECT id FROM ducklake_current_snapshot('ducklake'))
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.cv AS SELECT * FROM memory.source
+
+query I
+SELECT id > getvariable('snapshot') FROM ducklake_current_snapshot('ducklake')
+----
+true
+
+# a view without a binding is replaced
+statement ok
+BEGIN
+
+statement ok
+CREATE VIEW ducklake.d WITH (DEFER_BINDING) AS SELECT * FROM ducklake.missing
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.d WITH (DEFER_BINDING) AS SELECT * FROM ducklake.missing
+
+statement ok
+CREATE TABLE ducklake.missing(k INTEGER)
+
+query I
+SELECT column_name FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'd'
+----
+k
+
+statement ok
+COMMIT
+
+# a view without a binding gets the binding of the replacement
+statement ok
+CREATE TEMP SEQUENCE bind_seq
+
+statement ok
+BEGIN
+
+statement ok
+CREATE VIEW ducklake.q WITH (DEFER_BINDING) AS SELECT * FROM query('SELECT 42 AS c' || nextval('temp.bind_seq')::VARCHAR)
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.q AS SELECT * FROM query('SELECT 42 AS c' || nextval('temp.bind_seq')::VARCHAR)
+
+query I
+SELECT column_name FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'q'
+----
+c1
+
+query I
+SELECT currval('temp.bind_seq')
+----
+1
+
+statement ok
+ROLLBACK
+
+# a definition that depends on the view is still rejected
+statement ok
+SET enable_view_dependencies = true
+
+statement ok
+CREATE TEMP SEQUENCE dep_seq
+
+statement ok
+CREATE VIEW ducklake.dv AS SELECT * FROM query(CASE nextval('temp.dep_seq') WHEN 2 THEN 'SELECT * FROM ducklake.dv' ELSE 'SELECT 42 AS x' END)
+
+statement error
+CREATE OR REPLACE VIEW ducklake.dv AS SELECT * FROM query(CASE nextval('temp.dep_seq') WHEN 2 THEN 'SELECT * FROM ducklake.dv' ELSE 'SELECT 42 AS x' END)
+----
+CREATE OR REPLACE is not allowed to depend on itself
+
+statement ok
+RESET enable_view_dependencies
+
+# an identical PIVOT view is not written again
+statement ok
+CREATE TABLE ducklake.p(k VARCHAR, v INTEGER)
+
+statement ok
+CREATE VIEW ducklake.pv AS PIVOT ducklake.p ON k IN ('x', 'y') USING sum(v)
+
+statement ok
+SET VARIABLE snapshot = (SELECT id FROM ducklake_current_snapshot('ducklake'))
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.pv AS PIVOT ducklake.p ON k IN ('x', 'y') USING sum(v)
+
+query I
+SELECT id = getvariable('snapshot') FROM ducklake_current_snapshot('ducklake')
+----
+true
+
+# nor is an identical view that was not bound yet
+statement ok
+CREATE VIEW ducklake.w AS SELECT 42 AS answer
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_view_replace_noop_state')
+
+statement ok
+SET VARIABLE snapshot = (SELECT id FROM ducklake_current_snapshot('ducklake'))
+
+statement ok
+CREATE OR REPLACE VIEW ducklake.w AS SELECT 42 AS answer
+
+query I
+SELECT id = getvariable('snapshot') FROM ducklake_current_snapshot('ducklake')
+----
+true
+
+# the replacement drops the comments of the columns
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_view_replace_noop_columns.db' AS commented (DATA_PATH '{DATA_PATH}/ducklake_view_replace_noop_columns', DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE VIEW commented.cv AS SELECT 42 AS answer
+
+statement ok
+COMMENT ON COLUMN commented.cv.answer IS 'the answer'
+
+statement ok
+CREATE OR REPLACE VIEW commented.cv AS SELECT 42 AS answer
+
+query I
+SELECT comment FROM duckdb_columns() WHERE database_name = 'commented' AND table_name = 'cv'
+----
+NULL
+
+# also those of columns the view does not return under that name anymore
+statement ok
+CREATE TABLE commented.r(i INTEGER)
+
+statement ok
+CREATE VIEW commented.rv AS SELECT * FROM commented.r
+
+statement ok
+COMMENT ON COLUMN commented.rv.i IS 'the i'
+
+statement ok
+ALTER TABLE commented.r RENAME COLUMN i TO j
+
+statement ok
+SELECT * FROM commented.rv
+
+statement ok
+CREATE OR REPLACE VIEW commented.rv AS SELECT * FROM commented.r
+
+statement ok
+ALTER TABLE commented.r RENAME COLUMN j TO i
+
+query II
+SELECT column_name, comment FROM duckdb_columns() WHERE database_name = 'commented' AND table_name = 'rv'
+----
+i	NULL

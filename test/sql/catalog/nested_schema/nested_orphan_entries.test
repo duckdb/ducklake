@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/nested_orphan_entries', METADATA_CATALOG 'dl_meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1', DATA_PATH '{DATA_PATH}/nested_orphan_entries', METADATA_CATALOG 'dl_meta')
 
 statement ok
 CREATE SCHEMA dl.b
@@ -48,7 +48,7 @@ statement ok
 DETACH dl
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/nested_orphan_entries', METADATA_CATALOG 'dl_meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1', DATA_PATH '{DATA_PATH}/nested_orphan_entries', METADATA_CATALOG 'dl_meta')
 
 query I
 SELECT k FROM dl.main.keep
@@ -76,7 +76,7 @@ statement ok
 DETACH dl
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/nested_orphan_entries', METADATA_CATALOG 'dl_meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1', DATA_PATH '{DATA_PATH}/nested_orphan_entries', METADATA_CATALOG 'dl_meta')
 
 statement error
 SELECT k FROM dl.main.keep

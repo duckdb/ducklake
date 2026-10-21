@@ -265,9 +265,62 @@ static void StripCatalogFromPivots(QueryNode &node, const Identifier &catalog_na
 	ParsedExpressionIterator::EnumerateQueryNodeChildren(node, strip_expression, strip_ref);
 }
 
+static bool HasSameSpelling(const vector<Identifier> &left, const vector<Identifier> &right) {
+	if (left.size() != right.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < left.size(); i++) {
+		if (left[i].GetIdentifierName() != right[i].GetIdentifierName()) {
+			return false;
+		}
+	}
+	return true;
+}
+
+//! Equal types can spell the names of their nested fields differently
+static bool HasSameTypes(const vector<LogicalType> &left, const vector<LogicalType> &right) {
+	if (left.size() != right.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < left.size(); i++) {
+		if (!left[i].EqualsIncludingCollation(right[i]) || left[i].ToString() != right[i].ToString()) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static bool IsIdenticalView(DuckLakeViewEntry &view, const CreateViewInfo &info, const string &query_sql) {
+	if (view.GetQuerySQL() != query_sql || info.binding_mode != CreateViewBindingMode::BIND_ON_CREATE ||
+	    view.name.GetIdentifierName() != info.GetViewName().GetIdentifierName() ||
+	    !HasSameSpelling(view.aliases, info.aliases) || !Value::NotDistinctFrom(view.comment, info.comment) ||
+	    view.tags != info.tags || view.HasColumnComments() || !info.column_comments_map.empty()) {
+		return false;
+	}
+	auto columns = view.GetColumnInfo();
+	return !columns || (HasSameTypes(columns->types, info.types) && HasSameSpelling(columns->names, info.names));
+}
+
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction transaction, CreateViewInfo &info) {
 	if (info.security_type == ViewSecurityType::SECURE_VIEW) {
 		throw NotImplementedException("DuckLake does not support secure views");
+	}
+	StripCatalogFromPivots(*info.query->node, ParentCatalog().GetName());
+	auto query_sql = info.query->ToString();
+	if (info.on_conflict == OnCreateConflict::REPLACE_ON_CONFLICT) {
+		auto existing_entry = GetEntry(transaction, CatalogType::VIEW_ENTRY, info.GetViewName());
+		// a definition that depends on the view is rejected by the conflict handling below
+		if (existing_entry && existing_entry->type == CatalogType::VIEW_ENTRY &&
+		    !info.dependencies.Contains(*existing_entry)) {
+			auto &existing_view = existing_entry->Cast<DuckLakeViewEntry>();
+			if (IsIdenticalView(existing_view, info, query_sql)) {
+				if (!existing_view.GetColumnInfo()) {
+					// keep the binding of the replacement instead of binding the query again
+					existing_view.UpdateBinding(info.types, info.names);
+				}
+				return existing_entry;
+			}
+		}
 	}
 	// check if we have an existing entry with this name
 	if (!HandleCreateConflict(transaction, CatalogType::VIEW_ENTRY, info.GetViewName().GetIdentifierName(), info)) {
@@ -277,9 +330,6 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction tr
 	// get a local view-id
 	auto view_id = TableIndex(duck_transaction.GetLocalCatalogId());
 	auto view_uuid = UUID::ToString(UUID::GenerateRandomUUID());
-
-	StripCatalogFromPivots(*info.query->node, ParentCatalog().GetName());
-	auto query_sql = info.query->ToString();
 
 	auto view_entry = make_uniq<DuckLakeViewEntry>(ParentCatalog(), *this, info, view_id, std::move(view_uuid),
 	                                               query_sql, LocalChangeType::CREATED);

@@ -1,0 +1,178 @@
+# name: test/sql/alter/add_struct_alter_same_transaction.test
+# description: a STRUCT column keeps its fields when it is altered in the transaction that added it
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_struct_alter')
+
+# renamed
+statement ok
+CREATE TABLE ducklake.t1 (id INTEGER);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t1 ADD COLUMN s STRUCT(a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO ducklake.t1 VALUES (1, {'a': 10, 'b': 20})
+
+statement ok
+ALTER TABLE ducklake.t1 RENAME COLUMN s TO r
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM ducklake.t1
+----
+1	{'a': 10, 'b': 20}
+
+# set NOT NULL
+statement ok
+CREATE TABLE ducklake.t2 (id INTEGER);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t2 ADD COLUMN s STRUCT(a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO ducklake.t2 VALUES (1, {'a': 10, 'b': 20})
+
+statement ok
+ALTER TABLE ducklake.t2 ALTER COLUMN s SET NOT NULL
+
+statement ok
+COMMIT
+
+query II
+SELECT * FROM ducklake.t2
+----
+1	{'a': 10, 'b': 20}
+
+# a new type of the struct, then renamed
+statement ok
+CREATE TABLE ducklake.t3 (id INTEGER);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t3 ADD COLUMN s STRUCT(a INTEGER, b INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t3 ALTER COLUMN s SET DATA TYPE STRUCT(a BIGINT)
+
+statement ok
+ALTER TABLE ducklake.t3 RENAME COLUMN s TO r
+
+statement ok
+COMMIT
+
+query I
+SELECT column_type FROM (DESCRIBE ducklake.t3) WHERE column_name = 'r'
+----
+STRUCT(a BIGINT)
+
+# renamed, then a field dropped and a field renamed
+statement ok
+CREATE TABLE ducklake.t4 (id INTEGER);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t4 ADD COLUMN s STRUCT(a INTEGER, b INTEGER, c INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t4 RENAME COLUMN s TO r
+
+statement ok
+ALTER TABLE ducklake.t4 DROP COLUMN r.b
+
+statement ok
+ALTER TABLE ducklake.t4 RENAME COLUMN r.c TO d
+
+statement ok
+COMMIT
+
+query I
+SELECT column_type FROM (DESCRIBE ducklake.t4) WHERE column_name = 'r'
+----
+STRUCT(a INTEGER, d INTEGER)
+
+# the field ids of the renamed struct stay taken
+statement ok
+CREATE TABLE ducklake.t5 (id INTEGER);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t5 ADD COLUMN s STRUCT(a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO ducklake.t5 VALUES (1, {'a': 10, 'b': 20})
+
+statement ok
+ALTER TABLE ducklake.t5 RENAME COLUMN s TO r
+
+statement ok
+COMMIT
+
+statement ok
+ALTER TABLE ducklake.t5 ADD COLUMN c INTEGER DEFAULT 0
+
+query I
+SELECT count(*) FROM ducklake.t5 WHERE c = 0
+----
+1
+
+# a field dropped after the rename keeps its field id taken
+statement ok
+CREATE TABLE ducklake.t6 (id INTEGER);
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0, table_name => 't6')
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t6 ADD COLUMN s STRUCT(a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO ducklake.t6 VALUES (1, {'a': 10, 'b': 20})
+
+statement ok
+ALTER TABLE ducklake.t6 RENAME COLUMN s TO r
+
+statement ok
+ALTER TABLE ducklake.t6 DROP COLUMN r.b
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't6')
+----
+1
+
+statement ok
+ALTER TABLE ducklake.t6 ADD COLUMN r.c INTEGER
+
+query II
+SELECT id, r FROM ducklake.t6
+----
+1	{'a': 10, 'c': NULL}

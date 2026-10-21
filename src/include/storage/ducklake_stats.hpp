@@ -96,6 +96,8 @@ public:
 	void ClearBounds();
 	//! Rewrite FLOAT bounds as the DOUBLE values they widen to
 	void WidenFloatBounds();
+	//! Rewrite bounds of the source type as the values they cast to, dropping the bounds that do not cast
+	void CastBoundsFrom(const LogicalType &source);
 	void CopyMinFrom(const DuckLakeColumnStats &other);
 	void CopyMaxFrom(const DuckLakeColumnStats &other);
 	static bool BoundsSurviveTypePromotion(const LogicalType &source, const LogicalType &target);

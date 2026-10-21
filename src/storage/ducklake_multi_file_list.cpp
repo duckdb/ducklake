@@ -2,6 +2,7 @@
 #include "storage/ducklake_scan.hpp"
 #include "storage/ducklake_multi_file_list.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
+#include "storage/ducklake_inlined_data_reader.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 
 #include "duckdb/common/algorithm.hpp"
@@ -664,13 +665,84 @@ void DuckLakeMultiFileList::ApplyLocalChanges(DuckLakeTransaction &transaction) 
 	}
 }
 
+void DuckLakeMultiFileList::SetScanColumns(const vector<MultiFileColumnDefinition> &global_columns,
+                                           const vector<ColumnIndex> &column_ids) const {
+	lock_guard<mutex> l(file_lock);
+	scan_field_ids = make_uniq<unordered_set<int32_t>>();
+	for (auto &column_id : column_ids) {
+		auto index = column_id.GetPrimaryIndex();
+		if (index == DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID) {
+			scan_field_ids->insert(MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID);
+		}
+		if (index >= global_columns.size()) {
+			continue;
+		}
+		auto &identifier = global_columns[index].identifier;
+		if (!identifier.IsNull() && identifier.type().id() == LogicalTypeId::INTEGER) {
+			scan_field_ids->insert(IntegerValue::Get(identifier));
+		}
+	}
+}
+
+vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
+    DuckLakeTransaction &transaction,
+    unordered_map<string, shared_ptr<DuckLakeCommittedInlinedRows>> &inlined_rows) const {
+	static constexpr idx_t MAX_ATTEMPTS = 10;
+	auto &metadata_manager = transaction.GetMetadataManager();
+	if (!metadata_manager.CommitsEachStatement() || inlined_data_tables.empty()) {
+		return metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter_info.get(),
+		                                         read_info.include_local_changes);
+	}
+	// every query sees the latest commits, so the inlined rows are read first and again if a file was written since
+	for (idx_t attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+		optional_idx next_file_id;
+		inlined_rows.clear();
+		if (attempt > 0) {
+			// the flush can have dropped an inlined table it emptied
+			inlined_data_tables =
+			    read_info.table.GetInlinedDataTables(transaction, read_info.snapshot, read_info.include_local_changes);
+		}
+		for (auto &table : inlined_data_tables) {
+			vector<MultiFileColumnDefinition> columns;
+			if (!DuckLakeMultiFileReader::GetInlinedTableColumns(read_info, table.schema_version, columns)) {
+				continue;
+			}
+			if (scan_field_ids) {
+				columns.erase(std::remove_if(columns.begin(), columns.end(),
+				                             [&](const MultiFileColumnDefinition &col) {
+					                             auto field_id = IntegerValue::Get(col.identifier);
+					                             return field_id != MultiFileReader::ROW_ID_FIELD_ID &&
+					                                    scan_field_ids->count(field_id) == 0;
+				                             }),
+				              columns.end());
+			}
+			inlined_rows[table.table_name] =
+			    DuckLakeInlinedDataReader::ReadCommittedRows(read_info, table.table_name, columns, next_file_id);
+		}
+		auto result = metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter_info.get(),
+		                                                read_info.include_local_changes);
+		// without inlined rows a flush cannot move any of them
+		bool written_since = next_file_id.IsValid() &&
+		                     std::any_of(result.begin(), result.end(), [&](const DuckLakeFileListEntry &entry) {
+			                     return entry.file_id.IsValid() && entry.file_id.index >= next_file_id.GetIndex();
+		                     });
+		if (!written_since) {
+			return result;
+		}
+	}
+	throw TransactionException("Transaction conflict - the inlined data of table \"%s\" kept moving to files while "
+	                           "it was read",
+	                           read_info.table.name.GetIdentifierName());
+}
+
 void DuckLakeMultiFileList::GetFilesForTable() const {
 	auto transaction_ref = read_info.GetTransaction();
 	auto &transaction = *transaction_ref;
+	inlined_data_tables =
+	    read_info.table.GetInlinedDataTables(transaction, read_info.snapshot, read_info.include_local_changes);
+	unordered_map<string, shared_ptr<DuckLakeCommittedInlinedRows>> inlined_rows;
 	if (!IsTransactionLocal(read_info.table_id)) {
-		auto &metadata_manager = transaction.GetMetadataManager();
-		files = metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter_info.get(),
-		                                          read_info.include_local_changes);
+		files = ReadCommittedFiles(transaction, inlined_rows);
 	}
 	if (read_info.include_local_changes) {
 		ApplyLocalChanges(transaction);
@@ -685,7 +757,14 @@ void DuckLakeMultiFileList::GetFilesForTable() const {
 		transaction_row_start += file.row_count;
 		files.emplace_back(std::move(file_entry));
 	}
-	AddInlinedDataTables(transaction);
+	for (auto &table : inlined_data_tables) {
+		auto file_entry = InlinedDataEntry(table);
+		auto rows = inlined_rows.find(table.table_name);
+		if (rows != inlined_rows.end()) {
+			file_entry.inlined_rows = rows->second;
+		}
+		files.push_back(std::move(file_entry));
+	}
 	if (transaction_local_data) {
 		// we have transaction local inlined data - create the dummy file entry
 		DuckLakeFileListEntry file_entry;

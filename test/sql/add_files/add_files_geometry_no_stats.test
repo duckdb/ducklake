@@ -1,0 +1,73 @@
+# name: test/sql/add_files/add_files_geometry_no_stats.test
+# description: GEOMETRY files written without geospatial statistics are added with unknown geometry statistics
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_files_geometry_no_stats')
+
+statement ok
+CREATE TABLE ducklake.nostats (g GEOMETRY)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'nostats', 'data/parquet/geometry_point_no_stats.parquet')
+
+statement ok
+CREATE TABLE ducklake.empty_types (g GEOMETRY)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'empty_types', 'data/parquet/geometry_point_empty_types.parquet')
+
+statement ok
+CREATE TABLE ducklake.infinite (g GEOMETRY)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'infinite', 'data/parquet/geometry_infinite_point_no_stats.parquet')
+
+statement ok
+CREATE TABLE ducklake.mixed (g GEOMETRY)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'mixed', 'data/parquet/geometry_point_stats.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'mixed', 'data/parquet/geometry_far_point_no_stats.parquet')
+
+loop i 0 2
+
+query II
+SELECT vertex_extract(g, 'x'), (SELECT count(*) FROM ducklake.nostats WHERE vertex_extract(g, 'x') = 1) FROM ducklake.nostats
+----
+1.0	1
+
+query II
+SELECT vertex_extract(g, 'x'), (SELECT count(*) FROM ducklake.empty_types WHERE vertex_extract(g, 'x') = 1) FROM ducklake.empty_types
+----
+1.0	1
+
+query I
+SELECT count(*) FROM ducklake.infinite WHERE vertex_extract(g, 'x') = 'inf'::DOUBLE
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.mixed
+WHERE st_intersects_extent(g, st_geomfromwkb(from_hex('010100000000000000000059400000000000005940')))
+----
+1
+
+# The statistics read back from the catalog stay unknown
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_files_geometry_no_stats')
+
+endloop

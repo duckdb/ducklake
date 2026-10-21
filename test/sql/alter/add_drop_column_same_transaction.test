@@ -1,0 +1,192 @@
+# name: test/sql/alter/add_drop_column_same_transaction.test
+# description: a column added and dropped in one transaction keeps its field id taken
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_drop_column', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN c1 INTEGER
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 100)
+
+statement ok
+ALTER TABLE ducklake.t DROP COLUMN c1
+
+statement ok
+COMMIT
+
+query I
+SELECT * FROM ducklake.t
+----
+1
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN c2 INTEGER DEFAULT 0
+
+query II
+SELECT * FROM ducklake.t
+----
+1	0
+
+query I
+SELECT count(*) FROM ducklake.t WHERE c2 = 0
+----
+1
+
+# renamed before it is dropped
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN c3 INTEGER
+
+statement ok
+INSERT INTO ducklake.t VALUES (2, 0, 200)
+
+statement ok
+ALTER TABLE ducklake.t RENAME COLUMN c3 TO c4
+
+statement ok
+ALTER TABLE ducklake.t DROP COLUMN c4
+
+statement ok
+COMMIT
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN c5 INTEGER
+
+query III
+SELECT * FROM ducklake.t ORDER BY id
+----
+1	0	NULL
+2	0	NULL
+
+# a table created in the same transaction
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.u (id INTEGER);
+
+statement ok
+ALTER TABLE ducklake.u ADD COLUMN c1 INTEGER
+
+statement ok
+INSERT INTO ducklake.u VALUES (1, 100)
+
+statement ok
+ALTER TABLE ducklake.u DROP COLUMN c1
+
+statement ok
+COMMIT
+
+statement ok
+ALTER TABLE ducklake.u ADD COLUMN c2 INTEGER DEFAULT 0
+
+query II
+SELECT * FROM ducklake.u
+----
+1	0
+
+# a struct column
+statement ok
+CREATE TABLE ducklake.v (id INTEGER);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.v ADD COLUMN s STRUCT(a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO ducklake.v VALUES (1, {'a': 10, 'b': 20})
+
+statement ok
+ALTER TABLE ducklake.v DROP COLUMN s
+
+statement ok
+COMMIT
+
+statement ok
+ALTER TABLE ducklake.v ADD COLUMN c1 INTEGER DEFAULT 0
+
+statement ok
+ALTER TABLE ducklake.v ADD COLUMN c2 INTEGER DEFAULT 1
+
+statement ok
+ALTER TABLE ducklake.v ADD COLUMN c3 INTEGER DEFAULT 2
+
+query IIII
+SELECT * FROM ducklake.v
+----
+1	0	1	2
+
+# a nested field
+statement ok
+CREATE TABLE ducklake.n (id INTEGER, s STRUCT(a INTEGER));
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.n ADD COLUMN s.b INTEGER
+
+statement ok
+INSERT INTO ducklake.n VALUES (1, {'a': 10, 'b': 20})
+
+statement ok
+ALTER TABLE ducklake.n DROP COLUMN s.b
+
+statement ok
+COMMIT
+
+statement ok
+ALTER TABLE ducklake.n ADD COLUMN s.c INTEGER
+
+query II
+SELECT id, s FROM ducklake.n
+----
+1	{'a': 10, 'c': NULL}
+
+# a field of a struct column added in the same transaction
+statement ok
+CREATE TABLE ducklake.f (id INTEGER);
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.f ADD COLUMN s STRUCT(a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO ducklake.f VALUES (1, {'a': 10, 'b': 20})
+
+statement ok
+ALTER TABLE ducklake.f DROP COLUMN s.b
+
+statement ok
+COMMIT
+
+statement ok
+ALTER TABLE ducklake.f ADD COLUMN s.c INTEGER
+
+query II
+SELECT id, s FROM ducklake.f
+----
+1	{'a': 10, 'c': NULL}

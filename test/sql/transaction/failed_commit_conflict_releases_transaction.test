@@ -1,0 +1,63 @@
+# name: test/sql/transaction/failed_commit_conflict_releases_transaction.test
+# description: a COMMIT that fails on a conflict releases its DuckLake transaction and the metadata connection it holds
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lk (DATA_PATH '{DATA_PATH}/failed_commit_conflict_releases_transaction/', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lk.t(k INTEGER, v INTEGER)
+
+statement ok
+INSERT INTO lk.t VALUES (1, 1)
+
+statement ok con1
+SELECT 1
+
+statement ok con2
+SELECT 1
+
+statement ok
+SET VARIABLE connections = (SELECT count FROM duckdb_connection_count())
+
+statement ok con1
+BEGIN
+
+statement ok con1
+UPDATE lk.t SET v = v + 1 WHERE k = 1
+
+statement ok con2
+BEGIN
+
+statement ok con2
+UPDATE lk.t SET v = v + 1 WHERE k = 1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*[Cc]onflict.*
+
+# no failed transaction is left, so neither is its metadata connection
+query I
+SELECT count = getvariable('connections') FROM duckdb_connection_count()
+----
+true
+
+statement ok con2
+UPDATE lk.t SET v = v + 10 WHERE k = 1
+
+query II
+SELECT * FROM lk.t
+----
+1	12

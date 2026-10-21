@@ -1,0 +1,141 @@
+# name: test/sql/compaction/compaction_added_file_finer_timestamps.test
+# description: compaction keeps the timestamps of added files that are finer than the column type they were added with
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/added_finer_timestamps', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+COPY (SELECT TIMESTAMP_NS '2020-01-01 00:00:00.000000001' AS t) TO '{DATA_PATH}/finer_ns.parquet'
+
+statement ok
+COPY (SELECT TIMESTAMP_NS '2020-01-01 00:00:00.000000001' AS t, i FROM range(2) t(i)) TO '{DATA_PATH}/finer_ns_rows.parquet'
+
+statement ok
+COPY (SELECT TIMESTAMP '2020-01-01 00:00:00.123456' AS t) TO '{DATA_PATH}/finer_us.parquet'
+
+statement ok
+COPY (SELECT {'t': TIMESTAMP_NS '2020-01-01 00:00:00.000000001'} AS s) TO '{DATA_PATH}/finer_struct.parquet'
+
+# nanoseconds in a TIMESTAMP column, shown after the type change
+statement ok
+CREATE TABLE ducklake.t (t TIMESTAMP)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/finer_ns.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/finer_ns.parquet')
+
+statement ok
+ALTER TABLE ducklake.t ALTER COLUMN t TYPE TIMESTAMP_NS
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 't')
+
+query I
+SELECT t FROM ducklake.t
+----
+2020-01-01 00:00:00.000000001
+2020-01-01 00:00:00.000000001
+
+# a rewrite after deleting part of the file
+statement ok
+CREATE TABLE ducklake.r (t TIMESTAMP, i BIGINT)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'r', '{DATA_PATH}/finer_ns_rows.parquet')
+
+statement ok
+ALTER TABLE ducklake.r ALTER COLUMN t TYPE TIMESTAMP_NS
+
+statement ok
+DELETE FROM ducklake.r WHERE i = 0
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'r', delete_threshold => 0)
+
+query II
+SELECT t, i FROM ducklake.r
+----
+2020-01-01 00:00:00.000000001	1
+
+# microseconds in a TIMESTAMP_S column
+statement ok
+CREATE TABLE ducklake.s (t TIMESTAMP_S)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 's', '{DATA_PATH}/finer_us.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 's', '{DATA_PATH}/finer_us.parquet')
+
+statement ok
+ALTER TABLE ducklake.s ALTER COLUMN t TYPE TIMESTAMP
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 's')
+
+query I
+SELECT t FROM ducklake.s
+----
+2020-01-01 00:00:00.123456
+2020-01-01 00:00:00.123456
+
+# a struct field
+statement ok
+CREATE TABLE ducklake.n (s STRUCT(t TIMESTAMP))
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'n', '{DATA_PATH}/finer_struct.parquet')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'n', '{DATA_PATH}/finer_struct.parquet')
+
+statement ok
+ALTER TABLE ducklake.n ALTER COLUMN s TYPE STRUCT(t TIMESTAMP_NS)
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'n')
+
+query I
+SELECT s.t FROM ducklake.n
+----
+2020-01-01 00:00:00.000000001
+2020-01-01 00:00:00.000000001
+
+# files written by DuckLake under the older type are still merged, the added file is left as it is
+statement ok
+CREATE TABLE ducklake.w (t TIMESTAMP)
+
+statement ok
+INSERT INTO ducklake.w VALUES (TIMESTAMP '2021-01-01 00:00:00.000001')
+
+statement ok
+INSERT INTO ducklake.w VALUES (TIMESTAMP '2021-01-01 00:00:00.000002')
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'w', '{DATA_PATH}/finer_ns.parquet')
+
+statement ok
+ALTER TABLE ducklake.w ALTER COLUMN t TYPE TIMESTAMP_NS
+
+query II
+SELECT files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 'w')
+----
+2	1
+
+query I
+SELECT t FROM ducklake.w ORDER BY t
+----
+2020-01-01 00:00:00.000000001
+2021-01-01 00:00:00.000001
+2021-01-01 00:00:00.000002

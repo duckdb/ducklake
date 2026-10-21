@@ -1,0 +1,44 @@
+# name: test/sql/data_inlining/inlined_reserved_column_names.test
+# description: Inlined data tables keep columns named after keywords of the metadata database
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/inlined_reserved_column_names', DATA_INLINING_ROW_LIMIT 10)
+
+# reserved in Postgres, but not keywords of DuckDB
+statement ok
+CREATE TABLE lake.t (id INTEGER, current_date VARCHAR, session_user VARCHAR, localtime INTEGER, "MixedCase" INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1, 'a', 'b', 2, 3)
+
+statement ok
+ALTER TABLE lake.t ADD COLUMN system_user VARCHAR
+
+statement ok
+ALTER TABLE lake.t RENAME COLUMN id TO current_user
+
+statement ok
+INSERT INTO lake.t VALUES (4, 'c', 'd', 5, 6, 'e')
+
+query IIIIII
+SELECT current_user, current_date, session_user, localtime, "MixedCase", system_user FROM lake.t ORDER BY 1
+----
+1	a	b	2	3	NULL
+4	c	d	5	6	e
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+query II
+SELECT count(*), sum("MixedCase") FROM lake.t
+----
+2	9

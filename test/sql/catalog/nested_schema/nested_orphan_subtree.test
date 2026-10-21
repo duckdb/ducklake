@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/nested_orphan_files', METADATA_CATALOG 'dl_meta', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1', DATA_PATH '{DATA_PATH}/nested_orphan_files', METADATA_CATALOG 'dl_meta', DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 CREATE SCHEMA dl.a;
@@ -33,7 +33,7 @@ statement ok
 DETACH dl;
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/nested_orphan_files', METADATA_CATALOG 'dl_meta', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1', DATA_PATH '{DATA_PATH}/nested_orphan_files', METADATA_CATALOG 'dl_meta', DATA_INLINING_ROW_LIMIT 10)
 
 query I
 SELECT k FROM dl.main.keep
@@ -58,7 +58,7 @@ statement ok
 DETACH dl;
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/nested_orphan_files', METADATA_CATALOG 'dl_meta', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1', DATA_PATH '{DATA_PATH}/nested_orphan_files', METADATA_CATALOG 'dl_meta', DATA_INLINING_ROW_LIMIT 10)
 
 query I
 SELECT i FROM dl.a.b.t
@@ -73,7 +73,7 @@ statement ok
 DETACH dl;
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/nested_orphan_files', METADATA_CATALOG 'dl_meta', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1', DATA_PATH '{DATA_PATH}/nested_orphan_files', METADATA_CATALOG 'dl_meta', DATA_INLINING_ROW_LIMIT 10)
 
 statement error
 SELECT k FROM dl.main.keep
@@ -91,7 +91,7 @@ statement ok
 DETACH dl;
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/nested_orphan_files', METADATA_CATALOG 'dl_meta', DATA_INLINING_ROW_LIMIT 10)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1', DATA_PATH '{DATA_PATH}/nested_orphan_files', METADATA_CATALOG 'dl_meta', DATA_INLINING_ROW_LIMIT 10)
 
 statement error
 SELECT k FROM dl.main.keep

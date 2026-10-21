@@ -27,6 +27,9 @@ public:
 	void GetWrittenFiles(vector<string> &result);
 
 private:
+	//! Takes the transaction out, it is destroyed after the lock as its metadata connection can end one of ours
+	shared_ptr<DuckLakeTransaction> RemoveTransaction(Transaction &transaction);
+
 	DuckLakeCatalog &ducklake_catalog;
 	mutex transaction_lock;
 	reference_map_t<Transaction, shared_ptr<DuckLakeTransaction>> transactions;

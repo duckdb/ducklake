@@ -26,6 +26,8 @@ struct DuckLakeColumnSchemaEntry {
 struct DuckLakeCommitContext {
 	//! Runs a metadata-DB query during conflict resolution.
 	std::function<unique_ptr<QueryResult>(string)> conflict_query_executor;
+	//! The query of the latest snapshot, its table stats and the changes since the transaction snapshot
+	string snapshot_and_stats_query;
 	//! Whether the inlined file deletion table of a table exists, it is created lazily
 	std::function<bool(TableIndex)> inlined_file_deletion_table_exists;
 	//! Returns the latest snapshot for the first commit attempt.
@@ -38,6 +40,10 @@ struct DuckLakeCommitContext {
 	//! Classifies metadata-catalog errors that are safe to retry.
 	std::function<bool(const string &)> is_retryable_metadata_error = [](const string &) {
 		return false;
+	};
+	//! Advice for a commit error that is not retried.
+	std::function<string(const string &)> commit_error_hint = [](const string &) {
+		return string();
 	};
 	//! Optional hooks below default to a no-op/constant; callers override only the ones they need.
 	//! Clears the metadata manager cache if a clear was pending.
@@ -143,7 +149,7 @@ struct DuckLakeCommitContext {
 	DuckLakeSnapshotCommit commit_info;
 	//! When true, Commit() skips the post-commit DropEmptySupersededInlinedTables cleanup.
 	bool skip_drop_empty_inlined = false;
-	//! Whether the metadata schema has the >= 1.1-dev1 additions.
+	//! Whether the metadata schema has the >= 1.1 additions.
 	bool supports_v1_1_metadata = false;
 	//! Column names of the inlined data tables under this catalog version.
 	DuckLakeInlinedColNames InlinedColNames() const {
@@ -218,7 +224,7 @@ public:
 	//! After a REWRITE_DELETES compaction, recompute EXACT global stats for `table_id` from the post-rewrite file set
 	//! (+ committed inlined data) and append the UpdateGlobalTableStats SQL to `batch_query`. No-op (leaving the
 	//! existing stale stats, and the scan fallback) if the table is not fully delete-free post-rewrite or the
-	//! inlined data cannot be accounted for exactly.
+	//! inlined data cannot be accounted for exactly. Returns whether it wrote the stats.
 	bool RecomputeGlobalStatsAfterRewrite(string &batch_query, TableIndex table_id, DuckLakeSnapshot snapshot,
 	                                      const CompactionInformation &rewrite_changes,
 	                                      const set<DataFileIndex> &removed_source_ids,

@@ -1,0 +1,36 @@
+# name: test/sql/migration/v10_dropped_column_ids.test
+# description: a column added after migrating does not reuse the id of a column that DuckLake 1.0 added and dropped in one transaction
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+# written by DuckDB 1.5.6, where t.c1 and s.f were added, filled and dropped in one transaction without leaving column rows
+unzip data/old_ducklake/dropped_in_transaction.db.gz {TEST_DIR}/v10_dropped_column_ids.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_dropped_column_ids.db' AS lake (DATA_PATH 'data/old_ducklake/dropped_in_transaction/', OVERRIDE_DATA_PATH TRUE, DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+ALTER TABLE lake.t ADD COLUMN c2 INTEGER DEFAULT 0
+
+query II
+SELECT * FROM lake.t ORDER BY id
+----
+0	0
+1	0
+
+query I
+SELECT count(*) FROM lake.t WHERE c2 = 0
+----
+2
+
+statement ok
+ALTER TABLE lake.s ADD COLUMN s.g INTEGER DEFAULT 0
+
+query II
+SELECT * FROM lake.s ORDER BY id
+----
+0	{'a': 0, 'g': 0}
+1	{'a': 1, 'g': 0}

@@ -9,7 +9,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/shared_schema_helpers');
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1', DATA_PATH '{DATA_PATH}/shared_schema_helpers');
 
 statement ok
 CREATE SCHEMA dl.s;

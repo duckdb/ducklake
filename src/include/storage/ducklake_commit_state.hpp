@@ -35,6 +35,7 @@ struct NewTableInfo {
 	vector<DuckLakeViewColumnTagInfo> new_view_column_tags;
 	vector<DuckLakeDroppedColumn> dropped_columns;
 	vector<DuckLakeNewColumn> new_columns;
+	vector<DuckLakeNewColumn> dropped_new_columns;
 	vector<DuckLakeTableInfo> new_inlined_data_tables;
 	vector<DuckLakeSortInfo> new_sort_keys;
 	vector<DuckLakeConfigOption> new_table_options;

@@ -1,0 +1,29 @@
+# name: test/sql/metadata/view_load_error.test
+# description: A failure to load the views of the catalog reports the view query
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/view_load_error.db' AS lake (DATA_PATH '{DATA_PATH}/view_load_error')
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+DROP TABLE __ducklake_metadata_lake.main.ducklake_view
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/view_load_error.db' AS lake (DATA_PATH '{DATA_PATH}/view_load_error')
+
+statement error
+SELECT * FROM lake.t
+----
+Failed to get view information from DuckLake

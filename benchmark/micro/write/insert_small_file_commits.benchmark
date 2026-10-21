@@ -1,0 +1,126 @@
+# name: benchmark/micro/write/insert_small_file_commits.benchmark
+# description: Commit 100 files in separate ten-row transactions
+# group: [write]
+
+name Insert Small File Commits
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument lake insert_small_file_commits
+
+argument work insert_small_file_commits_work
+
+include benchmark/micro/fixtures/metadata_commit.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+INSERT INTO lake.t SELECT 0, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(0, 10) r(i);
+INSERT INTO lake.t SELECT 1, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(10, 20) r(i);
+INSERT INTO lake.t SELECT 2, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(20, 30) r(i);
+INSERT INTO lake.t SELECT 3, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(30, 40) r(i);
+INSERT INTO lake.t SELECT 4, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(40, 50) r(i);
+INSERT INTO lake.t SELECT 5, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(50, 60) r(i);
+INSERT INTO lake.t SELECT 6, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(60, 70) r(i);
+INSERT INTO lake.t SELECT 7, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(70, 80) r(i);
+INSERT INTO lake.t SELECT 8, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(80, 90) r(i);
+INSERT INTO lake.t SELECT 9, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(90, 100) r(i);
+INSERT INTO lake.t SELECT 10, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(100, 110) r(i);
+INSERT INTO lake.t SELECT 11, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(110, 120) r(i);
+INSERT INTO lake.t SELECT 12, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(120, 130) r(i);
+INSERT INTO lake.t SELECT 13, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(130, 140) r(i);
+INSERT INTO lake.t SELECT 14, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(140, 150) r(i);
+INSERT INTO lake.t SELECT 15, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(150, 160) r(i);
+INSERT INTO lake.t SELECT 16, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(160, 170) r(i);
+INSERT INTO lake.t SELECT 17, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(170, 180) r(i);
+INSERT INTO lake.t SELECT 18, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(180, 190) r(i);
+INSERT INTO lake.t SELECT 19, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(190, 200) r(i);
+INSERT INTO lake.t SELECT 20, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(200, 210) r(i);
+INSERT INTO lake.t SELECT 21, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(210, 220) r(i);
+INSERT INTO lake.t SELECT 22, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(220, 230) r(i);
+INSERT INTO lake.t SELECT 23, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(230, 240) r(i);
+INSERT INTO lake.t SELECT 24, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(240, 250) r(i);
+INSERT INTO lake.t SELECT 25, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(250, 260) r(i);
+INSERT INTO lake.t SELECT 26, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(260, 270) r(i);
+INSERT INTO lake.t SELECT 27, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(270, 280) r(i);
+INSERT INTO lake.t SELECT 28, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(280, 290) r(i);
+INSERT INTO lake.t SELECT 29, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(290, 300) r(i);
+INSERT INTO lake.t SELECT 30, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(300, 310) r(i);
+INSERT INTO lake.t SELECT 31, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(310, 320) r(i);
+INSERT INTO lake.t SELECT 32, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(320, 330) r(i);
+INSERT INTO lake.t SELECT 33, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(330, 340) r(i);
+INSERT INTO lake.t SELECT 34, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(340, 350) r(i);
+INSERT INTO lake.t SELECT 35, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(350, 360) r(i);
+INSERT INTO lake.t SELECT 36, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(360, 370) r(i);
+INSERT INTO lake.t SELECT 37, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(370, 380) r(i);
+INSERT INTO lake.t SELECT 38, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(380, 390) r(i);
+INSERT INTO lake.t SELECT 39, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(390, 400) r(i);
+INSERT INTO lake.t SELECT 40, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(400, 410) r(i);
+INSERT INTO lake.t SELECT 41, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(410, 420) r(i);
+INSERT INTO lake.t SELECT 42, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(420, 430) r(i);
+INSERT INTO lake.t SELECT 43, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(430, 440) r(i);
+INSERT INTO lake.t SELECT 44, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(440, 450) r(i);
+INSERT INTO lake.t SELECT 45, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(450, 460) r(i);
+INSERT INTO lake.t SELECT 46, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(460, 470) r(i);
+INSERT INTO lake.t SELECT 47, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(470, 480) r(i);
+INSERT INTO lake.t SELECT 48, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(480, 490) r(i);
+INSERT INTO lake.t SELECT 49, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(490, 500) r(i);
+INSERT INTO lake.t SELECT 50, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(500, 510) r(i);
+INSERT INTO lake.t SELECT 51, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(510, 520) r(i);
+INSERT INTO lake.t SELECT 52, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(520, 530) r(i);
+INSERT INTO lake.t SELECT 53, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(530, 540) r(i);
+INSERT INTO lake.t SELECT 54, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(540, 550) r(i);
+INSERT INTO lake.t SELECT 55, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(550, 560) r(i);
+INSERT INTO lake.t SELECT 56, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(560, 570) r(i);
+INSERT INTO lake.t SELECT 57, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(570, 580) r(i);
+INSERT INTO lake.t SELECT 58, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(580, 590) r(i);
+INSERT INTO lake.t SELECT 59, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(590, 600) r(i);
+INSERT INTO lake.t SELECT 60, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(600, 610) r(i);
+INSERT INTO lake.t SELECT 61, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(610, 620) r(i);
+INSERT INTO lake.t SELECT 62, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(620, 630) r(i);
+INSERT INTO lake.t SELECT 63, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(630, 640) r(i);
+INSERT INTO lake.t SELECT 64, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(640, 650) r(i);
+INSERT INTO lake.t SELECT 65, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(650, 660) r(i);
+INSERT INTO lake.t SELECT 66, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(660, 670) r(i);
+INSERT INTO lake.t SELECT 67, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(670, 680) r(i);
+INSERT INTO lake.t SELECT 68, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(680, 690) r(i);
+INSERT INTO lake.t SELECT 69, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(690, 700) r(i);
+INSERT INTO lake.t SELECT 70, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(700, 710) r(i);
+INSERT INTO lake.t SELECT 71, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(710, 720) r(i);
+INSERT INTO lake.t SELECT 72, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(720, 730) r(i);
+INSERT INTO lake.t SELECT 73, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(730, 740) r(i);
+INSERT INTO lake.t SELECT 74, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(740, 750) r(i);
+INSERT INTO lake.t SELECT 75, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(750, 760) r(i);
+INSERT INTO lake.t SELECT 76, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(760, 770) r(i);
+INSERT INTO lake.t SELECT 77, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(770, 780) r(i);
+INSERT INTO lake.t SELECT 78, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(780, 790) r(i);
+INSERT INTO lake.t SELECT 79, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(790, 800) r(i);
+INSERT INTO lake.t SELECT 80, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(800, 810) r(i);
+INSERT INTO lake.t SELECT 81, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(810, 820) r(i);
+INSERT INTO lake.t SELECT 82, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(820, 830) r(i);
+INSERT INTO lake.t SELECT 83, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(830, 840) r(i);
+INSERT INTO lake.t SELECT 84, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(840, 850) r(i);
+INSERT INTO lake.t SELECT 85, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(850, 860) r(i);
+INSERT INTO lake.t SELECT 86, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(860, 870) r(i);
+INSERT INTO lake.t SELECT 87, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(870, 880) r(i);
+INSERT INTO lake.t SELECT 88, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(880, 890) r(i);
+INSERT INTO lake.t SELECT 89, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(890, 900) r(i);
+INSERT INTO lake.t SELECT 90, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(900, 910) r(i);
+INSERT INTO lake.t SELECT 91, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(910, 920) r(i);
+INSERT INTO lake.t SELECT 92, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(920, 930) r(i);
+INSERT INTO lake.t SELECT 93, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(930, 940) r(i);
+INSERT INTO lake.t SELECT 94, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(940, 950) r(i);
+INSERT INTO lake.t SELECT 95, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(950, 960) r(i);
+INSERT INTO lake.t SELECT 96, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(960, 970) r(i);
+INSERT INTO lake.t SELECT 97, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(970, 980) r(i);
+INSERT INTO lake.t SELECT 98, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(980, 990) r(i);
+INSERT INTO lake.t SELECT 99, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(990, 1000) r(i);
+
+result_query II
+SELECT (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_data_file WHERE end_snapshot IS NULL), count(*) FROM lake.t
+----
+100	1000

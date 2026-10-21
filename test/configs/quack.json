@@ -37,6 +37,7 @@
         "test/sql/metadata/ducklake_settings_sqlite.test",
         "test/sql/metadata/sqlite_all_varchar.test",
         "test/sql/data_inlining/sqlite_column_limit.test",
+        "test/sql/data_inlining/sqlite_system_column_names.test",
         "test/sql/data_inlining/data_inlining_variant_sql_rollback.test"
       ]
     },
@@ -54,12 +55,13 @@
         "test/sql/concurrent/postgres_concurrent_attach_new.test",
         "test/sql/concurrent/postgres_concurrent_attach_new_migrate.test",
         "test/sql/migration/postgres_dev_migration_failure.test",
-        "test/sql/migration/postgres_concurrent_dev_attach.test",
+        "test/sql/migration/postgres_dev1_migration_skips_present_ddl.test",
         "test/sql/benchmark/postgres_catalog.test",
         "test/sql/issues/issue_843_postgres_legacy_inlined_types.test",
         "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test",
         "test/sql/compaction/compaction_idle_metadata_transaction.test",
-        "test/sql/compaction/postgres_expire_snapshots_time_zone.test"
+        "test/sql/compaction/postgres_expire_snapshots_time_zone.test",
+        "test/sql/transaction/postgres_failed_rollback_releases_transaction.test"
       ]
     },
     {
@@ -115,6 +117,8 @@
       "paths": [
         "test/sql/autoloading/autoload_data_path.test",
         "test/sql/data_inlining/postgres_identifier_limit.test",
+        "test/sql/data_inlining/postgres_system_column_names.test",
+        "test/sql/metadata/postgres_text_protocol.test",
         "test/sql/data_inlining/postgres_column_limit.test",
         "test/sql/issues/issue_sqlite_snapshot_time.test",
         "test/sql/metadata/ducklake_settings_s3.test"
@@ -143,6 +147,12 @@
       "reason": "FIXME: Each metadata query runs in its own server-side transaction on quack, so a reader that began before a concurrent TRUNCATE reads the post-truncate record counts from ducklake_table_stats.",
       "paths": [
         "test/sql/metadata/duckdb_tables_record_counts_concurrent.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Each metadata query runs in its own server-side transaction on quack, so a reader that began before a rewrite reads the narrowed bounds from ducklake_table_column_stats.",
+      "paths": [
+        "test/sql/compaction/rewrite_narrow_older_transaction.test"
       ]
     },
     {
@@ -175,6 +185,12 @@
       "reason": "FIXME: Flaky timeout on quack.",
       "paths": [
         "test/sql/alter/many_schema_versions_low_memory.test_slow"
+      ]
+    },
+    {
+      "reason": "FIXME: Not implemented Error: Multiple streaming scans or streaming scans + CTAS / insert in the same query are not currently supported",
+      "paths": [
+        "test/sql/sorted_table/set_sorted_by_idempotent.test"
       ]
     },
     {

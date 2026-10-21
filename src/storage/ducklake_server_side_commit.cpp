@@ -259,6 +259,7 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 
 	map<TableIndex, vector<DuckLakeDataFile>> files_per_table;
 	auto files_result = ScanStagedTable(DuckLakeStagedTableType::DATA_FILE);
+	bool has_created_by_ducklake = DuckLakeMetadataManager::ResultHasColumn(*files_result, "created_by_ducklake");
 	for (auto &row : *files_result) {
 		DataFileIndex local_file_id(AsIdx(row, 0));
 		DuckLakeDataFile f;
@@ -275,6 +276,8 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 		f.max_partial_file_snapshot = OptIdx(row, 13);
 		f.begin_snapshot = OptIdx(row, 14);
 		f.row_group_count = OptIdx(row, 16);
+		// staged tables from older clients lack the column, and only an added file has a name map
+		f.created_by_ducklake = has_created_by_ducklake ? row.GetValue<bool>(17) : !f.mapping_id.IsValid();
 		TakeIfPresent(per_file_stats, local_file_id, f.column_stats);
 		TakeIfPresent(attached_deletes, local_file_id.index, f.delete_files);
 		TakeIfPresent(partition_values_by_file, local_file_id.index, f.partition_values);
@@ -545,7 +548,7 @@ bool DuckLakeServerSideCommit::ReadSupportsV1_1Metadata() {
 	                                 "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read catalog version");
 	for (auto &row : *result) {
-		return DuckLakeVersionFromString(row.GetValue<string>(0)) >= DuckLakeVersion::V1_1_DEV_1;
+		return DuckLakeVersionFromString(row.GetValue<string>(0)) >= DuckLakeVersion::V1_1;
 	}
 	return false;
 }
@@ -631,6 +634,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.commit_info = state->commit_info;
 	ctx.skip_drop_empty_inlined = true;
 	ctx.supports_v1_1_metadata = supports_v1_1_metadata;
+	ctx.snapshot_and_stats_query = DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(supports_v1_1_metadata);
 	ctx.conflict_query_executor = [this](string q) -> unique_ptr<QueryResult> {
 		auto sql = SubstitutePlaceholders(std::move(q), transaction_snapshot);
 		return fresh_conn.Query(sql);

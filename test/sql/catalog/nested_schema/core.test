@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nested_core', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nested_core', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1')
 
 statement ok
 BEGIN;
@@ -163,7 +163,7 @@ statement ok
 DETACH dl;
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nested_core', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nested_core', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1')
 
 query II
 SELECT * FROM dl.a.child.t;
@@ -240,7 +240,7 @@ statement ok
 DETACH dl;
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nested_core', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nested_core', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1')
 
 query I
 SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'dl' AND parent_schema IS NOT NULL;
