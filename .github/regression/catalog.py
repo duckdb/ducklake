@@ -67,6 +67,37 @@ class DuckDBCatalog:
         return ["ROLLBACK;"]
 
 
+class SQLiteCatalog(DuckDBCatalog):
+    """Keeps detached, committed SQLite metadata files in the benchmark directory"""
+
+    def header(self):
+        return ["require sqlite_scanner", ""]
+
+    def reset_sidecars(self, store):
+        # Targets are detached; discard recovery state left by a killed benchmark before replacing its database.
+        return [
+            f"COPY (SELECT ''::BLOB AS content) TO '${{BENCHMARK_DIR}}/{store}.db{suffix}' (FORMAT blob);"
+            for suffix in ("-journal", "-wal", "-shm")
+        ]
+
+    def create(self, store):
+        # SQLite initializes a zero-byte database on attach.
+        return self.reset_sidecars(store) + [
+            f"COPY (SELECT ''::BLOB AS content) TO '${{BENCHMARK_DIR}}/{store}.db' (FORMAT blob);"
+        ]
+
+    def attach(self, if_not_exists, store, alias, options):
+        suffix = f" ({options})" if options else ""
+        return [f"ATTACH {if_not_exists}'ducklake:sqlite:${{BENCHMARK_DIR}}/{store}.db' AS {alias}{suffix};"]
+
+    def copy(self, source, target):
+        # Fixtures detach before copying, so SQLite has closed its journal.
+        return self.reset_sidecars(target) + [
+            f"COPY (SELECT content FROM read_blob('${{BENCHMARK_DIR}}/{source}.db'))",
+            f"TO '${{BENCHMARK_DIR}}/{target}.db' (FORMAT blob);",
+        ]
+
+
 class PostgresCatalog:
     """Keeps every metadata store in a schema of the database that the pg_database argument names"""
 
@@ -262,12 +293,16 @@ def render_root(repository, root, benchmarks, catalog):
 
 
 def create_catalog(name, database):
-    return PostgresCatalog(database) if name == "postgres" else DuckDBCatalog()
+    if name == "postgres":
+        return PostgresCatalog(database)
+    if name == "sqlite":
+        return SQLiteCatalog()
+    return DuckDBCatalog()
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--catalog", choices=("duckdb", "postgres"), default="duckdb")
+    parser.add_argument("--catalog", choices=("duckdb", "postgres", "sqlite"), default="duckdb")
     parser.add_argument("--postgres-database", default="ducklake_regression", help="default pg_database argument")
     parser.add_argument("root", type=Path, help="new directory to pass to the benchmark runner as --root-dir")
     parser.add_argument("benchmarks", nargs="+", help="benchmark files to render")

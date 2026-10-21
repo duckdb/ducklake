@@ -1,0 +1,60 @@
+# name: test/sql/catalog/catalog_load_column_history.test
+# description: Loading the catalog filters the column rows by snapshot in the ducklake_column scan
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/catalog_load_column_history.ducklake' AS ducklake (DATA_PATH '{DATA_PATH}/catalog_load_column_history')
+
+statement ok
+CREATE TABLE ducklake.t (a INTEGER, b INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN x INTEGER
+
+statement ok
+SET VARIABLE with_x = (SELECT max(snapshot_id) FROM ducklake.snapshots())
+
+statement ok
+ALTER TABLE ducklake.t DROP COLUMN x
+
+statement ok
+CREATE TABLE ducklake.dropped (c INTEGER)
+
+statement ok
+DROP TABLE ducklake.dropped
+
+statement ok
+DETACH ducklake
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage = 'memory')
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/catalog_load_column_history.ducklake' AS ducklake (DATA_PATH '{DATA_PATH}/catalog_load_column_history')
+
+query I
+SELECT column_name FROM (DESCRIBE ducklake.t)
+----
+a
+b
+
+query I
+SELECT column_name FROM (DESCRIBE FROM ducklake.t AT (VERSION => getvariable('with_x')))
+----
+a
+b
+x
+
+statement ok
+SET VARIABLE catalog_query = (SELECT query FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%column_tags%' LIMIT 1)
+
+query II
+EXPLAIN (FORMAT json) SELECT * FROM query(getvariable('catalog_query'))
+----
+physical_plan	<REGEX>:.*"Table": "[^"]*ducklake_column",[^}]*"Filters".*

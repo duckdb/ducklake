@@ -19,6 +19,7 @@ namespace duckdb {
 class DuckLakeTableEntry;
 class DuckLakeDeleteGlobalState;
 class DuckLakeTransaction;
+class MultiFileList;
 
 //! A deletion position with the snapshot ID from which it became valid
 struct PositionWithSnapshot {
@@ -94,13 +95,7 @@ struct DuckLakeDeleteMap {
 		file_map.emplace(std::move(filename), std::move(file_entry));
 	}
 
-	DuckLakeFileListExtendedEntry GetExtendedFileInfo(const string &filename) {
-		auto delete_entry = file_map.find(filename);
-		if (delete_entry == file_map.end()) {
-			throw InternalException("Could not find matching file for written delete file");
-		}
-		return delete_entry->second;
-	}
+	DuckLakeFileListExtendedEntry GetExtendedFileInfo(const string &filename);
 
 	optional_ptr<DuckLakeDeleteData> GetDeleteData(const string &filename) {
 		lock_guard<mutex> guard(lock);
@@ -120,6 +115,9 @@ struct DuckLakeDeleteMap {
 		lock_guard<mutex> guard(lock);
 		delete_data_map.emplace(filename, std::move(delete_data));
 	}
+
+	//! The file lists of the scans, read again for a file that a concurrent flush or compaction added to a scan
+	vector<shared_ptr<MultiFileList>> file_lists;
 
 private:
 	mutex lock;

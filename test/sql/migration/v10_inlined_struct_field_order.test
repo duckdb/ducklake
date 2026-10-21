@@ -1,0 +1,105 @@
+# name: test/sql/migration/v10_inlined_struct_field_order.test
+# description: inlined data whose struct fields DuckDB 1.5.6 stored in the order of an ALTER reads by field name
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+# written by DuckDB 1.5.6, the ALTER of every table but appended and other reordered its struct fields
+unzip data/old_ducklake/inlined_struct_field_order.db.gz {TEST_DIR}/v10_inlined_struct_field_order.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_struct_field_order.db' AS lake (DATA_PATH '{TEST_DIR}/v10_inlined_struct_field_order', OVERRIDE_DATA_PATH TRUE, DATA_INLINING_ROW_LIMIT 10, DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
+
+# the rows go into the inlined table with the reordered fields, sorted by a they are not sorted by b
+statement ok
+INSERT INTO lake.t VALUES ({'a': 0, 'b': 9}), ({'a': 2, 'b': -5}), (NULL), ({'a': NULL, 'b': 7}), ({'a': 8, 'b': 8})
+
+statement ok
+DELETE FROM lake.t WHERE c.a = 8
+
+statement ok
+ALTER TABLE lake.t SET SORTED BY (c)
+
+loop i 0 2
+
+query I
+SELECT c FROM lake.t ORDER BY c.a NULLS LAST, c IS NULL
+----
+{'a': 0, 'b': 9}
+{'a': 1, 'b': 2}
+{'a': 2, 'b': -5}
+{'a': 3, 'b': 4}
+{'a': NULL, 'b': 7}
+NULL
+
+query II
+SELECT id, c FROM lake.front ORDER BY id
+----
+1	{'a': 1, 'c': NULL}
+2	{'a': 3, 'c': 5}
+
+query II
+SELECT id, c FROM lake.inner_s ORDER BY id
+----
+1	{'s': {'x': 1, 'y': 2}}
+
+query II
+SELECT id, c FROM lake.map_v ORDER BY id
+----
+1	{k={'a': 1, 'b': 2}}
+
+query II
+SELECT id, l FROM lake.list_s ORDER BY id
+----
+1	[{'a': 1, 'b': 2}]
+
+query II
+SELECT id, c FROM lake.widen ORDER BY id
+----
+1	{'a': 1, 'b': 2}
+2	{'a': 3, 'b': 40000000000}
+
+query II
+SELECT id, c FROM lake.appended ORDER BY id
+----
+1	{'a': 1, 'z': NULL}
+2	{'a': 2, 'z': 9}
+
+query I
+SELECT i FROM lake.other
+----
+1
+
+# the second round reads the flushed files
+statement ok
+CHECKPOINT lake
+
+endloop
+
+query I
+SELECT count(*) FROM ducklake_list_files('lake', 'other')
+----
+1
+
+# the flush sorted the rows of the reordered inlined table by a
+statement ok
+SET VARIABLE t_files = (SELECT list(data_file) FROM ducklake_list_files('lake', 't'))
+
+query I
+SELECT list(c ORDER BY file_row_number) AS l
+FROM read_parquet(getvariable('t_files'), file_row_number = true, filename = true)
+GROUP BY filename
+ORDER BY len(l)
+----
+[{'a': 1, 'b': 2}]
+[{'a': 0, 'b': 9}, {'a': 2, 'b': -5}, {'a': 3, 'b': 4}, {'a': 8, 'b': 8}, {'a': NULL, 'b': 7}, NULL]
+
+statement ok
+INSERT INTO lake.t VALUES ({'a': 5, 'b': 6})
+
+query I
+SELECT count(*) FROM lake.t WHERE c.a = 5 AND c.b = 6
+----
+1

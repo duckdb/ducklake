@@ -23,7 +23,8 @@
       "reason": "Extension Loading tests, not relevant to remote files.",
       "paths": [
         "test/sql/general/missing_parquet.test",
-        "test/sql/autoloading/autoload_data_path.test"
+        "test/sql/autoloading/autoload_data_path.test",
+        "test/sql/add_files/add_files_json_without_extension.test"
       ]
     },
   {

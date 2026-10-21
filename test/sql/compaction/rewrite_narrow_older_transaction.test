@@ -1,0 +1,79 @@
+# name: test/sql/compaction/rewrite_narrow_older_transaction.test
+# description: A zero-output rewrite narrows bounds that an older transaction still needs
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/rewrite_narrow.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/rewrite_narrow', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range(100)
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range(1000, 1050)
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 't'
+----
+1
+
+statement ok
+DELETE FROM dl.t WHERE i >= 1000 AND i < 1010
+
+statement ok
+DELETE FROM dl.t WHERE i >= 1010 AND i < 1020
+
+statement ok
+DELETE FROM dl.t WHERE i >= 1020 AND i < 1030
+
+statement ok
+DELETE FROM dl.t WHERE i >= 1030 AND i < 1040
+
+statement ok
+DELETE FROM dl.t WHERE i >= 1040 AND i < 1050
+
+query II
+SELECT count(*), count(*) FILTER (WHERE end_snapshot IS NULL) FROM __ducklake_metadata_dl.ducklake_data_file
+----
+2	2
+
+query II
+SELECT COUNT(*), SUM(files_created) FROM ducklake_rewrite_data_files('dl', 't', delete_threshold => 0)
+----
+1	0
+
+query II
+SELECT min_value, max_value FROM __ducklake_metadata_dl.ducklake_table_column_stats
+----
+0	99
+
+query I con2
+SELECT count(*) FROM dl.t WHERE i >= 1000
+----
+0
+
+query I con1
+SELECT count(*) FROM dl.t
+----
+150
+
+query I con1
+SELECT count(*) FROM dl.t WHERE i >= 1000
+----
+50
+
+statement ok con1
+COMMIT

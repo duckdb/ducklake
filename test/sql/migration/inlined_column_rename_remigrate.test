@@ -11,13 +11,17 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/inlined_column_rename_remigrate.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/remigrate_files', METADATA_CATALOG 'dlmeta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/remigrate_files', METADATA_CATALOG 'dlmeta', DUCKLAKE_VERSION '1.1')
 
 statement ok
 CREATE TABLE dl.t(row_id INTEGER, begin_snapshot INTEGER, end_snapshot INTEGER);
 
 statement ok
 INSERT INTO dl.t VALUES (1, 10, 100);
+
+# relabel the catalog as dev1 so the reattach runs the migration
+statement ok
+UPDATE dlmeta.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version'
 
 statement ok
 DETACH dl

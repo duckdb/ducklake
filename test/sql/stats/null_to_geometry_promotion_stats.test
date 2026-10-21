@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/null_to_geometry_promotion_stats', DATA_INLINING_ROW_LIMIT 0, DUCKLAKE_VERSION '1.1-dev1')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/null_to_geometry_promotion_stats', DATA_INLINING_ROW_LIMIT 0, DUCKLAKE_VERSION '1.1')
 
 statement ok
 USE ducklake

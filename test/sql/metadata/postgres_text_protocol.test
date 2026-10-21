@@ -1,0 +1,58 @@
+# name: test/sql/metadata/postgres_text_protocol.test
+# description: The postgres_scanner settings of a session do not change the values DuckLake reads from its metadata
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+# the text protocol reads what these server settings print
+statement ok
+SET GLOBAL pg_use_text_protocol = true
+
+statement ok
+SET pg_query_mode = 'PLAIN_QUERY_TEXT'
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION} options=''-cextra_float_digits=0 -cbytea_output=escape -cDateStyle=SQL,DMY -cIntervalStyle=sql_standard''' AS lake (DATA_PATH '{DATA_PATH}/postgres_text_protocol')
+
+statement ok
+CREATE TABLE lake.t (f DOUBLE, r FLOAT, b BLOB, i INTERVAL)
+
+statement ok
+INSERT INTO lake.t VALUES (3.141592653589793, 2.7182817, '\x41'::BLOB, INTERVAL '1 month 2 days 3 hours')
+
+query IIII
+SELECT * FROM lake.t
+----
+3.141592653589793	2.7182817	A	1 month 2 days 03:00:00
+
+query I
+SELECT count(*) FROM ducklake_snapshots('lake')
+----
+3
+
+# reads of the user still use the text protocol, which prints the double with 15 digits
+query I
+SELECT f FROM __ducklake_metadata_lake.ducklake_inlined_data_1_1
+----
+3.14159265358979
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+query I
+SELECT count(*) FROM lake.t WHERE f = 3.141592653589793 AND r = 2.7182817::FLOAT
+----
+1
+
+statement ok
+RESET GLOBAL pg_use_text_protocol

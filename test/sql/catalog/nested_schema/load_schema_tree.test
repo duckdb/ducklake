@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/load_tree', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1', DATA_PATH '{DATA_PATH}/load_tree', METADATA_CATALOG 'meta')
 
 statement ok
 CREATE SCHEMA dl.a;
@@ -54,7 +54,7 @@ statement ok
 DETACH dl;
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/load_tree', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1', DATA_PATH '{DATA_PATH}/load_tree', METADATA_CATALOG 'meta')
 
 query I
 SELECT * FROM dl.a.child.t UNION ALL SELECT * FROM dl.b."child.with""quote".t UNION ALL SELECT * FROM dl.a.child.deep.t ORDER BY i;
@@ -196,7 +196,7 @@ statement ok
 DETACH dl;
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/load_tree', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1', DATA_PATH '{DATA_PATH}/load_tree', METADATA_CATALOG 'meta')
 
 query II
 SELECT schema_name, parent_schema FROM duckdb_schemas() WHERE database_name = 'dl' ORDER BY ALL;

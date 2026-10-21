@@ -1,5 +1,5 @@
 # name: test/sql/migration/inlined_column_rename_dev_missing_table.test
-# description: the in place dev migration must report an unreadable registered inlined table instead of silently skipping it
+# description: the dev migration must report an unreadable registered inlined table instead of silently skipping it
 # group: [migration]
 
 require ducklake
@@ -37,25 +37,19 @@ ATTACH 'ducklake:{TEST_DIR}/dev1_missing.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_m
 ----
 Failed to read inlined-data table
 
-# Schema additions survive a failed column rename
-statement ok
-ATTACH 'ducklake:{TEST_DIR}/dev1_missing.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_missing_files')
-
-query I
-SELECT table_name FROM duckdb_tables() WHERE database_name = 'dl'
-----
-t
-
-statement ok
-DETACH dl
-
+# the failed migration left the catalog untouched
 statement ok
 ATTACH '{TEST_DIR}/dev1_missing.db' AS meta
 
 query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
+----
+1.1-dev1
+
+query I
 SELECT count(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_schema' AND column_name = 'parent_schema_id'
 ----
-1
+0
 
 statement ok
 DETACH meta

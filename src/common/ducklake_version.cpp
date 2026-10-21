@@ -11,7 +11,8 @@ static constexpr StringUtil::EnumStringLiteral DUCKLAKE_VERSIONS[] = {
     {static_cast<uint32_t>(DuckLakeVersion::V0_4_DEV1), "0.4-dev1"},
     {static_cast<uint32_t>(DuckLakeVersion::V0_4), "0.4"},
     {static_cast<uint32_t>(DuckLakeVersion::V1_0), "1.0"},
-    {static_cast<uint32_t>(DuckLakeVersion::V1_1_DEV_1), "1.1-dev1"}};
+    {static_cast<uint32_t>(DuckLakeVersion::V1_1_DEV_1), "1.1-dev1"},
+    {static_cast<uint32_t>(DuckLakeVersion::V1_1), "1.1"}};
 
 DuckLakeVersion DuckLakeVersionFromString(const string &version_str) {
 	for (auto &entry : DUCKLAKE_VERSIONS) {
@@ -24,8 +25,8 @@ DuckLakeVersion DuckLakeVersionFromString(const string &version_str) {
 
 DuckLakeVersion ParseWritableDuckLakeVersion(const string &version_str, const string &option_name) {
 	auto version = DuckLakeVersionFromString(version_str);
-	if (version < DuckLakeVersion::V1_0) {
-		throw InvalidInputException("%s must be >= '1.0', got '%s'", option_name, version_str);
+	if (version < DuckLakeVersion::V1_0 || version == DuckLakeVersion::V1_1_DEV_1) {
+		throw InvalidInputException("%s must be '1.0' or '1.1', got '%s'", option_name, version_str);
 	}
 	return version;
 }

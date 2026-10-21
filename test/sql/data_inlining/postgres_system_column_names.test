@@ -1,0 +1,90 @@
+# name: test/sql/data_inlining/postgres_system_column_names.test
+# description: Tables with a column named like a postgres system column are not inlined on postgres
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/pg_system_column_files', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t (a INTEGER, xmin INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 2)
+
+query II
+SELECT * FROM ducklake.t
+----
+1	2
+
+# a column added or renamed to such a name on a table with inlined rows
+statement ok
+CREATE TABLE ducklake.u (a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO ducklake.u VALUES (1, 1)
+
+statement ok
+ALTER TABLE ducklake.u ADD COLUMN xmax INTEGER
+
+statement ok
+ALTER TABLE ducklake.u RENAME b TO cmin
+
+statement ok
+INSERT INTO ducklake.u VALUES (2, 2, 3)
+
+statement ok
+DELETE FROM ducklake.u WHERE a = 1
+
+query III
+SELECT a, cmin, xmax FROM ducklake.u
+----
+2	2	3
+
+query I
+SELECT count(*) FROM ducklake.u WHERE filename LIKE '%.parquet'
+----
+1
+
+# rows inlined in the transaction cannot get such a column
+statement ok
+CREATE TABLE ducklake.w (a INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.w VALUES (1)
+
+statement error
+ALTER TABLE ducklake.w RENAME a TO xmin
+----
+ALTER on a table with transaction-local inlined data is not supported when column "xmin" has the name of a system column of the metadata database, commit the rows first
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.w VALUES (1)
+
+statement error
+ALTER TABLE ducklake.w ADD COLUMN ctid INTEGER
+----
+ALTER on a table with transaction-local inlined data is not supported when column "ctid" has the name of a system column of the metadata database, commit the rows first
+
+statement ok
+ROLLBACK

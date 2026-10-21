@@ -1,0 +1,97 @@
+# name: test/sql/metadata/default_order.test
+# description: default_order does not change the order of the columns and partition keys of a table
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/default_order.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET default_order = 'DESC'
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/default_order')
+
+statement ok
+CREATE TABLE ducklake.t (a INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 'x')
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN c INTEGER
+
+query I
+SELECT column_name FROM (DESCRIBE ducklake.t)
+----
+a
+s
+c
+
+statement ok
+INSERT INTO ducklake.t VALUES (2, 'y', 20)
+
+statement ok
+ALTER TABLE ducklake.t RENAME COLUMN s TO str
+
+statement ok
+INSERT INTO ducklake.t VALUES (3, 'z', 30)
+
+query III
+SELECT a, str, c FROM ducklake.t ORDER BY a ASC
+----
+1	x	NULL
+2	y	20
+3	z	30
+
+statement ok
+CREATE TABLE ducklake.p (ts TIMESTAMP, id INTEGER)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0, table_name => 'p')
+
+statement ok
+ALTER TABLE ducklake.p SET PARTITIONED BY (year(ts), bucket(4, id))
+
+statement ok
+INSERT INTO ducklake.p (ts, id) VALUES ('2020-05-01', 1), ('2021-05-01', 2), ('2022-05-01', 3), ('2023-05-01', 4)
+
+statement ok
+RESET default_order
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/default_order')
+
+query III
+SELECT a, str, c FROM ducklake.t ORDER BY a
+----
+1	x	NULL
+2	y	20
+3	z	30
+
+query I
+SELECT count(*) FROM ducklake.p WHERE id = 3
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.p WHERE id IN (1, 4)
+----
+2
+
+# the first partition key is the year
+query I
+SELECT partition_value FROM __ducklake_metadata_ducklake.ducklake_file_partition_value
+WHERE partition_key_index = 0 ORDER BY partition_value
+----
+2020
+2021
+2022
+2023

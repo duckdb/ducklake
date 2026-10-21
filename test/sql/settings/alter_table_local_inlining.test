@@ -6,7 +6,7 @@ require ducklake
 
 require parquet
 
-foreach version 1.0 1.1-dev1
+foreach version 1.0 1.1
 
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/local_inlining_{version}.db' AS ducklake (DATA_PATH '{TEST_DIR}/local_inlining_{version}_files', DUCKLAKE_VERSION '{version}')

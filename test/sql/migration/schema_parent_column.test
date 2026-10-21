@@ -25,7 +25,7 @@ statement ok
 DETACH ducklake;
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/schema_parent_migration', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/schema_parent_migration', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 statement ok
 CREATE SCHEMA ducklake.new_schema;
@@ -37,15 +37,18 @@ main	NULL
 new_schema	NULL
 old_schema	NULL
 
-# simulate an older dev1 catalog, a plain attach re-runs the dev migration
+# simulate an older dev1 catalog, its migration restores the column
 statement ok
 ALTER TABLE meta.ducklake_schema DROP COLUMN parent_schema_id;
+
+statement ok
+UPDATE meta.ducklake_metadata SET value = '1.1-dev1' WHERE key = 'version';
 
 statement ok
 DETACH ducklake;
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/schema_parent_migration', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/schema_parent_migration', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 query II
 SELECT schema_name, parent_schema_id FROM meta.ducklake_schema ORDER BY schema_name;
@@ -59,7 +62,7 @@ statement ok
 DETACH ducklake;
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/schema_parent_migration', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/schema_parent_migration', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 statement ok
 CREATE SCHEMA ducklake.after_migration;

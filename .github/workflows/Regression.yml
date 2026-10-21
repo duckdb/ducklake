@@ -24,8 +24,8 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 150
-    # PostgreSQL results are informational until repeated same-binary comparisons on Linux calibrate their noise
-    continue-on-error: ${{ matrix.catalog == 'postgres' }}
+    # External catalog results are informational until their Linux comparisons are calibrated
+    continue-on-error: ${{ matrix.catalog != 'duckdb' }}
     strategy:
       fail-fast: false
       matrix:
@@ -39,6 +39,11 @@ jobs:
             ccache: -postgres
             vcpkg: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
             postgres_scanner: 1
+          - name: Regression benchmarks (SQLite)
+            catalog: sqlite
+            ccache: -sqlite
+            vcpkg: a42af01b72c28a8e1d7b48107b33e4f286a55ef6
+            sqlite_scanner: 1
     env:
       VCPKG_TARGET_TRIPLET: x64-linux
       GEN: ninja
@@ -46,6 +51,7 @@ jobs:
       VCPKG_TOOLCHAIN_PATH: ${{ github.workspace }}/vcpkg/scripts/buildsystems/vcpkg.cmake
       CCACHE_BASEDIR: ${{ github.workspace }}
       CCACHE_NOHASHDIR: true
+      ENABLE_SQLITE_SCANNER: ${{ matrix.sqlite_scanner }}
       ENABLE_POSTGRES_SCANNER: ${{ matrix.postgres_scanner }}
       USE_MERGED_VCPKG_MANIFEST: ${{ matrix.postgres_scanner }}
     steps:

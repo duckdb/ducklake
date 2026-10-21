@@ -51,6 +51,9 @@ public:
 	void BindView(ClientContext &context, BindViewAction action = BindViewAction::BIND_IF_UNBOUND) override;
 
 	string GetQuerySQL() const;
+	bool HasColumnComments() const {
+		return has_column_comments;
+	}
 
 public:
 	// ALTER VIEW
@@ -67,6 +70,7 @@ private:
 	string view_uuid;
 	string query_sql;
 	LocalChange local_change;
+	bool has_column_comments;
 };
 
 } // namespace duckdb

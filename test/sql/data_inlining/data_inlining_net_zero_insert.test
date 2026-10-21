@@ -1,0 +1,109 @@
+# name: test/sql/data_inlining/data_inlining_net_zero_insert.test
+# description: Deleting every transaction-local inlined row does not create an insertion snapshot
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/data_inlining_net_zero_insert', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+USE ducklake
+
+statement ok
+CREATE TABLE t AS SELECT 1 AS id
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO t VALUES (2)
+
+statement ok
+DELETE FROM t WHERE id = 2
+
+statement ok
+COMMIT
+
+query I
+SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake')
+----
+1
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO t VALUES (2), (3)
+
+statement ok
+DELETE FROM t WHERE id = 2
+
+statement ok
+UPDATE t SET id = 4 WHERE id = 3
+
+statement ok
+DELETE FROM t WHERE id = 4
+
+statement ok
+COMMIT
+
+query I
+SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake')
+----
+1
+
+query I
+SELECT * FROM t
+----
+1
+
+# Deleting committed data must still create a snapshot.
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO t VALUES (2)
+
+statement ok
+DELETE FROM t
+
+statement ok
+COMMIT
+
+query I
+SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake')
+----
+2
+
+query I
+SELECT count(*) FROM t
+----
+0
+
+# A new insert after removing the collection must survive.
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO t VALUES (3)
+
+statement ok
+DELETE FROM t
+
+statement ok
+INSERT INTO t VALUES (4)
+
+statement ok
+COMMIT
+
+query I
+SELECT * FROM t
+----
+4

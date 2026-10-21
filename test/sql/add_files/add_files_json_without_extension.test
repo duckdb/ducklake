@@ -1,0 +1,59 @@
+# name: test/sql/add_files/add_files_json_without_extension.test
+# description: Adding Parquet files with JSON columns while the json extension is not loaded
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/add_files_json_without_extension')
+
+query I
+SELECT loaded FROM duckdb_extensions() WHERE extension_name = 'json'
+----
+false
+
+statement ok
+CREATE TABLE dl.t (BLOCK_NUMBER INTEGER)
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', 'duckdb/data/parquet-testing/json_convertedtype.parquet',
+    ignore_extra_columns => true)
+
+query II
+SELECT count(*), sum(BLOCK_NUMBER) FROM dl.t
+----
+10	157635264
+
+statement ok
+CREATE TABLE dl.json_as_varchar (field1 VARCHAR, field2 VARCHAR)
+
+statement error
+CALL ducklake_add_data_files('dl', 'json_as_varchar', 'duckdb/data/parquet-testing/parquet_with_json.parquet')
+----
+Expected VARCHAR, found type JSON
+
+statement ok
+COPY (SELECT 1 AS i, 'POINT(1 2)'::GEOMETRY('OGC:CRS84') AS g)
+TO '{DATA_PATH}/add_files_crs.parquet' (GEOPARQUET_VERSION 'V2')
+
+query I
+SELECT duckdb_type FROM parquet_schema('{DATA_PATH}/add_files_crs.parquet') WHERE name = 'g'
+----
+GEOMETRY('OGC:CRS84')
+
+statement ok
+CREATE TABLE dl.crs (i INTEGER)
+
+statement ok
+CALL ducklake_add_data_files('dl', 'crs', '{DATA_PATH}/add_files_crs.parquet', ignore_extra_columns => true)
+
+query I
+SELECT i FROM dl.crs
+----
+1

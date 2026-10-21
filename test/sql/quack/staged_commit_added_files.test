@@ -1,0 +1,92 @@
+# name: test/sql/quack/staged_commit_added_files.test
+# description: a server-side commit that fails keeps the files added with ducklake_add_data_files
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
+
+require quack
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/staged_commit_added_files')
+
+statement ok
+CREATE TABLE lake.events (channel INTEGER, seq BIGINT, payload VARCHAR)
+
+statement ok
+COPY (SELECT 1 AS channel, 2::BIGINT AS seq, 'x' AS payload) TO '{DATA_PATH}/staged_commit_added_file.parquet'
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_add_data_files('lake', 'events', '{DATA_PATH}/staged_commit_added_file.parquet')
+
+statement ok con2
+ALTER TABLE lake.events ADD COLUMN note VARCHAR
+
+statement error con1
+COMMIT
+----
+has altered it
+
+# the file belongs to the user, so it is still there for the next attempt
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/staged_commit_added_file.parquet')
+----
+1
+
+statement ok
+CALL ducklake_add_data_files('lake', 'events', '{DATA_PATH}/staged_commit_added_file.parquet', allow_missing => true)
+
+query IIII
+SELECT * FROM lake.events
+----
+1	2	x	NULL
+
+# an older client stages no created_by_ducklake column, an added file is the one with a name map
+statement ok
+CREATE TABLE lake.old_client (channel INTEGER, seq BIGINT, payload VARCHAR)
+
+statement ok
+ALTER TABLE lake.old_client ADD COLUMN note VARCHAR
+
+statement error
+CALL quack_query_by_name('__ducklake_metadata_lake', '
+DROP TABLE ducklake_staged_data_file;
+CREATE TEMPORARY TABLE ducklake_staged_data_file(data_file_id BIGINT, table_id BIGINT, file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, record_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, row_id_start BIGINT, partition_id BIGINT, encryption_key VARCHAR, mapping_id UBIGINT, partial_max BIGINT, begin_snapshot BIGINT, compaction_id BIGINT, row_group_count BIGINT);
+TRUNCATE ducklake_staged_commit;
+TRUNCATE ducklake_staged_data_file_column_stats;
+TRUNCATE ducklake_staged_data_file_partition;
+TRUNCATE ducklake_staged_delete_file;
+TRUNCATE ducklake_staged_inlined_data;
+TRUNCATE ducklake_staged_inlined_row;
+TRUNCATE ducklake_staged_inlined_column_stats;
+TRUNCATE ducklake_staged_inlined_delete;
+TRUNCATE ducklake_staged_inlined_file_delete;
+TRUNCATE ducklake_staged_dropped_file;
+TRUNCATE ducklake_staged_tables_deleted_from;
+TRUNCATE ducklake_staged_tables_delete_attempted;
+TRUNCATE ducklake_staged_flushed_inlined;
+TRUNCATE ducklake_staged_compaction;
+TRUNCATE ducklake_staged_compaction_source;
+TRUNCATE ducklake_staged_name_map;
+TRUNCATE ducklake_staged_name_map_entry;
+INSERT INTO ducklake_staged_commit SELECT NULL, NULL, NULL, snapshot_id, NULL, NULL, next_catalog_id, next_file_id
+FROM main.ducklake_snapshot ORDER BY snapshot_id DESC LIMIT 1 OFFSET 1;
+INSERT INTO ducklake_staged_data_file SELECT 0, table_id, 0, ''{DATA_PATH}/staged_commit_added_file.parquet'', false,
+       ''parquet'', 1, 1000, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL
+FROM main.ducklake_table WHERE table_name = ''old_client'' AND end_snapshot IS NULL;
+SELECT * FROM ducklake_commit(''main'', 3)')
+----
+has altered it
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/staged_commit_added_file.parquet')
+----
+1

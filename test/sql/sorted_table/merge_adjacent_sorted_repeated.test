@@ -108,8 +108,9 @@ query I
 SELECT COUNT(*)
 FROM __ducklake_metadata_ducklake.ducklake_sort_info si
 JOIN __ducklake_metadata_ducklake.ducklake_sort_expression se USING (sort_id)
+JOIN __ducklake_metadata_ducklake.ducklake_table t ON si.table_id = t.table_id
 WHERE
-si.table_id = 1
+t.table_name = 'prevent_duplicates'
 ORDER BY ALL
 ----
 2
@@ -209,7 +210,8 @@ query I
 SELECT COUNT(*)
 FROM __ducklake_metadata_ducklake.ducklake_sort_info si
 JOIN __ducklake_metadata_ducklake.ducklake_sort_expression se USING (sort_id)
+JOIN __ducklake_metadata_ducklake.ducklake_table t ON si.table_id = t.table_id
 WHERE
-si.table_id = 4
+t.table_name = 'multiple_set_sorted'
 ----
 4

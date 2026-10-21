@@ -1,0 +1,27 @@
+# name: benchmark/micro/read/big_lake_filtered_reads.benchmark
+# description: Run 20 reads of single tables, each filtered on two columns, in a 2110-table lake
+# group: [read]
+
+name Big Lake Filtered Reads
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+argument work big_lake_filtered_read_work
+
+include benchmark/micro/fixtures/big_lake.benchmark.in
+
+# The frag tables hold three files each, so the stats prune two of them
+run
+@for t in range(10)
+SELECT count(*) FROM lake.main.bg_@{t} WHERE c0 > @{t} AND c7 >= 'a';
+SELECT count(*) FROM lake.main.frag_@{t} WHERE id = 3150 AND v = 'v3150';
+@end
+
+result_query I
+SELECT * FROM __answer
+----
+1

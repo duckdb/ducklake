@@ -32,9 +32,9 @@ DETACH meta
 
 statement error
 ATTACH 'ducklake:{TEST_DIR}/inlined_column_rename_unexpected_layout.db' AS dl
-(DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
+(DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 ----
-Failed to rename inlined-data metadata columns of "ducklake_inlined_data_1_1" while migrating to v1.1-dev1: the table has an unexpected column layout
+Failed to rename inlined-data metadata columns of "ducklake_inlined_data_1_1" while migrating to v1.1: the table has an unexpected column layout
 
 # nothing was renamed
 statement ok

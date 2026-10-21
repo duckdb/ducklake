@@ -1,0 +1,143 @@
+# name: test/sql/migration/v10_retyped_bounds.test
+# description: the v1.1 migration clears the bounds that DuckDB 1.5.6 may have stored in the type of a file or of an older column type
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+# written by DuckDB 1.5.6, ducklake_add_data_files gave ts a TIMESTAMP_NS file, tz a TIMESTAMPTZ_NS file, dbl a FLOAT
+# file and dbl2 a DOUBLE file, r got a file as FLOAT and one after ALTER COLUMN f TYPE DOUBLE, st a FLOAT file in the
+# transaction of its ALTER, i2f an INTEGER file in the transaction of its ALTER to FLOAT before one to DOUBLE, tf a FLOAT
+# file in a transaction that altered INTEGER to FLOAT and then to DOUBLE, dc a FLOAT file before f was altered to DOUBLE
+# and dropped
+unzip data/old_ducklake/migrate_bounds.db.gz {TEST_DIR}/v10_retyped_bounds.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_retyped_bounds.db' AS lake (DATA_PATH 'data/old_ducklake/migrate_bounds/', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
+
+query III
+SELECT t, (SELECT count(*) FROM lake.ts WHERE t = (SELECT t FROM lake.ts)), (SELECT count(*) FROM lake.ts WHERE t < TIMESTAMP '2020-01-01 12:34:56.123457') FROM lake.ts
+----
+2020-01-01 12:34:56.123457	1	0
+
+query I
+SELECT count(*) FROM lake.tz WHERE t = (SELECT t FROM lake.tz)
+----
+1
+
+query II
+SELECT f, (SELECT count(*) FROM lake.dbl WHERE f = (SELECT f FROM lake.dbl)) FROM lake.dbl
+----
+0.10000000149011612	1
+
+query II
+SELECT f, (SELECT count(*) FROM lake.dbl2 WHERE f = 0.1) FROM lake.dbl2
+----
+0.1	1
+
+query III
+SELECT (SELECT count(*) FROM lake.r WHERE f = 0.10000000149011612), (SELECT count(*) FROM lake.r WHERE f >= 0.10000000149011612), min(f) FROM lake.r
+----
+1	3	0.10000000149011612
+
+query II
+SELECT (SELECT count(*) FROM lake.st WHERE f = 0.10000000149011612), (SELECT count(*) FROM lake.st WHERE f >= 0.10000000149011612)
+----
+1	1
+
+query III
+SELECT (SELECT count(*) FROM lake.i2f WHERE f = 16777219), (SELECT count(*) FROM lake.tf WHERE f = 0.10000000149011612), (SELECT count(*) FROM lake.dc AT (VERSION => 22) WHERE f = 0.10000000149011612)
+----
+1	1	1
+
+# a bound that a FLOAT file could have written is dropped, and so are the bounds of the tables
+query IIIII
+SELECT tbl.table_name, stats.data_file_id, stats.column_id, stats.min_value, stats.max_value
+FROM meta.ducklake_file_column_stats stats JOIN meta.ducklake_table tbl USING (table_id)
+ORDER BY stats.data_file_id, stats.column_id
+----
+ts	1	1	NULL	NULL
+tz	3	1	NULL	NULL
+dbl	5	1	NULL	NULL
+dbl2	7	1	NULL	NULL
+r	8	1	NULL	NULL
+r	9	1	0.25	0.30000000000000004
+st	10	1	NULL	NULL
+i2f	11	1	16777219	16777219
+tf	12	1	NULL	NULL
+dc	13	1	1	1
+dc	13	2	NULL	NULL
+
+query III
+SELECT tbl.table_name, stats.column_id, stats.min_value IS NULL AND stats.max_value IS NULL
+FROM meta.ducklake_table_column_stats stats JOIN meta.ducklake_table tbl USING (table_id)
+ORDER BY ALL
+----
+dbl	1	true
+dbl2	1	true
+dc	1	false
+dc	2	true
+i2f	1	true
+r	1	true
+st	1	true
+tf	1	true
+ts	1	true
+tz	1	true
+
+# the same repair on the metadata catalog of the test config
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/v10_retyped_bounds_config.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS config_lake (DATA_PATH '{DATA_PATH}/v10_retyped_bounds_files', METADATA_CATALOG 'config_meta', DATA_INLINING_ROW_LIMIT 0, DUCKLAKE_VERSION '1.0')
+
+statement ok
+COPY (SELECT TIMESTAMP_NS '2020-01-01 12:34:56.123456789' AS t) TO '{DATA_PATH}/v10_retyped_bounds_ts_ns.parquet'
+
+statement ok
+CREATE TABLE config_lake.ts (t TIMESTAMP)
+
+statement ok
+CALL ducklake_add_data_files('config_lake', 'ts', '{DATA_PATH}/v10_retyped_bounds_ts_ns.parquet')
+
+statement ok
+CREATE TABLE config_lake.r (f FLOAT)
+
+statement ok
+INSERT INTO config_lake.r VALUES (0.1)
+
+statement ok
+ALTER TABLE config_lake.r ALTER COLUMN f TYPE DOUBLE
+
+# the bounds that versions before the fixes wrote
+statement ok
+UPDATE config_meta.ducklake_file_column_stats SET min_value = '2020-01-01 12:34:56.123456789', max_value = '2020-01-01 12:34:56.123456789'
+WHERE table_id = (SELECT table_id FROM config_meta.ducklake_table WHERE table_name = 'ts')
+
+statement ok
+UPDATE config_meta.ducklake_table_column_stats SET min_value = '2020-01-01 12:34:56.123456789', max_value = '2020-01-01 12:34:56.123456789'
+WHERE table_id = (SELECT table_id FROM config_meta.ducklake_table WHERE table_name = 'ts')
+
+statement ok
+UPDATE config_meta.ducklake_file_column_stats SET min_value = '0.1', max_value = '0.1'
+WHERE table_id = (SELECT table_id FROM config_meta.ducklake_table WHERE table_name = 'r')
+
+statement ok
+DETACH config_lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS config_lake (DATA_PATH '{DATA_PATH}/v10_retyped_bounds_files', METADATA_CATALOG 'config_meta', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
+
+query II
+SELECT (SELECT count(*) FROM config_lake.ts WHERE t = TIMESTAMP '2020-01-01 12:34:56.123457'), (SELECT count(*) FROM config_lake.r WHERE f = 0.10000000149011612)
+----
+1	1
+
+query II
+SELECT tbl.table_name, stats.min_value FROM config_meta.ducklake_file_column_stats stats
+JOIN config_meta.ducklake_table tbl USING (table_id) ORDER BY tbl.table_name
+----
+r	NULL
+ts	NULL

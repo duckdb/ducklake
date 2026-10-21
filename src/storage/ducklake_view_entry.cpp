@@ -19,7 +19,8 @@ DuckLakeViewEntry::DuckLakeViewEntry(Catalog &catalog, SchemaCatalogEntry &schem
                                      TableIndex view_id, string view_uuid_p, string query_sql_p,
                                      LocalChange local_change)
     : ViewCatalogEntry(catalog, schema, info), view_id(view_id), view_uuid(std::move(view_uuid_p)),
-      query_sql(std::move(query_sql_p)), local_change(local_change) {
+      query_sql(std::move(query_sql_p)), local_change(local_change),
+      has_column_comments(!info.column_comments_map.empty()) {
 }
 
 DuckLakeViewEntry::DuckLakeViewEntry(DuckLakeViewEntry &parent, CreateViewInfo &info, LocalChange local_change)

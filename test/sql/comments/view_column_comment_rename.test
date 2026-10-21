@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/view_column_comment_rename')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DUCKLAKE_VERSION '1.1', DATA_PATH '{DATA_PATH}/view_column_comment_rename')
 
 statement ok
 CREATE VIEW ducklake.v AS SELECT 1 AS a, 2 AS b
@@ -43,7 +43,7 @@ statement ok
 DETACH ducklake
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DUCKLAKE_VERSION '1.1-dev1', DATA_PATH '{DATA_PATH}/view_column_comment_rename')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DUCKLAKE_VERSION '1.1', DATA_PATH '{DATA_PATH}/view_column_comment_rename')
 
 query II
 SELECT column_name, comment FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'v2' ORDER BY ALL

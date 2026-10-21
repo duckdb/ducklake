@@ -1,5 +1,5 @@
-# name: test/sql/migration/dev1_plain_attach_migration.test
-# description: a plain attach of a catalog created by an older 1.1-dev1 build re-runs the whole v1.1 migration in place
+# name: test/sql/migration/dev1_migration.test
+# description: a catalog created by an older 1.1-dev1 build must be migrated and gets every v1.1 addition
 # group: [migration]
 
 require ducklake
@@ -36,9 +36,20 @@ SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_nam
 statement ok
 DETACH meta
 
-# a plain attach picks up every schema addition and renames the inlined metadata columns
-statement ok
+# dev catalogs are not attached without a migration, also not read-only
+statement error
 ATTACH 'ducklake:{TEST_DIR}/dev1_plain.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_plain_files')
+----
+catalog version is 1.1-dev1, but the extension requires version 1.1
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/dev1_plain.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_plain_files', READ_ONLY)
+----
+AUTOMATIC_MIGRATION
+
+# the migration adds every schema addition and renames the inlined metadata columns
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/dev1_plain.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_plain_files', AUTOMATIC_MIGRATION TRUE)
 
 query II
 SELECT * FROM dl.t ORDER BY i
@@ -87,12 +98,12 @@ SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_nam
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-1.1-dev1
+1.1
 
 statement ok
 DETACH meta
 
-# a second plain attach finds nothing to do and reads the data
+# a plain attach reads the migrated catalog
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/dev1_plain.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_plain_files')
 

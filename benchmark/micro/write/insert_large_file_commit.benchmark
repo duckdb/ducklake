@@ -1,0 +1,27 @@
+# name: benchmark/micro/write/insert_large_file_commit.benchmark
+# description: Commit 11194 files in one transaction
+# group: [write]
+
+name Insert Large File Commit
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument lake insert_large_file_commit
+
+argument work insert_large_file_commit_work
+
+include benchmark/micro/fixtures/metadata_commit.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+INSERT INTO lake.t SELECT i % 11194, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(111940) r(i);
+
+result_query II
+SELECT (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_data_file WHERE end_snapshot IS NULL), count(*) FROM lake.t
+----
+11194	111940
