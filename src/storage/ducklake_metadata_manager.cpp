@@ -5228,15 +5228,17 @@ FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion
 		return result;
 	}
 	// a file that a data or delete file of the catalog or of an open transaction uses waits until no file uses it
-	auto live_files = GetCanonicalFilePaths(GetLiveFilesForCleanupQuery());
+	// each directory is resolved once, so a symlink to the file under another name does not count
+	unordered_map<string, string> directories;
+	auto live_files = GetCanonicalFilePaths(GetLiveFilesForCleanupQuery(), directories);
 	vector<string> written_files;
 	transaction.manager.Cast<DuckLakeTransactionManager>().GetWrittenFiles(written_files);
 	for (auto &path : written_files) {
-		live_files.insert(CanonicalFilePath(path));
+		live_files.insert(CanonicalFilePath(path, directories));
 	}
 	vector<DuckLakeFileForCleanup> unused_files;
 	for (auto &file : result) {
-		if (!live_files.count(CanonicalFilePath(file.path))) {
+		if (!live_files.count(CanonicalFilePath(file.path, directories))) {
 			unused_files.push_back(std::move(file));
 		}
 	}
@@ -5285,9 +5287,19 @@ FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion f
 )";
 }
 
-string DuckLakeMetadataManager::CanonicalFilePath(const string &path) {
+string DuckLakeMetadataManager::CanonicalFilePath(const string &path,
+                                                  optional_ptr<unordered_map<string, string>> directories) {
 	auto normalized = StringUtil::Replace(path, "\\", "/");
 	auto parsed = Path::FromString(normalized);
+	auto separator = normalized.rfind('/');
+	if (parsed.IsLocal() && directories && separator != string::npos) {
+		auto directory = normalized.substr(0, separator + 1);
+		auto entry = directories->find(directory);
+		if (entry == directories->end()) {
+			entry = directories->emplace(directory, GetFileSystem().CanonicalizePath(directory)).first;
+		}
+		return entry->second + normalized.substr(separator);
+	}
 	if (parsed.IsLocal()) {
 		return GetFileSystem().CanonicalizePath(normalized);
 	}
@@ -5298,12 +5310,13 @@ string DuckLakeMetadataManager::CanonicalFilePath(const string &path) {
 	return normalized.substr(path_start, path_end - path_start);
 }
 
-unordered_set<string> DuckLakeMetadataManager::GetCanonicalFilePaths(string query) {
+unordered_set<string>
+DuckLakeMetadataManager::GetCanonicalFilePaths(string query, optional_ptr<unordered_map<string, string>> directories) {
 	auto result = Query(query);
 	result->ThrowIfError("Failed to get files scheduled for deletion from DuckLake: ");
 	unordered_set<string> paths;
 	for (auto &row : *result) {
-		paths.insert(CanonicalFilePath(row.GetValue<string>(0)));
+		paths.insert(CanonicalFilePath(row.GetValue<string>(0), directories));
 	}
 	return paths;
 }
