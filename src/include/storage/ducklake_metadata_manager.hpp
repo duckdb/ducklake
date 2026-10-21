@@ -652,7 +652,10 @@ protected:
 	string GetInliningObstacle(const string &name, const LogicalType &type);
 	string GetColumnType(const DuckLakeColumnInfo &col);
 	string GetColumnDefinitions(const vector<DuckLakeColumnInfo> &columns);
+	string GetLiveFilesForCleanupQuery() const;
 	string GetKnownFilesForCleanupQuery() const;
+	string CanonicalFilePath(const string &path);
+	unordered_set<string> GetCanonicalFilePaths(string query);
 
 	//! Optimized data file writing using DuckDB Appender API (DuckDB and SQLite metadata managers)
 	string WriteNewDataFilesWithAppender(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,

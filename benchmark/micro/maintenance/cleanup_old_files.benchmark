@@ -1,0 +1,23 @@
+# name: benchmark/micro/maintenance/cleanup_old_files.benchmark
+# description: Dry run of ducklake_cleanup_old_files that lists the files compaction scheduled for deletion
+# group: [maintenance]
+
+name Cleanup Old Files
+group micro
+subgroup maintenance
+
+require ducklake
+
+require parquet
+
+argument work cleanup_old_work
+
+include benchmark/micro/fixtures/snap1000.benchmark.in
+
+run
+SELECT count(*) AS scheduled FROM ducklake_cleanup_old_files('lake', cleanup_all => true, dry_run => true);
+
+result_query I
+SELECT scheduled FROM __answer
+----
+1000
