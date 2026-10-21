@@ -5298,7 +5298,8 @@ string DuckLakeMetadataManager::CanonicalFilePath(const string &path,
 		if (entry == directories->end()) {
 			entry = directories->emplace(directory, GetFileSystem().CanonicalizePath(directory)).first;
 		}
-		return entry->second + normalized.substr(separator);
+		// a case insensitive file system can spell one file name in two ways
+		return StringUtil::Lower(entry->second + normalized.substr(separator));
 	}
 	if (parsed.IsLocal()) {
 		return GetFileSystem().CanonicalizePath(normalized);

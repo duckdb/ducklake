@@ -97,7 +97,7 @@ CALL ducklake_expire_snapshots('ducklake', older_than => now())
 statement ok
 CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true)
 
-# the checks glob patterns, since a remote glob returns a literal path even when no file has it
+# check with a glob pattern, since a remote glob returns a literal path even when no file has it
 query II
 SELECT count(*), bool_and(parse_path(file)[-2] = 'd=a') FROM glob('{DATA_PATH}/cleanup_shared_file_dirs/*/data_0.parquet')
 ----
