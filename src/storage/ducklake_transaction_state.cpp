@@ -2467,7 +2467,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 				}
 			}
 			if (recomputed && compaction_rewrite_delete_changes.new_files.empty()) {
-				// cached stats are keyed by the next file id, which a rewrite without new files keeps
+				// older readers cache bounds by the next file id, which a rewrite without new files keeps
 				commit_snapshot.next_file_id++;
 			}
 		}
