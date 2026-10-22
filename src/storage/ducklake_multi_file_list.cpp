@@ -133,6 +133,39 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetFilterNode(column_t col
 	return GetColumnFilterNode(column_id, *expr_filter->expr, column_type);
 }
 
+unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetExtractFilterNode(const ColumnIndex &column_index,
+                                                                           unique_ptr<TableFilter> filter) const {
+	if (IsVirtualColumn(column_index.GetPrimaryIndex())) {
+		// LCOV_EXCL_START
+		return nullptr;
+		// LCOV_EXCL_STOP
+	}
+	optional_ptr<const DuckLakeFieldId> field_id =
+	    read_info.table.GetFieldId(PhysicalIndex(column_index.GetPrimaryIndex()));
+	reference<const ColumnIndex> current(column_index);
+	while (current.get().IsPushdownExtract()) {
+		auto &child = current.get().GetChildIndex(0);
+		if (!child.HasPrimaryIndex() || child.GetPrimaryIndex() >= field_id->Children().size()) {
+			// the fields of a VARIANT have no stats of their own
+			return nullptr;
+		}
+		field_id = field_id->Children()[child.GetPrimaryIndex()].get();
+		current = child;
+	}
+	if (!current.get().HasType() || current.get().GetType() != field_id->Type()) {
+		// a cast was pushed into the extract - the filter is on the cast value, not on the field
+		return nullptr;
+	}
+	auto expr_filter = ExpressionFilter::FromTableFilter(*filter, field_id->Type());
+	if (!expr_filter->expr) {
+		// LCOV_EXCL_START
+		return nullptr;
+		// LCOV_EXCL_STOP
+	}
+	return make_uniq<DuckLakeFilterNode>(
+	    ColumnFilterInfo(field_id->GetFieldIndex().index, field_id->Type(), std::move(expr_filter)));
+}
+
 unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetExpressionFilterNode(MultiFilePushdownInfo &info,
                                                                               const Expression &expr) const {
 	auto subject = DuckLakeUtil::GetFilterSubject(expr);
@@ -208,6 +241,7 @@ DuckLakeMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &dynam
 	auto &names = dynamic_pushdown_info.column_names;
 	auto &types = dynamic_pushdown_info.column_types;
 	auto &column_ids = dynamic_pushdown_info.column_ids;
+	auto &column_indexes = dynamic_pushdown_info.column_indexes;
 	auto &context = dynamic_pushdown_info.context;
 	auto &filters = dynamic_pushdown_info.filters;
 
@@ -225,11 +259,18 @@ DuckLakeMultiFileList::DynamicFilterPushdown(MultiFileDynamicPushdownInfo &dynam
 	}
 
 	for (auto &entry : filters) {
-		auto column_id = column_ids[entry.GetIndex().GetIndex()];
-		AddFilterToPushdownInfo(
-		    *pushdown_info, column_id,
+		auto &column_index = column_indexes[entry.GetIndex().GetIndex()];
+		auto filter =
 		    ExpressionFilter::GetExpressionFilter(entry.Filter(), "DuckLakeMultiFileList::DynamicFilterPushdown")
-		        .Copy());
+		        .Copy();
+		if (column_index.IsPushdownExtract()) {
+			auto node = GetExtractFilterNode(column_index, std::move(filter));
+			if (node) {
+				AddFilterNodeToPushdownInfo(*pushdown_info, *node);
+			}
+			continue;
+		}
+		AddFilterToPushdownInfo(*pushdown_info, column_ids[entry.GetIndex().GetIndex()], std::move(filter));
 	}
 
 	if (pushdown_info->Empty()) {
