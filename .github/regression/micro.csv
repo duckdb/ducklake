@@ -8,6 +8,7 @@ benchmark/micro/compaction/merge_adjacent_sorted.benchmark
 benchmark/micro/maintenance/expire_snapshots.benchmark
 benchmark/micro/maintenance/flush_inlined_data.benchmark
 benchmark/micro/maintenance/delete_orphaned_files.benchmark
+benchmark/micro/maintenance/cleanup_old_files.benchmark
 benchmark/micro/maintenance/flush_inlined_sorted.benchmark
 benchmark/micro/maintenance/big_lake_checkpoint.benchmark
 benchmark/micro/maintenance/big_lake_expire_snapshots.benchmark

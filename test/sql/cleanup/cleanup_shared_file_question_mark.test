@@ -1,0 +1,46 @@
+# name: test/sql/cleanup/cleanup_shared_file_question_mark.test
+# description: The cleanup of old files keeps a shared file under a data path with a question mark in a directory name
+# group: [cleanup]
+
+require ducklake
+
+require parquet
+
+# Windows does not allow a question mark in a directory name
+require notwindows
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/cleanup_shared_file?dir', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.v (i INTEGER);
+
+statement ok
+INSERT INTO ducklake.v SELECT i::INTEGER FROM range(5) r(i)
+
+statement ok
+CREATE TABLE ducklake.w (i INTEGER);
+
+statement ok
+SET VARIABLE v_file = (SELECT data_file FROM ducklake_list_files('ducklake', 'v'))
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'w', getvariable('v_file'))
+
+statement ok
+DROP TABLE ducklake.w
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true)
+
+query I
+SELECT sum(i) FROM ducklake.v
+----
+10
