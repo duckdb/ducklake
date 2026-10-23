@@ -1,0 +1,28 @@
+# name: test/sql/types/nested_field_pushdown_topn_cast.test
+# description: a cast pushed into an extract of inlined data only sees the rows that pass the filters under a Top-N
+# group: [types]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nested_field_pushdown_topn_cast', DATA_INLINING_ROW_LIMIT 100)
+
+statement ok
+SET disabled_optimizers = 'late_materialization'
+
+statement ok
+CREATE TABLE dl.t(id INTEGER, v VARIANT)
+
+statement ok
+INSERT INTO dl.t SELECT i, CASE WHEN i < 5 THEN {'k': i}::VARIANT ELSE {'k': 'bad'}::VARIANT END FROM range(10) t(i)
+
+query I
+SELECT v.k::INTEGER FROM dl.t WHERE id < 5 ORDER BY 1 LIMIT 1
+----
+0

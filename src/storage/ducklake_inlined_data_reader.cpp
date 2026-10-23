@@ -173,7 +173,7 @@ bool DuckLakeInlinedDataReader::IsDeferredExtract(idx_t column_idx) const {
 	}
 	if (filters) {
 		for (auto &entry : *filters) {
-			if (entry.GetIndex().GetIndex() == column_idx) {
+			if (entry.GetIndex().GetIndex() == column_idx && !ExpressionFilter::IsRootOptionalFilter(entry.Filter())) {
 				return false;
 			}
 		}
