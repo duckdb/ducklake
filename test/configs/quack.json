@@ -60,6 +60,7 @@
         "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test",
         "test/sql/compaction/compaction_idle_metadata_transaction.test",
         "test/sql/compaction/postgres_expire_snapshots_time_zone.test",
+        "test/sql/settings/set_option_concurrent_insert.test",
         "test/sql/general/postgres_nul_byte_text.test",
         "test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test"
@@ -135,6 +136,7 @@
       "reason": "set_option writes its ducklake_metadata row eagerly instead of staging it for commit like every other change, so a ROLLBACK leaves the row behind on quack, where each metadata statement runs on the server outside the local transaction. Rolled-back DDL is unaffected - that is only written at commit.",
       "paths": [
         "test/sql/stats/skip_stats_columns_transaction.test",
+        "test/sql/stats/skip_stats_columns_concurrent_rollback.test",
         "test/sql/compaction/compaction_failed_statement_rollback.test"
       ]
     },
