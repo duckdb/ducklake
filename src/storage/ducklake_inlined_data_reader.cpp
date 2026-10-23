@@ -428,7 +428,7 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 			} else {
 				source.Reference(scanned);
 			}
-			source.Flatten(approved_tuple_count);
+			source.Flatten();
 			auto &column_index = column_indexes[deferred.first];
 			Vector extracted(column_index.GetScanType(), approved_tuple_count);
 			ExtractPushdownField(context, column_index, source, extracted, approved_tuple_count);
