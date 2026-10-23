@@ -770,7 +770,6 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	} else {
 		auto &fs = FileSystem::GetFileSystem(context);
 		copy->file_path = copy->filename_pattern.CreateFilename(fs, copy->file_path, "parquet", 0);
-		copy->batch_size = DEFAULT_ROW_GROUP_SIZE;
 		copy->file_size_bytes = optional_idx();
 		copy->rotate = false;
 		copy->preserve_order = PreserveOrderType::PRESERVE_ORDER;

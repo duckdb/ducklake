@@ -86,7 +86,7 @@ public:
 
 	static const char *BoolLiteral(bool v);
 
-	static string PartitionValueLiteral(const Value &v);
+	static string TextLiteralOrNull(const Value &v);
 
 	//! Throws if a column name is reserved for inlined data metadata on this catalog
 	static void ValidateInlinedSystemColumn(DuckLakeCatalog &catalog, ClientContext &context, SchemaIndex schema_id,

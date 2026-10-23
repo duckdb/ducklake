@@ -3025,9 +3025,9 @@ void DuckLakeMetadataManager::SubstituteSnapshotPlaceholders(const DuckLakeSnaps
 void DuckLakeMetadataManager::SubstituteTransactionPlaceholders(DuckLakeSnapshot snapshot, string &query) const {
 	auto &commit_info = transaction.GetCommitInfo();
 	auto replacements = SnapshotReplacements(snapshot);
-	replacements.emplace_back("{AUTHOR}", commit_info.author.ToSQLString());
-	replacements.emplace_back("{COMMIT_MESSAGE}", commit_info.commit_message.ToSQLString());
-	replacements.emplace_back("{COMMIT_EXTRA_INFO}", commit_info.commit_extra_info.ToSQLString());
+	replacements.emplace_back("{AUTHOR}", DuckLakeUtil::TextLiteralOrNull(commit_info.author));
+	replacements.emplace_back("{COMMIT_MESSAGE}", DuckLakeUtil::TextLiteralOrNull(commit_info.commit_message));
+	replacements.emplace_back("{COMMIT_EXTRA_INFO}", DuckLakeUtil::TextLiteralOrNull(commit_info.commit_extra_info));
 	query = DuckLakeUtil::ReplacePlaceholders(query, replacements);
 }
 
@@ -3107,8 +3107,7 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
                                  const string &end_snapshot, vector<string> &result) {
 	string parent_idx = DuckLakeUtil::OptionalIdxOrNull(parent);
 
-	string initial_default_val =
-	    !column.initial_default.IsNull() ? SQLString::ToString(column.initial_default.ToString()) : "NULL";
+	string initial_default_val = DuckLakeUtil::TextLiteralOrNull(column.initial_default);
 
 	string default_val = "'NULL'";
 	string default_val_system = "'duckdb'";
@@ -4469,7 +4468,7 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 			throw InternalException("File should either not be partitioned, or have partition values");
 		}
 		for (auto &part_val : file.partition_values) {
-			auto partition_value = DuckLakeUtil::PartitionValueLiteral(part_val.partition_value);
+			auto partition_value = DuckLakeUtil::TextLiteralOrNull(part_val.partition_value);
 			partition_values.push_back(StringUtil::Format("(%d, %d, %d, %s)", data_file_index, table_id,
 			                                              part_val.partition_column_idx, partition_value));
 		}
@@ -4710,8 +4709,9 @@ string DuckLakeMetadataManager::WriteSnapshotChangesSql(const SnapshotChangeInfo
                                                         const DuckLakeSnapshotCommit &commit_info) {
 	return StringUtil::Format(
 	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES ({SNAPSHOT_ID}, %s, %s, %s, %s);)",
-	    SQLStringOrNull(change_info.changes_made), commit_info.author.ToSQLString(),
-	    commit_info.commit_message.ToSQLString(), commit_info.commit_extra_info.ToSQLString());
+	    SQLStringOrNull(change_info.changes_made), DuckLakeUtil::TextLiteralOrNull(commit_info.author),
+	    DuckLakeUtil::TextLiteralOrNull(commit_info.commit_message),
+	    DuckLakeUtil::TextLiteralOrNull(commit_info.commit_extra_info));
 }
 
 string DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(bool include_exactness) {
@@ -5049,7 +5049,7 @@ string DuckLakeMetadataManager::WriteNewTags(const vector<DuckLakeTagInfo> &new_
 	    [](const DuckLakeTagInfo &tag) { return StringUtil::Format("(%d, %s)", tag.id, SQLString(tag.key)); },
 	    [](const DuckLakeTagInfo &tag) {
 		    return StringUtil::Format("(%d, {SNAPSHOT_ID}, NULL, %s, %s)", tag.id, SQLString(tag.key),
-		                              tag.value.ToSQLString());
+		                              DuckLakeUtil::TextLiteralOrNull(tag.value));
 	    });
 }
 
@@ -5062,7 +5062,8 @@ string DuckLakeMetadataManager::WriteNewColumnTags(const vector<DuckLakeColumnTa
 	    },
 	    [](const DuckLakeColumnTagInfo &tag) {
 		    return StringUtil::Format("(%d, %d, {SNAPSHOT_ID}, NULL, %s, %s)", tag.table_id.index,
-		                              tag.field_index.index, SQLString(tag.key), tag.value.ToSQLString());
+		                              tag.field_index.index, SQLString(tag.key),
+		                              DuckLakeUtil::TextLiteralOrNull(tag.value));
 	    });
 }
 
@@ -5077,7 +5078,8 @@ string DuckLakeMetadataManager::WriteNewViewColumnTags(const vector<DuckLakeView
 	    },
 	    [](const DuckLakeViewColumnTagInfo &tag) {
 		    return StringUtil::Format("(%d, %s, {SNAPSHOT_ID}, NULL, %s, %s)", tag.view_id.index,
-		                              SQLString(tag.column_name), SQLString(tag.key), tag.value.ToSQLString());
+		                              SQLString(tag.column_name), SQLString(tag.key),
+		                              DuckLakeUtil::TextLiteralOrNull(tag.value));
 	    });
 }
 

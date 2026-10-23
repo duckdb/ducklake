@@ -1,0 +1,76 @@
+# name: test/sql/general/postgres_nul_byte_text.test
+# description: A Postgres catalog rejects text with a NUL byte, which Postgres cannot store, with a clear error
+# group: [general]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/pg_nul_byte', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.p (v VARCHAR, i INTEGER)
+
+statement ok
+ALTER TABLE dl.p SET PARTITIONED BY (v)
+
+statement error
+INSERT INTO dl.p VALUES ('p' || chr(0) || 'q', 1)
+----
+A DuckLake catalog on PostgreSQL cannot store text that contains a NUL byte
+
+statement ok
+INSERT INTO dl.p VALUES ('pq', 2)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_set_commit_message('dl', 'au' || chr(0) || 'thor', 'msg')
+
+statement ok
+INSERT INTO dl.p VALUES ('r', 3)
+
+statement error
+COMMIT
+----
+A DuckLake catalog on PostgreSQL cannot store text that contains a NUL byte
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_set_commit_message('dl', 'author', 'msg', extra_info => chr(0))
+
+statement ok
+INSERT INTO dl.p VALUES ('s', 4)
+
+statement error
+COMMIT
+----
+A DuckLake catalog on PostgreSQL cannot store text that contains a NUL byte
+
+statement error
+CREATE TABLE dl.pivoted AS PIVOT (SELECT 'a' || chr(0) AS k, 1 AS v) ON k USING sum(v)
+----
+A DuckLake catalog on PostgreSQL cannot store text that contains a NUL byte
+
+query II
+SELECT v, i FROM dl.p
+----
+pq	2
+
+# the files of the failed commits are removed
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/pg_nul_byte/**/*.parquet')
+----
+1

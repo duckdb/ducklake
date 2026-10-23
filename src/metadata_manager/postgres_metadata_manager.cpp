@@ -475,6 +475,10 @@ unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapsh
 	SubstituteTransactionPlaceholders(snapshot, query);
 	auto &ducklake_catalog = transaction.GetCatalog();
 	SubstituteCatalogPlaceholders(query, SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataSchemaName()));
+	if (query.find('\0') != string::npos) {
+		throw InvalidInputException("A DuckLake catalog on PostgreSQL cannot store text that contains a NUL byte, "
+		                            "such as a partition value, a name or a commit message");
+	}
 	auto catalog_literal = SQLString::ToString(ducklake_catalog.MetadataDatabaseName());
 	// casts of float bounds to text keep their exact value
 	query = "SET LOCAL extra_float_digits = 3;" + query;

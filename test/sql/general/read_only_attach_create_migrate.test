@@ -1,0 +1,54 @@
+# name: test/sql/general/read_only_attach_create_migrate.test
+# description: A read-only attach neither creates a DuckLake catalog nor migrates one
+# group: [general]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/read_only_attach_create_migrate.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/read_only_attach_create_migrate')
+
+statement ok
+CREATE TABLE lake.t AS SELECT 1 AS i
+
+statement ok
+DETACH lake
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake_new (READ_ONLY, CREATE_IF_NOT_EXISTS true,
+    METADATA_SCHEMA 'read_only_new_lake', DATA_PATH '{DATA_PATH}/read_only_new_lake')
+----
+read-only mode
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake_v10 (METADATA_SCHEMA 'read_only_v10_lake',
+    DATA_PATH '{DATA_PATH}/read_only_v10_lake', DUCKLAKE_VERSION '1.0')
+
+statement ok
+DETACH lake_v10
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake_v10 (METADATA_SCHEMA 'read_only_v10_lake', READ_ONLY,
+    AUTOMATIC_MIGRATION TRUE)
+----
+read-only mode
+
+# a snapshot attach is read-only too
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake_v10 (METADATA_SCHEMA 'read_only_v10_lake', SNAPSHOT_VERSION 0,
+    AUTOMATIC_MIGRATION TRUE)
+----
+read-only mode
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake_v10 (METADATA_SCHEMA 'read_only_v10_lake')
+
+query I
+SELECT value FROM __ducklake_metadata_lake_v10.read_only_v10_lake.ducklake_metadata WHERE key = 'version'
+----
+1.0

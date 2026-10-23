@@ -608,6 +608,11 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	copy.rotate = true;
 	copy.batch_size = catalog.GetConfigOption<idx_t>("parquet_row_group_size", schema_id, table_id,
 	                                                 DEFAULT_ROW_GROUP_SIZE, &copy_input.table_options);
+	string row_group_size_bytes;
+	if (catalog.TryGetConfigOption("parquet_row_group_size_bytes", row_group_size_bytes, schema_id, table_id,
+	                               &copy_input.table_options)) {
+		copy.batch_size_bytes = DBConfig::ParseMemoryLimit(row_group_size_bytes + " bytes");
+	}
 	if (copy_input.partition_data) {
 		copy.partition_output = true;
 		copy.write_empty_file = true;
@@ -656,11 +661,6 @@ PhysicalOperator &DuckLakeInsert::PlanCopyForInsert(ClientContext &context, Phys
 		GenerateProjection(context, planner, copy_options.projection_list, plan);
 	}
 
-	string row_group_size_bytes;
-	if (copy_input.catalog.TryGetConfigOption("parquet_row_group_size_bytes", row_group_size_bytes,
-	                                          copy_input.schema_id, copy_input.table_id, &copy_input.table_options)) {
-		copy.batch_size_bytes = DBConfig::ParseMemoryLimit(row_group_size_bytes + " bytes");
-	}
 	copy.SetEstimatedCardinality(1);
 	copy.ResolveOperatorTypes();
 	auto &physical_copy = planner.CreatePlan(copy, *plan).Cast<PhysicalCopyToFile>();
