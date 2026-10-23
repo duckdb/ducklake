@@ -124,7 +124,7 @@ unique_ptr<BaseStatistics> DuckLakeStatisticsExtended(ClientContext &context, Ta
 	if (!stats || !column_index.IsPushdownExtract()) {
 		return stats;
 	}
-	// the scan reads a single field of this column - narrow the statistics down to that field
+	// the scan reads a single field of this column, so narrow the statistics down to that field
 	auto stats_type = stats->GetStatsType();
 	if (stats_type != StatisticsType::STRUCT_STATS && stats_type != StatisticsType::VARIANT_STATS) {
 		return nullptr;

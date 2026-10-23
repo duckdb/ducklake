@@ -131,7 +131,7 @@ static void CastOrReference(ClientContext &context, Vector &source, Vector &resu
 	VectorOperations::Cast(context, source, result, count);
 }
 
-//! Inlined data is read whole - apply a field extract that was pushed into the scan
+//! Inlined data is read whole, so apply a field extract that was pushed into the scan
 static void ExtractPushdownField(ClientContext &context, const ColumnIndex &index, Vector &source, Vector &result,
                                  idx_t count) {
 	auto &child = index.GetChildIndex(0);

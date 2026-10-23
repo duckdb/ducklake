@@ -153,7 +153,7 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetExtractFilterNode(const
 		current = child;
 	}
 	if (!current.get().HasType() || current.get().GetType() != field_id->Type()) {
-		// a cast was pushed into the extract - the filter is on the cast value, not on the field
+		// a cast was pushed into the extract, so the filter is on the cast value, not on the field
 		return nullptr;
 	}
 	auto expr_filter = ExpressionFilter::FromTableFilter(*filter, field_id->Type());
