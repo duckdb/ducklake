@@ -1,0 +1,54 @@
+# name: test/sql/delete/full_file_delete_stats_retry.test
+# description: A full-file delete recovers its bounds after a commit to another table
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/full_file_delete_stats_retry.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/full_file_delete_stats_retry', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+CREATE TABLE ducklake.u(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t SELECT range FROM range(100)
+
+statement ok
+INSERT INTO ducklake.t SELECT range FROM range(1000, 1100)
+
+statement ok con1
+BEGIN
+
+query I con1
+DELETE FROM ducklake.t WHERE i >= 1000
+----
+100
+
+statement ok con2
+INSERT INTO ducklake.u VALUES (1)
+
+statement ok con1
+COMMIT
+
+query III
+SELECT record_count, min_value::BIGINT, max_value::BIGINT
+FROM __ducklake_metadata_ducklake.ducklake_table_stats
+JOIN __ducklake_metadata_ducklake.ducklake_table_column_stats USING (table_id)
+JOIN __ducklake_metadata_ducklake.ducklake_table USING (table_id)
+WHERE table_name = 't' AND end_snapshot IS NULL
+----
+100	0	99
+
+query III
+SELECT count(*), min(i), max(i) FROM ducklake.t
+----
+100	0	99

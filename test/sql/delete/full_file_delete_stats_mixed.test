@@ -1,0 +1,240 @@
+# name: test/sql/delete/full_file_delete_stats_mixed.test
+# description: Full-file bounds recovery accounts for pending inserts and rejects pending partial deletes
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/full_file_delete_stats_mixed.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/full_file_delete_stats_mixed', METADATA_CATALOG 'md', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+INSERT INTO lake.t SELECT range FROM range(20)
+
+statement ok
+INSERT INTO lake.t SELECT range FROM range(100, 120)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+INSERT INTO lake.t VALUES (1000), (1001)
+
+statement ok
+BEGIN
+
+query I
+DELETE FROM lake.t WHERE i < 20
+----
+20
+
+statement ok
+INSERT INTO lake.t VALUES (-20), (2000)
+
+statement ok
+COMMIT
+
+query III
+SELECT count(*), min(i), max(i) FROM lake.t
+----
+24	-20	2000
+
+query IIII
+SELECT record_count, next_row_id, min_value::INTEGER, max_value::INTEGER
+FROM md.ducklake_table_stats JOIN md.ducklake_table_column_stats USING (table_id)
+----
+24	44	-20	2000
+
+# Pending inlined deletes invalidate the old inlined extrema.
+statement ok
+BEGIN
+
+query I
+DELETE FROM lake.t WHERE i BETWEEN 100 AND 119
+----
+20
+
+query I
+DELETE FROM lake.t WHERE i = 1000
+----
+1
+
+statement ok
+INSERT INTO lake.t VALUES (3000)
+
+statement ok
+COMMIT
+
+query III
+SELECT count(*), min(i), max(i) FROM lake.t
+----
+4	-20	3000
+
+query IIII
+SELECT record_count, next_row_id, min_value IS NULL, max_value IS NULL
+FROM md.ducklake_table_stats LEFT JOIN md.ducklake_table_column_stats USING (table_id)
+----
+5	45	true	true
+
+# A newly written file with transaction-local deletions cannot supply exact extrema.
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE lake.partial(i INTEGER)
+
+statement ok
+INSERT INTO lake.partial VALUES (1), (2)
+
+statement ok
+INSERT INTO lake.partial VALUES (10), (20)
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM lake.partial WHERE i < 3
+
+statement ok
+INSERT INTO lake.partial VALUES (100), (200), (300)
+
+statement ok
+DELETE FROM lake.partial WHERE i = 100
+
+statement ok
+COMMIT
+
+query III
+SELECT count(*), min(i), max(i) FROM lake.partial
+----
+4	10	300
+
+query I
+SELECT count(*) FROM lake.partial WHERE i >= 100
+----
+2
+
+# Nested leaves retain their own field IDs when the remaining files are merged.
+statement ok
+CREATE TABLE lake.nested(s STRUCT(x INTEGER))
+
+statement ok
+INSERT INTO lake.nested VALUES ({'x': 1}), ({'x': 10})
+
+statement ok
+INSERT INTO lake.nested VALUES ({'x': 100}), ({'x': 200})
+
+statement ok
+DELETE FROM lake.nested WHERE s.x < 100
+
+query III
+SELECT count(*), min(s.x), max(s.x) FROM lake.nested
+----
+2	100	200
+
+query II
+SELECT s.min_value::INTEGER, s.max_value::INTEGER
+FROM md.ducklake_table_column_stats s
+JOIN md.ducklake_column c USING (table_id, column_id)
+JOIN md.ducklake_table t USING (table_id)
+WHERE t.table_name = 'nested' AND c.column_name = 'x' AND c.end_snapshot IS NULL
+----
+100	200
+
+query I
+SELECT count(*)
+FROM md.ducklake_table_column_stats s
+JOIN md.ducklake_column c USING (table_id, column_id)
+JOIN md.ducklake_table t USING (table_id)
+WHERE t.table_name = 'nested' AND c.column_name = 's' AND c.end_snapshot IS NULL
+----
+0
+
+# Deletes from pending inlined inserts rebuild their statistics before recovery.
+statement ok
+CREATE TABLE lake.buffered(i INTEGER)
+
+statement ok
+INSERT INTO lake.buffered VALUES (0), (1)
+
+statement ok
+INSERT INTO lake.buffered VALUES (10), (20)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM lake.buffered WHERE i < 2
+
+statement ok
+INSERT INTO lake.buffered VALUES (1000), (2000)
+
+statement ok
+DELETE FROM lake.buffered WHERE i = 2000
+
+statement ok
+COMMIT
+
+query III
+SELECT count(*), min(i), max(i) FROM lake.buffered
+----
+3	10	1000
+
+query II
+SELECT s.min_value::INTEGER, s.max_value::INTEGER
+FROM md.ducklake_table_column_stats s
+JOIN md.ducklake_table t USING (table_id)
+WHERE t.table_name = 'buffered'
+----
+10	1000
+
+# VARIANT is a leaf with extra statistics, even though DuckDB classifies it as nested.
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE lake.variants(i INTEGER, v VARIANT)
+
+statement ok
+INSERT INTO lake.variants VALUES (0, {'x': 1}::VARIANT)
+
+statement ok
+INSERT INTO lake.variants VALUES (1, {'x': 100}::VARIANT), (2, {'x': 200}::VARIANT)
+
+statement ok
+DELETE FROM lake.variants WHERE i = 0
+
+query I
+SELECT s.extra_stats IS NOT NULL
+FROM md.ducklake_table_column_stats s
+JOIN md.ducklake_table t USING (table_id)
+WHERE t.table_name = 'variants' AND s.column_id = 2
+----
+true
+
+query III
+SELECT count(*), min(v.x::INTEGER), max(v.x::INTEGER) FROM lake.variants
+----
+2	100	200
+
+statement ok
+INSERT INTO lake.variants VALUES (3, {'x': 300}::VARIANT)
+
+query I
+SELECT s.extra_stats IS NOT NULL
+FROM md.ducklake_table_column_stats s
+JOIN md.ducklake_table t USING (table_id)
+WHERE t.table_name = 'variants' AND s.column_id = 2
+----
+true

@@ -32,6 +32,9 @@ struct DuckLakeCommitContext {
 	std::function<bool(TableIndex)> inlined_file_deletion_table_exists;
 	//! Returns the latest snapshot for the first commit attempt.
 	std::function<DuckLakeSnapshot()> get_snapshot;
+	//! Sets the snapshot whose stats and schema are used by this commit attempt.
+	std::function<void(DuckLakeSnapshot)> set_attempt_snapshot = [](DuckLakeSnapshot) {
+	};
 	//! Rewrites the delete files whose new deletes are not dated to the commit snapshot.
 	std::function<void(idx_t)> set_delete_commit_snapshot = [](idx_t) {
 	};
@@ -60,8 +63,10 @@ struct DuckLakeCommitContext {
 	std::function<void()> prepare_retry = []() {
 	};
 	// LCOV_EXCL_STOP
-	//! Runs a metadata-DB query during post-commit cleanup.
+	//! Runs a metadata-DB query during commit or post-commit cleanup.
 	std::function<unique_ptr<QueryResult>(string)> query_metadata;
+	//! Protects inlined tables referenced by the commit from concurrent cleanup when the catalog requires it.
+	std::function<unique_ptr<QueryResult>(const set<TableIndex> &)> get_inlined_tables_for_commit;
 	//! Runs cleanup statements atomically.
 	std::function<unique_ptr<QueryResult>(string)> execute_in_transaction;
 	//! Runs a snapshot-templated metadata-DB query (handles {SNAPSHOT_ID} substitution).
@@ -135,9 +140,6 @@ struct DuckLakeCommitContext {
 	std::function<void(const vector<DuckLakeConfigOption> &)> set_table_options =
 	    [](const vector<DuckLakeConfigOption> &) {
 	    };
-	//! Invalidates the cached stats entry for a table after a stats-affecting file drop.
-	std::function<void(idx_t, TableIndex)> invalidate_table_stats_cache = [](idx_t, TableIndex) {
-	};
 	//! Reports a failure after the metadata commit is already durable.
 	// LCOV_EXCL_START
 	std::function<void(const string &)> report_post_commit_error = [](const string &) {
@@ -231,6 +233,16 @@ public:
 	                                      const CompactionInformation &rewrite_changes,
 	                                      const set<DataFileIndex> &removed_source_ids,
 	                                      const DuckLakeCommitContext &context);
+	//! Recover column bounds after a full-file drop without changing table totals or row IDs
+	bool RecomputeColumnStatsAfterFileDrop(string &batch_query, TableIndex table_id,
+	                                       const DroppedDataFileStats &dropped_stats, const NewDataInfo &new_data,
+	                                       const DuckLakeCommitContext &context);
+	//! Merge the remaining files and inlined rows only when they account for all live data
+	bool TryRecomputeGlobalStats(TableIndex table_id, DuckLakeSnapshot snapshot,
+	                             const vector<DuckLakeFileInfo> &new_files,
+	                             const vector<DuckLakeInlinedDataInfo> &new_inlined_data,
+	                             const set<DataFileIndex> &removed_source_ids, idx_t expected_data_file_rows,
+	                             const DuckLakeCommitContext &context, DuckLakeTableStats &new_stats);
 	//! Merge committed inlined data's per-column min/max into `target` via typed SQL aggregates. Returns false if the
 	//! inlined data cannot be accounted for exactly (e.g. a non-scalar column), in which case the caller must not
 	//! claim the recomputed stats are exact.

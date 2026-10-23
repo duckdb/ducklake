@@ -32,7 +32,7 @@ public:
 		// the names of the row id, which the sqlite extension deletes and updates rows by
 		return {"rowid", "oid", "_rowid_"};
 	}
-	bool IsRetryableCommitError(const string &message) const override;
+	bool IsRetryableCommitError(const string &message) override;
 	string CommitErrorHint(const string &message) const override;
 	void RenameInlinedColumns(const map<string, vector<pair<string, string>>> &renames) override;
 

@@ -183,7 +183,7 @@ SELECT count(*), count(*) FILTER (WHERE s = 'x' AND i = 1) FROM ducklake.e
 ----
 20009	0
 
-# a rewrite keeps the table stats of a delete that commits first
+# a rewrite refreshes totals after a delete that commits first
 statement ok
 CREATE TABLE ducklake.f(i INTEGER)
 
@@ -225,7 +225,7 @@ query I
 SELECT record_count FROM __ducklake_metadata_ducklake.ducklake_table_stats
 WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'f')
 ----
-100
+99
 
 # and the table stats of an insert that commits first
 statement ok

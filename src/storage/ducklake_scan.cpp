@@ -214,11 +214,9 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 	}
 	idx_t net_count = file_count.GetIndex() + table.GetNetInlinedRowCount(*transaction);
 
-	// MIN/MAX can be answered from the catalog column stats, but only when those stats are exact.
-	// Global column stats only ever widen on insert (via MergeStats) and are never tightened by deletes
-	// or compaction - so they are exact for the live data iff no row has ever been deleted, i.e. the gross
-	// record_count (total ever inserted) equals the net (delete-adjusted) row count. count(*) is unaffected
-	// either way: it does not consult MinMaxIsExact and subtracts delete counts independently.
+	// MIN/MAX also needs exact column bounds and no outstanding row deletions within the stored data.
+	// Bounds over the stored rows cover the live rows when the gross and net row counts match.
+	// COUNT(*) uses the delete-adjusted count independently.
 	auto table_stats = table.GetTableStats(*transaction);
 	bool min_max_exact = table_stats && !table_stats->record_count_unknown && table_stats->record_count == net_count;
 

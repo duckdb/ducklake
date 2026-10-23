@@ -1,5 +1,6 @@
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "common/ducklake_util.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/main/database.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -353,10 +354,18 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	}
 }
 
-bool PostgresMetadataManager::IsRetryableCommitError(const string &message) const {
+void PostgresMetadataManager::ResetCommitAttempt() {
+	read_inlined_tables.clear();
+	failed_inlined_table_locks.clear();
+}
+
+bool PostgresMetadataManager::IsRetryableCommitError(const string &message) {
 	// the server error follows the failed query, which can contain any text
 	auto server_error_start = message.rfind("\": ");
 	auto server_error = server_error_start == string::npos ? message : message.substr(server_error_start);
+	if (RemovedInlinedTableAfterRollback(server_error)) {
+		return true;
+	}
 	// constraint names are not translated, so a conflict on a metadata primary key is found in any language
 	for (auto end = server_error.find("_pkey"); end != string::npos; end = server_error.find("_pkey", end + 1)) {
 		auto start = end;
@@ -369,6 +378,81 @@ bool PostgresMetadataManager::IsRetryableCommitError(const string &message) cons
 		}
 	}
 	return false;
+}
+
+unordered_set<string> PostgresMetadataManager::GetInlinedTableNames(TableIndex table_id) {
+	auto names = DuckLakeMetadataManager::GetInlinedTableNames(table_id);
+	read_inlined_tables.insert(names.begin(), names.end());
+	return names;
+}
+
+unique_ptr<QueryResult> PostgresMetadataManager::GetInlinedTablesForCommit(const set<TableIndex> &table_ids) {
+	// Keep registrations until commit, since cleanup deletes them before dropping superseded inlined tables.
+	auto &catalog = transaction.GetCatalog();
+	auto names_query = GetInlinedTableNamesForTablesSql(table_ids);
+	failed_inlined_table_locks.clear();
+	auto candidates = Query(string(names_query));
+	candidates->ThrowIfError("Failed to read inlined table registrations: ");
+	// Waiting here can deadlock against cleanup waiting to drop a table we already read.
+	auto remote_query = StringUtil::Format(R"(
+WITH locked AS MATERIALIZED (%s ORDER BY table_id, table_name FOR KEY SHARE SKIP LOCKED)
+SELECT table_id, table_name FROM locked
+UNION ALL
+SELECT NULL, NULL WHERE (SELECT COUNT(*) FROM locked) <> (SELECT COUNT(*) FROM (%s) candidates))",
+	                                       names_query, names_query);
+	SubstituteCatalogPlaceholders(remote_query, SQLQuotedIdentifier::ToString(catalog.MetadataSchemaName()));
+	auto result = Query(StringUtil::Format(
+	    "SELECT table_id, table_name FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
+	    SQLString::ToString(remote_query)));
+	if (result->HasError()) {
+		for (auto &row : *candidates) {
+			failed_inlined_table_locks.insert(row.GetValue<string>(1));
+		}
+	}
+	return result;
+}
+
+static bool MentionsInlinedTable(const string &message, const string &table_name) {
+	auto is_identifier_char = [](char c) {
+		return StringUtil::CharacterIsAlphaNumeric(c) || c == '_' || c == '$';
+	};
+	for (auto pos = message.find(table_name); pos != string::npos;
+	     pos = message.find(table_name, pos + table_name.size())) {
+		auto end = pos + table_name.size();
+		if ((pos == 0 || !is_identifier_char(message[pos - 1])) &&
+		    (end == message.size() || !is_identifier_char(message[end]))) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool PostgresMetadataManager::RemovedInlinedTableAfterRollback(const string &message) {
+	if (transaction.GetConnection().context->transaction.HasActiveTransaction()) {
+		return false;
+	}
+	auto names = std::move(failed_inlined_table_locks);
+	for (auto &name : read_inlined_tables) {
+		if (MentionsInlinedTable(message, name)) {
+			names.insert(name);
+		}
+	}
+	ResetCommitAttempt();
+	if (names.empty()) {
+		return false;
+	}
+	// After rollback, missing registrations prove cleanup committed beyond our metadata snapshot.
+	auto query = StringUtil::Format(
+	    "SELECT DISTINCT table_name FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_name IN (%s)",
+	    StringUtil::Join(names, ",", [](const string &name) { return SQLString::ToString(name); }));
+	auto result = Query(query);
+	if (result->HasError()) {
+		return false;
+	}
+	for (auto &row : *result) {
+		names.erase(row.GetValue<string>(0));
+	}
+	return !names.empty();
 }
 
 bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_name) {

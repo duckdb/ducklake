@@ -1470,14 +1470,6 @@ void DuckLakeTransaction::CleanupFiles() {
 }
 
 void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version) {
-	if (snapshot) {
-		for (auto &entry : state->dropped_file_stats) {
-			ducklake_catalog.InvalidateTableStatsCache(snapshot->next_file_id, entry.first);
-		}
-		for (auto &table_id : state->local_changes.GetCompactedTables()) {
-			ducklake_catalog.InvalidateTableStatsCache(snapshot->next_file_id, table_id);
-		}
-	}
 	catalog_version = schema_version;
 	if (connection) {
 		connection->Commit();
@@ -1509,8 +1501,10 @@ void DuckLakeTransaction::ReportPostCommitError(const string &message) {
 void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
                                         const TransactionChangeInformation &transaction_changes,
                                         const DuckLakeRetryConfig &retry_config) {
+	metadata_manager->ResetCommitAttempt();
 	vector<unique_ptr<SQLStatement>> inlined_inserts;
 	DuckLakeCommitContext context;
+	auto attempt_snapshot = transaction_snapshot;
 	context.conflict_query_executor = [&](string q) -> unique_ptr<QueryResult> {
 		auto result = metadata_manager->Query(transaction_snapshot, q);
 		result->ThrowIfError("Failed to commit DuckLake transaction - failed to get snapshot and "
@@ -1522,7 +1516,10 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		    DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id));
 	};
 	context.get_snapshot = [&]() {
-		return GetSnapshot();
+		return attempt_snapshot;
+	};
+	context.set_attempt_snapshot = [&](DuckLakeSnapshot snapshot) {
+		attempt_snapshot = snapshot;
 	};
 	context.set_delete_commit_snapshot = [&](idx_t commit_snapshot) {
 		// the client context has no active transaction during the commit
@@ -1564,11 +1561,15 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.prepare_retry = [&]() {
 		inlined_inserts.clear();
 		metadata_manager->ClearInlinedTableCaches();
+		metadata_manager->ResetCommitAttempt();
 		connection->BeginTransaction();
 		snapshot.reset();
 	};
 	context.query_metadata = [&](string q) {
 		return metadata_manager->Query(q);
+	};
+	context.get_inlined_tables_for_commit = [&](const set<TableIndex> &table_ids) {
+		return metadata_manager->GetInlinedTablesForCommit(table_ids);
 	};
 	context.execute_in_transaction = [&](string q) {
 		return metadata_manager->ExecuteInTransaction(q);
@@ -1595,7 +1596,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		                                             inlined_inserts);
 	};
 	context.get_table_stats = [&](TableIndex table_id) {
-		return ducklake_catalog.GetTableStats(*this, table_id);
+		return ducklake_catalog.GetTableStatsForCommit(*this, attempt_snapshot, table_id);
 	};
 	context.column_holds_values = [&](TableIndex table_id, FieldIndex column_id, idx_t snapshot_id) {
 		return ducklake_catalog.ColumnHoldsValues(table_id, column_id, snapshot_id);
@@ -1604,7 +1605,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		ducklake_catalog.SetColumnHoldsValues(table_id, column_id, snapshot_id);
 	};
 	auto get_table_entry = [&](TableIndex table_id) -> optional_ptr<DuckLakeTableEntry> {
-		auto entry = ducklake_catalog.GetEntryById(*this, transaction_snapshot, table_id);
+		auto entry = ducklake_catalog.GetEntryById(*this, attempt_snapshot, table_id);
 		if (!entry) {
 			// LCOV_EXCL_START
 			return nullptr;
@@ -1647,17 +1648,17 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 			return names;
 			// LCOV_EXCL_STOP
 		}
-		for (auto &t : table->GetInlinedDataTables(*this, transaction_snapshot)) {
+		for (auto &t : table->GetInlinedDataTables(*this, attempt_snapshot)) {
 			names.push_back(t.table_name);
 		}
 		return names;
 	};
 	context.get_net_data_file_row_count = [&](TableIndex table_id) -> idx_t {
 		auto table = get_table_entry(table_id);
-		return table ? table->GetNetDataFileRowCount(*this) : 0;
+		return table ? metadata_manager->GetNetDataFileRowCount(table_id, attempt_snapshot) : 0;
 	};
 	context.build_stats_map = [&](vector<DuckLakeGlobalStatsInfo> &stats) {
-		auto &schema = ducklake_catalog.GetSchemaForSnapshot(*this, GetSnapshot());
+		auto &schema = ducklake_catalog.GetSchemaForSnapshot(*this, attempt_snapshot);
 		return DuckLakeCatalog::ConstructStatsMap(stats, schema);
 	};
 	context.invalidate_schema_cache = [&](idx_t schema_version) {
@@ -1677,9 +1678,6 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		for (auto &option : options) {
 			ducklake_catalog.SetConfigOption(option);
 		}
-	};
-	context.invalidate_table_stats_cache = [&](idx_t next_file_id, TableIndex table_id) {
-		ducklake_catalog.InvalidateTableStatsCache(next_file_id, table_id);
 	};
 	context.report_post_commit_error = [&](const string &message) {
 		ReportPostCommitError(message);
@@ -2048,7 +2046,7 @@ void DuckLakeTransaction::DropTableMacro(DuckLakeTableMacroEntry &macro) {
 }
 
 void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_id, string path, idx_t row_count,
-                                   idx_t file_size_bytes) {
+                                   idx_t live_row_count, idx_t file_size_bytes) {
 	state->tables_deleted_from.insert(table_id);
 	auto inserted = state->dropped_files.emplace(std::move(path), data_file_id);
 	if (!inserted.second) {
@@ -2057,7 +2055,9 @@ void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_
 		// LCOV_EXCL_STOP
 	}
 	auto &stats = state->dropped_file_stats[table_id];
+	stats.data_file_ids.insert(data_file_id);
 	stats.row_count += row_count;
+	stats.live_row_count += live_row_count;
 	stats.file_size_bytes += file_size_bytes;
 }
 
