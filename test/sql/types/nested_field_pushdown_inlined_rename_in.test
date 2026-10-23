@@ -1,0 +1,28 @@
+# name: test/sql/types/nested_field_pushdown_inlined_rename_in.test
+# description: an IN filter on a struct with a renamed field reads inlined data written before the rename
+# group: [types]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/nested_field_pushdown_inlined_rename_in', DATA_INLINING_ROW_LIMIT 100)
+
+statement ok
+CREATE TABLE dl.t(s STRUCT(n STRUCT(a INTEGER)))
+
+statement ok
+INSERT INTO dl.t VALUES ({'n': {'a': 7}}), ({'n': {'a': 8}})
+
+statement ok
+ALTER TABLE dl.t RENAME s.n.a TO b
+
+query I
+SELECT s.n FROM dl.t WHERE s.n IN ({'b': 7}, {'b': 9})
+----
+{'b': 7}
