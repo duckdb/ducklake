@@ -183,3 +183,14 @@ query II
 SELECT max(v.k::INTEGER), count(*) FROM ducklake.casts WHERE id BETWEEN 10 AND 14;
 ----
 13	4
+
+# a filter on the cast field itself runs after the other filters, so the cast still only sees the rows they pass
+query II
+SELECT count(*), sum(v.k::INTEGER) FROM ducklake.casts WHERE id < 5 AND v.k::INTEGER > 2;
+----
+2	7
+
+query II
+SELECT count(*), sum(v.k::INTEGER) FROM ducklake.casts WHERE id BETWEEN 10 AND 14 AND v.k::INTEGER > 11;
+----
+2	25

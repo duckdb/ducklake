@@ -168,17 +168,45 @@ bool DuckLakeInlinedDataReader::HasPushdownExtract() const {
 }
 
 bool DuckLakeInlinedDataReader::IsDeferredExtract(idx_t column_idx) const {
-	if (!column_indexes[column_idx].IsPushdownExtract() || (!filters && !deletion_filter)) {
-		return false;
-	}
-	if (filters) {
-		for (auto &entry : *filters) {
-			if (entry.GetIndex().GetIndex() == column_idx && !ExpressionFilter::IsRootOptionalFilter(entry.Filter())) {
-				return false;
-			}
+	return column_indexes[column_idx].IsPushdownExtract() && (filters || deletion_filter);
+}
+
+optional_idx DuckLakeInlinedDataReader::TakeDeferredExtract(idx_t column_idx) {
+	for (idx_t i = 0; i < deferred_extracts.size(); i++) {
+		if (deferred_extracts[i].first == column_idx) {
+			auto scan_column = deferred_extracts[i].second;
+			deferred_extracts.erase_at(i);
+			return scan_column;
 		}
 	}
-	return true;
+	return optional_idx();
+}
+
+void DuckLakeInlinedDataReader::SliceRows(DataChunk &chunk, const SelectionVector &sel, idx_t count) {
+	if (count == chunk.size()) {
+		return;
+	}
+	chunk.Slice(sel, count);
+	if (!deferred_extracts.empty()) {
+		// the deferred extracts are computed from the scanned rows that are left
+		scan_chunk.Slice(sel, count);
+	}
+}
+
+void DuckLakeInlinedDataReader::ComputeDeferredExtract(ClientContext &context, idx_t column_idx, idx_t scan_column,
+                                                       DataChunk &chunk) {
+	auto count = scan_chunk.size();
+	Vector source(scan_chunk.data[scan_column].GetType());
+	source.Reference(scan_chunk.data[scan_column]);
+	source.Flatten();
+	auto &column_index = column_indexes[column_idx];
+	Vector extracted(column_index.GetScanType(), count);
+	ExtractPushdownField(context, column_index, source, extracted, count);
+	Vector result(chunk.data[column_idx].GetType(), count);
+	if (!TryEvaluateExpression(context, column_idx, extracted, extracted.GetType(), result)) {
+		CastOrReference(context, extracted, result, count);
+	}
+	chunk.data[column_idx].Reference(result);
 }
 
 bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, GlobalTableFunctionState &gstate,
@@ -408,33 +436,39 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 		if (filters) {
 			for (auto &entry : *filters) {
 				auto &filter = entry.Filter();
-				if (ExpressionFilter::IsRootOptionalFilter(filter)) {
+				auto column_id = entry.GetIndex().GetIndex();
+				if (ExpressionFilter::IsRootOptionalFilter(filter) || IsDeferredExtract(column_id)) {
 					continue;
 				}
-				auto column_id = entry.GetIndex().GetIndex();
 				auto filter_state = TableFilterState::Initialize(context, filter);
 				approved_tuple_count = ColumnSegment::FilterSelection(sel, chunk.data[column_id], *filter_state,
 				                                                      chunk.size(), approved_tuple_count);
 			}
 		}
-		if (approved_tuple_count != chunk.size()) {
-			chunk.Slice(sel, approved_tuple_count);
+		SliceRows(chunk, sel, approved_tuple_count);
+		// a filter on an extracted field runs after the others, so a cast in the extract only sees the rows they pass
+		if (filters) {
+			for (auto &entry : *filters) {
+				auto &filter = entry.Filter();
+				auto column_id = entry.GetIndex().GetIndex();
+				if (ExpressionFilter::IsRootOptionalFilter(filter)) {
+					continue;
+				}
+				auto scan_column = TakeDeferredExtract(column_id);
+				if (!scan_column.IsValid()) {
+					continue;
+				}
+				ComputeDeferredExtract(context, column_id, scan_column.GetIndex(), chunk);
+				SelectionVector extract_sel;
+				auto filter_state = TableFilterState::Initialize(context, filter);
+				idx_t extract_count = chunk.size();
+				extract_count = ColumnSegment::FilterSelection(extract_sel, chunk.data[column_id], *filter_state,
+				                                               chunk.size(), extract_count);
+				SliceRows(chunk, extract_sel, extract_count);
+			}
 		}
 		for (auto &deferred : deferred_extracts) {
-			auto &scanned = scan_chunk.data[deferred.second];
-			Vector source(scanned.GetType());
-			if (approved_tuple_count != scan_count) {
-				source.Slice(scanned, sel, approved_tuple_count);
-			} else {
-				source.Reference(scanned);
-			}
-			source.Flatten();
-			auto &column_index = column_indexes[deferred.first];
-			Vector extracted(column_index.GetScanType(), approved_tuple_count);
-			ExtractPushdownField(context, column_index, source, extracted, approved_tuple_count);
-			Vector result(chunk.data[deferred.first].GetType(), approved_tuple_count);
-			CastOrReference(context, extracted, result, approved_tuple_count);
-			chunk.data[deferred.first].Reference(result);
+			ComputeDeferredExtract(context, deferred.first, deferred.second, chunk);
 		}
 		deferred_extracts.clear();
 	}
