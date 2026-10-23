@@ -1451,6 +1451,35 @@ void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckL
 	}
 }
 
+bool DuckLakeCatalog::TryGetRewriteSnapshots(TableIndex table_id, idx_t start_snapshot, idx_t end_snapshot,
+                                             set<idx_t> &result) {
+	lock_guard<mutex> guard(rewrite_snapshots_lock);
+	if (!rewrite_snapshots_read_until.IsValid() || rewrite_snapshots_read_until.GetIndex() < end_snapshot) {
+		return false;
+	}
+	auto entry = rewrite_snapshots.find(table_id.index);
+	if (entry != rewrite_snapshots.end() && start_snapshot <= end_snapshot) {
+		auto &snapshots = entry->second;
+		result.insert(snapshots.lower_bound(start_snapshot), snapshots.upper_bound(end_snapshot));
+	}
+	return true;
+}
+
+idx_t DuckLakeCatalog::GetFirstUnreadRewriteSnapshot() {
+	lock_guard<mutex> guard(rewrite_snapshots_lock);
+	return rewrite_snapshots_read_until.IsValid() ? rewrite_snapshots_read_until.GetIndex() + 1 : 0;
+}
+
+void DuckLakeCatalog::CacheRewriteSnapshots(const vector<pair<TableIndex, idx_t>> &rewrites, idx_t end_snapshot) {
+	lock_guard<mutex> guard(rewrite_snapshots_lock);
+	for (auto &rewrite : rewrites) {
+		rewrite_snapshots[rewrite.first.index].insert(rewrite.second);
+	}
+	if (!rewrite_snapshots_read_until.IsValid() || rewrite_snapshots_read_until.GetIndex() < end_snapshot) {
+		rewrite_snapshots_read_until = end_snapshot;
+	}
+}
+
 DuckLakeTableSchemaVersions DuckLakeCatalog::GetTableSchemaVersions(DuckLakeTransaction &transaction,
                                                                     TableIndex table_id) {
 	auto snapshot = transaction.GetSnapshot();

@@ -381,7 +381,8 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 	                                 gstate.file_list, bind_data.reader_bind, bind_data.virtual_columns, global_state);
 
 	// Handle snapshot filters for files with multiple snapshots (partial_max set)
-	if (file_entry.snapshot_filter_max.IsValid() || file_entry.snapshot_filter_min.IsValid()) {
+	if (file_entry.snapshot_filter_max.IsValid() || file_entry.snapshot_filter_min.IsValid() ||
+	    !file_entry.snapshot_filter_excluded.empty()) {
 		// we have a snapshot filter - add it to the filter list
 		// find the column we need to filter on
 		auto &reader = *reader_data.reader;
@@ -421,6 +422,11 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 		if (file_entry.snapshot_filter_min.IsValid()) {
 			AddSnapshotFilter(reader, snapshot_col_idx, snapshot_col_type, file_entry.snapshot_filter_min.GetIndex(),
 			                  ExpressionType::COMPARE_GREATERTHANOREQUALTO, snapshot_filter_identity);
+		}
+
+		for (auto snapshot_id : file_entry.snapshot_filter_excluded) {
+			AddSnapshotFilter(reader, snapshot_col_idx, snapshot_col_type, snapshot_id,
+			                  ExpressionType::COMPARE_NOTEQUAL, snapshot_filter_identity);
 		}
 	}
 	return result;
