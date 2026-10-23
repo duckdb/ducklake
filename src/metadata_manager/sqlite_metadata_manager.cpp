@@ -4,6 +4,8 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 
+#include <algorithm>
+
 namespace duckdb {
 
 SQLiteMetadataManager::SQLiteMetadataManager(DuckLakeTransaction &transaction) : DuckLakeMetadataManager(transaction) {
@@ -83,6 +85,43 @@ void SQLiteMetadataManager::RenameInlinedColumns(const map<string, vector<pair<s
 	}
 	auto result = Execute(query);
 	result->ThrowIfError("Failed to rename inlined-data metadata columns while migrating to v1.1: ");
+}
+
+//! The declared type of a stats column, since sqlite_query returns every value as VARCHAR
+static string StatsColumnType(const string &stat) {
+	if (stat == "value_count" || stat == "null_count" || stat == "column_size_bytes") {
+		return "BIGINT";
+	}
+	if (stat == "contains_nan" || stat == "min_is_exact" || stat == "max_is_exact") {
+		return "BOOLEAN";
+	}
+	if (stat == "min_value" || stat == "max_value" || stat == "extra_stats") {
+		return "VARCHAR";
+	}
+	return string();
+}
+
+//! Reads the stats through sqlite_query, since sqlite_scan pushes no filter into SQLite
+string SQLiteMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
+                                                             const string &metadata_table_prefix) {
+	auto unmapped = std::any_of(req.referenced_stats.begin(), req.referenced_stats.end(),
+	                            [](const string &stat) { return StatsColumnType(stat).empty(); });
+	if (metadata_table_prefix != "{METADATA_CATALOG}" || unmapped) {
+		return DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(req, table_id, metadata_table_prefix);
+	}
+	// TEXT values, so parallel scans on the shared connection read them without converting
+	string native_list = "CAST(data_file_id AS TEXT) AS data_file_id";
+	string select_list = "data_file_id::BIGINT AS data_file_id";
+	for (const auto &stat : req.referenced_stats) {
+		native_list += StringUtil::Format(", CAST(%s AS TEXT) AS %s", stat, stat);
+		select_list += StringUtil::Format(", %s::%s AS %s", stat, StatsColumnType(stat), stat);
+	}
+	auto native_query =
+	    StringUtil::Format("SELECT %s FROM (%s)", native_list,
+	                       DuckLakeMetadataManager::GenerateFileColumnStatsCTEBody(req, table_id, "main"));
+	return StringUtil::Format("  SELECT %s\n"
+	                          "  FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, %s)\n",
+	                          select_list, SQLString(native_query));
 }
 
 } // namespace duckdb

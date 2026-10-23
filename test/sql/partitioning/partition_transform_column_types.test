@@ -1,0 +1,80 @@
+# name: test/sql/partitioning/partition_transform_column_types.test
+# description: a partition key whose transform cannot be computed for its column type is rejected, not stored
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/partition_transform_column_types')
+
+statement ok
+CREATE TABLE dl.t(c TIMESTAMPTZ_NS, i INTEGER, ts TIMESTAMP)
+
+statement error
+ALTER TABLE dl.t SET PARTITIONED BY (year(c))
+----
+Cannot partition by year(c) - the transform does not support columns of type
+
+statement error
+ALTER TABLE dl.t SET PARTITIONED BY (i, hour(i))
+----
+Cannot partition by hour(i) - the transform does not support columns of type INTEGER
+
+statement error
+CREATE TABLE dl.t2(c TIMESTAMPTZ_NS) PARTITIONED BY (day(c))
+----
+Cannot partition by day(c)
+
+statement error
+CREATE TABLE dl.t3 PARTITIONED BY (month(i)) AS SELECT 1 AS i
+----
+Cannot partition by month(i)
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'dl'
+----
+1
+
+statement ok
+INSERT INTO dl.t VALUES (TIMESTAMPTZ_NS '2024-01-15 12:30:00+00', 1, TIMESTAMP '2024-01-15 12:30:00')
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (year(ts), bucket(4, c), i)
+
+statement ok
+INSERT INTO dl.t VALUES (TIMESTAMPTZ_NS '2025-01-15 12:30:00+00', 2, TIMESTAMP '2025-01-15 12:30:00')
+
+# a type change that the transform of a partition key does not support is rejected
+statement error
+ALTER TABLE dl.t ALTER COLUMN ts TYPE TIMESTAMPTZ_NS
+----
+Cannot partition by year(ts)
+
+statement ok
+ALTER TABLE dl.t ALTER COLUMN ts TYPE TIMESTAMP_NS
+
+statement ok
+INSERT INTO dl.t VALUES (TIMESTAMPTZ_NS '2026-01-15 12:30:00+00', 3, TIMESTAMP_NS '2026-01-15 12:30:00')
+
+query II
+SELECT count(*), sum(i) FROM dl.t
+----
+3	6
+
+# every partition key is checked, also after a bucket key that starts a new spec
+statement ok
+CREATE TABLE dl.b(ts TIMESTAMP) PARTITIONED BY (bucket(4, ts), year(ts))
+
+statement error
+ALTER TABLE dl.b ALTER COLUMN ts TYPE TIMESTAMPTZ_NS
+----
+Cannot partition by year(ts)
+
+statement ok
+INSERT INTO dl.b VALUES (TIMESTAMP '2024-01-15 12:30:00')

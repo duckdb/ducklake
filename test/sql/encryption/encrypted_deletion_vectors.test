@@ -1,0 +1,54 @@
+# name: test/sql/encryption/encrypted_deletion_vectors.test
+# description: An encrypted catalog writes encrypted Parquet delete files even when deletion vectors are enabled
+# group: [encryption]
+
+require ducklake
+
+require parquet
+
+require httpfs
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/encrypted_deletion_vectors', ENCRYPTED,
+    WRITE_DELETION_VECTORS true, DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t AS SELECT range AS i FROM range(100)
+
+statement ok
+DELETE FROM lake.t WHERE i < 3
+
+query II
+SELECT format, encryption_key IS NOT NULL FROM __ducklake_metadata_lake.ducklake_delete_file
+----
+parquet	true
+
+statement error
+SELECT * FROM '{DATA_PATH}/encrypted_deletion_vectors/**/*-delete.parquet'
+----
+<REGEX>:.*is encrypted, but 'encryption_config' was not set.*
+
+query II
+SELECT count(*), sum(i) FROM lake.t
+----
+97	4947
+
+# an unencrypted catalog still writes deletion vectors
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{UUID}_plain.db' AS plain (DATA_PATH '{DATA_PATH}/encrypted_deletion_vectors_plain',
+    WRITE_DELETION_VECTORS true, DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE plain.t AS SELECT range AS i FROM range(100)
+
+statement ok
+DELETE FROM plain.t WHERE i < 3
+
+query II
+SELECT format, encryption_key IS NULL FROM __ducklake_metadata_plain.ducklake_delete_file
+----
+puffin	true

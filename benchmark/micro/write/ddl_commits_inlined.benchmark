@@ -1,0 +1,65 @@
+# name: benchmark/micro/write/ddl_commits_inlined.benchmark
+# description: Ten ADD COLUMN and ten CREATE TABLE autocommits, each followed by a read, on a lake with data inlining enabled
+# group: [write]
+
+name DDL Commits Inlined
+group micro
+subgroup write
+
+require ducklake
+
+argument work ddl_inlined_work
+
+include benchmark/micro/fixtures/commit.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+# Each DDL commits an inlined data table for its new schema version
+run
+ALTER TABLE lake.main.ins_0 ADD COLUMN c0 INTEGER;
+SELECT count(*) FROM lake.main.bg_0;
+CREATE TABLE lake.main.ddl_0 (id INTEGER, v VARCHAR);
+SELECT count(*) FROM lake.main.bg_100;
+ALTER TABLE lake.main.ins_0 ADD COLUMN c1 INTEGER;
+SELECT count(*) FROM lake.main.bg_1;
+CREATE TABLE lake.main.ddl_1 (id INTEGER, v VARCHAR);
+SELECT count(*) FROM lake.main.bg_101;
+ALTER TABLE lake.main.ins_0 ADD COLUMN c2 INTEGER;
+SELECT count(*) FROM lake.main.bg_2;
+CREATE TABLE lake.main.ddl_2 (id INTEGER, v VARCHAR);
+SELECT count(*) FROM lake.main.bg_102;
+ALTER TABLE lake.main.ins_0 ADD COLUMN c3 INTEGER;
+SELECT count(*) FROM lake.main.bg_3;
+CREATE TABLE lake.main.ddl_3 (id INTEGER, v VARCHAR);
+SELECT count(*) FROM lake.main.bg_103;
+ALTER TABLE lake.main.ins_0 ADD COLUMN c4 INTEGER;
+SELECT count(*) FROM lake.main.bg_4;
+CREATE TABLE lake.main.ddl_4 (id INTEGER, v VARCHAR);
+SELECT count(*) FROM lake.main.bg_104;
+ALTER TABLE lake.main.ins_0 ADD COLUMN c5 INTEGER;
+SELECT count(*) FROM lake.main.bg_5;
+CREATE TABLE lake.main.ddl_5 (id INTEGER, v VARCHAR);
+SELECT count(*) FROM lake.main.bg_105;
+ALTER TABLE lake.main.ins_0 ADD COLUMN c6 INTEGER;
+SELECT count(*) FROM lake.main.bg_6;
+CREATE TABLE lake.main.ddl_6 (id INTEGER, v VARCHAR);
+SELECT count(*) FROM lake.main.bg_106;
+ALTER TABLE lake.main.ins_0 ADD COLUMN c7 INTEGER;
+SELECT count(*) FROM lake.main.bg_7;
+CREATE TABLE lake.main.ddl_7 (id INTEGER, v VARCHAR);
+SELECT count(*) FROM lake.main.bg_107;
+ALTER TABLE lake.main.ins_0 ADD COLUMN c8 INTEGER;
+SELECT count(*) FROM lake.main.bg_8;
+CREATE TABLE lake.main.ddl_8 (id INTEGER, v VARCHAR);
+SELECT count(*) FROM lake.main.bg_108;
+ALTER TABLE lake.main.ins_0 ADD COLUMN c9 INTEGER;
+SELECT count(*) FROM lake.main.bg_9;
+CREATE TABLE lake.main.ddl_9 (id INTEGER, v VARCHAR);
+SELECT count(*) FROM lake.main.bg_109;
+
+# A missed reset makes the first ADD COLUMN fail because c0 already exists
+result_query II
+SELECT (SELECT count(*) FROM duckdb_columns() WHERE database_name = 'lake' AND table_name = 'ins_0'),
+(SELECT count(*) FROM duckdb_tables() WHERE database_name = 'lake')
+----
+12	520

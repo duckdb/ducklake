@@ -1,0 +1,106 @@
+# name: test/sql/data_inlining/sqlite_system_column_names.test
+# description: Tables with a column named like the sqlite row id are not inlined on sqlite
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_system_column_names.db' AS dl (DATA_PATH '{DATA_PATH}/sqlite_system_column_names',
+    DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (a INTEGER, "rowid" INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 5), (2, 5), (3, NULL)
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 't')
+----
+1
+
+statement ok
+DELETE FROM dl.t WHERE a = 1
+
+statement ok
+UPDATE dl.t SET a = 30 WHERE a = 3
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query II
+SELECT a, "rowid" FROM dl.t ORDER BY a
+----
+2	5
+30	NULL
+
+# the other names of the row id, in any case
+statement ok
+CREATE TABLE dl.u (a INTEGER, "OID" INTEGER)
+
+statement ok
+INSERT INTO dl.u VALUES (1, 7), (2, 7)
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 'u')
+----
+1
+
+statement ok
+DELETE FROM dl.u WHERE a = 1
+
+query I
+SELECT a FROM dl.u
+----
+2
+
+# a column added to a table with inlined rows
+statement ok
+CREATE TABLE dl.v (a INTEGER)
+
+statement ok
+INSERT INTO dl.v VALUES (1)
+
+statement ok
+ALTER TABLE dl.v ADD COLUMN _rowid_ INTEGER
+
+statement ok
+INSERT INTO dl.v VALUES (2, 8), (3, 8)
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 'v')
+----
+1
+
+statement ok
+DELETE FROM dl.v WHERE a = 2
+
+query II
+SELECT a, _rowid_ FROM dl.v ORDER BY a
+----
+1	NULL
+3	8
+
+# rows inlined in the transaction cannot get such a column
+statement ok
+CREATE TABLE dl.x (a INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.x VALUES (1)
+
+statement error
+ALTER TABLE dl.x RENAME a TO "rowid"
+----
+ALTER on a table with transaction-local inlined data is not supported when column "rowid" has the name of a system column of the metadata database, commit the rows first
+
+statement ok
+ROLLBACK

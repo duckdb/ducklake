@@ -44,8 +44,8 @@ static DuckLakeDeleteFile WriteDeleteFileInternal(ClientContext &context, InputT
 	// generate the field ids to be written by the parquet writer
 	// these field ids follow icebergs' ids and names for the delete files
 	child_list_t<Value> values;
-	values.emplace_back("file_path", Value::INTEGER(MultiFileReader::FILENAME_FIELD_ID));
-	values.emplace_back("pos", Value::INTEGER(MultiFileReader::ORDINAL_FIELD_ID));
+	values.emplace_back("file_path", Value::INTEGER(MultiFileReader::DELETE_FILE_PATH_FIELD_ID));
+	values.emplace_back("pos", Value::INTEGER(MultiFileReader::DELETE_POS_FIELD_ID));
 	if (with_snapshots) {
 		// add the snapshot_id column to track when each deletion became valid
 		values.emplace_back("_ducklake_internal_snapshot_id",
@@ -646,10 +646,12 @@ InsertionOrderPreservingMap<string> DuckLakeDelete::ParamsToString() const {
 DuckLakeFileListExtendedEntry DuckLakeDeleteMap::GetExtendedFileInfo(const string &filename) {
 	lock_guard<mutex> guard(lock);
 	auto delete_entry = file_map.find(filename);
-	if (delete_entry == file_map.end() && file_list) {
-		for (auto &file_entry : file_list->Cast<DuckLakeMultiFileList>().GetFilesExtended()) {
-			auto path = file_entry.file.path;
-			file_map.emplace(std::move(path), std::move(file_entry));
+	if (delete_entry == file_map.end() && !file_lists.empty()) {
+		for (auto &file_list : file_lists) {
+			for (auto &file_entry : file_list->Cast<DuckLakeMultiFileList>().GetFilesExtended()) {
+				auto path = file_entry.file.path;
+				file_map.emplace(std::move(path), std::move(file_entry));
+			}
 		}
 		delete_entry = file_map.find(filename);
 		if (delete_entry == file_map.end()) {
@@ -664,48 +666,63 @@ DuckLakeFileListExtendedEntry DuckLakeDeleteMap::GetExtendedFileInfo(const strin
 	return delete_entry->second;
 }
 
-static optional_ptr<PhysicalTableScan> FindDeleteSource(PhysicalOperator &plan) {
+//! Whether the scan reads the current rows of the table, a MERGE can also read its source or an older version
+static bool ScansCurrentRows(PhysicalTableScan &scan, DuckLakeTableEntry &table) {
+	if (scan.function.GetName() != "ducklake_scan") {
+		return false;
+	}
+	auto &read_info = scan.function.function_info->Cast<DuckLakeFunctionInfo>();
+	return &read_info.table.ParentCatalog() == &table.ParentCatalog() && read_info.table_id == table.GetTableId() &&
+	       read_info.scan_type == DuckLakeScanType::SCAN_TABLE && read_info.include_local_changes;
+}
+
+//! The scans of the current rows of the table that emit the row numbers of its files
+static void FindDeleteSources(PhysicalOperator &plan, DuckLakeTableEntry &table,
+                              vector<reference<PhysicalTableScan>> &result) {
 	if (plan.type == PhysicalOperatorType::MERGE_ACTION_SOURCE) {
 		// the rows of a merge action are pushed into the source by the merge into - look for the scan in the plan
 		// that the merge into reads from
 		auto &merge_input = plan.Cast<PhysicalMergeActionSource>().merge_input;
-		return merge_input ? FindDeleteSource(*merge_input) : nullptr;
+		if (merge_input) {
+			FindDeleteSources(*merge_input, table, result);
+		}
+		return;
 	}
 	if (plan.type == PhysicalOperatorType::TABLE_SCAN) {
-		// does this emit the virtual columns?
 		auto &scan = plan.Cast<PhysicalTableScan>();
+		if (!ScansCurrentRows(scan, table)) {
+			return;
+		}
+		// does this emit the virtual columns?
 		bool found = std::any_of(scan.column_ids.begin(), scan.column_ids.end(), [](const ColumnIndex &col) {
 			return col.GetPrimaryIndex() == MultiFileReader::COLUMN_IDENTIFIER_FILE_ROW_NUMBER;
 		});
-		if (!found) {
-			return nullptr;
+		if (found) {
+			result.push_back(scan);
 		}
-		return scan;
+		return;
 	}
-	for (auto &children : plan.children) {
-		auto result = FindDeleteSource(children.get());
-		if (result) {
-			return result;
-		}
+	for (auto &child : plan.children) {
+		FindDeleteSources(child.get(), table, result);
 	}
-	return nullptr;
 }
 
 PhysicalOperator &DuckLakeDelete::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
                                              DuckLakeTableEntry &table, PhysicalOperator &child_plan,
                                              vector<idx_t> row_id_indexes, string encryption_key,
                                              bool allow_duplicates) {
-	auto delete_source = FindDeleteSource(child_plan);
+	vector<reference<PhysicalTableScan>> delete_sources;
+	FindDeleteSources(child_plan, table, delete_sources);
 	auto delete_map = make_shared_ptr<DuckLakeDeleteMap>();
-	if (delete_source) {
-		auto &bind_data = delete_source->bind_data->Cast<MultiFileBindData>();
+	for (auto &delete_source : delete_sources) {
+		auto &bind_data = delete_source.get().bind_data->Cast<MultiFileBindData>();
 		auto &reader = bind_data.multi_file_reader->Cast<DuckLakeMultiFileReader>();
 		auto &file_list = bind_data.file_list->Cast<DuckLakeMultiFileList>();
 		auto files = file_list.GetFilesExtended();
 		for (auto &file_entry : files) {
 			delete_map->AddExtendedFileInfo(std::move(file_entry));
 		}
-		delete_map->file_list = bind_data.file_list;
+		delete_map->file_lists.push_back(bind_data.file_list);
 		reader.delete_map = delete_map;
 	}
 	return planner.Make<DuckLakeDelete>(table, child_plan, std::move(delete_map), std::move(row_id_indexes),

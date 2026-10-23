@@ -1,0 +1,101 @@
+# name: test/sql/partitioning/calendar_timestamptz.test
+# description: Year, month, day and hour partition values of a TIMESTAMPTZ are those of its UTC instant
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/calendar_timestamptz')
+
+statement ok
+CREATE TABLE lake.t (id INTEGER, ts TIMESTAMPTZ)
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (year(ts), month(ts), day(ts), hour(ts))
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0, table_name => 't')
+
+# 2021-01-01 05:00 UTC is 2021-01-01 19:00 in Kiritimati and 2020-12-31 17:00 at GMT-12
+statement ok
+SET TimeZone = 'UTC'
+
+statement ok
+INSERT INTO lake.t VALUES (1, TIMESTAMPTZ '2021-01-01 05:00:00+00')
+
+statement ok
+SET TimeZone = 'Pacific/Kiritimati'
+
+statement ok
+INSERT INTO lake.t VALUES (2, TIMESTAMPTZ '2021-01-01 05:00:00+00')
+
+statement ok
+SET TimeZone = 'Etc/GMT+12'
+
+statement ok
+INSERT INTO lake.t VALUES (3, TIMESTAMPTZ '2021-01-01 05:00:00+00')
+
+# an inlined row flushed in another TimeZone
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10, table_name => 't')
+
+statement ok
+INSERT INTO lake.t VALUES (4, TIMESTAMPTZ '2021-01-01 05:00:00+00')
+
+statement ok
+SET TimeZone = 'America/Los_Angeles'
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+query II
+SELECT count(*), list_distinct(list(partition_values))
+FROM (
+	SELECT string_agg(partition_value, ', ' ORDER BY partition_key_index) AS partition_values
+	FROM __ducklake_metadata_lake.ducklake_file_partition_value
+	GROUP BY data_file_id
+)
+----
+4	['2021, 1, 1, 5']
+
+query I
+SELECT DISTINCT regexp_extract(path, '^(.*)/[^/]*$', 1) FROM __ducklake_metadata_lake.ducklake_data_file
+----
+year=2021/month=1/day=1/hour=5
+
+statement ok
+SET TimeZone = 'UTC'
+
+query II
+SELECT id, ts FROM lake.t ORDER BY id
+----
+1	2021-01-01 05:00:00+00
+2	2021-01-01 05:00:00+00
+3	2021-01-01 05:00:00+00
+4	2021-01-01 05:00:00+00
+
+# a catalog written by DuckLake 1.0 in a GMT-12 session keeps its partition values, and reads stay correct
+unzip data/old_ducklake/calendar_timestamptz.db.gz {TEST_DIR}/calendar_timestamptz_legacy.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/calendar_timestamptz_legacy.db' AS legacy
+(DATA_PATH 'data/old_ducklake/calendar_timestamptz/', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT string_agg(partition_value, ', ' ORDER BY partition_key_index)
+FROM __ducklake_metadata_legacy.ducklake_file_partition_value
+----
+2020, 12, 31, 17
+
+query II
+SELECT id, ts FROM legacy.t WHERE ts >= TIMESTAMPTZ '2021-01-01 00:00:00+00' AND year(ts) = 2021
+----
+1	2021-01-01 05:00:00+00

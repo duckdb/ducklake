@@ -1,0 +1,136 @@
+# name: test/sql/stats/filter_pushdown_postgres_types.test
+# description: nanosecond, time, infinite and UUID stats prune files
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/filter_pushdown_postgres_types', DATA_INLINING_ROW_LIMIT 0)
+
+# nanoseconds: files within a microsecond of the bound are kept
+
+statement ok
+CREATE TABLE dl.ns (id INTEGER, v TIMESTAMP_NS)
+
+statement ok
+INSERT INTO dl.ns VALUES (1, '2024-01-01 00:00:00.000000400')
+
+statement ok
+INSERT INTO dl.ns VALUES (2, '2024-01-01 00:00:00.000000600')
+
+statement ok
+INSERT INTO dl.ns VALUES (3, '2024-01-02')
+
+query I
+SELECT id FROM dl.ns WHERE v > '2024-01-01 00:00:00.000000500' ORDER BY id
+----
+2
+3
+
+query II
+EXPLAIN ANALYZE SELECT id FROM dl.ns WHERE v >= '2024-01-01 12:00:00'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+foreach type TIME TIME_NS
+
+statement ok
+CREATE TABLE dl.t_${type} (id INTEGER, v ${type})
+
+statement ok
+INSERT INTO dl.t_${type} VALUES (1, '01:00:00')
+
+statement ok
+INSERT INTO dl.t_${type} VALUES (2, '12:00:00')
+
+statement ok
+INSERT INTO dl.t_${type} VALUES (3, '24:00:00')
+
+query II
+EXPLAIN ANALYZE SELECT id FROM dl.t_${type} WHERE v > '18:00:00'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+endloop
+
+foreach type DATE TIMESTAMP_NS
+
+statement ok
+CREATE TABLE dl.inf_${type} (id INTEGER, v ${type})
+
+statement ok
+INSERT INTO dl.inf_${type} VALUES (1, '-infinity')
+
+statement ok
+INSERT INTO dl.inf_${type} VALUES (2, '2024-01-01')
+
+statement ok
+INSERT INTO dl.inf_${type} VALUES (3, 'infinity')
+
+query II
+EXPLAIN ANALYZE SELECT id FROM dl.inf_${type} WHERE v > '2024-03-01'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+endloop
+
+statement ok
+CREATE TABLE dl.u (id INTEGER, v UUID)
+
+statement ok
+INSERT INTO dl.u VALUES (1, '00000000-0000-0000-0000-000000000001')
+
+statement ok
+INSERT INTO dl.u VALUES (2, '7fffffff-ffff-ffff-ffff-ffffffffffff')
+
+statement ok
+INSERT INTO dl.u VALUES (3, 'ffffffff-ffff-ffff-ffff-ffffffffffff')
+
+query II
+EXPLAIN ANALYZE SELECT id FROM dl.u WHERE v > '80000000-0000-0000-0000-000000000000'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+statement ok
+CREATE TABLE dl.neg (id INTEGER, v TIMESTAMP_NS)
+
+statement ok
+INSERT INTO dl.neg VALUES (1, make_timestamp_ns(-200))
+
+statement ok
+INSERT INTO dl.neg VALUES (2, make_timestamp_ns(-2000000000))
+
+query I
+SELECT id FROM dl.neg WHERE v > make_timestamp_ns(-500)
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT id FROM dl.neg WHERE v > make_timestamp_ns(-500)
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+statement ok
+CREATE TABLE dl.tz (id INTEGER, v TIMESTAMPTZ_NS)
+
+statement ok
+INSERT INTO dl.tz VALUES (1, '2024-01-01 00:00:00.000000600+00')
+
+statement ok
+INSERT INTO dl.tz VALUES (2, '2024-01-02 00:00:00+00')
+
+query I
+SELECT id FROM dl.tz WHERE v < '2024-01-01 00:00:00.000000700+00'::TIMESTAMPTZ_NS
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT id FROM dl.tz WHERE v < '2024-01-01 00:00:00.000000700+00'::TIMESTAMPTZ_NS
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*

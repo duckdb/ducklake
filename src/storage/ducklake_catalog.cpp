@@ -332,6 +332,8 @@ DuckLakeCatalog::DuckLakeCatalog(AttachedDatabase &db_p, DuckLakeOptions options
 }
 
 DuckLakeCatalog::~DuckLakeCatalog() {
+	// a transaction can still cache entries after DETACH, and a rolled back ATTACH never detaches
+	EvictCacheEntries();
 	UnregisterCatalog();
 }
 
@@ -515,7 +517,11 @@ shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeCatalog::GetSchemaCacheEntry(DuckLa
 	if (cached) {
 		return cached;
 	}
-	return cache.GetOrCreate<DuckLakeSchemaCacheEntry>(key, LoadSchemaForSnapshot(transaction, snapshot));
+	auto catalog_set = LoadSchemaForSnapshot(transaction, snapshot);
+	lock_guard<mutex> guard(cache_entries_lock);
+	auto entry = cache.GetOrCreate<DuckLakeSchemaCacheEntry>(key, std::move(catalog_set));
+	TrackCacheEntry(key, entry);
+	return entry;
 }
 
 DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
@@ -566,6 +572,60 @@ static LogicalType ParseMacroParameterType(const string &type) {
 	return DuckLakeTypes::IsNested(result) ? LogicalType::UNKNOWN : result;
 }
 
+//! The type of constants inside list and struct literals, the form in which DuckLake 1.0 wrote some nested values
+static bool TryGetNestedLiteralType(ClientContext &context, const ParsedExpression &expr, LogicalType &result) {
+	if (expr.GetExpressionType() == ExpressionType::VALUE_CONSTANT) {
+		result = expr.Cast<ConstantExpression>().GetLiteral().ToValue().type();
+		return true;
+	}
+	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
+		return false;
+	}
+	auto &function = expr.Cast<FunctionExpression>();
+	auto &name = function.FunctionName().GetIdentifierName();
+	bool is_list = name == "list_value";
+	if (function.IsOperator() || (!is_list && name != "struct_pack")) {
+		return false;
+	}
+	LogicalType child_type = LogicalType::SQLNULL;
+	child_list_t<LogicalType> child_types;
+	for (auto &argument : function.GetArguments()) {
+		LogicalType argument_type;
+		if (!TryGetNestedLiteralType(context, argument.GetExpression(), argument_type)) {
+			return false;
+		}
+		if (!is_list) {
+			child_types.emplace_back(argument.GetName().GetIdentifierName(), argument_type);
+		} else if (!LogicalType::TryGetMaxLogicalType(context, child_type, argument_type, child_type)) {
+			return false;
+		}
+	}
+	result = is_list ? LogicalType::LIST(child_type) : LogicalType::STRUCT(std::move(child_types));
+	return true;
+}
+
+//! DuckLake 1.0 stored a nested default as the text of its value, which does not quote most strings
+static unique_ptr<ParsedExpression> LegacyNestedDefault(ClientContext &context, const string &macro_name,
+                                                        const DuckLakeMacroParameters &param) {
+	try {
+		auto expr = Parser::GetBuiltinParser().ParseSingleExpression(StringValue::Get(param.default_value));
+		LogicalType type;
+		Value value;
+		if (TryGetNestedLiteralType(context, *expr, type) &&
+		    DuckLakeUtil::TryReadTextAs(param.default_value, type, value)) {
+			return ConstantExpression::FromValue(value);
+		}
+	} catch (std::exception &) {
+	}
+	// the macro stays usable when the parameter is passed
+	vector<unique_ptr<ParsedExpression>> children;
+	children.push_back(ConstantExpression::FromValue(Value(macro_name)));
+	children.push_back(ConstantExpression::FromValue(Value(param.parameter_name)));
+	QualifiedName function_name(Identifier(SYSTEM_CATALOG), Identifier(DEFAULT_SCHEMA),
+	                            Identifier("ducklake_unreadable_macro_default"));
+	return make_uniq<FunctionExpression>(function_name, std::move(children));
+}
+
 unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, DuckLakeMacroInfo &macro,
                                                         string schema_name) {
 	CatalogType type;
@@ -600,10 +660,16 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 				continue;
 			}
 			auto expr_type = DuckLakeTypes::FromString(param.default_value_type);
+			bool null_default = StringValue::Get(param.default_value) == "NULL";
+			if (DuckLakeTypes::IsNested(expr_type) && !null_default) {
+				macro_function->default_parameters.insert(Identifier(param.parameter_name),
+				                                          LegacyNestedDefault(context, macro.macro_name, param));
+				continue;
+			}
 			if (expr_type.id() != LogicalTypeId::UNKNOWN) {
 				Value casted_value;
 				// typed NULL defaults are stored as the text NULL
-				if (StringValue::Get(param.default_value) == "NULL" && !DuckLakeTypes::IsStringType(expr_type)) {
+				if (null_default && !DuckLakeTypes::IsStringType(expr_type)) {
 					// nested types are stored without their child types
 					casted_value = expr_type.IsNested() ? Value() : Value(expr_type);
 				} else {
@@ -991,6 +1057,8 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 	auto lake_stats = ConstructStatsMap(global_stats, schema_entry->catalog_set);
 
 	shared_ptr<DuckLakeTableStatsCacheEntry> requested_entry;
+	vector<pair<TableIndex, shared_ptr<ObjectCacheEntry>>> cache_entries_to_put;
+	cache_entries_to_put.reserve(table_map.size());
 	for (auto &table_entry : table_map) {
 		auto current_id = table_entry.first;
 		shared_ptr<DuckLakeTableStatsCacheEntry> entry;
@@ -1005,8 +1073,9 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 		if (current_id == table_id) {
 			requested_entry = entry;
 		}
-		cache.Put(StatsCacheKey(snapshot.next_file_id, current_id), std::move(entry));
+		cache_entries_to_put.emplace_back(current_id, std::move(entry));
 	}
+	PutStatsCacheEntries(snapshot.next_file_id, std::move(cache_entries_to_put));
 	if (!requested_entry || !requested_entry->has_stats) {
 		return nullptr;
 	}
@@ -1022,7 +1091,7 @@ idx_t DuckLakeCatalog::GetTableRecordCount(DuckLakeTransaction &transaction, Tab
 	if (!cached) {
 		auto record_counts = transaction.GetMetadataManager().GetTableRecordCounts(snapshot);
 		cached = make_shared_ptr<DuckLakeTableRecordCountCacheEntry>(std::move(record_counts));
-		cache.Put(std::move(key), cached);
+		PutCacheEntry(std::move(key), cached);
 	}
 	auto entry = cached->record_counts.find(table_id);
 	return entry == cached->record_counts.end() ? 0 : entry->second;
@@ -1111,6 +1180,7 @@ optional_ptr<BoundAtClause> DuckLakeCatalog::CatalogSnapshot() const {
 }
 
 void DuckLakeCatalog::OnDetach(ClientContext &context) {
+	EvictCacheEntries();
 	// the metadata database stays attached while another DuckLake uses it
 	if (!UnregisterCatalog()) {
 		return;
@@ -1311,6 +1381,13 @@ bool DuckLakeCatalog::AutoCompactEnabled(DuckLakeTableEntry &table) const {
 	return AutoCompactEnabled(schema.GetSchemaId(), table.GetTableId());
 }
 
+void DuckLakeCatalog::VerifyWritable() const {
+	if (GetAttached().IsReadOnly()) {
+		throw InvalidInputException("Cannot write to \"%s\", which is attached in read-only mode",
+		                            GetName().GetIdentifierName());
+	}
+}
+
 bool DuckLakeCatalog::WriteDeletionVectors(DuckLakeTableEntry &table) const {
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
 	return WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
@@ -1334,6 +1411,34 @@ InlinedDeletionCacheResult DuckLakeCatalog::CheckInlinedDeletionTableCache(Table
 		return InlinedDeletionCacheResult::DOES_NOT_EXIST;
 	}
 	return InlinedDeletionCacheResult::UNKNOWN;
+}
+
+shared_ptr<const unordered_set<string>>
+DuckLakeCatalog::GetInlinedDeletionTables(idx_t snapshot_id, const std::function<unordered_set<string>()> &list) {
+	auto cached_listing = [&]() -> shared_ptr<const unordered_set<string>> {
+		lock_guard<mutex> guard(inlined_deletion_cache_lock);
+		auto entry = inlined_deletion_tables.find(snapshot_id);
+		return entry == inlined_deletion_tables.end() ? nullptr : entry->second;
+	};
+	auto tables = cached_listing();
+	if (tables) {
+		return tables;
+	}
+	lock_guard<mutex> listing_guard(inlined_deletion_listing_lock);
+	// another caller may have listed the tables while this one waited
+	tables = cached_listing();
+	if (tables) {
+		return tables;
+	}
+	tables = make_shared_ptr<const unordered_set<string>>(list());
+	lock_guard<mutex> guard(inlined_deletion_cache_lock);
+	inlined_deletion_tables[snapshot_id] = tables;
+	// transactions at a few recent snapshots can read side by side, older listings are dropped
+	static constexpr idx_t MAX_LISTED_SNAPSHOTS = 8;
+	while (inlined_deletion_tables.size() > MAX_LISTED_SNAPSHOTS) {
+		inlined_deletion_tables.erase(inlined_deletion_tables.begin());
+	}
+	return tables;
 }
 
 void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists) {
@@ -1410,17 +1515,17 @@ void DuckLakeCatalog::ForgetColumnsWithValues(const set<TableIndex> &table_ids) 
 }
 
 string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) const {
-	return StringUtil::Format("ducklake:%s:%s:%s:stats:%llu:table:%llu", GetName(), MetadataPath(), instance_id,
-	                          next_file_id, table_id.index);
+	// the instance id alone keeps the keys apart, and the stats do not depend on the name of the DuckLake
+	return StringUtil::Format("ducklake:%s:stats:%llu:table:%llu", instance_id, next_file_id, table_id.index);
 }
 
 string DuckLakeCatalog::RecordCountCacheKey(idx_t snapshot_id) const {
-	return StringUtil::Format("ducklake:%s:%s:%s:record_counts:%llu", GetName(), MetadataPath(), instance_id,
-	                          snapshot_id);
+	return StringUtil::Format("ducklake:%s:record_counts:%llu", instance_id, snapshot_id);
 }
 
 string DuckLakeCatalog::SchemaCacheKey(idx_t schema_version) const {
-	return StringUtil::Format("ducklake:%s:%s:%s:schema:%llu", GetName(), MetadataPath(), instance_id, schema_version);
+	// a loaded schema holds the name of the DuckLake, its macros for one, so a new name loads it again
+	return StringUtil::Format("ducklake:%s:%s:schema:%llu", instance_id, GetName(), schema_version);
 }
 
 void DuckLakeCatalog::InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id) {
@@ -1438,6 +1543,64 @@ void DuckLakeCatalog::InvalidateNameMapCache(MappingIndex mapping_id) {
 
 ObjectCache &DuckLakeCatalog::GetObjectCacheInstance() {
 	return GetDatabase().GetObjectCache();
+}
+
+void DuckLakeCatalog::PutCacheEntry(string key, shared_ptr<ObjectCacheEntry> entry) {
+	lock_guard<mutex> guard(cache_entries_lock);
+	TrackCacheEntry(key, entry);
+	GetObjectCacheInstance().Put(std::move(key), std::move(entry));
+}
+
+void DuckLakeCatalog::TrackCacheEntry(const string &key, const shared_ptr<ObjectCacheEntry> &entry) {
+	cache_entries[key] = entry;
+	if (cache_entries.size() < cache_entries_prune_size) {
+		return;
+	}
+	for (auto it = cache_entries.begin(); it != cache_entries.end();) {
+		if (it->second.expired()) {
+			it = cache_entries.erase(it);
+		} else {
+			++it;
+		}
+	}
+	cache_entries_prune_size = MaxValue<idx_t>(cache_entries_prune_size, cache_entries.size() * 2);
+}
+
+void DuckLakeCatalog::PutStatsCacheEntries(idx_t next_file_id,
+                                           vector<pair<TableIndex, shared_ptr<ObjectCacheEntry>>> entries) {
+	auto &cache = GetObjectCacheInstance();
+	lock_guard<mutex> guard(cache_entries_lock);
+	for (auto &entry : entries) {
+		stats_cache_entries.push_back(TrackedStatsEntry {next_file_id, entry.first, entry.second});
+		cache.Put(StatsCacheKey(next_file_id, entry.first), std::move(entry.second));
+	}
+	if (stats_cache_entries.size() < stats_cache_entries_prune_size) {
+		return;
+	}
+	// the object cache evicts entries on its own, and a put replaces the entry of a key
+	auto expired = [](const TrackedStatsEntry &entry) {
+		return entry.entry.expired();
+	};
+	stats_cache_entries.erase(std::remove_if(stats_cache_entries.begin(), stats_cache_entries.end(), expired),
+	                          stats_cache_entries.end());
+	stats_cache_entries_prune_size = MaxValue<idx_t>(stats_cache_entries_prune_size, stats_cache_entries.size() * 2);
+}
+
+void DuckLakeCatalog::EvictCacheEntries() {
+	auto &cache = GetObjectCacheInstance();
+	lock_guard<mutex> guard(cache_entries_lock);
+	for (auto &entry : cache_entries) {
+		if (!entry.second.expired()) {
+			cache.Delete(entry.first);
+		}
+	}
+	for (auto &entry : stats_cache_entries) {
+		if (!entry.entry.expired()) {
+			cache.Delete(StatsCacheKey(entry.next_file_id, entry.table_id));
+		}
+	}
+	cache_entries.clear();
+	stats_cache_entries.clear();
 }
 
 void DuckLakeCatalog::RegisterCatalog() {

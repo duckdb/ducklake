@@ -92,6 +92,10 @@ struct DuckLakePartitionUtils {
 
 	//! Whether changing the type of a value can change its bucket
 	static bool BucketChangesWithType(const LogicalType &source_type, const LogicalType &target_type);
+
+	//! Throws when the transform of the field cannot compute the partition values of a column of the type
+	static void VerifyTransformSupportsType(ClientContext &context, const DuckLakePartitionField &field,
+	                                        const string &column_name, const LogicalType &type);
 };
 
 } // namespace duckdb

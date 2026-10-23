@@ -1,0 +1,47 @@
+# name: test/sql/quack/failed_commit_files.test
+# description: A commit that fails before it reaches the metadata server removes the files it wrote
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/failed_commit_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t (k INTEGER, v INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1, 1), (2, 2)
+
+statement ok
+CALL lake.set_option('require_commit_message', true)
+
+statement error
+INSERT INTO lake.t SELECT range, range FROM range(1000)
+----
+Commit Information for the snapshot is required
+
+statement error
+UPDATE lake.t SET v = 5 WHERE k = 1
+----
+Commit Information for the snapshot is required
+
+statement ok
+CALL lake.set_option('require_commit_message', false)
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/failed_commit_files/**')
+----
+1
+
+query II
+SELECT * FROM lake.t ORDER BY k
+----
+1	1
+2	2

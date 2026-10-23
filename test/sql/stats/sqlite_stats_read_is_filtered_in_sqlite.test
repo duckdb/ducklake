@@ -1,0 +1,53 @@
+# name: test/sql/stats/sqlite_stats_read_is_filtered_in_sqlite.test
+# description: A filtered read on a SQLite catalog reads only its own table's column stats rows from SQLite
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_stats_read_is_filtered_in_sqlite.db' AS ducklake (DATA_PATH '{TEST_DIR}/sqlite_stats_read_is_filtered_in_sqlite')
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER, s VARCHAR, d DOUBLE)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, 'a' || i, i FROM range(0, 100) r(i)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, 'b' || i, i FROM range(100, 200) r(i)
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH '{TEST_DIR}/sqlite_stats_read_is_filtered_in_sqlite.db' AS meta (TYPE sqlite)
+
+# a stats row for a table that does not exist, holding text where value_count is declared integer
+statement ok
+SELECT * FROM sqlite_query('meta', 'INSERT INTO ducklake_file_column_stats (data_file_id, table_id, column_id, value_count) VALUES (999999, 999999, 1, ''x'')')
+
+statement ok
+DETACH meta
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_stats_read_is_filtered_in_sqlite.db' AS ducklake (DATA_PATH '{TEST_DIR}/sqlite_stats_read_is_filtered_in_sqlite')
+
+# scanning the whole stats table into DuckDB would hit that row and fail its integer conversion
+query III
+SELECT count(*), min(s), max(d) FROM ducklake.t WHERE i >= 150 AND s >= 'b' AND d < 190
+----
+40	b150	189.0
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM ducklake.t WHERE i >= 150
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+SELECT count(*) FROM ducklake.t WHERE d = 'NaN'::DOUBLE OR d > 1000
+----
+0

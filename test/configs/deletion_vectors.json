@@ -17,15 +17,13 @@
     {
       "reason": "Deletion vectors are written as puffin files, not *-del*.parquet, so the parquet glob assertion does not apply",
       "paths": [
-        "test/sql/encryption/encryption.test",
         "test/sql/rewrite_data_files/test_rewrite_rollback_cleanup.test"
       ]
     },
     {
       "reason": "Reads the delete file directly as parquet (DESCRIBE/SELECT of *-delete.parquet) to inspect its columns/contents",
       "paths": [
-        "test/sql/delete/parquet_deletion_describe.test",
-        "test/sql/deletion_inlining/test_deletion_inlining_encryption.test"
+        "test/sql/delete/parquet_deletion_describe.test"
       ]
     }
   ]

@@ -41,6 +41,8 @@ class DuckLakeUtil {
 public:
 	//! Extracts the value of a literal, or of a cast over a literal, as written in a DEFAULT or parameter default
 	static bool TryGetLiteralValue(const ParsedExpression &expr, Value &result);
+	//! Casts stored text to a type when the value prints as the same text
+	static bool TryReadTextAs(const Value &text, const LogicalType &type, Value &result);
 	//! The expression of a literal default stored as text, for a column of the given type
 	static unique_ptr<ParsedExpression> LiteralDefaultExpression(const Value &text, const LogicalType &type);
 	//! Extracts a macro parameter default that can be stored as a literal of its DuckLake type
@@ -84,7 +86,7 @@ public:
 
 	static const char *BoolLiteral(bool v);
 
-	static string PartitionValueLiteral(const Value &v);
+	static string TextLiteralOrNull(const Value &v);
 
 	//! Throws if a column name is reserved for inlined data metadata on this catalog
 	static void ValidateInlinedSystemColumn(DuckLakeCatalog &catalog, ClientContext &context, SchemaIndex schema_id,

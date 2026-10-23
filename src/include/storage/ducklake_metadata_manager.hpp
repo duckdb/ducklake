@@ -242,9 +242,15 @@ public:
 
 	virtual void ClearCache() {
 	}
+	//! Whether a table that a commit creates is only found once the cache is cleared
+	virtual bool NewTablesRequireCacheClear() const {
+		return true;
+	}
 
 	void MarkPendingCacheClear() {
-		pending_cache_clear = true;
+		if (NewTablesRequireCacheClear()) {
+			pending_cache_clear = true;
+		}
 	}
 	bool TakePendingCacheClear() {
 		bool pending = pending_cache_clear;
@@ -258,6 +264,10 @@ public:
 	//! Maximum number of columns of a table supported by this backend
 	virtual idx_t MaxColumnCount() const {
 		return NumericLimits<idx_t>::Maximum();
+	}
+	//! Names of the system columns that the tables of this backend have
+	virtual vector<string> SystemColumnNames() const {
+		return {};
 	}
 
 	//! Why the rows of a table with the given columns cannot be inlined, empty when they can
@@ -602,8 +612,8 @@ protected:
 
 	virtual string GetLatestSnapshotQuery() const;
 
-	static string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
-	                                             const string &metadata_table_prefix);
+	virtual string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
+	                                              const string &metadata_table_prefix);
 	//! The snapshot placeholders of the query are replaced later, unless an override does it
 	virtual string GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                                     const FilterPushdownInfo *filter_info,
@@ -691,8 +701,8 @@ protected:
 	string GenerateFilterTreeCondition(const DuckLakeFilterNode &node, FilterSQLResult &result,
 	                                   bool splice_into_parent = false);
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
-	static string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements,
-	                                                 TableIndex table_id, const string &metadata_table_prefix);
+	string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements, TableIndex table_id,
+	                                          const string &metadata_table_prefix);
 	//! Join each column's stats CTE once. Leading newline per join, empty when there are none.
 	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
 	virtual bool ValueIsFinite(const Value &val);

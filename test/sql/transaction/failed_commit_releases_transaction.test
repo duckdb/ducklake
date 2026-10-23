@@ -1,0 +1,67 @@
+# name: test/sql/transaction/failed_commit_releases_transaction.test
+# description: a failed COMMIT releases its DuckLake transaction and the metadata connection it holds
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lk (DATA_PATH '{DATA_PATH}/failed_commit_releases_transaction/', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lk.t(k INTEGER, v INTEGER)
+
+statement ok
+INSERT INTO lk.t VALUES (1, 1)
+
+statement ok con1
+SELECT 1
+
+statement ok
+SET VARIABLE connections = (SELECT count FROM duckdb_connection_count())
+
+# commits that fail for want of a commit message
+statement ok
+CALL lk.set_option('require_commit_message', true)
+
+loop i 0 3
+
+statement error
+INSERT INTO lk.t VALUES (2, 2)
+----
+Commit Information for the snapshot is required
+
+endloop
+
+statement ok con1
+SET immediate_transaction_mode = true
+
+statement error con1
+INSERT INTO lk.t VALUES (2, 2)
+----
+Commit Information for the snapshot is required
+
+statement ok con1
+SET immediate_transaction_mode = false
+
+query I
+SELECT count = getvariable('connections') FROM duckdb_connection_count()
+----
+true
+
+statement ok
+CALL lk.set_option('require_commit_message', false)
+
+statement ok
+INSERT INTO lk.t VALUES (3, 3)
+
+query II
+SELECT * FROM lk.t ORDER BY k
+----
+1	1
+3	3

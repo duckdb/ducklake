@@ -1,0 +1,62 @@
+# name: test/sql/metadata/postgres_long_metadata_schema.test
+# description: A METADATA_SCHEMA longer than Postgres allows is rejected before anything is created
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg_setup
+
+statement ok
+CALL postgres_execute('pg_setup', 'DROP SCHEMA IF EXISTS lake_with_a_metadata_schema_name_that_is_longer_than_63_bytes_o CASCADE')
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/long_metadata_schema',
+    METADATA_SCHEMA 'lake_with_a_metadata_schema_name_that_is_longer_than_63_bytes_one')
+----
+METADATA_SCHEMA "lake_with_a_metadata_schema_name_that_is_longer_than_63_bytes_one" is longer than the 63 bytes
+
+query I
+SELECT count(*) FROM postgres_query('pg_setup', 'SELECT nspname FROM pg_namespace WHERE nspname LIKE ''lake_with_a_metadata%''')
+----
+0
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/long_metadata_schema/**')
+----
+0
+
+# a name of 63 bytes is not truncated
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/long_metadata_schema',
+    METADATA_SCHEMA 'lake_with_a_metadata_schema_name_that_is_longer_than_63_bytes_o')
+
+statement ok
+CREATE TABLE lake.t AS SELECT 1 AS id
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (METADATA_SCHEMA 'lake_with_a_metadata_schema_name_that_is_longer_than_63_bytes_o')
+
+query I
+SELECT id FROM lake.t
+----
+1
+
+statement ok
+DETACH lake
+
+statement ok
+CALL postgres_execute('pg_setup', 'DROP SCHEMA IF EXISTS lake_with_a_metadata_schema_name_that_is_longer_than_63_bytes_o CASCADE')

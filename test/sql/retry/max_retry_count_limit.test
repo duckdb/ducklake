@@ -1,0 +1,43 @@
+# name: test/sql/retry/max_retry_count_limit.test
+# description: A commit with the largest retry count and retry wait writes its snapshot
+# group: [retry]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/max_retry_count_limit')
+
+statement ok
+CREATE TABLE ducklake.t (i INTEGER);
+
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+statement ok
+SET ducklake_max_retry_count = 18446744073709551615
+
+statement ok
+SET ducklake_retry_wait_ms = 18446744073709551615
+
+statement ok
+INSERT INTO ducklake.t VALUES (2)
+
+statement ok
+CREATE TABLE ducklake.t2 AS SELECT 42 AS x
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/max_retry_count_limit')
+
+query II
+SELECT (SELECT list(i ORDER BY i) FROM ducklake.t), (SELECT x FROM ducklake.t2)
+----
+[1, 2]	42

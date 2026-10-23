@@ -59,13 +59,16 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "dry_run", "boolean", dry_run)) {
 		result->dry_run = BooleanValue::Get(dry_run);
 	}
+	if (!result->dry_run) {
+		ducklake_catalog.VerifyWritable();
+	}
 	bool cleanup_all = false;
 	Value cleanup_all_value;
 	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "cleanup_all", "boolean", cleanup_all_value)) {
 		cleanup_all = BooleanValue::Get(cleanup_all_value);
 	}
 	Value older_than;
-	bool has_timestamp = DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "older_than", "timestamp", older_than);
+	bool has_timestamp = DuckLakeTableFunctionUtil::TryGetTimestampOption(input, "older_than", older_than);
 	if ((cleanup_all == has_timestamp && cleanup_all == true) ||
 	    (cleanup_all == has_timestamp && cleanup_all == false && older_than_default.empty())) {
 		throw InvalidInputException(
@@ -78,7 +81,8 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 		auto from_timestamp = older_than.GetValue<timestamp_tz_t>();
 		result->timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(timestamp_t(from_timestamp.value));
 	} else if (!cleanup_all && !older_than_default.empty()) {
-		result->timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampOlderThan(older_than_default);
+		result->timestamp_filter =
+		    DuckLakeTableFunctionUtil::FormatTimestampOlderThan("delete_older_than", older_than_default);
 	}
 
 	// orphans belong to no table, so only the global auto_compact option can turn their cleanup off
