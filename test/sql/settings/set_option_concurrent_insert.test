@@ -1,0 +1,165 @@
+# name: test/sql/settings/set_option_concurrent_insert.test
+# description: a new option that two transactions set at once on a Postgres catalog is stored once
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/set_option_concurrent_insert')
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+CREATE TABLE dl.u (i INTEGER)
+
+statement ok
+CREATE TABLE dl.w (i INTEGER)
+
+statement ok
+CREATE TABLE dl.x (i INTEGER)
+
+# con2 reads the catalog before con1 sets the option
+statement ok con2
+BEGIN
+
+statement ok con2
+SELECT count(*) FROM dl.t
+
+statement ok con1
+CALL dl.set_option('data_inlining_row_limit', 100, table_name => 't')
+
+statement error con2
+CALL dl.set_option('data_inlining_row_limit', 200, table_name => 't')
+----
+could not serialize access
+
+statement ok con2
+ROLLBACK
+
+query II
+SELECT count(*), max(value) FROM dl.options() WHERE option_name = 'data_inlining_row_limit'
+----
+1	100
+
+# an option that exists is updated while another transaction inserts a new one
+statement ok con3
+BEGIN
+
+statement ok con3
+SELECT count(*) FROM dl.t
+
+statement ok con1
+CALL dl.set_option('target_file_size', '1MB', table_name => 't')
+
+statement ok con3
+CALL dl.set_option('data_inlining_row_limit', 300, table_name => 't')
+
+statement ok con3
+COMMIT
+
+query II
+SELECT option_name, value FROM dl.options() WHERE scope = 'TABLE' ORDER BY ALL
+----
+data_inlining_row_limit	300
+target_file_size	1000000
+
+# a new option of another table is set at the same time
+statement ok con4
+BEGIN
+
+statement ok con4
+SELECT count(*) FROM dl.u
+
+statement ok con1
+CALL dl.set_option('parquet_row_group_size', 1000, table_name => 't')
+
+statement ok con4
+CALL dl.set_option('parquet_row_group_size', 2000, table_name => 'u')
+
+statement ok con4
+COMMIT
+
+query II
+SELECT count(*), sum(value::INTEGER) FROM dl.options() WHERE option_name = 'parquet_row_group_size'
+----
+2	3000
+
+# the same for an option of a schema and a global option
+foreach scope schema global
+
+statement ok con5
+BEGIN
+
+statement ok con5
+SELECT count(*) FROM dl.t
+
+statement ok con1
+CALL dl.set_option('target_file_size', '3MB', schema => CASE WHEN '{scope}' = 'schema' THEN 'main' END)
+
+statement error con5
+CALL dl.set_option('target_file_size', '4MB', schema => CASE WHEN '{scope}' = 'schema' THEN 'main' END)
+----
+could not serialize access
+
+statement ok con5
+ROLLBACK
+
+endloop
+
+query II
+SELECT scope, value FROM dl.options() WHERE option_name = 'target_file_size' ORDER BY ALL
+----
+GLOBAL	3000000
+SCHEMA	3000000
+TABLE	1000000
+
+# a writer waits for an open transaction that inserts the same option, and inserts it after the rollback,
+# while the option of another table is set without waiting
+concurrentloop threadid 0 3
+
+onlyif threadid=0
+statement ok
+BEGIN
+
+onlyif threadid=0
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10, table_name => 'w')
+
+onlyif threadid=0
+statement ok
+SELECT sleep_ms(1500)
+
+onlyif threadid=0
+statement ok
+ROLLBACK
+
+skipif threadid=0
+statement ok
+SELECT sleep_ms(500)
+
+onlyif threadid=1
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 20, table_name => 'w')
+
+onlyif threadid=2
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 30, table_name => 'x')
+
+endloop
+
+query I
+SELECT list(value ORDER BY value) FROM dl.options()
+WHERE option_name = 'data_inlining_row_limit' AND value IN ('10', '20', '30')
+----
+[20, 30]

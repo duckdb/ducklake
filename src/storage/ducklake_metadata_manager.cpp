@@ -5836,7 +5836,6 @@ DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s
 }
 
 void DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option) {
-	// check if the option already exists
 	auto &option_key = option.option.key;
 	auto &option_value = option.option.value;
 	string scope;
@@ -5851,18 +5850,21 @@ WHERE key = %s AND %s
 	                                       SQLString(option_key), scope_filter));
 
 	auto count = result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
+	auto update = StringUtil::Format("UPDATE {METADATA_CATALOG}.ducklake_metadata SET value=%s WHERE key=%s AND %s;\n",
+	                                 SQLString(option_value), SQLString(option_key), scope_filter);
 	if (count == 0) {
-		// option does not yet exist - insert the value
-		result = Execute(StringUtil::Format(R"(
-INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES (%s, %s, %s, %s)
+		// a concurrent transaction can insert the option after the count
+		auto query = NewConfigOptionLockSql(option) + update +
+		             StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_metadata SELECT %s, %s, %s, %s
+WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_metadata WHERE key=%s AND %s);
 )",
-		                                    SQLString(option_key), SQLString(option_value), scope, scope_id));
+		                                SQLString(option_key), SQLString(option_value), scope, scope_id,
+		                                SQLString(option_key), scope_filter);
+		// the overload with a snapshot runs the statements on a Postgres server, where the lock is taken
+		result = Execute(DuckLakeSnapshot(), query);
 	} else {
-		// option already exists - update it
-		result = Execute(StringUtil::Format(R"(
-UPDATE {METADATA_CATALOG}.ducklake_metadata SET value=%s WHERE key=%s AND %s
-)",
-		                                    SQLString(option_value), SQLString(option_key), scope_filter));
+		result = Execute(update);
 	}
 	result->ThrowIfError("Failed to insert config option in DuckLake: ");
 }
