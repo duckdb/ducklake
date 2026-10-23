@@ -689,6 +689,13 @@ DuckLakeTableEntry::BuildPartitionData(DuckLakeTransaction &transaction, const C
 	for (idx_t expr_idx = 0; expr_idx < partition_keys.size(); expr_idx++) {
 		auto &expr = *partition_keys[expr_idx];
 		auto partition_field = GetPartitionField(transaction.GetCatalog(), columns, field_data, expr);
+		auto context = transaction.context.lock();
+		if (context) {
+			// a spec that writes cannot bind would make every later insert fail
+			auto &partition_column = *field_data.GetByFieldIndex(partition_field.field_id);
+			DuckLakePartitionUtils::VerifyTransformSupportsType(*context, partition_field, partition_column.Name(),
+			                                                    partition_column.Type());
+		}
 		// Reject duplicate keys: same (field_id, transform). (year(ts), month(ts)) is fine, (a, a) is not.
 		for (auto &existing : partition_data->fields) {
 			if (existing.field_id == partition_field.field_id && existing.transform == partition_field.transform) {
@@ -1140,6 +1147,13 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterColumnType(DuckLakeTransaction
 	if (!partition) {
 		return std::move(result);
 	}
+	auto context = transaction.context.lock();
+	if (context) {
+		for (auto &field : partition->fields) {
+			auto &new_field = *result->GetFieldId(field.field_id);
+			DuckLakePartitionUtils::VerifyTransformSupportsType(*context, field, new_field.Name(), new_field.Type());
+		}
+	}
 	for (auto &field : partition->fields) {
 		if (field.transform.type != DuckLakeTransformType::BUCKET) {
 			continue;
@@ -1459,6 +1473,23 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 
 unique_ptr<CatalogEntry> DuckLakeTableEntry::Alter(ClientContext &context, DuckLakeTransaction &transaction,
                                                    AlterTableInfo &info) {
+	auto result = AlterEntry(context, transaction, info);
+	if (!result || !transaction.HasTransactionInlinedData(GetTableId())) {
+		return result;
+	}
+	// the inlined rows of the transaction are committed with the altered columns
+	auto &columns = result->Cast<DuckLakeTableEntry>().GetColumns();
+	auto obstacle = transaction.GetMetadataManager().GetInliningObstacle(columns);
+	if (!obstacle.empty()) {
+		throw NotImplementedException(
+		    "ALTER on a table with transaction-local inlined data is not supported when %s, commit the rows first",
+		    obstacle);
+	}
+	return result;
+}
+
+unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterEntry(ClientContext &context, DuckLakeTransaction &transaction,
+                                                        AlterTableInfo &info) {
 	if (transaction.HasTransactionInlinedData(GetTableId())) {
 		if (info.alter_table_type != AlterTableType::ADD_COLUMN &&
 		    info.alter_table_type != AlterTableType::REMOVE_COLUMN &&

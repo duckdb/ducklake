@@ -19,6 +19,10 @@ static bool HasFourDigitDatePrefix(const string &value) {
 	       StringUtil::CharacterIsDigit(value[8]) && StringUtil::CharacterIsDigit(value[9]);
 }
 
+static bool IsInfinityLiteral(const string &value) {
+	return value == "infinity" || value == "-infinity";
+}
+
 static string WithPostgresBinaryCollation(const string &expression) {
 	return "(" + expression + " COLLATE \"C\")";
 }
@@ -30,10 +34,23 @@ static bool IsPostgresTemporalStatsType(const LogicalType &type) {
 	case LogicalTypeId::TIMESTAMP_SEC:
 	case LogicalTypeId::TIMESTAMP_MS:
 	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::TIMESTAMP_TZ_NS:
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIME_NS:
 		return true;
 	default:
 		return false;
 	}
+}
+
+static bool IsNanosecondTemporalType(const LogicalType &type) {
+	return type.id() == LogicalTypeId::TIMESTAMP_NS || type.id() == LogicalTypeId::TIMESTAMP_TZ_NS ||
+	       type.id() == LogicalTypeId::TIME_NS;
+}
+
+static bool IsTimeOfDayType(const LogicalType &type) {
+	return type.id() == LogicalTypeId::TIME || type.id() == LogicalTypeId::TIME_NS;
 }
 
 static string GetPostgresStatsType(const LogicalType &type) {
@@ -63,8 +80,12 @@ static string GetPostgresStatsType(const LogicalType &type) {
 	case LogicalTypeId::TIMESTAMP:
 	case LogicalTypeId::TIMESTAMP_SEC:
 	case LogicalTypeId::TIMESTAMP_MS:
+	case LogicalTypeId::TIMESTAMP_NS:
+	case LogicalTypeId::TIME:
+	case LogicalTypeId::TIME_NS:
 		return "TIMESTAMP";
 	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_TZ_NS:
 		return "TIMESTAMPTZ";
 	case LogicalTypeId::DECIMAL:
 		return type.ToString();
@@ -81,6 +102,9 @@ static bool CanCastPostgresStatsForValueComparison(const LogicalType &type) {
 
 static bool CanCastPostgresTemporalValue(const Value &value, const LogicalType &type) {
 	auto string_value = value.ToString();
+	if (IsInfinityLiteral(string_value)) {
+		return true;
+	}
 	if (!HasFourDigitDatePrefix(string_value)) {
 		return false;
 	}
@@ -94,8 +118,33 @@ string PostgresMetadataManager::CastValueToTarget(const Value &value, const Logi
 	if (RequiresValueComparison(type) && (!CanCastPostgresStatsForValueComparison(type) || !ValueIsFinite(value))) {
 		return string();
 	}
+	if (type.id() == LogicalTypeId::UUID) {
+		// canonical text sorts like the bytes
+		return WithPostgresBinaryCollation(SQLString::ToString(value.ToString()));
+	}
 	if (!RequiresValueComparison(type) && type.id() != LogicalTypeId::VARCHAR) {
 		return string();
+	}
+	if (IsTimeOfDayType(type)) {
+		if (value.type().id() != type.id()) {
+			return string();
+		}
+		// Anchor time to the epoch date so timestamp bounds can widen without wrapping.
+		auto micros = value.GetValueUnsafe<int64_t>();
+		if (type.id() == LogicalTypeId::TIME_NS) {
+			micros /= Interval::NANOS_PER_MICRO;
+		}
+		return CastValueToTarget(Value::TIMESTAMP(timestamp_t(micros)), LogicalType::TIMESTAMP);
+	}
+	if (IsNanosecondTemporalType(type) && value.type().id() == type.id()) {
+		// postgres keeps microseconds, so floor the constant and widen the stats bounds to match
+		auto nanos = value.GetValueUnsafe<int64_t>();
+		if (timestamp_t(nanos).IsFinite()) {
+			auto micros = nanos / Interval::NANOS_PER_MICRO - (nanos % Interval::NANOS_PER_MICRO < 0 ? 1 : 0);
+			auto floored = type.id() == LogicalTypeId::TIMESTAMP_NS ? Value::TIMESTAMP(timestamp_t(micros))
+			                                                        : Value::TIMESTAMPTZ(timestamp_tz_t(micros));
+			return CastValueToTarget(floored, floored.type());
+		}
 	}
 	if (IsPostgresTemporalStatsType(type) && !CanCastPostgresTemporalValue(value, type)) {
 		return string();
@@ -122,15 +171,27 @@ string PostgresMetadataManager::CastValueToTarget(const Value &value, const Logi
 
 static string PostgresSafeTemporalStatsCast(const string &stats, const LogicalType &type) {
 	string regex;
+	auto fraction = IsNanosecondTemporalType(type) ? "9" : "6";
+	auto value = stats;
+	if (IsNanosecondTemporalType(type)) {
+		value = StringUtil::Format("regexp_replace(%s, '(\\.[0-9]{6})[0-9]+', '\\1')", stats);
+	}
+	if (IsTimeOfDayType(type)) {
+		regex = StringUtil::Format("'^(([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,%s})?|24:00:00(\\.0+)?)$'",
+		                           fraction);
+		return StringUtil::Format("(CASE WHEN %s ~ %s THEN DATE '1970-01-01' + %s::TIME END)", stats, regex, value);
+	}
 	if (type.id() == LogicalTypeId::DATE) {
 		regex = "'^[0-9]{4}-(0[1-9]|1[0-2])-([0][1-9]|[12][0-9]|3[01])$'";
-	} else if (type.id() == LogicalTypeId::TIMESTAMP_TZ) {
-		regex = "'^[0-9]{4}-(0[1-9]|1[0-2])-([0][1-9]|[12][0-9]|3[01]) "
-		        "([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?"
-		        "(Z|[+-](0[0-9]|1[0-5])(:[0-5][0-9])?)$'";
+	} else if (type.id() == LogicalTypeId::TIMESTAMP_TZ || type.id() == LogicalTypeId::TIMESTAMP_TZ_NS) {
+		regex = StringUtil::Format("'^[0-9]{4}-(0[1-9]|1[0-2])-([0][1-9]|[12][0-9]|3[01]) "
+		                           "([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,%s})?"
+		                           "(Z|[+-](0[0-9]|1[0-5])(:[0-5][0-9])?)$'",
+		                           fraction);
 	} else {
-		regex = "'^[0-9]{4}-(0[1-9]|1[0-2])-([0][1-9]|[12][0-9]|3[01])"
-		        "( ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,6})?)?$'";
+		regex = StringUtil::Format("'^[0-9]{4}-(0[1-9]|1[0-2])-([0][1-9]|[12][0-9]|3[01])"
+		                           "( ([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\\.[0-9]{1,%s})?)?$'",
+		                           fraction);
 	}
 
 	auto year = StringUtil::Format("substring(%s FROM 1 FOR 4)::INTEGER", stats);
@@ -141,8 +202,9 @@ static string PostgresSafeTemporalStatsCast(const string &stats, const LogicalTy
 	    "THEN 29 ELSE 28 END WHEN %s IN (4, 6, 9, 11) THEN 30 ELSE 31 END)",
 	    month, year, year, year, month);
 	auto valid_date = StringUtil::Format("%s > 0 AND %s <= %s", year, day, max_day);
-	return StringUtil::Format("(CASE WHEN %s ~ %s THEN CASE WHEN %s THEN %s::%s END END)", stats, regex, valid_date,
-	                          stats, GetPostgresStatsType(type));
+	return StringUtil::Format(
+	    "(CASE WHEN %s ~ %s THEN CASE WHEN %s THEN %s::%s END WHEN %s IN ('infinity', '-infinity') THEN %s::%s END)",
+	    stats, regex, valid_date, value, GetPostgresStatsType(type), stats, stats, GetPostgresStatsType(type));
 }
 
 string PostgresMetadataManager::CastStatsToTarget(const string &stats, const LogicalType &type,
@@ -152,12 +214,17 @@ string PostgresMetadataManager::CastStatsToTarget(const string &stats, const Log
 		if (cast_type == StatsCastType::ORDERING) {
 			return cast;
 		}
+		if (IsNanosecondTemporalType(type)) {
+			// widen truncated bounds by a microsecond
+			cast = StringUtil::Format("(%s %s INTERVAL '1 microsecond')", cast,
+			                          cast_type == StatsCastType::MIN ? "-" : "+");
+		}
 		return BoundOrInfinity(cast, GetPostgresStatsType(type), cast_type);
 	}
 	if (CanCastPostgresStatsForValueComparison(type)) {
 		return stats + "::" + GetPostgresStatsType(type);
 	}
-	if (type.id() == LogicalTypeId::VARCHAR) {
+	if (type.id() == LogicalTypeId::VARCHAR || type.id() == LogicalTypeId::UUID) {
 		return WithPostgresBinaryCollation(stats);
 	}
 	return string();

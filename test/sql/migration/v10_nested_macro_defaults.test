@@ -1,0 +1,77 @@
+# name: test/sql/migration/v10_nested_macro_defaults.test
+# description: list and struct macro defaults written by DuckLake 1.0 load, and the ones that cannot be read raise an error
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+# written by DuckDB 1.5.6, which stored the defaults as the text of their value
+unzip data/old_ducklake/macro_nested_default.db.gz {TEST_DIR}/v10_nested_macro_defaults.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_nested_macro_defaults.db' AS lake (DATA_PATH '{TEST_DIR}/v10_nested_macro_defaults_data', OVERRIDE_DATA_PATH TRUE, DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT count(*) FROM lake.t
+----
+2
+
+query IIIII
+SELECT lake.has(2), lake.has(3), lake.getx(), lake.nested_len(), lake.greeting()
+----
+true	false	1	2	hello
+
+# string, date and map defaults were stored without quotes
+statement error
+SELECT lake.has_name('x')
+----
+The default of parameter "l" of macro "has_name" was stored by DuckLake 1.0 in a form that cannot be read back
+
+statement error
+SELECT lake.first_day()
+----
+The default of parameter "l" of macro "first_day" was stored by DuckLake 1.0 in a form that cannot be read back
+
+statement error
+SELECT lake.get_a()
+----
+The default of parameter "m" of macro "get_a" was stored by DuckLake 1.0 in a form that cannot be read back
+
+statement error
+SELECT lake.codes()
+----
+The default of parameter "l" of macro "codes" was stored by DuckLake 1.0 in a form that cannot be read back
+
+query III
+SELECT lake.has_name('x', l := ['x']), lake.first_day(l := [DATE '2021-02-03']), lake.get_a(m := MAP {'a': 5})
+----
+true	2021-02-03	5
+
+# the catalog also loads without the migration
+unzip data/old_ducklake/macro_nested_default.db.gz {TEST_DIR}/v10_nested_macro_defaults_unmigrated.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_nested_macro_defaults_unmigrated.db' AS v10 (DATA_PATH '{TEST_DIR}/v10_nested_macro_defaults_data', OVERRIDE_DATA_PATH TRUE)
+
+query II
+SELECT v10.has(2), v10.getx()
+----
+true	1
+
+# macros named like the functions that the defaults call do not change them
+statement ok
+CREATE MACRO memory.list_value(a, b) AS 'oops'
+
+statement ok
+CREATE MACRO memory.ducklake_unreadable_macro_default(a, b) AS 'oops'
+
+query I
+SELECT lake.nested_len()
+----
+2
+
+statement error
+SELECT lake.has_name('x')
+----
+The default of parameter "l" of macro "has_name" was stored by DuckLake 1.0 in a form that cannot be read back

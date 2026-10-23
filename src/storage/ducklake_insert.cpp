@@ -11,6 +11,7 @@
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_field_data.hpp"
 #include "storage/ducklake_insert.hpp"
+#include "duckdb/main/query_result.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "common/ducklake_util.hpp"
@@ -157,6 +158,9 @@ static bool IsLeafColumnStats(const vector<Value> &col_stats) {
 void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, DataChunk &chunk,
                                      const string &encryption_key, optional_idx partition_id, bool set_snapshot_id) {
 	auto skipped_fields = global_state.table.GetSkippedStatsFields();
+	auto &field_data = global_state.table.GetFieldData();
+	auto snapshot_id_name = InternalColumnName(field_data, "_ducklake_internal_snapshot_id");
+	auto row_id_name = InternalColumnName(field_data, "_ducklake_internal_row_id");
 	for (idx_t r = 0; r < chunk.size(); r++) {
 		DuckLakeDataFile data_file;
 		data_file.file_name = chunk.GetValue(0, r).GetValue<string>();
@@ -193,8 +197,7 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 				continue;
 			}
 			auto column_names = DuckLakeUtil::ParseQuotedList(col_name, '.');
-			// FIXME: this should be checked differently
-			if (column_names[0] == "_ducklake_internal_snapshot_id") {
+			if (column_names.size() == 1 && column_names[0] == snapshot_id_name) {
 				if (set_snapshot_id) {
 					// set start snapshot id based on the minimum written to the file
 					auto snapshot_stats = ParseColumnStats(LogicalType::UBIGINT, col_stats);
@@ -207,7 +210,7 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 				}
 				continue;
 			}
-			if (column_names[0] == "_ducklake_internal_row_id") {
+			if (column_names.size() == 1 && column_names[0] == row_id_name) {
 				if (set_snapshot_id) {
 					// extract the min row_id so flushed files preserve the original row_id_start
 					auto row_id_stats = ParseColumnStats(LogicalType::BIGINT, col_stats);
@@ -386,6 +389,17 @@ static bool WriteSnapshotId(InsertVirtualColumns virtual_columns) {
 	return virtual_columns == InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
 }
 
+string DuckLakeInsert::InternalColumnName(const DuckLakeFieldData &field_data, const string &name) {
+	vector<string> names;
+	for (auto &field_id : field_data.GetFieldIds()) {
+		names.push_back(field_id->Name());
+	}
+	// the reader finds internal columns by field id, so their name in the file only has to be unique
+	names.push_back(name);
+	QueryResult::DeduplicateColumns(names);
+	return names.back();
+}
+
 static Value WrittenFieldIds(DuckLakeFieldData &field_data, InsertVirtualColumns virtual_columns) {
 	child_list_t<Value> values;
 	for (idx_t c_idx = 0; c_idx < field_data.GetColumnCount(); c_idx++) {
@@ -393,10 +407,11 @@ static Value WrittenFieldIds(DuckLakeFieldData &field_data, InsertVirtualColumns
 		values.emplace_back(field_id.Name(), GetFieldIdValue(field_id));
 	}
 	if (WriteRowId(virtual_columns)) {
-		values.emplace_back("_ducklake_internal_row_id", Value::BIGINT(MultiFileReader::ROW_ID_FIELD_ID));
+		values.emplace_back(DuckLakeInsert::InternalColumnName(field_data, "_ducklake_internal_row_id"),
+		                    Value::BIGINT(MultiFileReader::ROW_ID_FIELD_ID));
 	}
 	if (WriteSnapshotId(virtual_columns)) {
-		values.emplace_back("_ducklake_internal_snapshot_id",
+		values.emplace_back(DuckLakeInsert::InternalColumnName(field_data, "_ducklake_internal_snapshot_id"),
 		                    Value::BIGINT(MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID));
 	}
 	return Value::STRUCT(std::move(values));
@@ -571,11 +586,11 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	auto names_to_write = copy_input.columns.GetColumnNames();
 	auto types_to_write = copy_input.columns.GetColumnTypes();
 	if (WriteRowId(copy_input.virtual_columns)) {
-		names_to_write.push_back("_ducklake_internal_row_id");
+		names_to_write.push_back(InternalColumnName(*copy_input.field_data, "_ducklake_internal_row_id"));
 		types_to_write.push_back(LogicalType::BIGINT);
 	}
 	if (WriteSnapshotId(copy_input.virtual_columns)) {
-		names_to_write.push_back("_ducklake_internal_snapshot_id");
+		names_to_write.push_back(InternalColumnName(*copy_input.field_data, "_ducklake_internal_snapshot_id"));
 		types_to_write.push_back(LogicalType::BIGINT);
 	}
 

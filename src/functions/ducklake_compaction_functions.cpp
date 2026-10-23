@@ -275,6 +275,21 @@ static bool FieldsPreservedInLatest(const vector<unique_ptr<DuckLakeFieldId>> &o
 	return true;
 }
 
+static bool TimestampRetypedInLatest(const vector<unique_ptr<DuckLakeFieldId>> &older_fields,
+                                     const DuckLakeFieldData &latest) {
+	for (auto &older_field : older_fields) {
+		auto latest_field = latest.GetByFieldIndex(older_field->GetFieldIndex());
+		if (latest_field && LogicalType::TypeIsTimestamp(older_field->Type()) &&
+		    older_field->Type() != latest_field->Type()) {
+			return true;
+		}
+		if (TimestampRetypedInLatest(older_field->Children(), latest)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
                                             vector<unique_ptr<LogicalOperator>> &compactions) {
 	auto &metadata_manager = transaction.GetMetadataManager();
@@ -316,6 +331,22 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 		merges_into_latest_schema[schema_version] = result;
 		return result;
 	};
+	// an added file can hold timestamps finer than its schema version, which reading at that version rounds
+	unordered_map<idx_t, bool> rounds_added_timestamps;
+	auto rounds_added_file = [&](idx_t schema_version) -> bool {
+		if (schema_version == latest_schema_version) {
+			return false;
+		}
+		auto cached = rounds_added_timestamps.find(schema_version);
+		if (cached != rounds_added_timestamps.end()) {
+			return cached->second;
+		}
+		auto version_table = catalog.GetTableAtSchemaVersion(transaction, table_id, schema_version);
+		bool result =
+		    version_table && TimestampRetypedInLatest(version_table->GetFieldData().GetFieldIds(), latest_field_data);
+		rounds_added_timestamps[schema_version] = result;
+		return result;
+	};
 
 	// iterate over the files and split into separate compaction groups
 	compaction_map_t<DuckLakeCompactionCandidates> candidates;
@@ -333,6 +364,10 @@ void DuckLakeCompactor::GenerateCompactions(DuckLakeTableEntry &table,
 			continue;
 		}
 		if (files_compacted_in_transaction.count(candidate.file.id)) {
+			continue;
+		}
+		// only added files have a name mapping
+		if (candidate.file.mapping_id.IsValid() && rounds_added_file(candidate.schema_version)) {
 			continue;
 		}
 		// construct the compaction group for this file - i.e. the set of candidate files we can compact it with
@@ -866,8 +901,8 @@ static unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableF
 		throw BinderException("The min_file_size must be less than max_file_size.");
 	}
 
-	DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "newer_than", "timestamp", merge_options.newer_than);
-	DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "older_than", "timestamp", merge_options.older_than);
+	DuckLakeTableFunctionUtil::TryGetTimestampOption(input, "newer_than", merge_options.newer_than);
+	DuckLakeTableFunctionUtil::TryGetTimestampOption(input, "older_than", merge_options.older_than);
 	if (!merge_options.newer_than.IsNull() && !merge_options.older_than.IsNull() &&
 	    merge_options.newer_than >= merge_options.older_than) {
 		throw BinderException("The newer_than option must be less than older_than.");

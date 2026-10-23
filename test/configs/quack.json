@@ -37,6 +37,7 @@
         "test/sql/metadata/ducklake_settings_sqlite.test",
         "test/sql/metadata/sqlite_all_varchar.test",
         "test/sql/data_inlining/sqlite_column_limit.test",
+        "test/sql/data_inlining/sqlite_system_column_names.test",
         "test/sql/data_inlining/data_inlining_variant_sql_rollback.test"
       ]
     },
@@ -44,6 +45,7 @@
       "reason": "Test only for Postgres as catalog",
       "paths": [
         "test/sql/metadata/ducklake_settings_postgres.test",
+        "test/sql/retry/postgres_rollback_connection_loss.test",
         "test/sql/metadata/metadata_schema_scoped_attach.test",
         "test/sql/migration/postgres_concurrent_migration.test",
         "test/sql/retry/postgres_localized_conflict_retry.test",
@@ -58,6 +60,7 @@
         "test/sql/compaction/compaction_idle_metadata_transaction.test",
         "test/sql/compaction/postgres_expire_snapshots_time_zone.test",
         "test/sql/settings/set_option_concurrent_insert.test",
+        "test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test"
       ]
     },
@@ -114,6 +117,7 @@
       "paths": [
         "test/sql/autoloading/autoload_data_path.test",
         "test/sql/data_inlining/postgres_identifier_limit.test",
+        "test/sql/data_inlining/postgres_system_column_names.test",
         "test/sql/metadata/postgres_text_protocol.test",
         "test/sql/data_inlining/postgres_column_limit.test",
         "test/sql/issues/issue_sqlite_snapshot_time.test",
@@ -144,6 +148,12 @@
       "reason": "FIXME: Each metadata query runs in its own server-side transaction on quack, so a reader that began before a concurrent TRUNCATE reads the post-truncate record counts from ducklake_table_stats.",
       "paths": [
         "test/sql/metadata/duckdb_tables_record_counts_concurrent.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Each metadata query runs in its own server-side transaction on quack, so a reader that began before a rewrite reads the narrowed bounds from ducklake_table_column_stats.",
+      "paths": [
+        "test/sql/compaction/rewrite_narrow_older_transaction.test"
       ]
     },
     {

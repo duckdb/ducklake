@@ -116,8 +116,8 @@ struct DuckLakeDeleteMap {
 		delete_data_map.emplace(filename, std::move(delete_data));
 	}
 
-	//! The file list of the scan, read again for a file that a concurrent flush or compaction added to the scan
-	shared_ptr<MultiFileList> file_list;
+	//! The file lists of the scans, read again for a file that a concurrent flush or compaction added to a scan
+	vector<shared_ptr<MultiFileList>> file_lists;
 
 private:
 	mutex lock;

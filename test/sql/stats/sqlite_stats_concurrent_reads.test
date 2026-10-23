@@ -1,0 +1,34 @@
+# name: test/sql/stats/sqlite_stats_concurrent_reads.test
+# description: Filtered reads with several stats CTEs on a SQLite catalog, which scan the metadata in parallel
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_stats_concurrent_reads.db' AS ducklake (DATA_PATH '{TEST_DIR}/sqlite_stats_concurrent_reads', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(a INTEGER, b INTEGER, c INTEGER, d INTEGER, e INTEGER, f INTEGER)
+
+loop i 0 300
+
+statement ok
+INSERT INTO ducklake.t SELECT r, r, r, r, r, r FROM range(${i} * 10, ${i} * 10 + 10) x(r)
+
+endloop
+
+statement ok
+SET threads = 16
+
+loop i 0 300
+
+query I
+SELECT count(*) FROM ducklake.t WHERE a > 1500 AND b > 1500 AND c > 1500 AND d > 1500 AND e > 1500 AND f > 1500
+----
+1499
+
+endloop

@@ -8,6 +8,7 @@
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
 
 #include <cstring>
 
@@ -252,6 +253,20 @@ static unique_ptr<Expression> ApplyEpochTransform(ClientContext &context, unique
 	children.push_back(std::move(column_expr));
 	FunctionBinder binder(context);
 	return binder.BindScalarFunction(Identifier::DefaultSchema(), "date_diff", std::move(children));
+}
+
+void DuckLakePartitionUtils::VerifyTransformSupportsType(ClientContext &context, const DuckLakePartitionField &field,
+                                                         const string &column_name, const LogicalType &type) {
+	try {
+		ApplyPartitionTransform(context, make_uniq<BoundReferenceExpression>(type, 0ULL), field);
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		if (error.Type() != ExceptionType::BINDER) {
+			throw;
+		}
+		throw InvalidInputException("Cannot partition by %s(%s) - the transform does not support columns of type %s",
+		                            GetTransformName(field.transform.type), column_name, type);
+	}
 }
 
 unique_ptr<Expression> DuckLakePartitionUtils::ApplyPartitionTransform(ClientContext &context,

@@ -294,6 +294,10 @@ public:
 
 	bool WriteDeletionVectors(SchemaIndex schema_id, TableIndex table_id,
 	                          optional_ptr<const map<string, string>> table_options = nullptr) const {
+		// puffin files are not encrypted, so an encrypted catalog writes parquet delete files
+		if (IsEncrypted()) {
+			return false;
+		}
 		auto write_dv = GetConfigOption<string>("write_deletion_vectors", schema_id, table_id, "false", table_options);
 		return write_dv == "true";
 	}

@@ -28,9 +28,10 @@ public:
 		std::replace(ts_string.begin(), ts_string.end(), ' ', 'T');
 		return ts_string + "+00";
 	}
-	static string FormatTimestampOlderThan(const string &interval);
+	static string FormatTimestampOlderThan(const string &option, const string &interval);
 	static bool TryGetNonNullOption(const TableFunctionBindInput &input, const string &name, const string &type_name,
 	                                Value &result);
+	static bool TryGetTimestampOption(const TableFunctionBindInput &input, const string &name, Value &result);
 	static string GetStringOption(const TableFunctionBindInput &input, const string &name);
 	static string GetTableName(const Value &input);
 	static BoundAtClause AtClauseFromValue(const Value &input);

@@ -65,7 +65,7 @@ onlyif threadid=0
 statement error
 COMMIT
 ----
-<REGEX>:.*Exceeded the maximum retry count of 0 set by the ducklake_max_retry_count setting\.\n\. Consider increasing the value with: e\.g\., "SET ducklake_max_retry_count = 0;"\nFailed to flush changes into DuckLake: database is locked.*
+<REGEX>:.*Exceeded the maximum retry count of 0 set by the ducklake_max_retry_count setting\.\nConsider increasing the value with: e\.g\., "SET ducklake_max_retry_count = 10;"\nFailed to flush changes into DuckLake: database is locked.*
 
 onlyif threadid=1
 statement ok

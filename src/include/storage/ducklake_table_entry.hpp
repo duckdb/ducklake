@@ -203,6 +203,7 @@ public:
 	                                              const vector<unique_ptr<ParsedExpression>> &sort_keys);
 
 private:
+	unique_ptr<CatalogEntry> AlterEntry(ClientContext &context, DuckLakeTransaction &transaction, AlterTableInfo &info);
 	bool CanUseGlobalStats(DuckLakeTransaction &transaction) const;
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RenameTableInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, SetPartitionedByInfo &info);

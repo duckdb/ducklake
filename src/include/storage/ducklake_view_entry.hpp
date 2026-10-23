@@ -49,12 +49,17 @@ public:
 	string ToSQL() const override;
 
 	void BindView(ClientContext &context, BindViewAction action = BindViewAction::BIND_IF_UNBOUND) override;
+	//! Returns an unbound copy without parsing SQL
+	unique_ptr<DuckLakeViewEntry> CopyUnbound() const;
 
 	string GetQuerySQL() const;
+	bool HasColumnComments() const {
+		return has_column_comments;
+	}
 
 public:
 	// ALTER VIEW
-	DuckLakeViewEntry(DuckLakeViewEntry &parent, CreateViewInfo &info, LocalChange local_change);
+	DuckLakeViewEntry(const DuckLakeViewEntry &parent, CreateViewInfo &info, LocalChange local_change);
 
 	unique_ptr<CatalogEntry> Alter(DuckLakeTransaction &transaction, SetColumnCommentInfo &info);
 
@@ -67,6 +72,7 @@ private:
 	string view_uuid;
 	string query_sql;
 	LocalChange local_change;
+	bool has_column_comments;
 };
 
 } // namespace duckdb

@@ -14,6 +14,7 @@
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
+#include "functions/ducklake_table_functions.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
@@ -726,6 +727,8 @@ static string ParseInterval(ClientContext &, const string &option, const Value &
 		if (!Interval::FromString(interval_value, result)) {
 			throw BinderException("%s is not a valid interval value.", option);
 		}
+		// throws if the interval reaches back before the year 1
+		DuckLakeTableFunctionUtil::FormatTimestampOlderThan(option, interval_value);
 	}
 	return interval_value;
 }
@@ -811,11 +814,20 @@ bool DuckLakeUtil::TryGetLiteralValue(const ParsedExpression &expr, Value &resul
 	return true;
 }
 
+bool DuckLakeUtil::TryReadTextAs(const Value &text, const LogicalType &type, Value &result) {
+	auto typed_value = text.DefaultTryCastAs(type);
+	if (!typed_value || typed_value->ToString() != text.ToString()) {
+		return false;
+	}
+	result = std::move(*typed_value);
+	return true;
+}
+
 unique_ptr<ParsedExpression> DuckLakeUtil::LiteralDefaultExpression(const Value &text, const LogicalType &type) {
 	// keep the text when the column type would print it differently, as for a rounded value or a time zone
-	auto typed_value = text.DefaultTryCastAs(type);
-	if (typed_value && typed_value->ToString() == text.ToString()) {
-		return ConstantExpression::FromValue(*typed_value);
+	Value typed_value;
+	if (TryReadTextAs(text, type, typed_value)) {
+		return ConstantExpression::FromValue(typed_value);
 	}
 	return ConstantExpression::FromValue(text);
 }

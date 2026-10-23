@@ -1,0 +1,28 @@
+# name: benchmark/micro/write/add_column_many_files.benchmark
+# description: ADD COLUMN on a table of 4096 data files, which looks up the next column id of the table
+# group: [write]
+
+name Add Column Many Files
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work add_column_many_files_work
+
+argument warm_table lake.bg
+
+include benchmark/micro/fixtures/delete_files.benchmark.in
+
+run
+ALTER TABLE lake.bg ADD COLUMN c INTEGER;
+
+include benchmark/micro/fixtures/restore_cleanup_warm.benchmark.in
+
+# the new column takes the next id after id, so the cleanup restored the table between the runs
+result_query II
+SELECT count(*), max(column_id) FROM __ducklake_metadata_lake.ducklake_column c JOIN __ducklake_metadata_lake.ducklake_table t USING (table_id) WHERE t.table_name = 'bg'
+----
+2	2
