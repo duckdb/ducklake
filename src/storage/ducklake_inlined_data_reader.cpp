@@ -355,10 +355,12 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 					break;
 				}
 				reference<Vector> source(scan_chunk.data[column_id]);
-				Vector extracted(chunk.data[c].GetType());
+				unique_ptr<Vector> extracted;
 				if (column_indexes[c].IsPushdownExtract()) {
-					ExtractPushdownField(context, column_indexes[c], source, extracted, scan_chunk.size());
-					source = extracted;
+					// extracted as the reader produces it, which the mapping expression or cast takes as its input
+					extracted = make_uniq<Vector>(column_indexes[c].GetScanType(), scan_chunk.size());
+					ExtractPushdownField(context, column_indexes[c], source, *extracted, scan_chunk.size());
+					source = *extracted;
 				}
 				if (TryEvaluateExpression(context, c, source, source.get().GetType(), chunk.data[c])) {
 					break;
@@ -427,8 +429,11 @@ AsyncResult DuckLakeInlinedDataReader::Scan(ClientContext &context, GlobalTableF
 				source.Reference(scanned);
 			}
 			source.Flatten(approved_tuple_count);
+			auto &column_index = column_indexes[deferred.first];
+			Vector extracted(column_index.GetScanType(), approved_tuple_count);
+			ExtractPushdownField(context, column_index, source, extracted, approved_tuple_count);
 			Vector result(chunk.data[deferred.first].GetType(), approved_tuple_count);
-			ExtractPushdownField(context, column_indexes[deferred.first], source, result, approved_tuple_count);
+			CastOrReference(context, extracted, result, approved_tuple_count);
 			chunk.data[deferred.first].Reference(result);
 		}
 		deferred_extracts.clear();
