@@ -60,8 +60,10 @@ struct DuckLakeCommitContext {
 	std::function<void()> prepare_retry = []() {
 	};
 	// LCOV_EXCL_STOP
-	//! Runs a metadata-DB query during post-commit cleanup.
+	//! Runs a metadata-DB query during commit or post-commit cleanup.
 	std::function<unique_ptr<QueryResult>(string)> query_metadata;
+	//! Protects inlined tables referenced by the commit from concurrent cleanup when the catalog requires it.
+	std::function<unique_ptr<QueryResult>(const set<TableIndex> &)> get_inlined_tables_for_commit;
 	//! Runs cleanup statements atomically.
 	std::function<unique_ptr<QueryResult>(string)> execute_in_transaction;
 	//! Runs a snapshot-templated metadata-DB query (handles {SNAPSHOT_ID} substitution).

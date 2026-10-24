@@ -1511,6 +1511,7 @@ void DuckLakeTransaction::ReportPostCommitError(const string &message) {
 void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
                                         const TransactionChangeInformation &transaction_changes,
                                         const DuckLakeRetryConfig &retry_config) {
+	metadata_manager->ResetCommitAttempt();
 	vector<unique_ptr<SQLStatement>> inlined_inserts;
 	DuckLakeCommitContext context;
 	context.conflict_query_executor = [&](string q) -> unique_ptr<QueryResult> {
@@ -1566,11 +1567,15 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.prepare_retry = [&]() {
 		inlined_inserts.clear();
 		metadata_manager->ClearInlinedTableCaches();
+		metadata_manager->ResetCommitAttempt();
 		connection->BeginTransaction();
 		snapshot.reset();
 	};
 	context.query_metadata = [&](string q) {
 		return metadata_manager->Query(q);
+	};
+	context.get_inlined_tables_for_commit = [&](const set<TableIndex> &table_ids) {
+		return metadata_manager->GetInlinedTablesForCommit(table_ids);
 	};
 	context.execute_in_transaction = [&](string q) {
 		return metadata_manager->ExecuteInTransaction(q);

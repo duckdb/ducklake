@@ -34,7 +34,7 @@ static bool IsLockedCommit(const string &lower_message) {
 	return StringUtil::Contains(lower_message, "failed to execute query \"commit\": database is locked");
 }
 
-bool SQLiteMetadataManager::IsRetryableCommitError(const string &message) const {
+bool SQLiteMetadataManager::IsRetryableCommitError(const string &message) {
 	auto lower_message = StringUtil::Lower(message);
 	StringUtil::Trim(lower_message);
 	return StringUtil::EndsWith(lower_message, "database is locked") && !IsLockedCommit(lower_message);
