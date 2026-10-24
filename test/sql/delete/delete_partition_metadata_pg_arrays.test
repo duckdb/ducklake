@@ -1,0 +1,53 @@
+# name: test/sql/delete/delete_partition_metadata_pg_arrays.test
+# description: Metadata deletes keep native Postgres arrays without changing the caller's setting
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CONNECTION postgres:dbname=ducklakedb
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/pg_array_as_varchar', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(p INTEGER)
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (p)
+
+foreach scope GLOBAL SESSION
+
+statement ok
+INSERT INTO lake.t VALUES (1), (2)
+
+statement ok
+SET {scope} pg_array_as_varchar = true
+
+query I
+DELETE FROM lake.t WHERE p = 1
+----
+1
+
+query I
+SELECT p FROM lake.t
+----
+2
+
+query I
+SELECT current_setting('pg_array_as_varchar')
+----
+true
+
+statement ok
+SET {scope} pg_array_as_varchar = false
+
+statement ok
+DELETE FROM lake.t
+
+endloop

@@ -397,6 +397,7 @@ struct DuckLakeFileColumnStats {
 	bool has_max = false;
 	bool contains_nan = false;
 	bool has_contains_nan = false;
+	optional_idx null_count;
 };
 
 struct DuckLakeFileListEntry {
@@ -455,6 +456,11 @@ struct DuckLakeFileListExtendedEntry {
 	idx_t delete_count = 0;
 	MappingIndex mapping_id;
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
+	optional_idx partition_id;
+	vector<DuckLakeFilePartitionInfo> partition_values;
+	unordered_map<idx_t, DuckLakeFileColumnStats> column_min_max;
+	//! Highest snapshot id of the rows in the file
+	optional_idx max_partial_file_snapshot;
 };
 
 struct DuckLakeCompactionBaseFileData {

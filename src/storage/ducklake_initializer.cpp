@@ -174,6 +174,8 @@ void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction) {
 	auto result = transaction.GetMetadataManager().AttachMetadata(attach_query);
 	result->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
 	                     catalog.MetadataPath() + "\"");
+	// The metadata extension may have been autoloaded after the internal connection was created.
+	DuckLakeUtil::SetNativeExtensionTypes(*transaction.GetConnection().context);
 }
 
 bool DuckLakeInitializer::DuckLakeIsInitialized(DuckLakeTransaction &transaction) {

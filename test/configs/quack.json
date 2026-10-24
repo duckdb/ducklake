@@ -86,7 +86,8 @@
         "test/sql/rewrite_data_files/test_rewrite_many_non_candidate_files.test",
         "test/sql/stats/nan_column_stats_missing_max.test",
         "test/sql/stats/nan_column_stats_missing_min.test",
-        "test/sql/stats/numeric_stats_one_bound.test"
+        "test/sql/stats/numeric_stats_one_bound.test",
+        "test/sql/delete/delete_partition_metadata_missing_stats.test"
       ]
     },
     {

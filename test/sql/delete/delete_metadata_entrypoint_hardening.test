@@ -1,0 +1,72 @@
+# name: test/sql/delete/delete_metadata_entrypoint_hardening.test
+# description: Plain metadata DELETE, conditional MERGE DELETE and inlining fallback
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/entrypoint_hardening', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(id INTEGER, p INTEGER, v INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, 1, 10), (2, 1, 20), (3, 2, 30)
+
+query II
+EXPLAIN DELETE FROM ducklake.t WHERE p = 2
+----
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
+
+# A MERGE action condition is applied per row even when the join selects a whole partition.
+query I
+MERGE INTO ducklake.t AS t USING (SELECT 1 AS k) AS s ON t.p = 1 WHEN MATCHED AND t.v = 10 THEN DELETE
+----
+1
+
+query I rowsort
+SELECT id FROM ducklake.t
+----
+2
+3
+
+query I
+DELETE FROM ducklake.t WHERE p = 2
+----
+1
+
+statement ok
+CALL ducklake_set_option('ducklake', 'data_inlining_row_limit', 100)
+
+statement ok
+CREATE TABLE ducklake.inline_t(id INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE ducklake.inline_t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO ducklake.inline_t VALUES (1, 1), (2, 1), (3, 2)
+
+query II
+EXPLAIN DELETE FROM ducklake.inline_t WHERE p = 1
+----
+physical_plan	<REGEX>:.*Ducklake Delete.*
+
+query I
+DELETE FROM ducklake.inline_t WHERE p = 1
+----
+2
+
+query I
+SELECT id FROM ducklake.inline_t
+----
+3

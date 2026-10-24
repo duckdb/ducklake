@@ -608,7 +608,8 @@ void DuckLakeMultiFileList::AddInlinedDataTables(DuckLakeTransaction &transactio
 	}
 }
 
-vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() const {
+vector<DuckLakeFileListExtendedEntry>
+DuckLakeMultiFileList::GetFilesExtended(bool include_partition_values, const vector<idx_t> &stats_columns) const {
 	lock_guard<mutex> l(file_lock);
 	vector<DuckLakeFileListExtendedEntry> result;
 	auto transaction_ref = read_info.GetTransaction();
@@ -616,7 +617,8 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 	if (!IsTransactionLocal(read_info.table_id)) {
 		// not a transaction local table - read the file list from the metadata store
 		auto &metadata_manager = transaction.GetMetadataManager();
-		result = metadata_manager.GetExtendedFilesForTable(read_info.table, read_info.snapshot, filter_info.get());
+		result = metadata_manager.GetExtendedFilesForTable(read_info.table, read_info.snapshot, filter_info.get(),
+		                                                   include_partition_values, stats_columns);
 	}
 	ApplyLocalFileChanges(transaction, read_info.table_id, result);
 	idx_t transaction_row_start = DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START;
@@ -629,6 +631,31 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 			file_entry.delete_file_begin_snapshot = file.delete_files.back().begin_snapshot;
 		}
 		file_entry.row_id_start = transaction_row_start;
+		file_entry.mapping_id = file.mapping_id;
+		file_entry.max_partial_file_snapshot = file.max_partial_file_snapshot;
+		file_entry.partition_id = file.partition_id;
+		for (auto &field_index : stats_columns) {
+			auto entry = file.column_stats.find(FieldIndex(field_index));
+			if (entry == file.column_stats.end()) {
+				continue;
+			}
+			auto &source = entry->second;
+			DuckLakeFileColumnStats stats;
+			stats.has_min = source.has_min;
+			stats.min = source.min;
+			stats.has_max = source.has_max;
+			stats.max = source.max;
+			if (source.has_null_count) {
+				stats.null_count = source.null_count;
+			}
+			file_entry.column_min_max.emplace(field_index, std::move(stats));
+		}
+		for (auto &part_val : file.partition_values) {
+			DuckLakeFilePartitionInfo partition_value;
+			partition_value.partition_column_idx = part_val.partition_column_idx;
+			partition_value.partition_value = part_val.partition_value;
+			file_entry.partition_values.push_back(std::move(partition_value));
+		}
 		transaction_row_start += file.row_count;
 		result.push_back(std::move(file_entry));
 	}
