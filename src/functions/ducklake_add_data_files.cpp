@@ -1055,6 +1055,12 @@ static bool IsDuckLakeInternalColumn(const string &name) {
 	return name == "duckdb_schema" || StringUtil::StartsWith(name, "_ducklake_internal_");
 }
 
+// Iceberg reserves field IDs above Integer.MAX_VALUE - 200 for metadata columns.
+static bool IsIcebergReservedFieldId(idx_t field_id) {
+	static constexpr idx_t ICEBERG_UNRESERVED_FIELD_ID_MAX = NumericLimits<int32_t>::Maximum() - 200;
+	return field_id > ICEBERG_UNRESERVED_FIELD_ID_MAX;
+}
+
 void DuckLakeFileProcessor::CollectLiveFieldIds(const vector<unique_ptr<DuckLakeFieldId>> &field_ids,
                                                 unordered_set<idx_t> &result) {
 	for (auto &field_id : field_ids) {
@@ -1070,7 +1076,9 @@ void DuckLakeFileProcessor::ValidateParquetFieldIds(const ParquetFileMetadata &f
 		const auto full_name = prefix.empty() ? column->name : StringUtil::Format("%s.%s", prefix, column->name);
 		if (!IsDuckLakeInternalColumn(column->name) && column->field_id.IsValid()) {
 			const auto source_field_id = column->field_id.GetIndex();
-			if (live_field_ids.find(source_field_id) == live_field_ids.end()) {
+			const auto is_iceberg_reserved = IsIcebergReservedFieldId(source_field_id);
+			const auto is_live = live_field_ids.find(source_field_id) != live_field_ids.end();
+			if (!is_iceberg_reserved && !is_live) {
 				throw InvalidInputException(
 				    "Parquet field ID mismatch for column \"%s\" in file \"%s\": field ID %d is not a live field in "
 				    "table \"%s\"",
