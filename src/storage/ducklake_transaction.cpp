@@ -888,12 +888,6 @@ Connection &DuckLakeTransaction::GetConnection() {
 		Settings::Set<DefaultOrderSetting>(*connection->context, SetScope::SESSION, Value("ASC"));
 		// commit retries read the errors of metadata queries, which a global SET errors_as_json would turn into JSON
 		Settings::Set<ErrorsAsJSONSetting>(*connection->context, SetScope::SESSION, Value::BOOLEAN(false));
-		auto &metadata_type = ducklake_catalog.MetadataType();
-		if (metadata_type == "sqlite" || metadata_type == "sqlite_scanner") {
-			// FIXME: sqlite_scanner's per-scan read connections deadlock against concurrent writers
-			DuckLakeUtil::SetExtensionSetting(*connection->context, "sqlite_disable_multithreaded_scans",
-			                                  Value::BOOLEAN(true));
-		}
 		BeginMetadataTransaction();
 	} else if (metadata_transaction_released) {
 		BeginMetadataTransaction();
