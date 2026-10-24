@@ -21,6 +21,7 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
+#include "duckdb/function/function_binder.hpp"
 #include "duckdb/function/scalar/struct_utils.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/common/type_visitor.hpp"
@@ -274,6 +275,12 @@ unique_ptr<Expression> DuckLakeUtil::MergeFilterExpressions(unique_ptr<Expressio
 		}
 	}
 	return BoundConjunctionExpression::Create(ExpressionType::CONJUNCTION_AND, std::move(merged));
+}
+
+unique_ptr<Expression> DuckLakeUtil::BindScalarFunction(ClientContext &context, const string &function_name,
+                                                        vector<unique_ptr<Expression>> children) {
+	FunctionBinder binder(context);
+	return binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(function_name), std::move(children));
 }
 
 bool DuckLakeUtil::IsStructExtract(const Expression &expr) {
