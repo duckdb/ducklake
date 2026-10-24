@@ -1,0 +1,240 @@
+# name: test/sql/issues/issue_1818_timezone_transform_pruning.test
+# description: File pruning supports comparisons on a TIMESTAMPTZ transformed to a local TIMESTAMP
+# group: [issues]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET TimeZone = 'UTC'
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_1818', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (utcbegin TIMESTAMPTZ, value INTEGER)
+
+# One row per file so each value bounds its file.
+statement ok
+INSERT INTO dl.t VALUES (TIMESTAMPTZ '2026-01-01 08:00:00+00', 1)
+
+statement ok
+INSERT INTO dl.t VALUES (TIMESTAMPTZ '2026-01-02 08:00:00+00', 2)
+
+statement ok
+INSERT INTO dl.t VALUES (TIMESTAMPTZ '2026-02-01 08:00:00+00', 3)
+
+statement ok
+INSERT INTO dl.t VALUES (NULL, 0)
+
+query II
+EXPLAIN ANALYZE SELECT * FROM dl.t WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' = TIMESTAMP '2026-01-02'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+SELECT value FROM dl.t WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' = TIMESTAMP '2026-01-02'
+----
+2
+
+# The explicit zone does not depend on the session zone.
+statement ok
+SET TimeZone = 'Asia/Tokyo'
+
+query II
+EXPLAIN ANALYZE SELECT * FROM dl.t WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' = TIMESTAMP '2026-01-02'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+SELECT value FROM dl.t WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' = TIMESTAMP '2026-01-02'
+----
+2
+
+statement ok
+SET TimeZone = 'UTC'
+
+query II
+EXPLAIN ANALYZE SELECT * FROM dl.t
+WHERE TIMESTAMP '2026-01-02' = (utcbegin AT TIME ZONE 'America/Los_Angeles')
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+SELECT value FROM dl.t WHERE TIMESTAMP '2026-01-02' = (utcbegin AT TIME ZONE 'America/Los_Angeles')
+----
+2
+
+query II
+EXPLAIN ANALYZE SELECT * FROM dl.t
+WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' >= TIMESTAMP '2026-01-01'
+  AND utcbegin AT TIME ZONE 'America/Los_Angeles' < TIMESTAMP '2026-02-01'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+query I
+SELECT value FROM dl.t
+WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' >= TIMESTAMP '2026-01-01'
+  AND utcbegin AT TIME ZONE 'America/Los_Angeles' < TIMESTAMP '2026-02-01'
+ORDER BY value
+----
+1
+2
+
+# One-sided bounds keep their strictness.
+query II
+EXPLAIN ANALYZE SELECT * FROM dl.t
+WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' >= TIMESTAMP '2026-01-02'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+query I
+SELECT value FROM dl.t WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' >= TIMESTAMP '2026-01-02' ORDER BY value
+----
+2
+3
+
+query II
+EXPLAIN ANALYZE SELECT * FROM dl.t
+WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' < TIMESTAMP '2026-01-02'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+SELECT value FROM dl.t WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' < TIMESTAMP '2026-01-02'
+----
+1
+
+# An infinite end leaves that side of the range open.
+query II
+EXPLAIN ANALYZE SELECT * FROM dl.t
+WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' BETWEEN TIMESTAMP '2026-01-02' AND TIMESTAMP 'infinity'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+query I
+SELECT value FROM dl.t
+WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' BETWEEN TIMESTAMP '2026-01-02' AND TIMESTAMP 'infinity'
+ORDER BY value
+----
+2
+3
+
+query II
+EXPLAIN ANALYZE SELECT * FROM dl.t
+WHERE utcbegin AT TIME ZONE 'Asia/Kathmandu' = TIMESTAMP '2026-01-02 13:45:00'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+SELECT value FROM dl.t WHERE utcbegin AT TIME ZONE 'Asia/Kathmandu' = TIMESTAMP '2026-01-02 13:45:00'
+----
+2
+
+query II
+EXPLAIN ANALYZE SELECT * FROM dl.t
+WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' = TIMESTAMP '2026-01-02' OR value = 3
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+query I
+SELECT value FROM dl.t
+WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' = TIMESTAMP '2026-01-02' OR value = 3
+ORDER BY value
+----
+2
+3
+
+# Nanosecond timestamps use the matching timezone overload.
+statement ok
+CREATE TABLE dl.t_ns (utcbegin TIMESTAMPTZ_NS, value INTEGER)
+
+statement ok
+INSERT INTO dl.t_ns VALUES (TIMESTAMPTZ_NS '2026-01-01 08:00:00+00', 1)
+
+statement ok
+INSERT INTO dl.t_ns VALUES (TIMESTAMPTZ_NS '2026-01-02 08:00:00+00', 2)
+
+query II
+EXPLAIN ANALYZE SELECT * FROM dl.t_ns
+WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' = TIMESTAMP_NS '2026-01-02 00:00:00'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+SELECT value FROM dl.t_ns WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' = TIMESTAMP_NS '2026-01-02 00:00:00'
+----
+2
+
+# Both instants map to 01:30 during the repeated local hour at the end of DST.
+statement ok
+INSERT INTO dl.t VALUES (TIMESTAMPTZ '2026-11-01 08:30:00+00', 4)
+
+statement ok
+INSERT INTO dl.t VALUES (TIMESTAMPTZ '2026-11-01 09:30:00+00', 5)
+
+query II
+EXPLAIN ANALYZE SELECT * FROM dl.t
+WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' = TIMESTAMP '2026-11-01 01:30:00'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+query II
+SELECT value, count(*) FROM dl.t
+WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' = TIMESTAMP '2026-11-01 01:30:00'
+GROUP BY value ORDER BY value
+----
+4	1
+5	1
+
+# 02:30 does not exist on the day clocks move forward.
+statement ok
+INSERT INTO dl.t VALUES (TIMESTAMPTZ '2026-03-08 09:30:00+00', 6)
+
+statement ok
+INSERT INTO dl.t VALUES (TIMESTAMPTZ '2026-03-08 10:30:00+00', 7)
+
+query I
+SELECT count(*) FROM dl.t
+WHERE utcbegin AT TIME ZONE 'America/Los_Angeles' = TIMESTAMP '2026-03-08 02:30:00'
+----
+0
+
+# Apia skipped 2011-12-30, moving from UTC-10 to UTC+14.
+statement ok
+CREATE TABLE dl.t_apia (utcbegin TIMESTAMPTZ, value INTEGER)
+
+statement ok
+INSERT INTO dl.t_apia VALUES (TIMESTAMPTZ '2011-12-30 09:00:00+00', 1)
+
+statement ok
+INSERT INTO dl.t_apia VALUES (TIMESTAMPTZ '2011-12-30 10:00:00+00', 2)
+
+query II
+EXPLAIN ANALYZE SELECT * FROM dl.t_apia
+WHERE utcbegin AT TIME ZONE 'Pacific/Apia' = TIMESTAMP '2011-12-31 00:00:00'
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+SELECT value FROM dl.t_apia WHERE utcbegin AT TIME ZONE 'Pacific/Apia' = TIMESTAMP '2011-12-31 00:00:00'
+----
+2
+
+# A bound on the skipped day keeps the rows on both sides of the jump.
+query I
+SELECT value FROM dl.t_apia WHERE utcbegin AT TIME ZONE 'Pacific/Apia' <= TIMESTAMP '2011-12-30 12:00:00'
+----
+1
+
+query I
+SELECT value FROM dl.t_apia WHERE utcbegin AT TIME ZONE 'Pacific/Apia' >= TIMESTAMP '2011-12-30 12:00:00'
+----
+2

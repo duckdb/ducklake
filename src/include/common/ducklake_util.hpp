@@ -63,6 +63,9 @@ public:
 
 	//! Combine two filter expressions - both must hold, so AND their conjuncts and drop duplicates
 	static unique_ptr<Expression> MergeFilterExpressions(unique_ptr<Expression> left, unique_ptr<Expression> right);
+	//! Bind a named scalar function to already-bound arguments
+	static unique_ptr<Expression> BindScalarFunction(ClientContext &context, const string &function_name,
+	                                                 vector<unique_ptr<Expression>> children);
 	//! Whether an expression reads a struct field by a constant name or position
 	static bool IsStructExtract(const Expression &expr);
 	//! A leaf filter is evaluated against a single column's stats, so it may only read one column. Returns
