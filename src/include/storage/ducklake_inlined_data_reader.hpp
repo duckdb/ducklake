@@ -53,6 +53,14 @@ private:
 	static void GetColumnToRead(const DuckLakeFunctionInfo &read_info, DuckLakeMetadataManager &metadata_manager,
 	                            const DuckLakeInlinedColNames &col_names, const MultiFileColumnDefinition &col,
 	                            string &column, LogicalType &type);
+	bool HasPushdownExtract() const;
+	//! Whether the field extracted into this column is computed after filtering, only for the rows that pass
+	bool IsDeferredExtract(idx_t column_idx) const;
+	//! The scanned column of a deferred extract that has not been computed yet, removing it from the list
+	optional_idx TakeDeferredExtract(idx_t column_idx);
+	//! Keep the selected rows of the output, and of the scanned rows the deferred extracts are computed from
+	void SliceRows(DataChunk &chunk, const SelectionVector &sel, idx_t count);
+	void ComputeDeferredExtract(ClientContext &context, idx_t column_idx, idx_t scan_column, DataChunk &chunk);
 	bool TryEvaluateExpression(ClientContext &context, idx_t virtual_col_idx, Vector &input_vector,
 	                           const LogicalType &input_type, Vector &output_vector);
 
@@ -67,8 +75,10 @@ private:
 	vector<column_t> scan_column_ids;
 	ColumnDataScanState state;
 	DataChunk scan_chunk;
-	//! Expression executors for expression_map entries, keyed by column_t (from column_ids)
-	unordered_map<column_t, unique_ptr<ExpressionExecutor>> expression_executors;
+	//! Expression executors for expression_map entries, keyed by the position of the column in the scan
+	unordered_map<idx_t, unique_ptr<ExpressionExecutor>> expression_executors;
+	//! (output column, scanned column) of the extracts that wait for the filters of the current chunk
+	vector<pair<idx_t, idx_t>> deferred_extracts;
 };
 
 } // namespace duckdb

@@ -1,0 +1,20 @@
+# name: benchmark/micro/read/variant_field_reads.benchmark
+# description: Filter on and project one field of a wide shredded VARIANT column, which reads only that field
+# group: [read]
+
+name Variant Field Reads
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/nested_fields.benchmark.in
+
+run
+SELECT (SELECT count(*) FROM lake.t WHERE v.k::VARCHAR = 'key-42') AS matches,
+(SELECT sum(v.n::BIGINT) FROM lake.t) AS total;
+
+result II
+1000	499999500000
