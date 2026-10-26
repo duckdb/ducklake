@@ -25,6 +25,16 @@ COPY (SELECT TIMESTAMP '2020-01-01 00:00:00.123456' AS t) TO '{DATA_PATH}/finer_
 statement ok
 COPY (SELECT {'t': TIMESTAMP_NS '2020-01-01 00:00:00.000000001'} AS s) TO '{DATA_PATH}/finer_struct.parquet'
 
+# a path is registered once per table, so the second file of a table is a copy
+statement ok
+COPY (SELECT * FROM '{DATA_PATH}/finer_ns.parquet') TO '{DATA_PATH}/finer_ns_copy.parquet'
+
+statement ok
+COPY (SELECT * FROM '{DATA_PATH}/finer_us.parquet') TO '{DATA_PATH}/finer_us_copy.parquet'
+
+statement ok
+COPY (SELECT * FROM '{DATA_PATH}/finer_struct.parquet') TO '{DATA_PATH}/finer_struct_copy.parquet'
+
 # nanoseconds in a TIMESTAMP column, shown after the type change
 statement ok
 CREATE TABLE ducklake.t (t TIMESTAMP)
@@ -33,7 +43,7 @@ statement ok
 CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/finer_ns.parquet')
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/finer_ns.parquet')
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/finer_ns_copy.parquet')
 
 statement ok
 ALTER TABLE ducklake.t ALTER COLUMN t TYPE TIMESTAMP_NS
@@ -76,7 +86,7 @@ statement ok
 CALL ducklake_add_data_files('ducklake', 's', '{DATA_PATH}/finer_us.parquet')
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 's', '{DATA_PATH}/finer_us.parquet')
+CALL ducklake_add_data_files('ducklake', 's', '{DATA_PATH}/finer_us_copy.parquet')
 
 statement ok
 ALTER TABLE ducklake.s ALTER COLUMN t TYPE TIMESTAMP
@@ -98,7 +108,7 @@ statement ok
 CALL ducklake_add_data_files('ducklake', 'n', '{DATA_PATH}/finer_struct.parquet')
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'n', '{DATA_PATH}/finer_struct.parquet')
+CALL ducklake_add_data_files('ducklake', 'n', '{DATA_PATH}/finer_struct_copy.parquet')
 
 statement ok
 ALTER TABLE ducklake.n ALTER COLUMN s TYPE STRUCT(t TIMESTAMP_NS)
