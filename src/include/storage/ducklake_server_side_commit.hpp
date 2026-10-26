@@ -58,8 +58,8 @@ private:
 	void ReadStagedCompactions();
 	//! Read staged name maps and rebuild entry trees.
 	void ReadStagedNameMaps();
-	//! Load current global table stats from the metadata catalog.
-	void ReadExistingTableStats();
+	//! The current global stats of a table, read from the metadata catalog when first asked for
+	shared_ptr<DuckLakeTableStats> GetExistingTableStats(TableIndex table_id);
 
 	//! Query the metadata catalog for the latest snapshot.
 	DuckLakeSnapshot ReadLatestSnapshot();
@@ -99,6 +99,8 @@ private:
 	TransactionChangeInformation transaction_changes;
 	map<pair<TableIndex, FieldIndex>, LogicalType> column_types;
 	map<TableIndex, shared_ptr<DuckLakeTableStats>> existing_table_stats;
+	//! The tables the commit writes, whose stats are read together
+	vector<TableIndex> commit_tables;
 	bool supports_v1_1_metadata = false;
 	bool staged_dropped_files_read = false;
 	vector<pair<string, idx_t>> staged_dropped_files;

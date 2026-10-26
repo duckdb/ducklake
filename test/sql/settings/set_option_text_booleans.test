@@ -1,0 +1,47 @@
+# name: test/sql/settings/set_option_text_booleans.test
+# description: set_option accepts the text values 'true' and 'false' for every boolean option
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/set_option_text_booleans')
+
+foreach option require_commit_message hive_file_pattern auto_compact per_thread_output write_deletion_vectors sort_on_insert
+
+statement ok
+CALL lake.set_option('{option}', 'true')
+
+query I
+SELECT value FROM lake.options() WHERE option_name = '{option}'
+----
+true
+
+statement ok
+CALL lake.set_option('{option}', 'false')
+
+query I
+SELECT value FROM lake.options() WHERE option_name = '{option}'
+----
+false
+
+statement error
+CALL lake.set_option('{option}', 'maybe')
+----
+Could not convert string 'maybe' to BOOL
+
+endloop
+
+statement ok
+CALL lake.set_option('require_commit_message', 'true')
+
+statement error
+CREATE TABLE lake.t (i INTEGER)
+----
+Commit Information for the snapshot is required

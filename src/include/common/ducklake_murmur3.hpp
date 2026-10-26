@@ -23,10 +23,8 @@ struct DuckLakeMurmur3 {
 		const uint32_t c2 = 0x1b873593;
 
 		// body
-		auto blocks = reinterpret_cast<const uint32_t *>(data);
 		for (idx_t i = 0; i < nblocks; i++) {
-			uint32_t k1;
-			memcpy(&k1, &blocks[i], sizeof(uint32_t));
+			auto k1 = Load<uint32_t>(data + i * sizeof(uint32_t));
 
 			k1 *= c1;
 			k1 = (k1 << 15) | (k1 >> 17);

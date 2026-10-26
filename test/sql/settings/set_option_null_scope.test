@@ -1,0 +1,50 @@
+# name: test/sql/settings/set_option_null_scope.test
+# description: set_option refuses a NULL schema or table_name instead of setting the option globally
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/set_option_null_scope')
+
+statement ok
+CREATE TABLE lake.t (i INTEGER)
+
+statement error
+CALL lake.set_option('parquet_compression', 'gzip', table_name => NULL)
+----
+The table_name option must be a non-null string.
+
+statement error
+CALL lake.set_option('target_file_size', '1MB', schema => NULL)
+----
+The schema option must be a non-null string.
+
+statement error
+CALL lake.set_option('data_inlining_row_limit', 7, table_name => getvariable('unset_table'))
+----
+The table_name option must be a non-null string.
+
+statement error
+CALL ducklake_set_option('lake', 'parquet_compression', 'gzip', table_name => NULL)
+----
+The table_name option must be a non-null string.
+
+query I
+SELECT count(*) FROM lake.options() WHERE option_name IN ('parquet_compression', 'target_file_size')
+----
+0
+
+statement ok
+CALL lake.set_option('parquet_compression', 'zstd', table_name => 't')
+
+query III
+SELECT value, scope, scope_entry FROM lake.options() WHERE option_name = 'parquet_compression'
+----
+zstd	TABLE	main.t

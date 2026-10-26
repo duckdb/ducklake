@@ -471,6 +471,13 @@ unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapsh
 	return std::move(result);
 }
 
+unique_ptr<QueryResult> PostgresMetadataManager::ExecuteDropInTransaction(string &query) {
+	// DROP TABLE waits for every open transaction that read the table and the readers queued behind it fail, so it
+	// gives up instead and leaves the table to a later cleanup
+	auto batch = "CALL postgres_execute({METADATA_CATALOG_NAME_LITERAL}, 'SET LOCAL lock_timeout = 1');\n" + query;
+	return ExecuteInTransaction(batch);
+}
+
 void PostgresMetadataManager::ClearCache() {
 	auto result = transaction.ExecuteRaw("CALL postgres_clear_cache();");
 	result->ThrowIfError("Failed to clear the PostgreSQL metadata cache: ");

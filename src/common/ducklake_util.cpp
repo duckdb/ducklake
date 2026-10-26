@@ -708,13 +708,9 @@ static string ParseMemorySize(ClientContext &, const string &, const Value &val)
 	return to_string(DBConfig::ParseMemoryLimitOrMaximum(val.ToString()));
 }
 
-static string ParseBooleanLiteral(ClientContext &, const string &, const Value &val) {
-	return DuckLakeUtil::BoolLiteral(val.GetValue<bool>());
-}
-
 static string ParseDeleteThreshold(ClientContext &, const string &, const Value &val) {
 	double threshold = val.GetValue<double>();
-	if (threshold < 0 || threshold > 1) {
+	if (!(threshold >= 0 && threshold <= 1)) {
 		throw BinderException("The rewrite_delete_threshold must be between 0 and 1");
 	}
 	return to_string(threshold);
@@ -751,8 +747,8 @@ static const unordered_map<string, config_option_parser_t> &ConfigOptionParsers(
 	    {"parquet_row_group_size", ParseRowGroupSize},
 	    {"parquet_row_group_size_bytes", ParseRowGroupSizeBytes},
 	    {"target_file_size", ParseMemorySize},
-	    {"require_commit_message", ParseBooleanLiteral},
-	    {"hive_file_pattern", ParseBooleanLiteral},
+	    {"require_commit_message", ParseBoolean},
+	    {"hive_file_pattern", ParseBoolean},
 	    {"rewrite_delete_threshold", ParseDeleteThreshold},
 	    {"delete_older_than", ParseInterval},
 	    {"expire_older_than", ParseInterval},

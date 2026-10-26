@@ -11,6 +11,7 @@
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/hive_partitioning.hpp"
+#include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/types/vector.hpp"
@@ -189,7 +190,8 @@ private:
 	                                                    const string &prefix = string(), bool repeated = false);
 	void CollectLiveFieldIds(const vector<unique_ptr<DuckLakeFieldId>> &field_ids, unordered_set<idx_t> &result);
 	void ValidateParquetFieldIds(const ParquetFileMetadata &file, const vector<unique_ptr<ParquetColumn>> &columns,
-	                             const unordered_set<idx_t> &live_field_ids, const string &prefix = string());
+	                             const unordered_set<idx_t> &live_field_ids, bool foreign_field_ids,
+	                             const string &prefix = string());
 	void MapColumnStats(ParquetFileMetadata &file_metadata, DuckLakeDataFile &result);
 	DuckLakeColumnStats ConstantColumnStats(const ParquetFileMetadata &file_metadata, FieldIndex field_index,
 	                                        const LogicalType &field_type, const Value &value) const;
@@ -1085,21 +1087,56 @@ void DuckLakeFileProcessor::CollectLiveFieldIds(const vector<unique_ptr<DuckLake
 	}
 }
 
+//! The reader takes these field ids for the row id and snapshot id columns that DuckLake writes
+static bool IsRowLineageFieldId(idx_t field_id) {
+	return field_id == idx_t(MultiFileReader::ROW_ID_FIELD_ID) ||
+	       field_id == idx_t(MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID);
+}
+
+static bool HasFieldIdNotGivenOut(const vector<unique_ptr<ParquetColumn>> &columns, idx_t next_column_id) {
+	for (auto &column : columns) {
+		if (!IsDuckLakeInternalColumn(column->name) && column->field_id.IsValid()) {
+			auto field_id = column->field_id.GetIndex();
+			if (field_id >= next_column_id && !IsRowLineageFieldId(field_id)) {
+				return true;
+			}
+		}
+		if (HasFieldIdNotGivenOut(column->child_columns, next_column_id)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+//! Whether another writer such as Iceberg wrote the file: it has a field id the table never gave out, and none of the
+//! internal columns that DuckLake writes
+static bool HasForeignFieldIds(const vector<unique_ptr<ParquetColumn>> &columns, idx_t next_column_id) {
+	for (auto &column : columns) {
+		if (StringUtil::StartsWith(column->name, "_ducklake_internal_")) {
+			return false;
+		}
+	}
+	return HasFieldIdNotGivenOut(columns, next_column_id);
+}
+
 void DuckLakeFileProcessor::ValidateParquetFieldIds(const ParquetFileMetadata &file,
                                                     const vector<unique_ptr<ParquetColumn>> &columns,
-                                                    const unordered_set<idx_t> &live_field_ids, const string &prefix) {
+                                                    const unordered_set<idx_t> &live_field_ids, bool foreign_field_ids,
+                                                    const string &prefix) {
 	for (auto &column : columns) {
 		const auto full_name = prefix.empty() ? column->name : StringUtil::Format("%s.%s", prefix, column->name);
 		if (!IsDuckLakeInternalColumn(column->name) && column->field_id.IsValid()) {
 			const auto source_field_id = column->field_id.GetIndex();
-			if (live_field_ids.find(source_field_id) == live_field_ids.end()) {
+			// columns map by name, the ids of another writer's file are not DuckLake's
+			if (live_field_ids.find(source_field_id) == live_field_ids.end() &&
+			    (!foreign_field_ids || IsRowLineageFieldId(source_field_id))) {
 				throw InvalidInputException(
 				    "Parquet field ID mismatch for column \"%s\" in file \"%s\": field ID %d is not a live field in "
 				    "table \"%s\"",
 				    full_name, file.filepath, source_field_id, table.name.GetIdentifierName());
 			}
 		}
-		ValidateParquetFieldIds(file, column->child_columns, live_field_ids, full_name);
+		ValidateParquetFieldIds(file, column->child_columns, live_field_ids, foreign_field_ids, full_name);
 	}
 }
 
@@ -1146,7 +1183,9 @@ void DuckLakeFileProcessor::DetermineMapping(ParquetFileMetadata &file) {
 	// Before we map parquet columns to DuckLake columns, we need to validate that the parquet field ids are live.
 	unordered_set<idx_t> live_field_ids;
 	CollectLiveFieldIds(table.GetFieldData().GetFieldIds(), live_field_ids);
-	ValidateParquetFieldIds(file, file.columns, live_field_ids);
+	// a file this table wrote only has ids it gave out, so one with an id of a dropped column cannot be added
+	auto foreign_field_ids = HasForeignFieldIds(file.columns, table.GetNextColumnId(transaction));
+	ValidateParquetFieldIds(file, file.columns, live_field_ids, foreign_field_ids);
 
 	file.map_entries = MapColumns(file, file.columns, table.GetFieldData().GetFieldIds());
 }

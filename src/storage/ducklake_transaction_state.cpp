@@ -1717,6 +1717,7 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 		switch (local_change.type) {
 		case LocalChangeType::SET_PARTITION_KEY: {
 			auto partition_key = DuckLakeTransaction::GetNewPartitionKey(commit_state, table);
+			partition_key.replaces_equal_spec = table.StartsPartitionSpec();
 			result.new_partition_keys.push_back(std::move(partition_key));
 
 			transaction_changes.altered_tables.insert(table_id);
@@ -2739,6 +2740,10 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				commit_snapshot.schema_version++;
 			}
 			can_retry = true;
+			if (i > 0) {
+				// the rollback of the failed attempt also undid what the transaction wrote before its commit
+				context.rewrite_before_retry();
+			}
 			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
 			DuckLakeCommitState commit_state(commit_snapshot);
 			// write the new snapshot

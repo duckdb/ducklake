@@ -1031,7 +1031,8 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 }
 
 shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransaction &transaction,
-                                                              DuckLakeSnapshot snapshot, TableIndex table_id) {
+                                                              DuckLakeSnapshot snapshot, TableIndex table_id,
+                                                              optional_ptr<const vector<TableIndex>> load_tables) {
 	auto &cache = GetObjectCacheInstance();
 	auto key = StatsCacheKey(snapshot.next_file_id, table_id);
 	auto cached = cache.Get<DuckLakeTableStatsCacheEntry>(key);
@@ -1050,15 +1051,30 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 		// a table that is not part of the snapshot, e.g. one created in this transaction, has no stats in it
 		return nullptr;
 	}
-	// one query for the whole snapshot, caching the tables without stats as well
-	auto global_stats = transaction.GetMetadataManager().GetGlobalTableStats(snapshot);
+	// one query for the whole snapshot or for the given tables, caching the tables without stats as well
+	vector<TableIndex> cache_tables;
+	if (!load_tables) {
+		for (auto &table_entry : table_map) {
+			cache_tables.push_back(table_entry.first);
+		}
+	} else {
+		unordered_set<idx_t> seen;
+		cache_tables.push_back(table_id);
+		seen.insert(table_id.index);
+		for (auto &load_table : *load_tables) {
+			if (table_map.find(load_table) != table_map.end() && seen.insert(load_table.index).second) {
+				cache_tables.push_back(load_table);
+			}
+		}
+	}
+	auto global_stats = transaction.GetMetadataManager().GetGlobalTableStats(
+	    snapshot, load_tables ? cache_tables : vector<TableIndex>());
 	auto lake_stats = ConstructStatsMap(global_stats, schema_entry->catalog_set);
 
 	shared_ptr<DuckLakeTableStatsCacheEntry> requested_entry;
 	vector<pair<TableIndex, shared_ptr<ObjectCacheEntry>>> cache_entries_to_put;
-	cache_entries_to_put.reserve(table_map.size());
-	for (auto &table_entry : table_map) {
-		auto current_id = table_entry.first;
+	cache_entries_to_put.reserve(cache_tables.size());
+	for (auto &current_id : cache_tables) {
 		shared_ptr<DuckLakeTableStatsCacheEntry> entry;
 		auto stats_entry = lake_stats->table_stats.find(current_id);
 		if (stats_entry == lake_stats->table_stats.end()) {

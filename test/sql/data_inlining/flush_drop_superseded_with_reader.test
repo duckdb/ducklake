@@ -1,0 +1,68 @@
+# name: test/sql/data_inlining/flush_drop_superseded_with_reader.test
+# description: A flush does not wait for a transaction that reads the inlined table it would drop
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/flush_drop_superseded_with_reader', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE lake.t (id INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1), (2)
+
+statement ok
+ALTER TABLE lake.t ADD COLUMN c INTEGER
+
+statement ok
+INSERT INTO lake.t VALUES (3, 3)
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT sum(id) FROM lake.t
+----
+6
+
+statement ok con2
+CALL ducklake_flush_inlined_data('lake')
+
+# the reader keeps reading the table
+query I con1
+SELECT sum(id) FROM lake.t
+----
+6
+
+statement ok con1
+COMMIT
+
+query I con2
+SELECT sum(id) FROM lake.t
+----
+6
+
+# once no transaction reads it, the next flush drops the superseded inlined table
+statement ok con2
+INSERT INTO lake.t VALUES (4, 4)
+
+statement ok con2
+CALL ducklake_flush_inlined_data('lake')
+
+query I con2
+SELECT count(*) FROM __ducklake_metadata_lake.ducklake_inlined_data_tables WHERE table_id = (SELECT table_id FROM __ducklake_metadata_lake.ducklake_table WHERE table_name = 't' AND end_snapshot IS NULL)
+----
+1
+
+query II con2
+SELECT sum(id), sum(c) FROM lake.t
+----
+10	7
