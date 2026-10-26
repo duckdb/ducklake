@@ -33,7 +33,7 @@ CALL ducklake_flush_inlined_data('ducklake')
 
 query III
 SELECT name, type, field_id FROM parquet_schema('{DATA_PATH}/ducklake_field_ids_files/main/t1/*.parquet')
-WHERE name NOT IN ('duckdb_schema', '_ducklake_internal_row_id', '_ducklake_internal_snapshot_id')
+WHERE name NOT IN ('duckdb_schema', '_ducklake_internal_row_id', '_ducklake_internal_snapshot_id', '_ducklake_internal_origin_snapshot')
 ORDER BY name
 ----
 t1_c1	INT32	1
@@ -43,7 +43,7 @@ t1_c3	INT64	3
 
 query III
 SELECT name, type, field_id FROM parquet_schema('{DATA_PATH}/ducklake_field_ids_files/main/t2/*.parquet')
-WHERE name NOT IN ('duckdb_schema', '_ducklake_internal_row_id', '_ducklake_internal_snapshot_id')
+WHERE name NOT IN ('duckdb_schema', '_ducklake_internal_row_id', '_ducklake_internal_snapshot_id', '_ducklake_internal_origin_snapshot')
 ORDER BY name
 ----
 t2_c1	INT32	1
@@ -62,7 +62,7 @@ CALL ducklake_flush_inlined_data('ducklake')
 
 query II
 SELECT name, field_id FROM parquet_schema('{DATA_PATH}/ducklake_field_ids_files/main/t3/*.parquet')
-WHERE name NOT IN ('duckdb_schema', '_ducklake_internal_row_id', '_ducklake_internal_snapshot_id')
+WHERE name NOT IN ('duckdb_schema', '_ducklake_internal_row_id', '_ducklake_internal_snapshot_id', '_ducklake_internal_origin_snapshot')
 ORDER BY name
 ----
 c1	2
