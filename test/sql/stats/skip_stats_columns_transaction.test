@@ -62,8 +62,7 @@ WHERE column_id=2 AND data_file_id=(SELECT max(data_file_id) FROM ducklake_meta.
 ----
 NULL	NULL
 
-# a rollback must not take away a value another transaction set in the meantime. Updating an
-# existing row conflicts in the metadata catalog, so the two only meet when there is no row yet
+# a rollback must not take away a value another transaction set in the meantime
 statement ok con1
 CREATE TABLE ducklake.cc(id INTEGER, s VARCHAR)
 
