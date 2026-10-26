@@ -595,7 +595,7 @@ template <class ENTRY>
 static void ApplyLocalFileChanges(DuckLakeTransaction &transaction, TableIndex table_id, vector<ENTRY> &entries) {
 	if (transaction.HasDroppedFiles()) {
 		entries.erase(std::remove_if(entries.begin(), entries.end(),
-		                             [&](const ENTRY &entry) { return transaction.FileIsDropped(entry.file.path); }),
+		                             [&](const ENTRY &entry) { return transaction.FileIsDropped(entry.file_id); }),
 		              entries.end());
 	}
 	// if the transaction has any local deletes - apply them to the file list

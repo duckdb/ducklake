@@ -322,7 +322,8 @@ public:
 	set<TableIndex> renamed_tables;
 	set<TableIndex> renamed_views;
 	set<TableIndex> dropped_views;
-	unordered_map<string, DataFileIndex> dropped_files;
+	//! The committed data files the transaction drops, with their paths, by data file id
+	map<DataFileIndex, string> dropped_files;
 	map<TableIndex, DroppedDataFileStats> dropped_file_stats;
 	set<TableIndex> tables_deleted_from;
 	set<TableIndex> tables_delete_attempted;

@@ -2354,7 +2354,7 @@ void DuckLakeTransaction::DropTableMacro(DuckLakeTableMacroEntry &macro) {
 void DuckLakeTransaction::DropFile(TableIndex table_id, DataFileIndex data_file_id, string path, idx_t row_count,
                                    idx_t file_size_bytes) {
 	state->tables_deleted_from.insert(table_id);
-	auto inserted = state->dropped_files.emplace(std::move(path), data_file_id);
+	auto inserted = state->dropped_files.emplace(data_file_id, std::move(path));
 	if (!inserted.second) {
 		// LCOV_EXCL_START
 		return;
@@ -2374,7 +2374,7 @@ bool DuckLakeTransaction::HasDroppedFiles() const {
 	return !state->dropped_files.empty();
 }
 
-const unordered_map<string, DataFileIndex> &DuckLakeTransaction::GetDroppedFiles() const {
+const map<DataFileIndex, string> &DuckLakeTransaction::GetDroppedFiles() const {
 	return state->dropped_files;
 }
 
@@ -2394,8 +2394,8 @@ const map<TableIndex, idx_t> &DuckLakeTransaction::GetFlushedInlinedFileDeletion
 	return state->flushed_inlined_file_deletions;
 }
 
-bool DuckLakeTransaction::FileIsDropped(const string &path) const {
-	return state->dropped_files.find(path) != state->dropped_files.end();
+bool DuckLakeTransaction::FileIsDropped(DataFileIndex data_file_id) const {
+	return state->dropped_files.find(data_file_id) != state->dropped_files.end();
 }
 
 void DuckLakeTransaction::DropEntry(CatalogEntry &entry) {

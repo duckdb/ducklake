@@ -471,7 +471,7 @@ string DuckLakeStagedCommit::EmitDroppedFiles(DuckLakeTransaction &transaction) 
 	for (auto &entry : transaction.GetDroppedFiles()) {
 		sql += StringUtil::Format("INSERT INTO %s VALUES (%s, %llu);",
 		                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::DROPPED_FILE),
-		                          SQLString(entry.first), entry.second.index);
+		                          SQLString(entry.second), entry.first.index);
 	}
 	for (auto &table_id : transaction.GetTablesDeletedFrom()) {
 		sql += StringUtil::Format("INSERT INTO %s VALUES (%llu);",

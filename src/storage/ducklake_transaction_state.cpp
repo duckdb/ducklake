@@ -2459,7 +2459,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	if (!dropped_files.empty()) {
 		set<DataFileIndex> dropped_indexes;
 		for (auto &entry : dropped_files) {
-			dropped_indexes.insert(entry.second);
+			dropped_indexes.insert(entry.first);
 		}
 		batch_queries += DuckLakeMetadataManager::DropDataFiles(dropped_indexes);
 		batch_queries += UpdateStatsForDroppedFiles(stats, context, attempt_dropped_file_stats);
@@ -2660,8 +2660,8 @@ void DuckLakeTransactionState::CheckFileConflicts(const TransactionChangeInforma
 		compacted_files.insert(table_changes.compacted_files.begin(), table_changes.compacted_files.end());
 	}
 	for (auto &file : dropped_files) {
-		deleted_from_files.insert(file.second);
-		files_against_inlined_deletes.insert(file.second);
+		deleted_from_files.insert(file.first);
+		files_against_inlined_deletes.insert(file.first);
 	}
 	if (deleted_from_files.empty() && compacted_files.empty()) {
 		return;

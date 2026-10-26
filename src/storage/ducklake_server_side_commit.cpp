@@ -434,7 +434,7 @@ void DuckLakeServerSideCommit::ReadStagedDroppedFiles() {
 	ReadStagedDroppedFileEntries();
 	for (auto &entry : staged_dropped_files) {
 		auto file_id = entry.second;
-		state->dropped_files.emplace(entry.first, DataFileIndex(file_id));
+		state->dropped_files.emplace(DataFileIndex(file_id), entry.first);
 	}
 	state->dropped_file_stats = staged_dropped_file_stats;
 	auto tables = ScanStagedTable(DuckLakeStagedTableType::TABLES_DELETED_FROM);
