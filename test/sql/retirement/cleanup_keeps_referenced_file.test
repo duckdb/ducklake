@@ -34,6 +34,12 @@ DROP TABLE dl.a
 statement ok
 CALL ducklake_expire_snapshots('dl', older_than => now())
 
+# the registration of the other table shares the physical identity of the file, so the expiry keeps it unscheduled
+query I
+SELECT count(*) FROM meta.ducklake_files_scheduled_for_deletion
+----
+0
+
 query I
 SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
 ----
@@ -53,3 +59,47 @@ query I
 SELECT * FROM dl.b
 ----
 1
+
+# a compaction of one table does not schedule a file that another table registered too
+statement ok
+COPY (SELECT 5 AS i) TO '{DATA_PATH}/cleanup_keeps_referenced_file_compacted.parquet'
+
+statement ok
+CREATE TABLE dl.c(i INTEGER)
+
+statement ok
+CALL ducklake_add_data_files('dl', 'c', '{DATA_PATH}/cleanup_keeps_referenced_file_compacted.parquet')
+
+statement ok
+CALL ducklake_add_data_files('dl', 'b', '{DATA_PATH}/cleanup_keeps_referenced_file_compacted.parquet')
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0)
+
+statement ok
+INSERT INTO dl.c VALUES (6)
+
+query I
+SELECT files_processed FROM ducklake_merge_adjacent_files('dl', 'c')
+----
+2
+
+query I
+SELECT count(*) FROM meta.ducklake_files_scheduled_for_deletion WHERE path LIKE '%cleanup_keeps_referenced_file_compacted.parquet'
+----
+0
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+query I
+SELECT * FROM dl.b ORDER BY ALL
+----
+1
+5
+
+query I
+SELECT * FROM dl.c ORDER BY ALL
+----
+5
+6

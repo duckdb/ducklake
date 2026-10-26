@@ -4724,9 +4724,32 @@ static string ScheduledDeletionTuple(idx_t file_id, const DuckLakePath &path) {
 	                          DuckLakeUtil::BoolLiteral(path.path_is_relative));
 }
 
+//! Schedules the files for deletion before their rows are removed, except files whose physical identity another
+//! row keeps
+static string ScheduleDeletionsSql(const vector<string> &scheduled_deletions, const string &file_table,
+                                   const string &file_id_column, const string &removed_ids,
+                                   bool supports_file_identity) {
+	if (!supports_file_identity) {
+		return DuckLakeMetadataManager::InsertValuesSql("ducklake_files_scheduled_for_deletion", scheduled_deletions);
+	}
+	return ChunkValuesStatements(scheduled_deletions, [&](const string &tuples) {
+		return StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion
+SELECT v.* FROM (VALUES %s) AS v(file_id, path, path_is_relative, schedule_start)
+WHERE NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.%s f JOIN {METADATA_CATALOG}.%s other
+    ON COALESCE(other.origin_file_id, other.%s) = COALESCE(f.origin_file_id, f.%s)
+    WHERE f.%s = v.file_id AND other.%s NOT IN (%s));
+)",
+		                          tuples, file_table, file_table, file_id_column, file_id_column, file_id_column,
+		                          file_id_column, removed_ids);
+	});
+}
+
 string
 DuckLakeMetadataManager::DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverwrittenDeleteFile> &overwritten_files,
-                                                      const vector<DuckLakePath> &resolved_paths) {
+                                                      const vector<DuckLakePath> &resolved_paths,
+                                                      bool supports_file_identity) {
 	if (overwritten_files.empty()) {
 		return {};
 	}
@@ -4740,12 +4763,14 @@ DuckLakeMetadataManager::DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverw
 		deleted_file_ids.push_back(file.delete_file_id);
 		scheduled_deletions.push_back(ScheduledDeletionTuple(file.delete_file_id.index, resolved_paths[i]));
 	}
-	auto batch_query = StringUtil::Format(R"(
+	auto deleted_id_list = GenerateIDList(deleted_file_ids);
+	auto batch_query = ScheduleDeletionsSql(scheduled_deletions, "ducklake_delete_file", "delete_file_id",
+	                                        deleted_id_list, supports_file_identity);
+	return batch_query + StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_delete_file
 WHERE delete_file_id IN (%s);
 )",
-	                                      GenerateIDList(deleted_file_ids));
-	return batch_query + InsertValuesSql("ducklake_files_scheduled_for_deletion", scheduled_deletions);
+	                                        deleted_id_list);
 }
 
 string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_files,
@@ -5636,7 +5661,8 @@ idx_t DuckLakeMetadataManager::GetNextColumnId(TableIndex table_id) {
 }
 
 string DuckLakeMetadataManager::WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions,
-                                                   const vector<DuckLakePath> &resolved_paths) {
+                                                   const vector<DuckLakePath> &resolved_paths,
+                                                   bool supports_file_identity) {
 	if (compactions.empty()) {
 		return {};
 	}
@@ -5652,11 +5678,13 @@ string DuckLakeMetadataManager::WriteMergeAdjacent(const vector<DuckLakeCompacte
 		scheduled_deletions.push_back(ScheduledDeletionTuple(compaction.source_id.index, resolved_paths[i]));
 	}
 	auto deleted_file_ids = GenerateIDList(source_ids);
+	// add the files we clear to the deletion schedule
+	auto batch_query = ScheduleDeletionsSql(scheduled_deletions, "ducklake_data_file", "data_file_id", deleted_file_ids,
+	                                        supports_file_identity);
 	// for each file that has been compacted - delete it from the list of data files entirely
 	// including all other info (stats, delete files, partition values, etc)
 	vector<string> tables_to_delete_from {"ducklake_data_file", "ducklake_file_column_stats", "ducklake_delete_file",
 	                                      "ducklake_file_partition_value", "ducklake_file_variant_stats"};
-	string batch_query;
 	for (auto &delete_from_tbl : tables_to_delete_from) {
 		batch_query += StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
@@ -5664,8 +5692,7 @@ WHERE data_file_id IN (%s);
 )",
 		                                  delete_from_tbl, deleted_file_ids);
 	}
-	// add the files we cleared to the deletion schedule
-	return batch_query + InsertValuesSql("ducklake_files_scheduled_for_deletion", scheduled_deletions);
+	return batch_query;
 }
 string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions) {
 	if (compactions.empty()) {
@@ -5712,10 +5739,11 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 }
 
 string DuckLakeMetadataManager::WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions,
-                                                 CompactionType type, const vector<DuckLakePath> &resolved_paths) {
+                                                 CompactionType type, const vector<DuckLakePath> &resolved_paths,
+                                                 bool supports_file_identity) {
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES:
-		return WriteMergeAdjacent(compactions, resolved_paths);
+		return WriteMergeAdjacent(compactions, resolved_paths, supports_file_identity);
 	case CompactionType::REWRITE_DELETES:
 		return WriteDeleteRewrites(compactions);
 	default:
@@ -5876,12 +5904,15 @@ AND NOT EXISTS (
 		}
 		return cleanup_files;
 	};
-	auto schedule_for_cleanup = [&](const vector<DuckLakeFileForCleanup> &files) {
+	auto schedule_for_cleanup = [&](const vector<DuckLakeFileForCleanup> &files, const string &file_table,
+	                                const string &file_id_column) {
 		vector<string> scheduled_deletions;
 		for (auto &file : files) {
 			scheduled_deletions.push_back(ScheduledDeletionTuple(file.id.index, GetRelativePath(file.path)));
 		}
-		auto result = Execute(InsertValuesSql("ducklake_files_scheduled_for_deletion", scheduled_deletions));
+		auto result =
+		    Execute(ScheduleDeletionsSql(scheduled_deletions, file_table, file_id_column, CleanupFileIdList(files),
+		                                 transaction.GetCatalog().SupportsFileIdentity()));
 		result->ThrowIfError("Failed to schedule files for clean-up in DuckLake: ");
 	};
 
@@ -5896,6 +5927,7 @@ AND NOT EXISTS (
 	auto deleted_file_ids = CleanupFileIdList(cleanup_files);
 	vector<string> tables_to_delete_from;
 	if (!cleanup_files.empty()) {
+		schedule_for_cleanup(cleanup_files, "ducklake_data_file", "data_file_id");
 		// delete the data files
 		tables_to_delete_from = {"ducklake_data_file", "ducklake_file_column_stats", "ducklake_file_variant_stats",
 		                         "ducklake_file_partition_value"};
@@ -5907,7 +5939,6 @@ WHERE data_file_id IN (%s);
 			                                    delete_tbl, deleted_file_ids));
 			result->ThrowIfError("Failed to delete old data file information in DuckLake: ");
 		}
-		schedule_for_cleanup(cleanup_files);
 	}
 
 	// get a list of delete files that are no longer required after these deletions
@@ -5919,6 +5950,7 @@ WHERE data_file_id IN (%s);
 	result = Query(UnusedFilesQuery("ducklake_delete_file", "delete_file_id", table_id_filter + file_id_filter));
 	auto cleanup_deletes = read_cleanup_files(*result);
 	if (!cleanup_deletes.empty()) {
+		schedule_for_cleanup(cleanup_deletes, "ducklake_delete_file", "delete_file_id");
 		// delete the delete files
 		result = Execute(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_delete_file
@@ -5926,7 +5958,6 @@ WHERE delete_file_id IN (%s);
 )",
 		                                    CleanupFileIdList(cleanup_deletes)));
 		result->ThrowIfError("Failed to delete old delete file information in DuckLake: ");
-		schedule_for_cleanup(cleanup_deletes);
 	}
 
 	// delete based on table id -> ducklake_table_stats, ducklake_table_column_stats, ducklake_partition_info
