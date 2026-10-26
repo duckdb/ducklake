@@ -420,6 +420,8 @@ struct DuckLakeFileListEntry {
 	DuckLakeFileData delete_file;
 	optional_idx row_id_start;
 	optional_idx snapshot_id;
+	//! The origin of the rows that embed none, unset when it is the snapshot of the file
+	optional_idx origin_snapshot;
 	//! Upper bound filter, we only include rows where _ducklake_internal_snapshot_id <= snapshot_filter
 	optional_idx snapshot_filter_max;
 	//! Lower bound filter, we only include rows where _ducklake_internal_snapshot_id >= snapshot_filter_min
@@ -488,6 +490,8 @@ struct DuckLakeFileForCleanup {
 
 struct DuckLakeCompactionFileData : public DuckLakeCompactionBaseFileData {
 	optional_idx row_id_start;
+	//! The origin of the rows that embed none, unset when it is the begin snapshot
+	optional_idx origin_snapshot;
 	MappingIndex mapping_id;
 	optional_idx partition_id;
 	vector<Value> partition_values;

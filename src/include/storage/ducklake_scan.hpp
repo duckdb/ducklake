@@ -60,6 +60,8 @@ struct DuckLakeFunctionInfo : public TableFunctionInfo {
 	string flush_sort_order_sql;
 	//! Whether the scan sees the uncommitted changes of its transaction, which an AT clause excludes
 	bool include_local_changes = true;
+	//! Whether the scan reads the origin snapshot of each row, which rewrites carry into their output
+	bool reads_origin_snapshots = false;
 
 	shared_ptr<DuckLakeTransaction> GetTransaction();
 	bool CanUseGlobalStats();

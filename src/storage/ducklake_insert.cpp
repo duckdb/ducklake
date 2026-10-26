@@ -21,6 +21,7 @@
 #include "storage/ducklake_geo_stats.hpp"
 #include "common/ducklake_types.hpp"
 #include "functions/ducklake_compaction_functions.hpp"
+#include "storage/ducklake_multi_file_reader.hpp"
 
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/common/bind_helpers.hpp"
@@ -161,6 +162,7 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 	auto &field_data = global_state.table.GetFieldData();
 	auto snapshot_id_name = InternalColumnName(field_data, "_ducklake_internal_snapshot_id");
 	auto row_id_name = InternalColumnName(field_data, "_ducklake_internal_row_id");
+	auto origin_snapshot_name = InternalColumnName(field_data, "_ducklake_internal_origin_snapshot");
 	for (idx_t r = 0; r < chunk.size(); r++) {
 		DuckLakeDataFile data_file;
 		data_file.file_name = chunk.GetValue(0, r).GetValue<string>();
@@ -218,6 +220,9 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 						data_file.flush_row_id_start = StringUtil::ToUnsigned(row_id_stats.min);
 					}
 				}
+				continue;
+			}
+			if (column_names.size() == 1 && column_names[0] == origin_snapshot_name) {
 				continue;
 			}
 
@@ -381,12 +386,17 @@ static Value GetFieldIdValue(const DuckLakeFieldId &field_id) {
 }
 
 static bool WriteRowId(InsertVirtualColumns virtual_columns) {
-	return virtual_columns == InsertVirtualColumns::WRITE_ROW_ID ||
-	       virtual_columns == InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
+	return virtual_columns != InsertVirtualColumns::NONE;
 }
 
 static bool WriteSnapshotId(InsertVirtualColumns virtual_columns) {
-	return virtual_columns == InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
+	return virtual_columns == InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID ||
+	       virtual_columns == InsertVirtualColumns::WRITE_ROW_ID_SNAPSHOT_ID_AND_ORIGIN_SNAPSHOT;
+}
+
+static bool WriteOriginSnapshot(InsertVirtualColumns virtual_columns) {
+	return virtual_columns == InsertVirtualColumns::WRITE_ROW_ID_AND_ORIGIN_SNAPSHOT ||
+	       virtual_columns == InsertVirtualColumns::WRITE_ROW_ID_SNAPSHOT_ID_AND_ORIGIN_SNAPSHOT;
 }
 
 string DuckLakeInsert::InternalColumnName(const DuckLakeFieldData &field_data, const string &name) {
@@ -413,6 +423,10 @@ static Value WrittenFieldIds(DuckLakeFieldData &field_data, InsertVirtualColumns
 	if (WriteSnapshotId(virtual_columns)) {
 		values.emplace_back(DuckLakeInsert::InternalColumnName(field_data, "_ducklake_internal_snapshot_id"),
 		                    Value::BIGINT(MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID));
+	}
+	if (WriteOriginSnapshot(virtual_columns)) {
+		values.emplace_back(DuckLakeInsert::InternalColumnName(field_data, "_ducklake_internal_origin_snapshot"),
+		                    Value::BIGINT(DuckLakeMultiFileReader::ORIGIN_SNAPSHOT_FIELD_ID));
 	}
 	return Value::STRUCT(std::move(values));
 }
@@ -500,7 +514,8 @@ static void GeneratePartitionExpressions(ClientContext &context, DuckLakeCopyInp
 		return;
 	}
 	idx_t virtual_column_count = static_cast<idx_t>(WriteRowId(copy_input.virtual_columns)) +
-	                             static_cast<idx_t>(WriteSnapshotId(copy_input.virtual_columns));
+	                             static_cast<idx_t>(WriteSnapshotId(copy_input.virtual_columns)) +
+	                             static_cast<idx_t>(WriteOriginSnapshot(copy_input.virtual_columns));
 	// if we have partition columns that are NOT identity, we need to compute them separately, and NOT write them
 	idx_t partition_column_start = copy_input.columns.PhysicalColumnCount() + virtual_column_count;
 	for (idx_t part_idx = 0; part_idx < copy_input.partition_data->fields.size(); part_idx++) {
@@ -591,6 +606,10 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	}
 	if (WriteSnapshotId(copy_input.virtual_columns)) {
 		names_to_write.push_back(InternalColumnName(*copy_input.field_data, "_ducklake_internal_snapshot_id"));
+		types_to_write.push_back(LogicalType::BIGINT);
+	}
+	if (WriteOriginSnapshot(copy_input.virtual_columns)) {
+		names_to_write.push_back(InternalColumnName(*copy_input.field_data, "_ducklake_internal_origin_snapshot"));
 		types_to_write.push_back(LogicalType::BIGINT);
 	}
 

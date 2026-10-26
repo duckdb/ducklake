@@ -1,0 +1,79 @@
+# name: test/sql/origins/legacy_rewrite_origins.test
+# description: a compaction after the migration to 2.0-dev2 gives the rows of a 1.1 rewrite output its snapshot as origin
+# group: [origins]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/legacy_rewrite_origins', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1')
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT i FROM range(3) t(i)
+
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+# snapshot 3 rewrites the file into one that embeds row ids and nothing else
+statement ok
+CALL ducklake_rewrite_data_files('dl', 't', delete_threshold => 0)
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+query II
+SELECT i, f._ducklake_internal_row_id
+FROM read_parquet('{DATA_PATH}/legacy_rewrite_origins/main/t/*.parquet', filename = true, union_by_name = true) f
+JOIN ducklake_list_files('dl', 't') l ON f.filename = l.data_file
+ORDER BY ALL
+----
+0	0
+2	2
+3	NULL
+
+statement ok
+DETACH dl
+
+# snapshot 5 is the origin boundary
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/legacy_rewrite_origins', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'origin_boundary_snapshot'
+----
+5
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+# the rows of the rewrite output originate in the rewrite, as its file embeds no origins
+query IIII
+SELECT i, f._ducklake_internal_row_id, f._ducklake_internal_snapshot_id, f._ducklake_internal_origin_snapshot
+FROM read_parquet('{DATA_PATH}/legacy_rewrite_origins/main/t/*.parquet', filename = true, union_by_name = true) f
+JOIN ducklake_list_files('dl', 't') l ON f.filename = l.data_file
+ORDER BY ALL
+----
+0	0	3	3
+2	2	3	3
+3	3	4	4
+
+query II
+SELECT rowid, i FROM dl.t AT (VERSION => 2) ORDER BY i
+----
+0	0
+2	2
+
+query II
+SELECT rowid, i FROM dl.t ORDER BY i
+----
+0	0
+2	2
+3	3

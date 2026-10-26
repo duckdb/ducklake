@@ -460,6 +460,10 @@ DuckLakeTableEntry &DuckLakeMultiFileList::GetTable() {
 	return read_info.table;
 }
 
+bool DuckLakeMultiFileList::ReadsOriginSnapshots() const {
+	return read_info.reads_origin_snapshots;
+}
+
 OpenFileInfo DuckLakeMultiFileList::GetFile(idx_t i) const {
 	auto &files = GetFiles();
 	if (i >= files.size()) {
@@ -507,6 +511,12 @@ OpenFileInfo DuckLakeMultiFileList::GetFile(idx_t i) const {
 			snapshot_id = Value::BIGINT(NumericCast<int64_t>(files[i].snapshot_id.GetIndex()));
 		} else {
 			snapshot_id = Value(LogicalType::BIGINT);
+		}
+		if (files[i].origin_snapshot.IsValid()) {
+			extended_info->options["origin_snapshot"] =
+			    Value::BIGINT(NumericCast<int64_t>(files[i].origin_snapshot.GetIndex()));
+		} else {
+			extended_info->options["origin_snapshot"] = snapshot_id;
 		}
 		extended_info->options["snapshot_id"] = std::move(snapshot_id);
 		if (!file.encryption_key.empty()) {
@@ -671,7 +681,8 @@ void DuckLakeMultiFileList::SetScanColumns(const vector<MultiFileColumnDefinitio
 	scan_field_ids = make_uniq<unordered_set<int32_t>>();
 	for (auto &column_id : column_ids) {
 		auto index = column_id.GetPrimaryIndex();
-		if (index == DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID) {
+		if (index == DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID ||
+		    index == DuckLakeMultiFileReader::COLUMN_IDENTIFIER_ORIGIN_SNAPSHOT) {
 			scan_field_ids->insert(MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID);
 		}
 		if (index >= global_columns.size()) {

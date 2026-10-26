@@ -2839,9 +2839,11 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	// Determine the effective max file size threshold for filtering
 	idx_t effective_max_file_size =
 	    options.max_file_size.IsValid() ? options.max_file_size.GetIndex() : options.target_file_size;
+	bool has_origins = transaction.GetCatalog().SupportsFileIdentity();
 	string data_select_list =
 	    "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
-	    "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_max, "
+	    "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_max, " +
+	    string(has_origins ? "data.origin_snapshot, " : "") +
 	    "data.partition_id, partition_sr.schema_version AS partition_schema_version, partition_info.keys, " +
 	    GetDataFileSelectList("data");
 	string delete_select_list = "del.data_file_id AS del_data_file_id,"
@@ -2972,6 +2974,9 @@ ORDER BY data.begin_snapshot ASC, data.row_id_start ASC, data.data_file_id ASC, 
 		col_idx++;
 		new_entry.schema_version = row.GetValue<idx_t>(col_idx++);
 		new_entry.max_partial_file_snapshot = OptIdx(row, col_idx++);
+		if (has_origins) {
+			new_entry.file.origin_snapshot = OptIdx(row, col_idx++);
+		}
 		new_entry.file.partition_id = OptIdx(row, col_idx++);
 		new_entry.partition_schema_version = OptIdx(row, col_idx++);
 		if (!row.IsNull(col_idx)) {

@@ -599,21 +599,29 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::PlanRewriteScan(
 	auto scan_function = table.GetScanFunctionById(context, bind_data, info);
 	auto &multi_file_bind_data = bind_data->Cast<MultiFileBindData>();
 	auto &read_info = scan_function.function_info->Cast<DuckLakeFunctionInfo>();
+	// the rewritten rows keep their versions, so 2.0-dev2 catalogs carry their origins
+	bool write_origin_snapshot = table.ParentCatalog().Cast<DuckLakeCatalog>().SupportsFileIdentity();
+	read_info.reads_origin_snapshots = write_origin_snapshot;
 	multi_file_bind_data.file_list = create_file_list(read_info);
 
 	// rowids are always written, since a sort reorders rows, deletes leave gaps and UPDATE files embed their own
 	if (write_snapshot_id) {
-		copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
+		copy_input.virtual_columns = write_origin_snapshot
+		                                 ? InsertVirtualColumns::WRITE_ROW_ID_SNAPSHOT_ID_AND_ORIGIN_SNAPSHOT
+		                                 : InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
 	} else {
-		copy_input.virtual_columns = InsertVirtualColumns::WRITE_ROW_ID;
+		copy_input.virtual_columns = write_origin_snapshot ? InsertVirtualColumns::WRITE_ROW_ID_AND_ORIGIN_SNAPSHOT
+		                                                   : InsertVirtualColumns::WRITE_ROW_ID;
 	}
 	copy_input.get_table_index = table_idx.index;
 	auto copy_options = DuckLakeInsert::GetCopyOptions(context, copy_input);
 	copy = std::move(copy_options.copy);
 
+	// the virtual columns of the scan include the origin snapshot column of the file list
+	auto virtual_columns = scan_function.get_virtual_columns(context, bind_data.get());
 	auto ducklake_scan =
 	    make_uniq<LogicalGet>(table_idx, BoundTableFunction(std::move(scan_function)), std::move(bind_data),
-	                          copy->expected_types, copy->names, table.GetVirtualColumns());
+	                          copy->expected_types, copy->names, std::move(virtual_columns));
 	auto &column_ids = ducklake_scan->GetMutableColumnIds();
 	for (idx_t i = 0; i < table.GetColumns().PhysicalColumnCount(); i++) {
 		column_ids.emplace_back(i);
@@ -621,6 +629,9 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::PlanRewriteScan(
 	column_ids.emplace_back(COLUMN_IDENTIFIER_ROW_ID);
 	if (write_snapshot_id) {
 		column_ids.emplace_back(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_SNAPSHOT_ID);
+	}
+	if (write_origin_snapshot) {
+		column_ids.emplace_back(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_ORIGIN_SNAPSHOT);
 	}
 
 	auto root = unique_ptr_cast<LogicalGet, LogicalOperator>(std::move(ducklake_scan));
@@ -665,6 +676,7 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		result.file_id = source.file.id;
 		result.row_id_start = source.file.row_id_start;
 		result.snapshot_id = source.file.begin_snapshot;
+		result.origin_snapshot = source.file.origin_snapshot;
 		result.mapping_id = source.file.mapping_id;
 		result.inlined_file_deletions = source.inlined_file_deletions;
 		switch (type) {

@@ -31,7 +31,13 @@ class DuckLakeInlineData;
 struct DuckLakeCopyOptions;
 struct DuckLakeCopyInput;
 
-enum class InsertVirtualColumns { NONE, WRITE_ROW_ID, WRITE_ROW_ID_AND_SNAPSHOT_ID };
+enum class InsertVirtualColumns {
+	NONE,
+	WRITE_ROW_ID,
+	WRITE_ROW_ID_AND_SNAPSHOT_ID,
+	WRITE_ROW_ID_AND_ORIGIN_SNAPSHOT,
+	WRITE_ROW_ID_SNAPSHOT_ID_AND_ORIGIN_SNAPSHOT
+};
 
 class DuckLakeInsertGlobalState : public GlobalSinkState {
 public:

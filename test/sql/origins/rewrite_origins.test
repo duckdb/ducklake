@@ -1,0 +1,170 @@
+# name: test/sql/origins/rewrite_origins.test
+# description: compaction, rewrite_deletes and flush write the origin snapshot of every row they move
+# group: [origins]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/rewrite_origins', METADATA_CATALOG 'meta')
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+# snapshots 2 to 4 inline three rows, snapshot 5 deletes one of them
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+statement ok
+DELETE FROM dl.t WHERE i = 3
+
+# the flush keeps the insert snapshot of every inlined row as its origin
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query IIII
+SELECT i, f._ducklake_internal_row_id, f._ducklake_internal_snapshot_id, f._ducklake_internal_origin_snapshot
+FROM read_parquet('{DATA_PATH}/rewrite_origins/main/t/*.parquet', filename = true, union_by_name = true) f
+JOIN ducklake_list_files('dl', 't') l ON f.filename = l.data_file
+ORDER BY ALL
+----
+1	0	2	2
+2	1	3	3
+3	2	4	4
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0)
+
+# snapshot 7 writes a file without embedded columns, whose rows originate in its begin snapshot
+statement ok
+INSERT INTO dl.t VALUES (4), (5)
+
+statement ok
+DELETE FROM dl.t WHERE i = 5
+
+# the rewrite embeds row ids and origins but no insert snapshot, its rows are visible from the rewrite on
+statement ok
+CALL ducklake_rewrite_data_files('dl', 't', delete_threshold => 0)
+
+query IIII
+SELECT i, f._ducklake_internal_row_id, f._ducklake_internal_snapshot_id, f._ducklake_internal_origin_snapshot
+FROM read_parquet('{DATA_PATH}/rewrite_origins/main/t/*.parquet', filename = true, union_by_name = true) f
+JOIN ducklake_list_files('dl', 't') l ON f.filename = l.data_file
+ORDER BY ALL
+----
+1	0	NULL	2
+2	1	NULL	3
+4	3	NULL	7
+
+query III
+SELECT rowid, snapshot_id, i FROM dl.t ORDER BY i
+----
+0	9	1
+1	9	2
+3	9	4
+
+query II
+SELECT rowid, i FROM dl.t AT (VERSION => 8) ORDER BY i
+----
+0	1
+1	2
+3	4
+
+# snapshot 10 writes a file whose rows originate in it
+statement ok
+INSERT INTO dl.t VALUES (6)
+
+# compaction embeds the insert snapshot of every row and keeps its origin
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+query IIII
+SELECT i, f._ducklake_internal_row_id, f._ducklake_internal_snapshot_id, f._ducklake_internal_origin_snapshot
+FROM read_parquet('{DATA_PATH}/rewrite_origins/main/t/*.parquet', filename = true, union_by_name = true) f
+JOIN ducklake_list_files('dl', 't') l ON f.filename = l.data_file
+ORDER BY ALL
+----
+1	0	9	2
+2	1	9	3
+4	3	9	7
+6	5	10	10
+
+# a survivor of the rewrite stays invisible before the rewrite snapshot
+query II
+SELECT rowid, i FROM dl.t AT (VERSION => 8) ORDER BY i
+----
+0	1
+1	2
+3	4
+
+query II
+SELECT rowid, i FROM dl.t AT (VERSION => 10) ORDER BY i
+----
+0	1
+1	2
+3	4
+5	6
+
+query III
+SELECT rowid, snapshot_id, i FROM dl.t ORDER BY i
+----
+0	9	1
+1	9	2
+3	9	4
+5	10	6
+
+# an update writes new versions, which carry no origin of the rows they replace
+statement ok
+UPDATE dl.t SET i = 7 WHERE i = 6
+
+query IIII
+SELECT i, f._ducklake_internal_row_id, f._ducklake_internal_snapshot_id, f._ducklake_internal_origin_snapshot
+FROM read_parquet('{DATA_PATH}/rewrite_origins/main/t/*.parquet', filename = true, union_by_name = true) f
+JOIN ducklake_list_files('dl', 't') l ON f.filename = l.data_file
+WHERE i = 7
+----
+7	5	NULL	NULL
+
+# the flush of a table partitioned by a transform computes the partition values after the internal columns
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10)
+
+statement ok
+CREATE TABLE dl.p(d DATE, v INTEGER)
+
+statement ok
+ALTER TABLE dl.p SET PARTITIONED BY (year(d))
+
+statement ok
+INSERT INTO dl.p VALUES (DATE '2024-05-01', 1), (DATE '2025-05-01', 2)
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'p')
+
+query IIII
+SELECT v, f._ducklake_internal_row_id, f._ducklake_internal_origin_snapshot = f._ducklake_internal_snapshot_id, l.data_file LIKE '%year=' || year(f.d) || '%'
+FROM read_parquet('{DATA_PATH}/rewrite_origins/main/p/**/*.parquet', filename = true, union_by_name = true) f
+JOIN ducklake_list_files('dl', 'p') l ON f.filename = l.data_file
+ORDER BY ALL
+----
+1	0	true	true
+2	1	true	true
+
+query II
+SELECT d, v FROM dl.p WHERE year(d) = 2025
+----
+2025-05-01	2

@@ -37,6 +37,9 @@ struct DuckLakeMultiFileReaderGlobalState : public MultiFileReaderGlobalState {
 struct DuckLakeMultiFileReader : public MultiFileReader {
 public:
 	static constexpr column_t COLUMN_IDENTIFIER_SNAPSHOT_ID = UINT64_C(10000000000000000000);
+	static constexpr column_t COLUMN_IDENTIFIER_ORIGIN_SNAPSHOT = UINT64_C(10000000000000000001);
+	//! The field id of the origin snapshot column, next to the reserved ids of the row id and snapshot id columns
+	static constexpr int32_t ORIGIN_SNAPSHOT_FIELD_ID = 2147483538;
 
 public:
 	explicit DuckLakeMultiFileReader(DuckLakeFunctionInfo &read_info);
@@ -118,6 +121,7 @@ private:
 private:
 	unique_ptr<MultiFileColumnDefinition> row_id_column;
 	unique_ptr<MultiFileColumnDefinition> snapshot_id_column;
+	unique_ptr<MultiFileColumnDefinition> origin_snapshot_column;
 	//! Inlined transaction-local data
 	shared_ptr<DuckLakeInlinedData> transaction_local_data;
 };

@@ -132,6 +132,10 @@ virtual_column_map_t DuckLakeVirtualColumns(ClientContext &context, optional_ptr
 	auto &bind_data = bind_data_p->Cast<MultiFileBindData>();
 	auto &file_list = bind_data.file_list->Cast<DuckLakeMultiFileList>();
 	auto result = file_list.GetTable().GetVirtualColumns();
+	if (file_list.ReadsOriginSnapshots()) {
+		result.insert(make_pair(DuckLakeMultiFileReader::COLUMN_IDENTIFIER_ORIGIN_SNAPSHOT,
+		                        TableColumn("_ducklake_internal_origin_snapshot", LogicalType::BIGINT)));
+	}
 	bind_data.virtual_columns = result;
 	return result;
 }

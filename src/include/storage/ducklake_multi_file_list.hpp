@@ -40,6 +40,7 @@ public:
 	idx_t GetTotalFileCount() const override;
 	unique_ptr<NodeStatistics> GetCardinality(ClientContext &context) const override;
 	DuckLakeTableEntry &GetTable();
+	bool ReadsOriginSnapshots() const;
 	unique_ptr<MultiFileList> Copy() const override;
 	vector<DuckLakeFileListExtendedEntry> GetFilesExtended() const;
 	const vector<DuckLakeFileListEntry> &GetFiles() const;

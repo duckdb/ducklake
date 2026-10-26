@@ -195,9 +195,16 @@ static MultiFileColumnDefinition SnapshotIdColumn() {
 	return column;
 }
 
+static MultiFileColumnDefinition OriginSnapshotColumn() {
+	MultiFileColumnDefinition column("_ducklake_internal_origin_snapshot", LogicalType::BIGINT);
+	column.identifier = Value::INTEGER(DuckLakeMultiFileReader::ORIGIN_SNAPSHOT_FIELD_ID);
+	return column;
+}
+
 DuckLakeMultiFileReader::DuckLakeMultiFileReader(DuckLakeFunctionInfo &read_info) : read_info(read_info) {
 	row_id_column = make_uniq<MultiFileColumnDefinition>(RowIdColumn());
 	snapshot_id_column = make_uniq<MultiFileColumnDefinition>(SnapshotIdColumn());
+	origin_snapshot_column = make_uniq<MultiFileColumnDefinition>(OriginSnapshotColumn());
 }
 
 DuckLakeMultiFileReader::~DuckLakeMultiFileReader() {
@@ -683,6 +690,24 @@ MultiFileReaderVirtualColumnBinding DuckLakeMultiFileReader::GetVirtualColumnExp
 		auto entry = options.find("snapshot_id");
 		if (entry == options.end()) {
 			throw InternalException("snapshot_id not found for reading snapshot_id column");
+		}
+		return MultiFileReaderVirtualColumnBinding(entry->second);
+	}
+	if (column_id == COLUMN_IDENTIFIER_ORIGIN_SNAPSHOT) {
+		// rows moved under 2.0-dev2 embed their origin, older moved rows their insert snapshot
+		if (FindColumnByFieldId(local_columns, ORIGIN_SNAPSHOT_FIELD_ID).IsValid()) {
+			return MultiFileReaderVirtualColumnBinding(*origin_snapshot_column.get());
+		}
+		if (FindColumnByFieldId(local_columns, MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID).IsValid()) {
+			return MultiFileReaderVirtualColumnBinding(*snapshot_id_column.get());
+		}
+		if (!reader_data.file_to_be_opened.extended_info) {
+			throw InternalException("Extended info not found for reading origin snapshot column");
+		}
+		auto &options = reader_data.file_to_be_opened.extended_info->options;
+		auto entry = options.find("origin_snapshot");
+		if (entry == options.end()) {
+			throw InternalException("origin_snapshot not found for reading origin snapshot column");
 		}
 		return MultiFileReaderVirtualColumnBinding(entry->second);
 	}
