@@ -5879,7 +5879,7 @@ bool DuckLakeMetadataManager::ConfigOptionExists(const DuckLakeConfigOption &opt
 	return result->Fetch()->GetValue(0, 0).GetValue<idx_t>() > 0;
 }
 
-string DuckLakeMetadataManager::WriteConfigOptions(const vector<DuckLakeConfigOptionUndo> &changes) const {
+string DuckLakeMetadataManager::WriteConfigOptions(const vector<DuckLakeConfigOptionChange> &changes) const {
 	// sorted, so that concurrent commits update the rows of the options in the same order
 	map<string, idx_t> last_changes;
 	for (idx_t i = 0; i < changes.size(); i++) {

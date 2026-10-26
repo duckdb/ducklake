@@ -320,7 +320,7 @@ public:
 	const DuckLakeNameMapSet &GetNewNameMaps() const {
 		return new_name_maps;
 	}
-	const vector<DuckLakeConfigOptionUndo> &GetConfigOptionChanges() const {
+	const vector<DuckLakeConfigOptionChange> &GetConfigOptionChanges() const {
 		return config_option_changes;
 	}
 	bool FileIsDropped(const string &path) const;
@@ -366,8 +366,9 @@ private:
 	void FlushChanges();
 	void BeginMetadataTransaction();
 	void FlushNameMapCacheInvalidations();
-	//! Puts back the config options this transaction replaced in the catalog
-	void UndoConfigOptions();
+	void ChangeConfigOption(const DuckLakeConfigOption &option, bool reset);
+	//! Ends the config option changes of this transaction in the catalog
+	void EndConfigOptionChanges(bool committed);
 	//! Whether the option is set, as this transaction sees it
 	bool ConfigOptionIsSet(const DuckLakeConfigOption &option);
 	static DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
@@ -420,8 +421,8 @@ private:
 	DuckLakeNameMapSet new_name_maps;
 	//! Name maps deleted by direct metadata operations, applied to the catalog cache on commit
 	vector<MappingIndex> pending_name_map_cache_invalidations;
-	//! The config options set and reset by this transaction, written by the commit and undone on rollback
-	vector<DuckLakeConfigOptionUndo> config_option_changes;
+	//! The config options set and reset by this transaction, which its commit writes
+	vector<DuckLakeConfigOptionChange> config_option_changes;
 
 	atomic<idx_t> catalog_version;
 	mutex transaction_views_lock;

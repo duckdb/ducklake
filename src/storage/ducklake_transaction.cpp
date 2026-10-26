@@ -789,10 +789,8 @@ const LocalTableChanges &DuckLakeTransaction::GetLocalChanges() const {
 void DuckLakeTransaction::Start() {
 }
 
-void DuckLakeTransaction::UndoConfigOptions() {
-	for (auto it = config_option_changes.rbegin(); it != config_option_changes.rend(); ++it) {
-		ducklake_catalog.UndoConfigOption(*it);
-	}
+void DuckLakeTransaction::EndConfigOptionChanges(bool committed) {
+	ducklake_catalog.EndConfigOptionChanges(*this, config_option_changes, committed);
 	config_option_changes.clear();
 }
 
@@ -825,19 +823,19 @@ void DuckLakeTransaction::Commit() {
 		}
 	} catch (...) {
 		// a failed commit never reaches Rollback - the transaction manager only reports the error
-		UndoConfigOptions();
+		EndConfigOptionChanges(false);
 		throw;
 	}
 	FlushNameMapCacheInvalidations();
 	connection.reset();
 	state->local_changes.Clear();
-	config_option_changes.clear();
+	EndConfigOptionChanges(true);
 	SetRequiresNewInlinedTable(false);
 	ClearSchemaCachePins();
 }
 
 void DuckLakeTransaction::Rollback() {
-	UndoConfigOptions();
+	EndConfigOptionChanges(false);
 	if (connection) {
 		// rollback any changes made to the metadata catalog
 		try {
@@ -1698,14 +1696,21 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 }
 
 void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
-	// the catalog copy is not transactional - remember the previous value so a rollback can restore it
-	config_option_changes.push_back(ducklake_catalog.SetConfigOption(option));
+	ChangeConfigOption(option, false);
 }
 
 void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) {
 	if (ConfigOptionIsSet(option)) {
-		config_option_changes.push_back(ducklake_catalog.ResetConfigOption(option));
+		ChangeConfigOption(option, true);
 	}
+}
+
+void DuckLakeTransaction::ChangeConfigOption(const DuckLakeConfigOption &option, bool reset) {
+	DuckLakeConfigOptionChange change;
+	change.option = option;
+	change.reset = reset;
+	config_option_changes.push_back(change);
+	ducklake_catalog.ChangeConfigOption(*this, change);
 }
 
 bool DuckLakeTransaction::ConfigOptionIsSet(const DuckLakeConfigOption &option) {

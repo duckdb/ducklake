@@ -93,7 +93,7 @@ static vector<Value> GetOptionRow(const DuckLakeTag &tag, const string &scope, c
 }
 
 template <class T, class MATCH>
-static void ReplaceOption(vector<T> &entries, MATCH matches, const DuckLakeConfigOptionUndo &change, T entry) {
+static void ReplaceOption(vector<T> &entries, MATCH matches, const DuckLakeConfigOptionChange &change, T entry) {
 	entries.erase(std::remove_if(entries.begin(), entries.end(), matches), entries.end());
 	if (!change.reset) {
 		entries.push_back(std::move(entry));
@@ -101,7 +101,7 @@ static void ReplaceOption(vector<T> &entries, MATCH matches, const DuckLakeConfi
 }
 
 //! Applies the options that the transaction set and reset, which it writes when it commits
-static void ApplyConfigOptionChanges(DuckLakeMetadata &metadata, const vector<DuckLakeConfigOptionUndo> &changes) {
+static void ApplyConfigOptionChanges(DuckLakeMetadata &metadata, const vector<DuckLakeConfigOptionChange> &changes) {
 	for (auto &change : changes) {
 		auto &option = change.option;
 		auto &key = option.option.key;

@@ -590,7 +590,7 @@ public:
 	unordered_set<idx_t> GetTablesWithLiveDataFiles();
 	bool ConfigOptionExists(const DuckLakeConfigOption &option);
 	//! The SQL that writes the last change of each option
-	string WriteConfigOptions(const vector<DuckLakeConfigOptionUndo> &changes) const;
+	string WriteConfigOptions(const vector<DuckLakeConfigOptionChange> &changes) const;
 	virtual void MigrateV01();
 	virtual void MigrateV02(bool allow_failures = false);
 	virtual void MigrateV03(bool allow_failures = false);

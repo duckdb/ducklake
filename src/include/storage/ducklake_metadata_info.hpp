@@ -571,12 +571,9 @@ struct DuckLakeConfigOption {
 	TableIndex table_id;
 };
 
-//! What a config option held before a transaction set it, so a rollback can put it back
-struct DuckLakeConfigOptionUndo {
-	//! the option as written, whose value the undo compares against
+//! A config option that a transaction set or reset
+struct DuckLakeConfigOptionChange {
 	DuckLakeConfigOption option;
-	string previous_value;
-	bool was_set = false;
 	bool reset = false;
 };
 
