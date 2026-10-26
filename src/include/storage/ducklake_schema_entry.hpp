@@ -53,6 +53,9 @@ public:
 	                                               map<string, string> prebuilt_table_options = {});
 	//! Data path for a new table in this schema, derived from the schema path, table name and uuid
 	string GenerateTableDataPath(const string &table_uuid, const string &table_name) const;
+	//! Creates a table that its commit fills with the state of the source at the snapshot
+	DuckLakeTableEntry &CloneTable(CatalogTransaction transaction, DuckLakeTableEntry &source, idx_t snapshot_id,
+	                               const string &name);
 	unique_ptr<CreateInfo> GetInfo() const override;
 	optional_ptr<CatalogEntry> CreateTable(CatalogTransaction transaction, BoundCreateTableInfo &info) override;
 	optional_ptr<CatalogEntry> CreateFunction(CatalogTransaction transaction, CreateFunctionInfo &info) override;

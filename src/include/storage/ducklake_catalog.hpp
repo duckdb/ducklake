@@ -205,6 +205,8 @@ public:
 	                        optional_ptr<const map<string, string>> table_options = nullptr) const;
 	//! Look up a config option in the table scope only, without falling back to schema or global
 	bool TryGetTableConfigOption(const string &option, string &result, TableIndex table_id) const;
+	//! The options set on the table itself
+	map<string, string> GetTableConfigOptions(TableIndex table_id) const;
 	//! Check if a config option has a table-level or schema-level override (excluding global scope)
 	bool TryGetScopedConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id,
 	                              optional_ptr<const map<string, string>> table_options = nullptr) const;

@@ -142,6 +142,12 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 		change_keys.emplace_back("tables_created");
 		change_values.push_back(CatalogListToValue(created_tables));
 	}
+	CatalogNameMap cloned_tables;
+	SplitCreatedEntries(other_changes.cloned_tables, "table", cloned_tables, nullptr);
+	if (!cloned_tables.empty()) {
+		change_keys.emplace_back("tables_cloned");
+		change_values.push_back(CatalogListToValue(cloned_tables));
+	}
 	if (!created_views.empty()) {
 		change_keys.emplace_back("views_created");
 		change_values.push_back(CatalogListToValue(created_views));

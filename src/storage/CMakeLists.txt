@@ -29,6 +29,7 @@ add_library(
   ducklake_staged_commit.cpp
   ducklake_stats.cpp
   ducklake_table_entry.cpp
+  ducklake_table_fork.cpp
   ducklake_initializer.cpp
   ducklake_update.cpp
   ducklake_scan.cpp

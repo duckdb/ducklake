@@ -23,6 +23,8 @@ struct TransactionChangeInformation {
 	case_insensitive_map_t<reference<DuckLakeSchemaEntry>> created_schemas;
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
 	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_tables;
+	//! The created tables that copy other tables
+	case_insensitive_map_t<reference_set_t<CatalogEntry>> cloned_tables;
 	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_scalar_macros;
 	case_insensitive_map_t<reference_set_t<CatalogEntry>> created_table_macros;
 
@@ -63,6 +65,7 @@ struct SnapshotChangeInformation {
 	case_insensitive_set_t created_schemas;
 	set<SchemaIndex> dropped_schemas;
 	case_insensitive_map_t<case_insensitive_map_t<string>> created_tables;
+	case_insensitive_map_t<case_insensitive_map_t<string>> cloned_tables;
 	case_insensitive_map_t<case_insensitive_map_t<string>> created_scalar_macros;
 	case_insensitive_map_t<case_insensitive_map_t<string>> created_table_macros;
 	set<TableIndex> altered_tables;

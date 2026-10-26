@@ -120,7 +120,7 @@ static bool RequiresClientSideCommit(DuckLakeTransaction &transaction) {
 	return transaction.GetRequiresNewInlinedTable() || !transaction.GetFlushedInlinedTables().empty() ||
 	       !transaction.GetFlushedInlinedFileDeletions().empty() ||
 	       transaction.GetLocalChanges().HasDatedNewDeletes() || transaction.ExpiresSnapshotsOnCommit() ||
-	       transaction.RetiresFilesOnCommit();
+	       transaction.RetiresFilesOnCommit() || transaction.HasTableForks();
 }
 
 //! Whether the commit writes inlined file deletions, which create the deletion table of a table on first use

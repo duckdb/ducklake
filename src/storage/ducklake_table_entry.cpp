@@ -151,6 +151,19 @@ bool DuckLakeTableEntry::HasCurrentInlinedDataTable(optional_idx last_schema_cha
 	return false;
 }
 
+DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &source, SchemaCatalogEntry &schema, CreateTableInfo &info,
+                                       TableIndex table_id, string table_uuid, string data_path)
+    : DuckLakeTableEntry(source.ParentCatalog(), schema, info, table_id, std::move(table_uuid), std::move(data_path),
+                         source.field_data, optional_idx(), vector<DuckLakeInlinedTableInfo>(),
+                         LocalChangeType::CREATED) {
+	if (source.partition_data) {
+		partition_data = make_uniq<DuckLakePartition>(*source.partition_data);
+	}
+	if (source.sort_data) {
+		sort_data = make_uniq<DuckLakeSort>(*source.sort_data);
+	}
+}
+
 // ALTER TABLE RENAME/SET COMMENT/ADD COLUMN/DROP COLUMN
 DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change)
     : DuckLakeTableEntry(parent.ParentCatalog(), parent.ParentSchema(), info, parent.GetTableId(),
@@ -410,6 +423,9 @@ TableFunction DuckLakeTableEntry::GetScanFunctionById(ClientContext &context, un
                                                       const EntryLookupInfo &lookup_info) {
 	auto function = DuckLakeFunctions::GetDuckLakeScanFunction(*context.db);
 	auto &transaction = DuckLakeTransaction::Get(context, ParentCatalog());
+	if (!lookup_info.GetAtClause()) {
+		transaction.CheckNotCloned(*this);
+	}
 	auto function_info =
 	    DuckLakeFunctionInfo::Create(*this, transaction, transaction.GetSnapshot(lookup_info.GetAtClause()));
 	function_info->include_local_changes = !lookup_info.GetAtClause();

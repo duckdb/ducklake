@@ -102,6 +102,8 @@ struct DuckLakeCommitContext {
 	                               const vector<DuckLakeTableInfo> &, vector<DuckLakeSchemaInfo> &) {
 		    return false;
 	    };
+	//! Emits the SQL that copies the history of a source table into a table the commit creates
+	std::function<string(const DuckLakeForkInfo &, DuckLakeSnapshot &)> fork_table;
 	//! Emits the SQL that registers new inlined data tables (CREATE TABLE + ducklake_inlined_data_tables INSERT).
 	// LCOV_EXCL_START
 	std::function<string(DuckLakeSnapshot, const vector<DuckLakeTableInfo> &, const set<TableIndex> &)>
@@ -337,6 +339,8 @@ public:
 	set<TableIndex> refreshed_table_sizes;
 	//! The tables other transactions changed after the snapshot of a retried commit
 	set<TableIndex> tables_changed_by_others;
+	//! The tables this transaction creates as copies of other tables, by their transaction-local id
+	map<TableIndex, DuckLakeForkInfo> table_forks;
 	//! The snapshot tags this transaction creates, with the tagged snapshot
 	case_insensitive_map_t<idx_t> new_snapshot_tags;
 	//! The committed snapshot tags this transaction drops, by their stored name

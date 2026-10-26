@@ -413,6 +413,11 @@ public:
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type);
 
 	virtual void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files);
+	//! Fails when the state of the table at the snapshot cannot be copied
+	void CheckTableFork(TableIndex source_table_id, idx_t snapshot_id);
+	//! The SQL that copies the history of a table up to a snapshot into a table that the commit creates
+	string ForkTable(const DuckLakeForkInfo &fork, DuckLakeSnapshot &commit_snapshot,
+	                 const std::function<string(const string &, const string &)> &guard_sql);
 	//! The retirement of the cleanup candidates that no data or delete file references, read after the latest snapshot
 	DuckLakeRetirement GetRetirement(const vector<DuckLakeFileForCleanup> &candidates, CleanupType type,
 	                                 idx_t written_after_snapshot = 0);

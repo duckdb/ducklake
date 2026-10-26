@@ -255,6 +255,9 @@ public:
 	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, unique_ptr<DuckLakePartition> partition_data);
 	// ! Create a DuckLakeTableEntry from a SET SORT KEY
 	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, unique_ptr<DuckLakeSort> sort_data);
+	// ! Create a DuckLakeTableEntry that copies another table, its commit copies the metadata of the source
+	DuckLakeTableEntry(DuckLakeTableEntry &source, SchemaCatalogEntry &schema, CreateTableInfo &info,
+	                   TableIndex table_id, string table_uuid, string data_path);
 
 protected:
 	ColumnList columns;

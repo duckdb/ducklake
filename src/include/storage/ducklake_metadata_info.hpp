@@ -116,6 +116,17 @@ struct DuckLakeTableInfo {
 	vector<DuckLakeInlinedTableInfo> inlined_data_tables;
 };
 
+//! A table that a commit creates as a copy of another table at a snapshot
+struct DuckLakeForkInfo {
+	TableIndex source_table_id;
+	//! The snapshot whose state of the source the copy takes
+	idx_t snapshot_id;
+	TableIndex table_id;
+	//! The data paths of the source and of the copy
+	string source_path;
+	string table_path;
+};
+
 //! Stores the information on macro parameters
 struct DuckLakeMacroParameters {
 	string parameter_name;

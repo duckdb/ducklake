@@ -1185,9 +1185,14 @@ TransactionChangeInformation DuckLakeTransaction::GetTransactionChanges() const 
 	for (auto &schema_entry : state->new_tables) {
 		for (auto &entry : schema_entry.second->GetEntries()) {
 			switch (entry.second->type) {
-			case CatalogType::TABLE_ENTRY:
+			case CatalogType::TABLE_ENTRY: {
 				GetTransactionTableChanges(*entry.second, changes);
+				auto &table = entry.second->Cast<DuckLakeTableEntry>();
+				if (state->table_forks.count(table.GetTableId())) {
+					changes.cloned_tables[table.ParentSchema().Cast<DuckLakeSchemaEntry>().PathKey()].insert(table);
+				}
 				break;
+			}
 			case CatalogType::VIEW_ENTRY:
 				GetTransactionViewChanges(*entry.second, changes);
 				break;
@@ -1694,6 +1699,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		};
 		context.only_retires_files = !ChangesMadeBesidesExpiry() && !ExpiresSnapshotsOnCommit();
 	}
+	context.fork_table = [&](const DuckLakeForkInfo &fork, DuckLakeSnapshot &commit_snapshot) {
+		return metadata_manager->ForkTable(fork, commit_snapshot, context.guard_sql);
+	};
 	context.set_delete_commit_snapshot = [&](idx_t commit_snapshot) {
 		// the client context has no active transaction during the commit
 		state->local_changes.SetDeleteCommitSnapshot(*GetConnection().context, *this, commit_snapshot);
@@ -2231,6 +2239,7 @@ void DuckLakeTransaction::DiscardFiles(const vector<string> &files) {
 }
 
 void DuckLakeTransaction::AppendFiles(TableIndex table_id, vector<DuckLakeDataFile> files) {
+	CheckNotCloned(table_id);
 	if (files.empty()) {
 		return;
 	}
@@ -2238,6 +2247,7 @@ void DuckLakeTransaction::AppendFiles(TableIndex table_id, vector<DuckLakeDataFi
 }
 
 void DuckLakeTransaction::AppendInlinedData(TableIndex table_id, unique_ptr<DuckLakeInlinedData> new_data) {
+	CheckNotCloned(table_id);
 	auto context_ref = context.lock();
 	state->local_changes.AppendInlinedData(*context_ref, table_id, std::move(new_data));
 }
@@ -2251,6 +2261,7 @@ bool DuckLakeTransaction::GetRequiresNewInlinedTable() const {
 }
 
 void DuckLakeTransaction::AddNewInlinedDeletes(TableIndex table_id, const string &table_name, set<idx_t> new_deletes) {
+	CheckNotCloned(table_id);
 	if (new_deletes.empty()) {
 		// LCOV_EXCL_START
 		return;
@@ -2283,14 +2294,17 @@ optional_ptr<DuckLakeInlinedDataDeletes> DuckLakeTransaction::GetInlinedDeletes(
 }
 
 void DuckLakeTransaction::AddNewInlinedFileDeletes(TableIndex table_id, idx_t file_id, set<idx_t> new_deletes) {
+	CheckNotCloned(table_id);
 	state->local_changes.AddNewInlinedFileDeletes(table_id, file_id, std::move(new_deletes));
 }
 
 void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteFile> files) {
+	CheckNotCloned(table_id);
 	state->local_changes.AddDeletes(table_id, std::move(files));
 }
 
 bool DuckLakeTransaction::AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry) {
+	CheckNotCloned(table_id);
 	return state->local_changes.AddCompaction(table_id, std::move(entry));
 }
 
@@ -2382,9 +2396,34 @@ static void DropLocalEntry(map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &loc
 	}
 }
 
+void DuckLakeTransaction::AddTableFork(TableIndex table_id, TableIndex source_table_id, idx_t snapshot_id) {
+	DuckLakeForkInfo fork;
+	fork.source_table_id = source_table_id;
+	fork.snapshot_id = snapshot_id;
+	state->table_forks[table_id] = std::move(fork);
+}
+
+bool DuckLakeTransaction::HasTableForks() const {
+	return !state->table_forks.empty();
+}
+
+void DuckLakeTransaction::CheckNotCloned(TableIndex table_id) const {
+	if (state->table_forks.count(table_id)) {
+		throw NotImplementedException("A table that the transaction clones can be used once the transaction commits");
+	}
+}
+
+void DuckLakeTransaction::CheckNotCloned(const DuckLakeTableEntry &table) const {
+	if (state->table_forks.count(table.GetTableId())) {
+		throw NotImplementedException("Table \"%s\" is cloned in this transaction and can be used once it commits",
+		                              table.name.GetIdentifierName());
+	}
+}
+
 void DuckLakeTransaction::DropTable(DuckLakeTableEntry &table) {
 	catalog_version = ducklake_catalog.GetNewUncommittedCatalogVersion();
 	auto table_id = table.GetTableId();
+	state->table_forks.erase(table_id);
 	if (table.IsTransactionLocal()) {
 		DropLocalEntry(state->new_tables, table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId(),
 		               table.name.GetIdentifierName());

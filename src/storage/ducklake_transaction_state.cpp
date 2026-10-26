@@ -446,6 +446,7 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 		changes_made.push_back("created_schema:" + created_schema.first);
 	}
 	AddCreatedChangeInfo(changes_made, changes.created_tables, "created_table");
+	AddCreatedChangeInfo(changes_made, changes.cloned_tables, "cloned_table");
 	AddCreatedChangeInfo(changes_made, changes.created_scalar_macros, "created_scalar_macro");
 	AddCreatedChangeInfo(changes_made, changes.created_table_macros, "created_table_macro");
 	for (auto &entry : changes.dropped_scalar_macros) {
@@ -1925,6 +1926,18 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			}
 			auto new_table = DuckLakeTransaction::GetNewTable(commit_state, table);
 			auto new_table_id = new_table.id;
+			auto fork = table_forks.end();
+			if (local_change.type == LocalChangeType::CREATED) {
+				fork = table_forks.find(old_table_id);
+			}
+			bool is_fork = fork != table_forks.end();
+			if (is_fork) {
+				// the fork copies the columns, specs and tags of its source with their history
+				new_table.columns.clear();
+				auto fork_info = fork->second;
+				fork_info.table_id = new_table_id;
+				result.new_forks.push_back(std::move(fork_info));
+			}
 			result.new_tables.push_back(std::move(new_table));
 
 			// remap the table in the commit state
@@ -1945,6 +1958,16 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 
 			// CREATE TABLE ... PARTITIONED BY / SORTED BY
 			if (local_change.type == LocalChangeType::CREATED) {
+				for (auto &option : latest_table.GetTableOptions()) {
+					DuckLakeConfigOption config_option;
+					config_option.option.key = option.first;
+					config_option.option.value = option.second;
+					config_option.table_id = new_table_id;
+					result.new_table_options.push_back(std::move(config_option));
+				}
+				if (is_fork) {
+					break;
+				}
 				if (table.GetPartitionData()) {
 					auto partition_key = DuckLakeTransaction::GetNewPartitionKey(commit_state, table);
 					result.new_partition_keys.push_back(std::move(partition_key));
@@ -1952,13 +1975,6 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 				if (table.GetSortData()) {
 					auto sort_key = DuckLakeTransaction::GetNewSortKey(commit_state, table);
 					result.new_sort_keys.push_back(std::move(sort_key));
-				}
-				for (auto &option : latest_table.GetTableOptions()) {
-					DuckLakeConfigOption config_option;
-					config_option.option.key = option.first;
-					config_option.option.value = option.second;
-					config_option.table_id = new_table_id;
-					result.new_table_options.push_back(std::move(config_option));
 				}
 				// the comments the table was created with, unless a later COMMENT ON replaces them
 				if (comment_remaining == 0 && !table.comment.IsNull()) {
@@ -2375,6 +2391,12 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::WriteNewSortKeys(existing_catalog.sorts, result.new_sort_keys);
 		new_tables_result = result.new_tables;
 		new_inlined_data_tables_result = result.new_inlined_data_tables;
+		for (auto &fork : result.new_forks) {
+			fork.source_path = get_table_path(fork.source_table_id);
+			fork.table_path = get_table_path(fork.table_id);
+			batch_queries += context.fork_table(fork, commit_snapshot);
+			refreshed_table_sizes.insert(fork.table_id);
+		}
 	}
 
 	if (!new_scalar_macros.empty() || !new_table_macros.empty()) {

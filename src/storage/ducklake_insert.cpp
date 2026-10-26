@@ -829,6 +829,7 @@ string DuckLakeVerifyNotNull::GetName() const {
 
 PhysicalOperator &DuckLakeCatalog::PlanInsert(ClientContext &context, PhysicalPlanGenerator &planner, LogicalInsert &op,
                                               optional_ptr<PhysicalOperator> plan) {
+	DuckLakeTransaction::Get(context, *this).CheckNotCloned(op.table.Cast<DuckLakeTableEntry>());
 	if (op.return_chunk) {
 		throw BinderException("RETURNING clause not yet supported for insertion into DuckLake table");
 	}

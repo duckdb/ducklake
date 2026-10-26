@@ -283,6 +283,11 @@ public:
 
 	void DropSchema(DuckLakeSchemaEntry &schema);
 	void DropTable(DuckLakeTableEntry &table);
+	//! Records that the commit fills the table with the state of the source at the snapshot
+	void AddTableFork(TableIndex table_id, TableIndex source_table_id, idx_t snapshot_id);
+	bool HasTableForks() const;
+	//! Fails for a table that the transaction clones, whose rows exist once the transaction commits
+	void CheckNotCloned(const DuckLakeTableEntry &table) const;
 	void DropView(DuckLakeViewEntry &view);
 	void DropScalarMacro(DuckLakeScalarMacroEntry &macro);
 	void DropTableMacro(DuckLakeTableMacroEntry &macro);
@@ -443,6 +448,7 @@ private:
 	optional_ptr<vector<DuckLakeFileForCleanup>> unlinked_files;
 	//! The discarded files the commit retired, which it unlinks
 	vector<DuckLakeFileForCleanup> retired_discarded_files;
+	void CheckNotCloned(TableIndex table_id) const;
 	//! Whether the files this transaction discards are retired before they are unlinked
 	bool RetiresDiscardedFiles() const;
 	//! The discarded files whose paths the commit retires, without those it publishes again

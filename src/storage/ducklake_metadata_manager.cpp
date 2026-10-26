@@ -94,7 +94,7 @@ void DuckLakeMetadataManager::FlushChangesServerSide(DuckLakeTransaction &, Duck
 
 //! The texts of the guard errors, free of the words that make an error retryable
 static constexpr const char *GUARD_ERRORS[] = {"was migrated by another connection", "was retired by cleanup",
-                                               "is already registered in this table"};
+                                               "is already registered in this table", "cannot be cloned"};
 
 string DuckLakeMetadataManager::GuardSql(const string &message, const string &source) {
 	return StringUtil::Format("SELECT error(%s) %s;\n", message, source);
@@ -1487,7 +1487,14 @@ WHERE  {SNAPSHOT_ID} >= ducklake_macro.begin_snapshot AND ({SNAPSHOT_ID} < duckl
 	}
 
 	auto table_filter = [&](const string &alias) {
-		return single_table ? StringUtil::Format(" AND %s.table_id = %llu", alias, table_id.GetIndex()) : string();
+		if (single_table) {
+			return StringUtil::Format(" AND %s.table_id = %llu", alias, table_id.GetIndex());
+		}
+		// a copied table has specs from before its own creation
+		return StringUtil::Format(
+		    " AND %s.table_id IN (SELECT table_id FROM {METADATA_CATALOG}.ducklake_table tbl WHERE {SNAPSHOT_ID} >= "
+		    "tbl.begin_snapshot AND ({SNAPSHOT_ID} < tbl.end_snapshot OR tbl.end_snapshot IS NULL))",
+		    alias);
 	};
 	// load partition information
 	result = query_executor(snapshot, StringUtil::Format(R"(

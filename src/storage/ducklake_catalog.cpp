@@ -1283,6 +1283,16 @@ static bool TryGetOptionInScope(const SCOPE_MAP &scope_map, SCOPE_ID scope_id, c
 	return true;
 }
 
+map<string, string> DuckLakeCatalog::GetTableConfigOptions(TableIndex table_id) const {
+	lock_guard<mutex> guard(config_lock);
+	map<string, string> result;
+	auto entry = options.table_options.find(table_id);
+	if (entry != options.table_options.end()) {
+		result.insert(entry->second.begin(), entry->second.end());
+	}
+	return result;
+}
+
 bool DuckLakeCatalog::TryGetTableConfigOption(const string &option, string &result, TableIndex table_id) const {
 	lock_guard<mutex> guard(config_lock);
 	return TryGetOptionInScope(options.table_options, table_id, option, result);

@@ -156,6 +156,27 @@ DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction, BoundCr
 	return result;
 }
 
+DuckLakeTableEntry &DuckLakeSchemaEntry::CloneTable(CatalogTransaction transaction, DuckLakeTableEntry &source,
+                                                    idx_t snapshot_id, const string &name) {
+	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
+	auto info = source.GetInfo();
+	auto &table_info = info->Cast<CreateTableInfo>();
+	table_info.SetTableName(Identifier(name));
+	table_info.on_conflict = OnCreateConflict::ERROR_ON_CONFLICT;
+	HandleCreateConflict(transaction, CatalogType::TABLE_ENTRY, name, table_info);
+	auto table_id = TableIndex(duck_transaction.GetLocalCatalogId());
+	auto table_uuid = duck_transaction.GenerateUUID();
+	auto table_data_path = GenerateTableDataPath(table_uuid, name);
+	auto table_entry = make_uniq<DuckLakeTableEntry>(source, *this, table_info, table_id, std::move(table_uuid),
+	                                                 std::move(table_data_path));
+	auto &ducklake_catalog = catalog.Cast<DuckLakeCatalog>();
+	table_entry->SetTableOptions(ducklake_catalog.GetTableConfigOptions(source.GetTableId()));
+	auto &result = *table_entry;
+	duck_transaction.CreateEntry(std::move(table_entry));
+	duck_transaction.AddTableFork(table_id, source.GetTableId(), snapshot_id);
+	return result;
+}
+
 string DuckLakeSchemaEntry::GenerateTableDataPath(const string &table_uuid, const string &table_name) const {
 	auto &duck_catalog = catalog.Cast<DuckLakeCatalog>();
 	return DataPath() + duck_catalog.GeneratePathFromName(table_uuid, table_name);
@@ -358,6 +379,10 @@ optional_ptr<T> TryGetAlterEntry(DuckLakeSchemaEntry &schema, CatalogTransaction
 	optional_ptr<CatalogEntry> entry = schema.GetEntry(catalog_transaction, T::Type, alter.GetQualifiedName().Name());
 	if (!entry || entry->type != T::Type) {
 		return nullptr;
+	}
+	if (entry->type == CatalogType::TABLE_ENTRY) {
+		auto &transaction = DuckLakeTransaction::Get(catalog_transaction.GetContext(), schema.ParentCatalog());
+		transaction.CheckNotCloned(entry->Cast<DuckLakeTableEntry>());
 	}
 	return entry->Cast<T>();
 }
