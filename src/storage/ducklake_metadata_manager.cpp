@@ -5863,51 +5863,52 @@ static void ConfigOptionScope(const DuckLakeConfigOption &option, string &scope,
 	}
 }
 
-bool DuckLakeMetadataManager::ResetConfigOption(const DuckLakeConfigOption &option) {
+//! The condition on the rows of the option
+static string ConfigOptionFilter(const DuckLakeConfigOption &option) {
 	string scope;
 	string scope_id;
 	string scope_filter;
 	ConfigOptionScope(option, scope, scope_id, scope_filter);
-	auto result = Query(StringUtil::Format(R"(
-DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s
-)",
-	                                       SQLString(option.option.key), scope_filter));
+	return StringUtil::Format("key = %s AND %s", SQLString(option.option.key), scope_filter);
+}
+
+bool DuckLakeMetadataManager::ConfigOptionExists(const DuckLakeConfigOption &option) {
+	auto result = Query(StringUtil::Format("SELECT COUNT(*) FROM {METADATA_CATALOG}.ducklake_metadata WHERE %s",
+	                                       ConfigOptionFilter(option)));
 	result->ThrowIfError("Failed to reset config option in DuckLake: ");
 	return result->Fetch()->GetValue(0, 0).GetValue<idx_t>() > 0;
 }
 
-void DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option) {
-	auto &option_key = option.option.key;
-	auto &option_value = option.option.value;
-	string scope;
-	string scope_id;
-	string scope_filter;
-	ConfigOptionScope(option, scope, scope_id, scope_filter);
-	auto result = Query(StringUtil::Format(R"(
-SELECT COUNT(*)
-FROM {METADATA_CATALOG}.ducklake_metadata
-WHERE key = %s AND %s
-)",
-	                                       SQLString(option_key), scope_filter));
-
-	auto count = result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
-	auto update = StringUtil::Format("UPDATE {METADATA_CATALOG}.ducklake_metadata SET value=%s WHERE key=%s AND %s;\n",
-	                                 SQLString(option_value), SQLString(option_key), scope_filter);
-	if (count == 0) {
-		// a concurrent transaction can insert the option after the count
-		auto query = NewConfigOptionLockSql(option) + update +
-		             StringUtil::Format(R"(
-INSERT INTO {METADATA_CATALOG}.ducklake_metadata SELECT %s, %s, %s, %s
-WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_metadata WHERE key=%s AND %s);
-)",
-		                                SQLString(option_key), SQLString(option_value), scope, scope_id,
-		                                SQLString(option_key), scope_filter);
-		// the overload with a snapshot runs the statements on a Postgres server, where the lock is taken
-		result = Execute(DuckLakeSnapshot(), query);
-	} else {
-		result = Execute(update);
+string DuckLakeMetadataManager::WriteConfigOptions(const vector<DuckLakeConfigOptionUndo> &changes) const {
+	// sorted, so that concurrent commits update the rows of the options in the same order
+	map<string, idx_t> last_changes;
+	for (idx_t i = 0; i < changes.size(); i++) {
+		last_changes[ConfigOptionFilter(changes[i].option)] = i;
 	}
-	result->ThrowIfError("Failed to insert config option in DuckLake: ");
+	string locks;
+	string writes;
+	for (auto &entry : last_changes) {
+		auto &option_filter = entry.first;
+		auto &change = changes[entry.second];
+		if (change.reset) {
+			writes += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE %s;\n", option_filter);
+			continue;
+		}
+		string scope;
+		string scope_id;
+		string scope_filter;
+		ConfigOptionScope(change.option, scope, scope_id, scope_filter);
+		auto &option = change.option.option;
+		locks += NewConfigOptionLockSql(option_filter);
+		writes += StringUtil::Format(R"(
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = %s WHERE %s;
+INSERT INTO {METADATA_CATALOG}.ducklake_metadata SELECT %s, %s, %s, %s
+WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_metadata WHERE %s);
+)",
+		                             SQLString(option.value), option_filter, SQLString(option.key),
+		                             SQLString(option.value), scope, scope_id, option_filter);
+	}
+	return locks + writes;
 }
 
 bool DuckLakeMetadataManager::IsEncrypted() const {

@@ -92,6 +92,40 @@ static vector<Value> GetOptionRow(const DuckLakeTag &tag, const string &scope, c
 	        scope_entry.empty() ? Value() : Value(scope_entry)};
 }
 
+template <class T, class MATCH>
+static void ReplaceOption(vector<T> &entries, MATCH matches, const DuckLakeConfigOptionUndo &change, T entry) {
+	entries.erase(std::remove_if(entries.begin(), entries.end(), matches), entries.end());
+	if (!change.reset) {
+		entries.push_back(std::move(entry));
+	}
+}
+
+//! Applies the options that the transaction set and reset, which it writes when it commits
+static void ApplyConfigOptionChanges(DuckLakeMetadata &metadata, const vector<DuckLakeConfigOptionUndo> &changes) {
+	for (auto &change : changes) {
+		auto &option = change.option;
+		auto &key = option.option.key;
+		if (option.table_id.IsValid()) {
+			ReplaceOption(
+			    metadata.table_settings,
+			    [&](const DuckLakeTableSetting &setting) {
+				    return setting.table_id == option.table_id && setting.tag.key == key;
+			    },
+			    change, DuckLakeTableSetting {option.table_id, option.option});
+		} else if (option.schema_id.IsValid()) {
+			ReplaceOption(
+			    metadata.schema_settings,
+			    [&](const DuckLakeSchemaSetting &setting) {
+				    return setting.schema_id == option.schema_id && setting.tag.key == key;
+			    },
+			    change, DuckLakeSchemaSetting {option.schema_id, option.option});
+		} else {
+			ReplaceOption(
+			    metadata.tags, [&](const DuckLakeTag &tag) { return tag.key == key; }, change, option.option);
+		}
+	}
+}
+
 unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context, TableFunctionInitInput &input) {
 	auto &bind_data = input.bind_data->Cast<DuckLakeOptionsData>();
 	auto &ducklake_catalog = bind_data.catalog;
@@ -100,6 +134,7 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 
 	auto result = make_uniq<DuckLakeOptionsState>();
 	auto metadata = metadata_manager.LoadDuckLake();
+	ApplyConfigOptionChanges(metadata, transaction.GetConfigOptionChanges());
 
 	// Global options
 	for (auto &tag : metadata.tags) {

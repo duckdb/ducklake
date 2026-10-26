@@ -234,8 +234,8 @@ public:
 	virtual string CommitErrorHint(const string &) const {
 		return string();
 	}
-	//! SQL run before an option is inserted, so concurrent inserts of an option cannot both succeed
-	virtual string NewConfigOptionLockSql(const DuckLakeConfigOption &) const {
+	//! SQL that a commit runs before it inserts an option, so two commits cannot both insert it
+	virtual string NewConfigOptionLockSql(const string &) const {
 		return string();
 	}
 
@@ -588,8 +588,9 @@ public:
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	//! The tables with data files that are not dropped
 	unordered_set<idx_t> GetTablesWithLiveDataFiles();
-	virtual void SetConfigOption(const DuckLakeConfigOption &option);
-	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);
+	bool ConfigOptionExists(const DuckLakeConfigOption &option);
+	//! The SQL that writes the last change of each option
+	string WriteConfigOptions(const vector<DuckLakeConfigOptionUndo> &changes) const;
 	virtual void MigrateV01();
 	virtual void MigrateV02(bool allow_failures = false);
 	virtual void MigrateV03(bool allow_failures = false);

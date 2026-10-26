@@ -143,6 +143,12 @@ struct DuckLakeCommitContext {
 	std::function<void(const string &)> report_post_commit_error = [](const string &) {
 	};
 	// LCOV_EXCL_STOP
+	//! Emits the SQL that writes the config options the transaction set and reset.
+	std::function<string()> write_config_options = []() {
+		return string();
+	};
+	//! Whether the commit writes a snapshot, a commit that only changes options writes none.
+	bool write_snapshot = true;
 	//! Author / message / extra info for the snapshot row.
 	DuckLakeSnapshotCommit commit_info;
 	//! When true, Commit() skips the post-commit DropEmptySupersededInlinedTables cleanup.

@@ -2741,10 +2741,15 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			can_retry = true;
 			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
 			DuckLakeCommitState commit_state(commit_snapshot);
-			// write the new snapshot
-			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
-			batch_queries += CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
-			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
+			string batch_queries;
+			if (context.write_snapshot) {
+				// write the new snapshot
+				batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
+				batch_queries +=
+				    CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
+				batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
+			}
+			batch_queries += context.write_config_options();
 			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				auto &commit_error = res->GetErrorObject();
@@ -2802,7 +2807,9 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	}
 	// If we got here, this snapshot was successful
 	context.set_entry_oids(new_entry_oids);
-	context.set_committed_snapshot_id(commit_snapshot.snapshot_id);
+	if (context.write_snapshot) {
+		context.set_committed_snapshot_id(commit_snapshot.snapshot_id);
+	}
 	context.set_table_options(committed_table_options);
 	for (auto &entry : dropped_file_stats) {
 		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);
