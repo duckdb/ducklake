@@ -16,6 +16,7 @@ namespace duckdb {
 class BaseStatistics;
 class DuckLakeFieldData;
 class DuckLakeTableEntry;
+class LogicalCopyToFile;
 
 enum class DuckLakeTransformType {
 	IDENTITY,
@@ -77,6 +78,11 @@ struct DuckLakePartitionUtils {
 	//! Build a relative Hive partition path from the table partition spec and values (e.g., "region=east/year=2020/")
 	static string BuildHivePartitionPath(DuckLakeTableEntry &table, const vector<Value> &partition_values,
 	                                     const string &separator);
+	//! The directory of a hive partition component, or its md5 hash when it is too long for a file name
+	static string GetPartitionDirectoryName(const string &hive_component);
+	//! The hive partition path of a partitioned COPY, with the directory names of GetPartitionDirectoryName.
+	//! Returns nullptr when distinct partitions can share a directory, which a partition path does not allow.
+	static unique_ptr<Expression> CreatePartitionPathExpression(ClientContext &context, const LogicalCopyToFile &copy);
 
 	//! Wrap a column expression in a named scalar function (e.g. "year", "hash")
 	static unique_ptr<Expression> ApplyScalarFunction(ClientContext &context, const string &function_name,
@@ -92,6 +98,10 @@ struct DuckLakePartitionUtils {
 
 	//! Whether changing the type of a value can change its bucket
 	static bool BucketChangesWithType(const LogicalType &source_type, const LogicalType &target_type);
+
+	//! Throws when the transform of the field cannot compute the partition values of a column of the type
+	static void VerifyTransformSupportsType(ClientContext &context, const DuckLakePartitionField &field,
+	                                        const string &column_name, const LogicalType &type);
 };
 
 } // namespace duckdb

@@ -170,6 +170,10 @@ public:
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes,
 	                                   const DuckLakeCommitContext &context);
+	//! Replaces the error with a conflict with the commits of other transactions
+	bool FindConflictWithOtherCommits(DuckLakeSnapshot transaction_snapshot,
+	                                  const TransactionChangeInformation &changes, const DuckLakeCommitContext &context,
+	                                  ErrorData &error);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                       DuckLakeSnapshot transaction_snapshot, const DuckLakeCommitContext &context) const;
 	void CheckFileConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,

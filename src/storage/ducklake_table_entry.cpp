@@ -689,6 +689,13 @@ DuckLakeTableEntry::BuildPartitionData(DuckLakeTransaction &transaction, const C
 	for (idx_t expr_idx = 0; expr_idx < partition_keys.size(); expr_idx++) {
 		auto &expr = *partition_keys[expr_idx];
 		auto partition_field = GetPartitionField(transaction.GetCatalog(), columns, field_data, expr);
+		auto context = transaction.context.lock();
+		if (context) {
+			// a spec that writes cannot bind would make every later insert fail
+			auto &partition_column = *field_data.GetByFieldIndex(partition_field.field_id);
+			DuckLakePartitionUtils::VerifyTransformSupportsType(*context, partition_field, partition_column.Name(),
+			                                                    partition_column.Type());
+		}
 		// Reject duplicate keys: same (field_id, transform). (year(ts), month(ts)) is fine, (a, a) is not.
 		for (auto &existing : partition_data->fields) {
 			if (existing.field_id == partition_field.field_id && existing.transform == partition_field.transform) {
@@ -966,6 +973,10 @@ bool TypePromotionIsAllowed(const LogicalType &source, const LogicalType &target
 	return result == target;
 }
 
+static bool IsTimestampWithoutTimeZone(const LogicalType &type) {
+	return LogicalType::TypeIsTimestamp(type) && type.id() != LogicalTypeId::TIMESTAMP_TZ;
+}
+
 bool IsSimpleCast(const ParsedExpression &expr) {
 	if (expr.GetExpressionType() != ExpressionType::OPERATOR_CAST) {
 		return false;
@@ -1072,6 +1083,10 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 	// we need to drop and recreate the column
 	// drop the field
 	result.DropField(source_id);
+	if (IsTimestampWithoutTimeZone(source_type) && IsTimestampWithoutTimeZone(target)) {
+		// added files can hold finer timestamps than the bounds kept at the coarser unit
+		result.refined_timestamp_fields.push_back(source_id.GetFieldIndex());
+	}
 
 	// re-create with the new type
 	auto column_data = source_id.GetColumnData().Copy();
@@ -1139,6 +1154,13 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterColumnType(DuckLakeTransaction
 	auto &partition = result->partition_data;
 	if (!partition) {
 		return std::move(result);
+	}
+	auto context = transaction.context.lock();
+	if (context) {
+		for (auto &field : partition->fields) {
+			auto &new_field = *result->GetFieldId(field.field_id);
+			DuckLakePartitionUtils::VerifyTransformSupportsType(*context, field, new_field.Name(), new_field.Type());
+		}
 	}
 	for (auto &field : partition->fields) {
 		if (field.transform.type != DuckLakeTransformType::BUCKET) {

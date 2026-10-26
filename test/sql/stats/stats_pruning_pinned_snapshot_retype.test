@@ -1,0 +1,50 @@
+# name: test/sql/stats/stats_pruning_pinned_snapshot_retype.test
+# description: A read pinned on a WAL SQLite catalog prunes with its own stats while another connection clears them in place
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/stats_pruning_pinned_snapshot_retype.db' AS ducklake (DATA_PATH '{TEST_DIR}/stats_pruning_pinned_snapshot_retype', META_JOURNAL_MODE 'wal', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER, f FLOAT DEFAULT 0.1)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, i FROM range(0, 100) r(i)
+
+statement ok
+INSERT INTO ducklake.t SELECT i, i FROM range(100, 200) r(i)
+
+statement ok con1
+BEGIN
+
+query II con1
+EXPLAIN ANALYZE SELECT count(*) FROM ducklake.t WHERE f >= 150
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+statement ok con2
+ALTER TABLE ducklake.t ALTER f TYPE DOUBLE
+
+query I con2
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_file_column_stats WHERE column_id = 2 AND min_value IS NULL
+----
+2
+
+query II con1
+EXPLAIN ANALYZE SELECT count(*) FROM ducklake.t WHERE f >= 150
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I con1
+SELECT count(*) FROM ducklake.t WHERE f >= 150
+----
+50
+
+statement ok con1
+COMMIT

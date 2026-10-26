@@ -38,7 +38,8 @@ static constexpr DuckLakeOptionMetadata DUCKLAKE_OPTIONS[] = {
     {"encrypted", "Whether or not to encrypt Parquet files written to the data path"},
     {"per_thread_output", "Whether to create separate output files per thread during parallel insertion"},
     {"write_deletion_vectors", "[EXPERIMENTAL - do not use outside testing] Whether to write Iceberg V3 deletion "
-                               "vectors (puffin) instead of positional delete files (parquet)"},
+                               "vectors (puffin) instead of positional delete files (parquet), encrypted catalogs "
+                               "always write parquet"},
     {"sort_on_insert", "Whether to sort data on INSERT according to SET SORTED BY (default: true)"},
     {"skip_stats_columns", "Columns for which min/max bounds are not recorded (counts are still recorded)"},
 };

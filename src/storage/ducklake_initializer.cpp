@@ -30,13 +30,15 @@ DuckLakeInitializer::DuckLakeInitializer(ClientContext &context, DuckLakeCatalog
 
 string DuckLakeInitializer::GetAttachOptions() {
 	vector<string> attach_options;
-	if (options.access_mode != AccessMode::AUTOMATIC) {
+	const string metadata_type = catalog.MetadataType();
+	// Quack does not enforce read-only attaches and newer versions reject them, the DuckLake catalog refuses writes
+	bool is_quack = metadata_type == "quack" || metadata_type == "quack_scanner";
+	if (options.access_mode != AccessMode::AUTOMATIC && !(is_quack && options.access_mode == AccessMode::READ_ONLY)) {
 		attach_options.push_back(EnumUtil::ToString(options.access_mode));
 	}
 	for (auto &option : options.metadata_parameters) {
 		attach_options.push_back(option.first + " " + option.second.ToSQLString());
 	}
-	const string metadata_type = catalog.MetadataType();
 	bool user_set_type = options.metadata_parameters.find("type") != options.metadata_parameters.end();
 	if (metadata_type.empty() && !user_set_type && !options.hide_metadata_catalog) {
 		// open a visible metadata catalog as DuckDB explicitly so DuckDB does not warn that it is a DuckLake catalog
@@ -75,14 +77,13 @@ void DuckLakeInitializer::Initialize() {
 		// if the schema is not explicitly set by the user - set it to the default schema in the catalog
 		options.metadata_schema = transaction.GetDefaultSchemaName();
 	}
-	// if no explicit ducklake_version was set via ATTACH, check the global setting
-	if (options.ducklake_version == DuckLakeVersion::UNSET) {
-		Value setting_val;
-		if (context.TryGetCurrentSetting("ducklake_default_version", setting_val) && !setting_val.IsNull()) {
-			options.ducklake_version = ParseWritableDuckLakeVersion(setting_val.ToString(), "ducklake_default_version");
-		}
+	// the metadata database would truncate a longer name, and the catalog is then not found under its name
+	auto max_name_length = transaction.GetMetadataManager().MaxIdentifierLength();
+	if (options.metadata_schema.GetIdentifierName().size() > max_name_length) {
+		throw InvalidInputException("METADATA_SCHEMA \"%s\" is longer than the %d bytes that the metadata database "
+		                            "allows for a name",
+		                            options.metadata_schema.GetIdentifierName(), max_name_length);
 	}
-
 	// after the metadata database is attached initialize the ducklake
 	// check if we are loading an existing DuckLake or creating a new one
 	// directly query a known ducklake metadata table to avoid scanning all attached catalogs via duckdb_tables()
@@ -96,6 +97,7 @@ void DuckLakeInitializer::Initialize() {
 			                            "new DuckLake is explicitly disabled",
 			                            options.metadata_path);
 		}
+		catalog.VerifyWritable();
 		try {
 			InitializeNewDuckLake(transaction, has_explicit_schema);
 		} catch (std::exception &ex) {
@@ -205,6 +207,16 @@ void DuckLakeInitializer::InitializeDataPath() {
 }
 
 void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction, bool has_explicit_schema) {
+	// without a version in the ATTACH, the ducklake_default_version setting or else the latest version
+	auto version = options.ducklake_version;
+	Value setting_val;
+	if (version == DuckLakeVersion::UNSET && context.TryGetCurrentSetting("ducklake_default_version", setting_val) &&
+	    !setting_val.IsNull()) {
+		version = ParseWritableDuckLakeVersion(setting_val.ToString(), "ducklake_default_version");
+	}
+	if (version == DuckLakeVersion::UNSET) {
+		version = DUCKLAKE_LATEST_VERSION;
+	}
 	if (options.data_path.empty()) {
 		auto &metadata_catalog =
 		    Catalog::GetCatalog(*transaction.GetConnection().context, Identifier(options.metadata_database));
@@ -218,9 +230,6 @@ void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction
 		options.data_path = path + ".files";
 		InitializeDataPath();
 	}
-	// default to the latest version when creating a new DuckLake
-	auto version =
-	    options.ducklake_version == DuckLakeVersion::UNSET ? DUCKLAKE_LATEST_VERSION : options.ducklake_version;
 	SetVersionedMetadataManager(transaction, version);
 	auto &metadata_manager = transaction.GetMetadataManager();
 	metadata_manager.InitializeDuckLake(has_explicit_schema, catalog.Encryption());
@@ -251,6 +260,9 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				    "DuckLake catalog version mismatch: catalog version is %s, but the extension requires version "
 				    "%s. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
 				    tag.value, DuckLakeVersionToString(target_version));
+			}
+			if (catalog_version < target_version) {
+				catalog.VerifyWritable();
 			}
 			if (catalog_version == DuckLakeVersion::V0_1) {
 				metadata_manager.MigrateV01();

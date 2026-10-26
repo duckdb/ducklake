@@ -39,6 +39,9 @@ struct ParsedCatalogEntry {
 
 class DuckLakeUtil {
 public:
+	//! File systems allow at most 255 bytes in a file name
+	static constexpr idx_t MAX_FILE_NAME_LENGTH = 255;
+
 	//! Extracts the value of a literal, or of a cast over a literal, as written in a DEFAULT or parameter default
 	static bool TryGetLiteralValue(const ParsedExpression &expr, Value &result);
 	//! Casts stored text to a type when the value prints as the same text
@@ -86,7 +89,7 @@ public:
 
 	static const char *BoolLiteral(bool v);
 
-	static string PartitionValueLiteral(const Value &v);
+	static string TextLiteralOrNull(const Value &v);
 
 	//! Throws if a column name is reserved for inlined data metadata on this catalog
 	static void ValidateInlinedSystemColumn(DuckLakeCatalog &catalog, ClientContext &context, SchemaIndex schema_id,

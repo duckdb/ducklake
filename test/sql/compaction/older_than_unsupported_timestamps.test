@@ -1,0 +1,100 @@
+# name: test/sql/compaction/older_than_unsupported_timestamps.test
+# description: Maintenance functions reject an infinite or BC older_than, and an age that reaches back before year 1
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/older_than_unsupported_timestamps.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/older_than_unsupported_timestamps')
+
+statement ok
+CREATE TABLE lake.t (i INTEGER)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0, table_name => 't')
+
+statement ok
+INSERT INTO lake.t VALUES (1)
+
+statement ok
+INSERT INTO lake.t VALUES (2)
+
+statement error
+SELECT * FROM ducklake_expire_snapshots('lake', dry_run => true, older_than => 'infinity'::TIMESTAMPTZ)
+----
+Invalid Input Error: The older_than option must be a finite timestamp in the year 1 or later, not 'infinity'
+
+statement error
+SELECT *
+FROM ducklake_expire_snapshots('lake', dry_run => true, older_than => '0001-01-01 (BC) 00:00:00+00'::TIMESTAMPTZ)
+----
+Invalid Input Error: The older_than option must be a finite timestamp in the year 1 or later, not '0001-01-01 (BC) 00:00:00+00'
+
+statement error
+SELECT * FROM ducklake_cleanup_old_files('lake', dry_run => true, older_than => 'infinity'::TIMESTAMPTZ)
+----
+Invalid Input Error: The older_than option must be a finite timestamp in the year 1 or later, not 'infinity'
+
+statement error
+SELECT * FROM ducklake_delete_orphaned_files('lake', dry_run => true, older_than => '-infinity'::TIMESTAMPTZ)
+----
+Invalid Input Error: The older_than option must be a finite timestamp in the year 1 or later, not '-infinity'
+
+statement error
+SELECT * FROM ducklake_merge_adjacent_files('lake', older_than => 'infinity'::TIMESTAMPTZ)
+----
+Invalid Input Error: The older_than option must be a finite timestamp in the year 1 or later, not 'infinity'
+
+statement error
+SELECT * FROM ducklake_merge_adjacent_files('lake', newer_than => '-infinity'::TIMESTAMPTZ)
+----
+Invalid Input Error: The newer_than option must be a finite timestamp in the year 1 or later, not '-infinity'
+
+statement error
+CALL lake.set_option('expire_older_than', '3000 years')
+----
+Invalid Input Error: The expire_older_than option '3000 years' reaches back before the year 1
+
+statement error
+CALL lake.set_option('delete_older_than', '3000 years')
+----
+Invalid Input Error: The delete_older_than option '3000 years' reaches back before the year 1
+
+statement ok
+CHECKPOINT lake
+
+# an age stored by an older DuckLake fails at the checkpoint
+statement ok
+CALL lake.set_option('expire_older_than', '1 day')
+
+statement ok
+CALL lake.set_option('delete_older_than', '1 day')
+
+statement ok
+UPDATE __ducklake_metadata_lake.ducklake_metadata SET value = '3000 years'
+WHERE key IN ('expire_older_than', 'delete_older_than')
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/older_than_unsupported_timestamps')
+
+statement error
+CHECKPOINT lake
+----
+<REGEX>:Invalid Input Error: .*The expire_older_than option '3000 years' reaches back before the year 1.*
+
+statement ok
+CALL lake.set_option('expire_older_than', '1 day')
+
+statement error
+CHECKPOINT lake
+----
+<REGEX>:Invalid Input Error: .*The delete_older_than option '3000 years' reaches back before the year 1.*

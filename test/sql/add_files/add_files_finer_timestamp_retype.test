@@ -1,0 +1,191 @@
+# name: test/sql/add_files/add_files_finer_timestamp_retype.test
+# description: Filters keep the rows of added files with finer timestamps after a retype to a finer timestamp unit
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_files_finer_timestamp_retype', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+COPY (SELECT TIMESTAMP_NS '2020-01-01 00:00:00.000000001' AS t) TO '{DATA_PATH}/finer_timestamp_ns.parquet'
+
+statement ok
+COPY (SELECT TIMESTAMP '2020-01-01 00:00:00.4' AS t) TO '{DATA_PATH}/finer_timestamp_us.parquet'
+
+statement ok
+COPY (SELECT DATE '2020-01-01' AS t) TO '{DATA_PATH}/finer_timestamp_date.parquet'
+
+statement ok
+COPY (SELECT {'a': TIMESTAMP_NS '2020-01-01 00:00:00.000000001'} AS s) TO '{DATA_PATH}/finer_timestamp_struct.parquet'
+
+# the added file keeps no bounds, the inserted file keeps its own
+statement ok
+CREATE TABLE ducklake.ts (t TIMESTAMP)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'ts', '{DATA_PATH}/finer_timestamp_ns.parquet')
+
+statement ok
+INSERT INTO ducklake.ts VALUES ('2019-01-01')
+
+statement ok
+ALTER TABLE ducklake.ts ALTER t TYPE TIMESTAMP_NS
+
+query III
+SELECT (SELECT count(*) FROM ducklake.ts WHERE t = TIMESTAMP_NS '2020-01-01 00:00:00.000000001'), (SELECT count(*) FROM ducklake.ts WHERE t > TIMESTAMP_NS '2020-01-01 00:00:00'), max(t) FROM ducklake.ts
+----
+1	1	2020-01-01 00:00:00.000000001
+
+# seconds retyped to milliseconds
+statement ok
+CREATE TABLE ducklake.s (t TIMESTAMP_S)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 's', '{DATA_PATH}/finer_timestamp_us.parquet')
+
+statement ok
+ALTER TABLE ducklake.s ALTER t TYPE TIMESTAMP_MS
+
+query I
+SELECT count(*) FROM ducklake.s WHERE t = TIMESTAMP_MS '2020-01-01 00:00:00.4'
+----
+1
+
+# a file added in the transaction of the retype
+statement ok
+CREATE TABLE ducklake.txn (t TIMESTAMP)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'txn', '{DATA_PATH}/finer_timestamp_ns.parquet')
+
+statement ok
+ALTER TABLE ducklake.txn ALTER t TYPE TIMESTAMP_NS
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.txn WHERE t = TIMESTAMP_NS '2020-01-01 00:00:00.000000001'
+----
+1
+
+# a table created in the transaction of the retype
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.created (t TIMESTAMP)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'created', '{DATA_PATH}/finer_timestamp_ns.parquet')
+
+statement ok
+ALTER TABLE ducklake.created ALTER t TYPE TIMESTAMP_NS
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.created WHERE t = TIMESTAMP_NS '2020-01-01 00:00:00.000000001'
+----
+1
+
+# an insert in the transaction of the retype does not write the table bounds back
+statement ok
+CREATE TABLE ducklake.ins (t TIMESTAMP)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'ins', '{DATA_PATH}/finer_timestamp_ns.parquet')
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.ins VALUES ('2019-01-01')
+
+statement ok
+ALTER TABLE ducklake.ins ALTER t TYPE TIMESTAMP_NS
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.ins WHERE t > TIMESTAMP_NS '2020-01-01 00:00:00'
+----
+1
+
+# a struct field
+statement ok
+CREATE TABLE ducklake.nested (s STRUCT(a TIMESTAMP))
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'nested', '{DATA_PATH}/finer_timestamp_struct.parquet')
+
+statement ok
+ALTER TABLE ducklake.nested ALTER s TYPE STRUCT(a TIMESTAMP_NS)
+
+query I
+SELECT count(*) FROM ducklake.nested WHERE s.a = TIMESTAMP_NS '2020-01-01 00:00:00.000000001'
+----
+1
+
+# tables without added files and dates keep their bounds
+statement ok
+CREATE TABLE ducklake.native (t TIMESTAMP)
+
+statement ok
+INSERT INTO ducklake.native VALUES ('2019-01-01')
+
+statement ok
+ALTER TABLE ducklake.native ALTER t TYPE TIMESTAMP_NS
+
+statement ok
+CREATE TABLE ducklake.dt (t DATE)
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'dt', '{DATA_PATH}/finer_timestamp_date.parquet')
+
+statement ok
+ALTER TABLE ducklake.dt ALTER t TYPE TIMESTAMP_NS
+
+query III
+SELECT tbl.table_name, stats.min_value, stats.max_value
+FROM __ducklake_metadata_ducklake.ducklake_file_column_stats stats
+JOIN __ducklake_metadata_ducklake.ducklake_table tbl USING (table_id)
+ORDER BY tbl.table_id, stats.min_value NULLS FIRST
+----
+ts	NULL	NULL
+ts	2019-01-01 00:00:00	2019-01-01 00:00:00
+s	NULL	NULL
+txn	NULL	NULL
+created	NULL	NULL
+ins	NULL	NULL
+ins	2019-01-01 00:00:00	2019-01-01 00:00:00
+nested	NULL	NULL
+native	2019-01-01 00:00:00	2019-01-01 00:00:00
+dt	2020-01-01	2020-01-01
+
+query III
+SELECT tbl.table_name, stats.min_value, stats.max_value
+FROM __ducklake_metadata_ducklake.ducklake_table_column_stats stats
+JOIN __ducklake_metadata_ducklake.ducklake_table tbl USING (table_id)
+ORDER BY tbl.table_id, stats.column_id
+----
+ts	NULL	NULL
+s	NULL	NULL
+txn	NULL	NULL
+created	NULL	NULL
+ins	NULL	NULL
+nested	NULL	NULL
+native	2019-01-01 00:00:00	2019-01-01 00:00:00
+dt	2020-01-01	2020-01-01

@@ -5,9 +5,15 @@
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/decimal.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "common/ducklake_util.hpp"
+#include "duckdb/common/crypto/md5.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/planner/expression.hpp"
+#include "duckdb/planner/expression/bound_case_expression.hpp"
+#include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/planner/operator/logical_copy_to_file.hpp"
 
 #include <cstring>
 
@@ -145,14 +151,66 @@ string DuckLakePartitionUtils::BuildHivePartitionPath(DuckLakeTableEntry &table,
 		if (!result.empty()) {
 			result += separator;
 		}
-		result += HivePartitioning::Escape(key_names[field_idx]) + "=";
-		result += partition_value.IsNull() ? HivePartitioning::DEFAULT_PARTITION_NAME
-		                                   : HivePartitioning::EscapeValue(partition_value.ToString());
+		auto component = HivePartitioning::Escape(key_names[field_idx]) + "=";
+		component += partition_value.IsNull() ? HivePartitioning::DEFAULT_PARTITION_NAME
+		                                      : HivePartitioning::EscapeValue(partition_value.ToString());
+		result += GetPartitionDirectoryName(component);
 	}
 	if (!result.empty()) {
 		result += separator;
 	}
 	return result;
+}
+
+//! Whether distinct values of the type always have distinct hive directory names
+static bool HasDistinctHiveNames(const LogicalType &type) {
+	if (type.IsNumeric() || type.IsTemporal()) {
+		return true;
+	}
+	switch (type.id()) {
+	case LogicalTypeId::BOOLEAN:
+	case LogicalTypeId::VARCHAR:
+	case LogicalTypeId::INTERVAL:
+	case LogicalTypeId::UUID:
+	case LogicalTypeId::ENUM:
+		return true;
+	default:
+		return false;
+	}
+}
+
+string DuckLakePartitionUtils::GetPartitionDirectoryName(const string &hive_component) {
+	if (hive_component.size() <= DuckLakeUtil::MAX_FILE_NAME_LENGTH) {
+		return hive_component;
+	}
+	MD5Context md5;
+	md5.Add(hive_component);
+	return md5.FinishHex();
+}
+
+unique_ptr<Expression> DuckLakePartitionUtils::CreatePartitionPathExpression(ClientContext &context,
+                                                                             const LogicalCopyToFile &copy) {
+	for (auto col_idx : copy.partition_columns) {
+		if (!HasDistinctHiveNames(copy.expected_types[col_idx])) {
+			return nullptr;
+		}
+	}
+	FunctionBinder binder(context);
+	vector<unique_ptr<Expression>> components;
+	for (idx_t i = 0; i < copy.partition_columns.size(); i++) {
+		auto col_idx = copy.partition_columns[i];
+		vector<unique_ptr<Expression>> children;
+		children.push_back(make_uniq<BoundConstantExpression>(Value(copy.names[col_idx].GetIdentifierName())));
+		children.push_back(make_uniq<BoundReferenceExpression>(copy.expected_types[col_idx], i));
+		auto component = binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier("hive_partition_component"),
+		                                           std::move(children));
+		auto fits = BoundComparisonExpression::Create(
+		    ExpressionType::COMPARE_LESSTHANOREQUALTO, ApplyScalarFunction(context, "strlen", component->Copy()),
+		    make_uniq<BoundConstantExpression>(Value::BIGINT(DuckLakeUtil::MAX_FILE_NAME_LENGTH)));
+		auto hashed = ApplyScalarFunction(context, "md5", component->Copy());
+		components.push_back(make_uniq<BoundCaseExpression>(std::move(fits), std::move(component), std::move(hashed)));
+	}
+	return binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier("path_join"), std::move(components));
 }
 
 unique_ptr<Expression> DuckLakePartitionUtils::ApplyScalarFunction(ClientContext &context, const string &function_name,
@@ -235,16 +293,24 @@ static unique_ptr<Expression> FloorNanosToMicros(ClientContext &context, unique_
 	return DuckLakePartitionUtils::ApplyScalarFunction(context, "make_timestamp", std::move(micros));
 }
 
+//! A TIMESTAMPTZ as the timestamp of its UTC instant, so its transforms do not depend on the session TimeZone
+static unique_ptr<Expression> TimestampTZToUTC(ClientContext &context, unique_ptr<Expression> column_expr) {
+	if (column_expr->GetReturnType().id() != LogicalTypeId::TIMESTAMP_TZ) {
+		return column_expr;
+	}
+	column_expr = DuckLakePartitionUtils::ApplyScalarFunction(context, "epoch_us", std::move(column_expr));
+	return DuckLakePartitionUtils::ApplyScalarFunction(context, "make_timestamp", std::move(column_expr));
+}
+
 static unique_ptr<Expression> ApplyEpochTransform(ClientContext &context, unique_ptr<Expression> column_expr,
                                                   DuckLakeTransformType transform_type) {
 	auto source_id = column_expr->GetReturnType().id();
 	if (source_id == LogicalTypeId::TIMESTAMP_NS || source_id == LogicalTypeId::TIMESTAMP_TZ_NS) {
 		// the implicit cast to microseconds rounds, Iceberg requires flooring
 		column_expr = FloorNanosToMicros(context, std::move(column_expr));
-	} else if (source_id == LogicalTypeId::TIMESTAMP_TZ) {
+	} else {
 		// Iceberg computes epoch transforms on the UTC instant
-		column_expr = DuckLakePartitionUtils::ApplyScalarFunction(context, "epoch_us", std::move(column_expr));
-		column_expr = DuckLakePartitionUtils::ApplyScalarFunction(context, "make_timestamp", std::move(column_expr));
+		column_expr = TimestampTZToUTC(context, std::move(column_expr));
 	}
 	vector<unique_ptr<Expression>> children;
 	children.push_back(make_uniq<BoundConstantExpression>(Value(GetEpochTransformPart(transform_type))));
@@ -252,6 +318,32 @@ static unique_ptr<Expression> ApplyEpochTransform(ClientContext &context, unique
 	children.push_back(std::move(column_expr));
 	FunctionBinder binder(context);
 	return binder.BindScalarFunction(Identifier::DefaultSchema(), "date_diff", std::move(children));
+}
+
+static bool EpochTransformSupportsType(const LogicalType &type) {
+	// date_diff also binds through an implicit cast, as from VARIANT, which then fails on values that are not dates
+	return type.id() == LogicalTypeId::DATE || type.id() == LogicalTypeId::TIMESTAMP_TZ_NS ||
+	       LogicalType::TypeIsTimestamp(type);
+}
+
+void DuckLakePartitionUtils::VerifyTransformSupportsType(ClientContext &context, const DuckLakePartitionField &field,
+                                                         const string &column_name, const LogicalType &type) {
+	bool supported = !IsEpochTransform(field.transform.type) || EpochTransformSupportsType(type);
+	if (supported) {
+		try {
+			ApplyPartitionTransform(context, make_uniq<BoundReferenceExpression>(type, 0ULL), field);
+		} catch (std::exception &ex) {
+			ErrorData error(ex);
+			if (error.Type() != ExceptionType::BINDER) {
+				throw;
+			}
+			supported = false;
+		}
+	}
+	if (!supported) {
+		throw InvalidInputException("Cannot partition by %s(%s) - the transform does not support columns of type %s",
+		                            GetTransformName(field.transform.type), column_name, type);
+	}
 }
 
 unique_ptr<Expression> DuckLakePartitionUtils::ApplyPartitionTransform(ClientContext &context,
@@ -264,7 +356,8 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyPartitionTransform(ClientCon
 	case DuckLakeTransformType::MONTH:
 	case DuckLakeTransformType::DAY:
 	case DuckLakeTransformType::HOUR:
-		return ApplyScalarFunction(context, GetTransformName(field.transform.type), std::move(column_expr));
+		return ApplyScalarFunction(context, GetTransformName(field.transform.type),
+		                           TimestampTZToUTC(context, std::move(column_expr)));
 	case DuckLakeTransformType::EPOCH_YEAR:
 	case DuckLakeTransformType::EPOCH_MONTH:
 	case DuckLakeTransformType::EPOCH_DAY:

@@ -30,6 +30,13 @@ WHERE name IN ('file_path', 'pos') ORDER BY ALL
 file_path	REQUIRED
 pos	REQUIRED
 
+query II
+SELECT name, field_id FROM parquet_schema('{DATA_PATH}/delete_file_required_columns/main/t/*-delete.parquet')
+WHERE name IN ('file_path', 'pos') ORDER BY ALL
+----
+file_path	2147483546
+pos	2147483545
+
 # no column of a delete file is optional
 query I
 SELECT count(*) FROM parquet_schema('{DATA_PATH}/delete_file_required_columns/main/t/*-delete.parquet')

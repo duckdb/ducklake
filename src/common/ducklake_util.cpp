@@ -14,6 +14,7 @@
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
+#include "functions/ducklake_table_functions.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
@@ -504,7 +505,7 @@ const char *DuckLakeUtil::BoolLiteral(bool v) {
 	return v ? "true" : "false";
 }
 
-string DuckLakeUtil::PartitionValueLiteral(const Value &v) {
+string DuckLakeUtil::TextLiteralOrNull(const Value &v) {
 	return v.IsNull() ? string("NULL") : SQLString::ToString(v.ToString());
 }
 
@@ -726,6 +727,8 @@ static string ParseInterval(ClientContext &, const string &option, const Value &
 		if (!Interval::FromString(interval_value, result)) {
 			throw BinderException("%s is not a valid interval value.", option);
 		}
+		// throws if the interval reaches back before the year 1
+		DuckLakeTableFunctionUtil::FormatTimestampOlderThan(option, interval_value);
 	}
 	return interval_value;
 }

@@ -328,7 +328,6 @@ unique_ptr<LogicalOperator> DuckLakeDataFlusher::GenerateFlushCommand() {
 	    copy);
 
 	copy->table_index = binder.GenerateTableIndex();
-	copy->batch_size = DEFAULT_ROW_GROUP_SIZE;
 	copy->children.push_back(std::move(root));
 
 	// followed by the compaction operator (that writes the results back to the

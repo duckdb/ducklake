@@ -840,8 +840,18 @@ void DuckLakeTransaction::Rollback() {
 	UndoConfigOptions();
 	if (connection) {
 		// rollback any changes made to the metadata catalog
-		if (connection->HasActiveTransaction()) {
-			connection->Rollback();
+		try {
+			if (connection->HasActiveTransaction()) {
+				connection->Rollback();
+			}
+		} catch (std::exception &) {
+			// nothing references the written files, so they are removed also when the rollback fails
+			connection.reset();
+			try {
+				state->CleanupFiles();
+			} catch (std::exception &) { // NOLINT
+			}
+			throw;
 		}
 		connection.reset();
 	}
@@ -876,6 +886,8 @@ Connection &DuckLakeTransaction::GetConnection() {
 		Settings::Set<CatalogErrorMaxSchemasSetting>(*connection->context, SetScope::SESSION, Value::UBIGINT(0));
 		// metadata queries rely on ascending ORDER BY, which a global SET default_order would change
 		Settings::Set<DefaultOrderSetting>(*connection->context, SetScope::SESSION, Value("ASC"));
+		// commit retries read the errors of metadata queries, which a global SET errors_as_json would turn into JSON
+		Settings::Set<ErrorsAsJSONSetting>(*connection->context, SetScope::SESSION, Value::BOOLEAN(false));
 		auto &metadata_type = ducklake_catalog.MetadataType();
 		if (metadata_type == "sqlite" || metadata_type == "sqlite_scanner") {
 			// FIXME: sqlite_scanner's per-scan read connections deadlock against concurrent writers
@@ -1453,6 +1465,10 @@ void DuckLakeTransaction::FlushChanges() {
 		}
 	}
 	forget_columns_with_values();
+}
+
+void DuckLakeTransaction::CleanupFiles() {
+	state->CleanupFiles();
 }
 
 void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version) {
@@ -2405,6 +2421,26 @@ string DuckLakeTransaction::GenerateUUIDv7() {
 
 string DuckLakeTransaction::GenerateUUID() const {
 	return GenerateUUIDv7();
+}
+
+DuckLakeViewEntry &DuckLakeTransaction::GetTransactionView(DuckLakeViewEntry &view) {
+	if (catalog_version == 0 || view.IsTransactionLocal()) {
+		return view;
+	}
+	lock_guard<mutex> guard(transaction_views_lock);
+	if (transaction_views_version != catalog_version) {
+		// a later schema change can change the binding again
+		for (auto &entry : transaction_views) {
+			outdated_transaction_views.push_back(std::move(entry.second));
+		}
+		transaction_views.clear();
+		transaction_views_version = catalog_version;
+	}
+	auto &copy = transaction_views[&view];
+	if (!copy) {
+		copy = view.CopyUnbound();
+	}
+	return *copy;
 }
 
 idx_t DuckLakeTransaction::GetCatalogVersion() {

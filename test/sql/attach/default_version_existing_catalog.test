@@ -1,0 +1,82 @@
+# name: test/sql/attach/default_version_existing_catalog.test
+# description: ducklake_default_version only sets the version of new catalogs, existing ones attach at their version
+# group: [attach]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/default_version_10.ducklake' AS l10 (DATA_PATH '{TEST_DIR}/default_version_10',
+    DUCKLAKE_VERSION '1.0')
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/default_version_11.ducklake' AS l11 (DATA_PATH '{TEST_DIR}/default_version_11',
+    DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE TABLE l10.t AS SELECT 1 AS i
+
+statement ok
+CREATE TABLE l11.t AS SELECT 2 AS i
+
+statement ok
+DETACH l10
+
+statement ok
+DETACH l11
+
+statement ok
+SET ducklake_default_version = '1.0'
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/default_version_11.ducklake' AS l11
+
+query II
+SELECT (SELECT value FROM __ducklake_metadata_l11.ducklake_metadata WHERE key = 'version'), i FROM l11.t
+----
+1.1	2
+
+statement ok
+DETACH l11
+
+statement ok
+SET ducklake_default_version = '1.1'
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/default_version_10.ducklake' AS l10
+
+query II
+SELECT (SELECT value FROM __ducklake_metadata_l10.ducklake_metadata WHERE key = 'version'), i FROM l10.t
+----
+1.0	1
+
+statement ok
+DETACH l10
+
+# a new catalog gets the version of the setting
+statement ok
+SET ducklake_default_version = '1.0'
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/default_version_new.ducklake' AS lnew (DATA_PATH '{TEST_DIR}/default_version_new')
+
+query I
+SELECT value FROM __ducklake_metadata_lnew.ducklake_metadata WHERE key = 'version'
+----
+1.0
+
+statement ok
+DETACH lnew
+
+# an automatic migration of an existing catalog goes to the latest version, as without the setting
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/default_version_10.ducklake' AS l10 (AUTOMATIC_MIGRATION TRUE)
+
+query II
+SELECT (SELECT value FROM __ducklake_metadata_l10.ducklake_metadata WHERE key = 'version'), i FROM l10.t
+----
+1.1	1
+
+statement ok
+RESET ducklake_default_version

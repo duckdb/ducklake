@@ -1,0 +1,40 @@
+# name: test/sql/retry/last_retry_conflict_hint.test
+# description: A conflict found on the last retry is reported without the advice to raise the retry count
+# group: [retry]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/last_retry_conflict_hint', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+SET ducklake_max_retry_count = 1
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DROP TABLE lake.t
+
+statement ok con2
+INSERT INTO lake.t VALUES (1)
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Failed to commit DuckLake transaction\.\nTransaction conflict - attempting to insert into table.*but another transaction has dropped it.*
