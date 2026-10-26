@@ -456,7 +456,7 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 }
 
 string PostgresMetadataManager::ConfigOptionLockSql() const {
-	// every such commit updates the version row, so of two concurrent ones the later retries and finds the option
+	// of two concurrent commits that update the version row the later waits, then retries or replaces the other rows
 	return "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = value WHERE key = 'version' AND scope IS NULL;\n";
 }
 

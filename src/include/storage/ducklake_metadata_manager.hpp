@@ -598,6 +598,8 @@ public:
 	unordered_set<idx_t> GetTablesWithLiveDataFiles();
 	virtual void SetConfigOption(const DuckLakeConfigOption &option);
 	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);
+	//! Replaces the rows of each changed option with its last value
+	string RewriteConfigOptionsSql(const vector<DuckLakeConfigOptionUndo> &changes) const;
 	virtual void MigrateV01();
 	virtual void MigrateV02(bool allow_failures = false);
 	virtual void MigrateV03(bool allow_failures = false);

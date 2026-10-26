@@ -5989,6 +5989,36 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value=%s WHERE key=%s AND %s
 	result->ThrowIfError("Failed to insert config option in DuckLake: ");
 }
 
+string DuckLakeMetadataManager::RewriteConfigOptionsSql(const vector<DuckLakeConfigOptionUndo> &changes) const {
+	// sorted, so that concurrent commits write the rows of the options in the same order
+	map<pair<string, string>, idx_t> last_changes;
+	for (idx_t i = 0; i < changes.size(); i++) {
+		string scope;
+		string scope_id;
+		string scope_filter;
+		ConfigOptionScope(changes[i].option, scope, scope_id, scope_filter);
+		last_changes[make_pair(scope_filter, changes[i].option.option.key)] = i;
+	}
+	string result;
+	for (auto &entry : last_changes) {
+		auto &change = changes[entry.second];
+		auto &key = change.option.option.key;
+		// also removes a row of the option that a concurrent commit inserted
+		result += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s;\n",
+		                             SQLString(key), entry.first.first);
+		if (change.reset) {
+			continue;
+		}
+		string scope;
+		string scope_id;
+		string scope_filter;
+		ConfigOptionScope(change.option, scope, scope_id, scope_filter);
+		result += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES (%s, %s, %s, %s);\n",
+		                             SQLString(key), SQLString(change.option.option.value), scope, scope_id);
+	}
+	return result;
+}
+
 bool DuckLakeMetadataManager::IsEncrypted() const {
 	return transaction.GetCatalog().Encryption() == DuckLakeEncryption::ENCRYPTED;
 }

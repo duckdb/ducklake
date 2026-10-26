@@ -810,7 +810,7 @@ void DuckLakeTransaction::Commit() {
 		}
 	}
 	try {
-		if (ChangesMade() || !ConfigOptionLockSql().empty()) {
+		if (ChangesMade() || !ConfigOptionCommitSql().empty()) {
 			FlushChanges();
 		} else if (connection) {
 			try {
@@ -1447,7 +1447,7 @@ idx_t DuckLakeRetryConfig::WaitMs(idx_t attempt, idx_t remaining_ms, double mult
 }
 
 void DuckLakeTransaction::FlushChanges() {
-	if (!ChangesMade() && ConfigOptionLockSql().empty()) {
+	if (!ChangesMade() && ConfigOptionCommitSql().empty()) {
 		// LCOV_EXCL_START
 		return;
 		// LCOV_EXCL_STOP
@@ -1705,10 +1705,10 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.report_post_commit_error = [&](const string &message) {
 		ReportPostCommitError(message);
 	};
-	context.config_option_lock = ConfigOptionLockSql();
+	context.config_option_sql = ConfigOptionCommitSql();
 	context.write_snapshot = ChangesMade();
-	// a retry rolls back what the statements wrote, so a commit that only writes options fails instead
-	context.allow_retry = context.write_snapshot || !metadata_written;
+	// a retry rolls back what the statements wrote, so a commit that locks options fails instead
+	context.allow_retry = context.config_option_sql.empty() || !metadata_written;
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
 	context.snapshot_and_stats_query =
@@ -1729,11 +1729,15 @@ void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) 
 	}
 }
 
-string DuckLakeTransaction::ConfigOptionLockSql() const {
+string DuckLakeTransaction::ConfigOptionCommitSql() const {
 	if (config_option_undo.empty()) {
 		return string();
 	}
-	return metadata_manager->ConfigOptionLockSql();
+	auto lock = metadata_manager->ConfigOptionLockSql();
+	if (lock.empty()) {
+		return string();
+	}
+	return lock + metadata_manager->RewriteConfigOptionsSql(config_option_undo);
 }
 
 void DuckLakeTransaction::RewriteConfigOptions() {
