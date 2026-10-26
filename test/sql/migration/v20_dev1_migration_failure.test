@@ -1,0 +1,68 @@
+# name: test/sql/migration/v20_dev1_migration_failure.test
+# description: a failed migration from 2.0-dev1 to 2.0-dev2 keeps nothing, so it succeeds once its cause is gone
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v20_dev1_migration_failure', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+# simulate a 2.0-dev1 catalog
+statement ok
+CREATE TABLE meta.ducklake_snapshot_tag(tag_name VARCHAR, snapshot_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT)
+
+statement ok
+UPDATE meta.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version'
+
+# the migration fails at the table it creates, after it added the origin columns
+statement ok
+CREATE TABLE meta.ducklake_retired_path(path VARCHAR)
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v20_dev1_migration_failure', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+----
+ducklake_retired_path
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS check_meta
+
+query I
+SELECT count(*) FROM (SELECT DISTINCT table_name, column_name FROM duckdb_columns() WHERE database_name = 'check_meta' AND column_name IN ('origin_file_id', 'origin_snapshot'))
+----
+0
+
+query I
+SELECT value FROM check_meta.ducklake_metadata WHERE key = 'version'
+----
+2.0-dev1
+
+statement ok
+DROP TABLE check_meta.ducklake_retired_path
+
+statement ok
+DETACH check_meta
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v20_dev1_migration_failure', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev2
+
+query I
+SELECT * FROM dl.t
+----
+42

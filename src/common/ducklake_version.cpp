@@ -13,7 +13,8 @@ static constexpr StringUtil::EnumStringLiteral DUCKLAKE_VERSIONS[] = {
     {static_cast<uint32_t>(DuckLakeVersion::V1_0), "1.0"},
     {static_cast<uint32_t>(DuckLakeVersion::V1_1_DEV_1), "1.1-dev1"},
     {static_cast<uint32_t>(DuckLakeVersion::V1_1), "1.1"},
-    {static_cast<uint32_t>(DuckLakeVersion::V2_0_DEV1), "2.0-dev1"}};
+    {static_cast<uint32_t>(DuckLakeVersion::V2_0_DEV1), "2.0-dev1"},
+    {static_cast<uint32_t>(DuckLakeVersion::V2_0_DEV2), "2.0-dev2"}};
 
 static constexpr DuckLakeVersion SUPPORTED_VERSIONS[] = {DuckLakeVersion::V1_0, DuckLakeVersion::V1_1,
                                                          DUCKLAKE_LATEST_VERSION};

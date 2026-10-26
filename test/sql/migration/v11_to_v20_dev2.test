@@ -1,0 +1,135 @@
+# name: test/sql/migration/v11_to_v20_dev2.test
+# description: a 1.1 catalog is migrated to 2.0-dev2 only with AUTOMATIC_MIGRATION, and the dev version is attached as it is
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_to_v20_dev2_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1')
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement error
+SELECT * FROM meta.ducklake_snapshot_tag
+----
+does not exist
+
+statement ok
+DETACH dl
+
+# a release catalog is attached at its own version
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_to_v20_dev2_files', METADATA_CATALOG 'meta')
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+1.1
+
+statement ok
+DETACH dl
+
+# the migrations create the tag table, the origin columns and the retired path table
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_to_v20_dev2_files', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev2
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_snapshot_tag') ORDER BY column_index
+----
+tag_name	VARCHAR
+snapshot_id	BIGINT
+begin_snapshot	BIGINT
+end_snapshot	BIGINT
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_snapshot_tag
+----
+0
+
+query III
+SELECT DISTINCT table_name, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND column_name IN ('origin_file_id', 'origin_snapshot') ORDER BY ALL
+----
+ducklake_data_file	origin_file_id	BIGINT
+ducklake_data_file	origin_snapshot	BIGINT
+ducklake_delete_file	origin_file_id	BIGINT
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_retired_path') ORDER BY column_index
+----
+path
+retired_at
+
+# the migration commits the boundary snapshot, after the files of the catalog
+query III
+SELECT snapshot_id, changes, snapshot_id::VARCHAR = (SELECT value FROM meta.ducklake_metadata WHERE key = 'origin_boundary_snapshot') FROM dl.snapshots() ORDER BY snapshot_id
+----
+0	{schemas_created=[main]}	false
+1	{tables_created=[main.t], tables_inserted_into=[1]}	false
+2	{}	true
+
+query II
+SELECT origin_file_id, origin_snapshot FROM meta.ducklake_data_file
+----
+NULL	NULL
+
+statement ok
+INSERT INTO dl.t VALUES (43)
+
+query II
+SELECT count(*), count(origin_file_id) + count(origin_snapshot) FROM meta.ducklake_data_file
+----
+2	0
+
+query I
+SELECT * FROM dl.t ORDER BY i
+----
+42
+43
+
+statement ok
+DETACH dl
+
+# the dev version is attached as it is, also when it is requested explicitly
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_to_v20_dev2_files', METADATA_CATALOG 'meta')
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev2
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_to_v20_dev2_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '2.0-dev2')
+
+query I
+SELECT * FROM dl.t ORDER BY i
+----
+42
+43
+
+statement ok
+DETACH dl
+
+# a release version cannot be requested for it
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_to_v20_dev2_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1')
+----
+Cannot downgrade

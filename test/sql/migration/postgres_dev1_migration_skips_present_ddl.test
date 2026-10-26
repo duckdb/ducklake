@@ -62,13 +62,14 @@ CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_delete_
 statement ok
 CALL postgres_execute('pg', 'CREATE VIEW dev1_skips_present_ddl.ducklake_delete_file AS SELECT * FROM dev1_skips_present_ddl.delete_file_data')
 
+# the later versions add columns to ducklake_delete_file, so the migration stops at 1.1
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_SCHEMA 'dev1_skips_present_ddl', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_SCHEMA 'dev1_skips_present_ddl', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
-2.0-dev1
+1.1
 
 query I
 SELECT * FROM dl.t

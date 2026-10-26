@@ -324,6 +324,10 @@ public:
 	bool SupportsSnapshotTags() const {
 		return ducklake_version >= DuckLakeVersion::V2_0_DEV1;
 	}
+	//! Whether the catalog records file origins and retired paths
+	bool SupportsFileIdentity() const {
+		return ducklake_version >= DuckLakeVersion::V2_0_DEV2;
+	}
 
 	void OnDetach(ClientContext &context) override;
 

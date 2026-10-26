@@ -2,6 +2,7 @@
 
 #include "common/ducklake_data_file.hpp"
 #include "common/ducklake_snapshot.hpp"
+#include "common/ducklake_version.hpp"
 #include "duckdb/common/common.hpp"
 #include "duckdb/main/connection.hpp"
 #include "storage/ducklake_metadata_info.hpp"
@@ -63,8 +64,8 @@ private:
 
 	//! Query the metadata catalog for the latest snapshot.
 	DuckLakeSnapshot ReadLatestSnapshot();
-	//! Whether the metadata schema has the >= 1.1 additions.
-	bool ReadSupportsV1_1Metadata();
+	//! The version of the metadata schema.
+	DuckLakeVersion ReadCatalogVersion();
 	//! Build a DuckLakeTableStats from parsed global stats.
 	unique_ptr<DuckLakeTableStats> BuildTableStats(const DuckLakeGlobalStatsInfo &gs);
 	//! Build a full DuckLakeStats map from global stats.
@@ -100,6 +101,7 @@ private:
 	map<pair<TableIndex, FieldIndex>, LogicalType> column_types;
 	map<TableIndex, shared_ptr<DuckLakeTableStats>> existing_table_stats;
 	bool supports_v1_1_metadata = false;
+	bool supports_file_identity = false;
 	bool staged_dropped_files_read = false;
 	vector<pair<string, idx_t>> staged_dropped_files;
 	map<TableIndex, DroppedDataFileStats> staged_dropped_file_stats;

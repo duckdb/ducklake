@@ -301,6 +301,10 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				metadata_manager.MigrateV11();
 				catalog_version = DuckLakeVersion::V2_0_DEV1;
 			}
+			if (catalog_version == DuckLakeVersion::V2_0_DEV1 && catalog_version < target_version) {
+				metadata_manager.MigrateV20Dev1();
+				catalog_version = DuckLakeVersion::V2_0_DEV2;
+			}
 			if (catalog_version != target_version) {
 				// LCOV_EXCL_START
 				throw NotImplementedException("Unsupported DuckLake version '%s'",
@@ -391,7 +395,7 @@ void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &trans
 	unique_ptr<DuckLakeMetadataManager> new_manager;
 	if (version == DuckLakeVersion::V1_1) {
 		new_manager = MakeVersionedManager<DuckLakeMetadataManagerV1_1>(transaction);
-	} else if (version == DuckLakeVersion::V2_0_DEV1) {
+	} else if (version == DuckLakeVersion::V2_0_DEV2) {
 		new_manager = MakeVersionedManager<DuckLakeMetadataManagerV2_0>(transaction);
 	} else {
 		throw InternalException("SetVersionedMetadataManager: unsupported version");

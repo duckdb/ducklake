@@ -96,7 +96,9 @@ void DuckLakeServerSideCommit::SetRetryConfigOverride(const DuckLakeRetryConfig 
 }
 
 DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
-	supports_v1_1_metadata = ReadSupportsV1_1Metadata();
+	auto catalog_version = ReadCatalogVersion();
+	supports_v1_1_metadata = catalog_version >= DuckLakeVersion::V1_1;
+	supports_file_identity = catalog_version >= DuckLakeVersion::V2_0_DEV2;
 	ReadCommitHeader();
 	ReadColumnTypes();
 	ReadStagedDeleteFiles();
@@ -543,14 +545,14 @@ void DuckLakeServerSideCommit::ReadExistingTableStats() {
 	}
 }
 
-bool DuckLakeServerSideCommit::ReadSupportsV1_1Metadata() {
+DuckLakeVersion DuckLakeServerSideCommit::ReadCatalogVersion() {
 	string sql = StringUtil::Replace("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version'",
 	                                 "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read catalog version");
 	for (auto &row : *result) {
-		return DuckLakeVersionFromString(row.GetValue<string>(0)) >= DuckLakeVersion::V1_1;
+		return DuckLakeVersionFromString(row.GetValue<string>(0));
 	}
-	return false;
+	return DuckLakeVersion::V1_0;
 }
 
 DuckLakeSnapshot DuckLakeServerSideCommit::ReadLatestSnapshot() {
@@ -634,6 +636,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.commit_info = state->commit_info;
 	ctx.skip_drop_empty_inlined = true;
 	ctx.supports_v1_1_metadata = supports_v1_1_metadata;
+	ctx.supports_file_identity = supports_file_identity;
 	ctx.snapshot_and_stats_query = DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(supports_v1_1_metadata);
 	ctx.conflict_query_executor = [this](string q) -> unique_ptr<QueryResult> {
 		auto sql = SubstitutePlaceholders(std::move(q), transaction_snapshot);

@@ -381,7 +381,8 @@ void DuckLakeMetadataManager::ExecuteMigration(string migrate_query, bool allow_
 		migrate_query = StringUtil::Replace(migrate_query, "{IF_EXISTS}", "");
 		migrate_query = StringUtil::Replace(migrate_query, "{WHERE_EMPTY}", "");
 	}
-	auto result = Execute(migrate_query);
+	// a server that commits each statement on its own would keep a failed migration half applied
+	auto result = CommitsEachStatement() ? ExecuteInTransaction(migrate_query) : Execute(migrate_query);
 	result->ThrowIfError("Failed to migrate DuckLake from v" + from_version + " to v" + to_version + ":");
 }
 
@@ -642,6 +643,54 @@ void DuckLakeMetadataManager::MigrateV11() {
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version';
 )";
 	ExecuteMigration(migrate_query, false, "1.1", "2.0-dev1");
+}
+
+static constexpr const DuckLakeAddedColumn V2_0_DEV2_ADDED_COLUMNS[] = {
+    {"ducklake_data_file", "origin_file_id", "BIGINT"},
+    {"ducklake_data_file", "origin_snapshot", "BIGINT"},
+    {"ducklake_delete_file", "origin_file_id", "BIGINT"}};
+
+string DuckLakeMetadataManager::GetRetiredPathTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_retired_path(path VARCHAR, retired_at TIMESTAMPTZ);";
+}
+
+string DuckLakeMetadataManager::AppendFileIdentityColumns(const string &table_name, string create_statement) {
+	string columns;
+	for (auto &added : V2_0_DEV2_ADDED_COLUMNS) {
+		if (table_name == added.table) {
+			columns += StringUtil::Format(", %s %s", added.column, added.type);
+		}
+	}
+	create_statement.insert(create_statement.rfind(')'), columns);
+	return create_statement;
+}
+
+string DuckLakeMetadataManager::OriginBoundarySql(const string &snapshot_id) {
+	return StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) SELECT "
+	                          "'origin_boundary_snapshot', %s;\n",
+	                          snapshot_id);
+}
+
+void DuckLakeMetadataManager::MigrateV20Dev1() {
+	string migrate_query;
+	for (auto &added : V2_0_DEV2_ADDED_COLUMNS) {
+		migrate_query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s ADD COLUMN %s %s;\n", added.table,
+		                                    added.column, added.type);
+	}
+	migrate_query += GetRetiredPathTableStatement() + "\n";
+	// the migration commits a snapshot, which orders it with the commits of attachments at the older version
+	migrate_query += R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_snapshot
+SELECT snapshot_id + 1, NOW(), schema_version, next_catalog_id, next_file_id FROM {METADATA_CATALOG}.ducklake_snapshot
+WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot);
+INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes (snapshot_id)
+SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot;
+)";
+	// the files written before its snapshot may lack the origins of their rows
+	migrate_query +=
+	    OriginBoundarySql("(SELECT CAST(MAX(snapshot_id) AS VARCHAR) FROM {METADATA_CATALOG}.ducklake_snapshot)");
+	migrate_query += "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev2' WHERE key = 'version';\n";
+	ExecuteMigration(migrate_query, false, "2.0-dev1", "2.0-dev2");
 }
 
 void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {
@@ -4306,6 +4355,7 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 	                                Identifier("ducklake_file_variant_stats"));
 
 	bool supports_v1_1_metadata = catalog.SupportsV1_1Metadata();
+	bool supports_file_identity = catalog.SupportsFileIdentity();
 	for (auto &file : new_files) {
 		auto data_file_index = static_cast<int64_t>(file.id.index);
 		auto table_id = static_cast<int64_t>(file.table_id.index);
@@ -4317,7 +4367,8 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 		// ducklake_data_file columns:
 		// data_file_id, table_id, begin_snapshot, end_snapshot, file_order, path, path_is_relative,
 		// file_format, record_count, file_size_bytes, footer_size, row_id_start, partition_id,
-		// encryption_key, mapping_id, partial_max, row_group_count (>= 1.1)
+		// encryption_key, mapping_id, partial_max, row_group_count (>= 1.1),
+		// origin_file_id, origin_snapshot (>= 2.0-dev2)
 		data_file_appender.BeginRow();
 		data_file_appender.Append<int64_t>(data_file_index);                            // data_file_id
 		data_file_appender.Append<int64_t>(table_id);                                   // table_id
@@ -4342,6 +4393,10 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 		AppendBigintOrNull(data_file_appender, file.max_partial_file_snapshot);
 		if (supports_v1_1_metadata) {
 			AppendBigintOrNull(data_file_appender, file.row_group_count);
+		}
+		if (supports_file_identity) {
+			AppendBigintOrNull(data_file_appender, file.origin_file_id);
+			AppendBigintOrNull(data_file_appender, file.origin_snapshot);
 		}
 		data_file_appender.EndRow();
 
@@ -4436,7 +4491,7 @@ bool DuckLakeMetadataManager::TryAppendDataFiles(DuckLakeSnapshot &commit_snapsh
 
 string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
                                                           const vector<DuckLakePath> &resolved_paths,
-                                                          bool supports_v1_1_metadata) {
+                                                          bool supports_v1_1_metadata, bool supports_file_identity) {
 	if (new_files.empty()) {
 		// LCOV_EXCL_START
 		return string();
@@ -4467,6 +4522,10 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 		    file.file_size_bytes, footer_size, row_id, partition_id, encryption_key, mapping, partial_max);
 		if (supports_v1_1_metadata) {
 			data_file_value += ", " + DuckLakeUtil::OptionalIdxOrNull(file.row_group_count);
+		}
+		if (supports_file_identity) {
+			data_file_value += ", " + DuckLakeUtil::OptionalIdxOrNull(file.origin_file_id) + ", " +
+			                   DuckLakeUtil::OptionalIdxOrNull(file.origin_snapshot);
 		}
 		data_file_values.push_back(data_file_value + ")");
 		for (auto &raw_stats : file.column_stats) {
@@ -4634,7 +4693,7 @@ WHERE delete_file_id IN (%s);
 
 string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_files,
                                                     const vector<DuckLakePath> &resolved_paths,
-                                                    bool write_row_group_count) {
+                                                    bool write_row_group_count, bool write_file_identity) {
 	if (new_files.empty()) {
 		return {};
 	}
@@ -4660,6 +4719,9 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 		    encryption_key, partial_max);
 		if (write_row_group_count) {
 			delete_file_value += ", " + DuckLakeUtil::OptionalIdxOrNull(file.row_group_count);
+		}
+		if (write_file_identity) {
+			delete_file_value += ", " + DuckLakeUtil::OptionalIdxOrNull(file.origin_file_id);
 		}
 		delete_file_values.push_back(delete_file_value + ")");
 	}

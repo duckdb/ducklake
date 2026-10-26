@@ -1,0 +1,94 @@
+# name: test/sql/migration/v20_dev1_to_v20_dev2.test
+# description: a 2.0-dev1 catalog is attached only after its migration to 2.0-dev2, which records the origin boundary
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+# written by the 2.0-dev1 build, t has a file rewritten by ducklake_rewrite_data_files and a file with a delete, u has
+# inlined rows, the tag before_delete names snapshot 2
+unzip data/old_ducklake/v20_dev1.db.gz {TEST_DIR}/v20_dev1_to_v20_dev2.db
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/v20_dev1_to_v20_dev2.db' AS lake (DATA_PATH 'data/old_ducklake/v20_dev1/', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta')
+----
+catalog version is 2.0-dev1, but the extension requires version 2.0-dev2
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/v20_dev1_to_v20_dev2.db' AS lake (DATA_PATH 'data/old_ducklake/v20_dev1/', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', DUCKLAKE_VERSION '2.0-dev1')
+----
+ducklake_version must be '1.0', '1.1' or '2.0-dev2', got '2.0-dev1'
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v20_dev1_to_v20_dev2.db' AS lake (DATA_PATH 'data/old_ducklake/v20_dev1/', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT value FROM lake.options() WHERE option_name = 'version'
+----
+2.0-dev2
+
+# the migration commits the boundary snapshot, after every snapshot of the catalog
+query III
+SELECT (SELECT value FROM lake.options() WHERE option_name = 'origin_boundary_snapshot'), max(snapshot_id), max_by(changes, snapshot_id) FROM lake.snapshots()
+----
+9	9	{}
+
+query III
+SELECT data_file_id, origin_file_id, origin_snapshot FROM meta.ducklake_data_file ORDER BY ALL
+----
+0	NULL	NULL
+2	NULL	NULL
+3	NULL	NULL
+
+query II
+SELECT delete_file_id, origin_file_id FROM meta.ducklake_delete_file ORDER BY ALL
+----
+1	NULL
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_retired_path
+----
+0
+
+query II
+SELECT * FROM lake.t ORDER BY i
+----
+1	a
+3	c
+4	d
+
+query II
+SELECT * FROM lake.t AT (VERSION => 'before_delete') ORDER BY i
+----
+1	a
+2	b
+3	c
+
+query I
+SELECT * FROM lake.u ORDER BY k
+----
+10
+11
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('lake')
+----
+before_delete	2
+
+statement ok
+DETACH lake
+
+# the migrated catalog is attached as it is
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v20_dev1_to_v20_dev2.db' AS lake (DATA_PATH 'data/old_ducklake/v20_dev1/', OVERRIDE_DATA_PATH TRUE)
+
+query I
+SELECT value FROM lake.options() WHERE option_name = 'origin_boundary_snapshot'
+----
+9
+
+query I
+SELECT count(*) FROM lake.t
+----
+3

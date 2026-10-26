@@ -48,7 +48,7 @@ SELECT COUNT(*) FROM ducklake_snapshots('dl')
 statement ok
 DETACH dl
 
-# the migration enables tags
+# the migration enables tags, its snapshot is the head
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_version_gate_files', AUTOMATIC_MIGRATION TRUE)
 
@@ -58,7 +58,7 @@ CALL ducklake_create_tag('dl', 'v1')
 query II
 SELECT tag_name, snapshot_id FROM ducklake_tags('dl')
 ----
-v1	1
+v1	2
 
 statement ok
 DETACH dl
@@ -80,7 +80,7 @@ attached in read-only mode
 query II
 SELECT tag_name, snapshot_id FROM ducklake_tags('dl')
 ----
-v1	1
+v1	2
 
 statement ok
 DETACH dl

@@ -182,6 +182,10 @@ struct DuckLakeFileInfo {
 	MappingIndex mapping_id;
 	map<FieldIndex, DuckLakeColumnStats> column_stats;
 	vector<DuckLakeFilePartitionInfo> partition_values;
+	//! The file id of the first row of the physical file, unset when this row is the first
+	optional_idx origin_file_id;
+	//! The snapshot the rows of the file originate in when they embed no origins, unset for the begin snapshot
+	optional_idx origin_snapshot;
 };
 
 struct DuckLakeInlinedDataInfo {
@@ -217,6 +221,8 @@ struct DuckLakeDeleteFileInfo {
 	optional_idx begin_snapshot;
 	//! Optional max_snapshot information for partial deletion files.
 	optional_idx max_snapshot;
+	//! The file id of the first row of the physical file, unset when this row is the first
+	optional_idx origin_file_id;
 };
 
 struct DuckLakePartitionFieldInfo {

@@ -19,6 +19,8 @@ public:
 	    : DuckLakeMetadataManagerV1_1<Base>(transaction) {
 	}
 
+	string GetDataFileTableStatement() override;
+	string GetDeleteFileTableStatement() override;
 	string GetCreateTableStatements() override;
 	string GetVersionString() override;
 };

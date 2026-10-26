@@ -7,15 +7,30 @@
 namespace duckdb {
 
 template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetDataFileTableStatement() {
+	return DuckLakeMetadataManager::AppendFileIdentityColumns(
+	    "ducklake_data_file", DuckLakeMetadataManagerV1_1<Base>::GetDataFileTableStatement());
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetDeleteFileTableStatement() {
+	return DuckLakeMetadataManager::AppendFileIdentityColumns(
+	    "ducklake_delete_file", DuckLakeMetadataManagerV1_1<Base>::GetDeleteFileTableStatement());
+}
+
+template <typename Base>
 string DuckLakeMetadataManagerV2_0<Base>::GetCreateTableStatements() {
 	auto result = DuckLakeMetadataManagerV1_1<Base>::GetCreateTableStatements();
 	result += DuckLakeMetadataManager::GetSnapshotTagTableStatement() + "\n";
+	result += DuckLakeMetadataManager::GetRetiredPathTableStatement() + "\n";
+	// a new catalog records origins from its first snapshot on
+	result += DuckLakeMetadataManager::OriginBoundarySql("'0'");
 	return result;
 }
 
 template <typename Base>
 string DuckLakeMetadataManagerV2_0<Base>::GetVersionString() {
-	constexpr auto VERSION = DuckLakeVersion::V2_0_DEV1;
+	constexpr auto VERSION = DuckLakeVersion::V2_0_DEV2;
 	return DuckLakeVersionToString(VERSION);
 }
 

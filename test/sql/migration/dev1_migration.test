@@ -40,7 +40,7 @@ DETACH meta
 statement error
 ATTACH 'ducklake:{TEST_DIR}/dev1_plain.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_plain_files')
 ----
-catalog version is 1.1-dev1, but the extension requires version 2.0-dev1
+catalog version is 1.1-dev1, but the extension requires version 2.0-dev2
 
 statement error
 ATTACH 'ducklake:{TEST_DIR}/dev1_plain.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_plain_files', READ_ONLY)
@@ -98,7 +98,7 @@ SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_nam
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev1
+2.0-dev2
 
 statement ok
 DETACH meta

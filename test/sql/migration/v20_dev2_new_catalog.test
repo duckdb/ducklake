@@ -1,0 +1,108 @@
+# name: test/sql/migration/v20_dev2_new_catalog.test
+# description: a new catalog is created at 2.0-dev2 with the snapshot tag table, the origin columns and the retired path table
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v20_dev2_new_catalog_files', METADATA_CATALOG 'meta')
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev2
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_snapshot_tag') ORDER BY column_index
+----
+tag_name	VARCHAR
+snapshot_id	BIGINT
+begin_snapshot	BIGINT
+end_snapshot	BIGINT
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_snapshot_tag
+----
+0
+
+# the identity columns are the last ones, after the row group count of 1.1
+query III
+SELECT table_name, column_name, data_type FROM (SELECT DISTINCT table_name, column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name IN ('ducklake_data_file', 'ducklake_delete_file') AND column_name IN ('row_group_count', 'origin_file_id', 'origin_snapshot')) ORDER BY table_name, column_index
+----
+ducklake_data_file	row_group_count	BIGINT
+ducklake_data_file	origin_file_id	BIGINT
+ducklake_data_file	origin_snapshot	BIGINT
+ducklake_delete_file	row_group_count	BIGINT
+ducklake_delete_file	origin_file_id	BIGINT
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_retired_path') ORDER BY column_index
+----
+path
+retired_at
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_retired_path
+----
+0
+
+# a new catalog records origins from its first snapshot on
+query II
+SELECT value, description IS NOT NULL FROM dl.options() WHERE option_name = 'origin_boundary_snapshot'
+----
+0	true
+
+statement error
+CALL dl.set_option('origin_boundary_snapshot', 5)
+----
+origin_boundary_snapshot
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT i FROM range(3) t(i)
+
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+# a file the commit writes has no origin of its own
+query IIII
+SELECT count(*), count(origin_file_id), count(origin_snapshot), (SELECT count(origin_file_id) FROM meta.ducklake_delete_file) FROM meta.ducklake_data_file
+----
+1	0	0	0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file
+----
+1
+
+query I
+SELECT * FROM dl.t ORDER BY i
+----
+0
+2
+
+statement ok
+DETACH dl
+
+# the catalog is attached again without a migration
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v20_dev2_new_catalog_files', METADATA_CATALOG 'meta')
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev2
+
+query I
+SELECT * FROM dl.t ORDER BY i
+----
+0
+2
