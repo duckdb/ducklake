@@ -1290,13 +1290,15 @@ void DuckLakeCatalog::EndConfigOptionChanges(const DuckLakeTransaction &transact
 void DuckLakeCatalog::CommitConfigOptions(const DuckLakeTransaction &transaction,
                                           const vector<DuckLakeConfigOptionChange> &changes,
                                           const vector<DuckLakeConfigOption> &new_table_options,
-                                          const std::function<void()> &commit) {
+                                          const std::function<bool()> &commit) {
 	if (changes.empty() && new_table_options.empty()) {
 		commit();
 		return;
 	}
 	lock_guard<mutex> guard(config_commit_lock);
-	commit();
+	if (!commit()) {
+		return;
+	}
 	for (auto &option : new_table_options) {
 		SetConfigOption(option);
 	}

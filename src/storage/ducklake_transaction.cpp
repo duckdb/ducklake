@@ -1528,8 +1528,21 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		// the client context has no active transaction during the commit
 		state->local_changes.SetDeleteCommitSnapshot(*GetConnection().context, *this, commit_snapshot);
 	};
+	auto commit_in_order = [&](const std::function<bool()> &commit) {
+		ducklake_catalog.CommitConfigOptions(*this, config_option_changes, state->committed_table_options, commit);
+	};
 	context.execute_commit_batch = [&](DuckLakeSnapshot snapshot, string &query) {
-		auto result = metadata_manager->Execute(snapshot, query);
+		unique_ptr<QueryResult> result;
+		auto execute = [&]() {
+			result = metadata_manager->Execute(snapshot, query);
+			return !result->HasError();
+		};
+		if (metadata_manager->CommitsEachStatement()) {
+			// the batch commits on the metadata server
+			commit_in_order(execute);
+		} else {
+			execute();
+		}
 		for (auto &insert : inlined_inserts) {
 			if (result->HasError()) {
 				break;
@@ -1552,8 +1565,14 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		}
 	};
 	context.commit_connection = [&]() {
-		ducklake_catalog.CommitConfigOptions(*this, config_option_changes, state->committed_table_options,
-		                                     [&]() { connection->Commit(); });
+		if (metadata_manager->CommitsEachStatement()) {
+			connection->Commit();
+			return;
+		}
+		commit_in_order([&]() {
+			connection->Commit();
+			return true;
+		});
 	};
 	context.try_rollback = [&]() {
 		if (connection->context->transaction.HasActiveTransaction()) {

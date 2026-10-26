@@ -219,7 +219,7 @@ public:
 	//! Runs the metadata commit of a transaction, and keeps the option values it committed in the order of commits
 	void CommitConfigOptions(const DuckLakeTransaction &transaction, const vector<DuckLakeConfigOptionChange> &changes,
 	                         const vector<DuckLakeConfigOption> &new_table_options,
-	                         const std::function<void()> &commit);
+	                         const std::function<bool()> &commit);
 	//! Pending table options take precedence
 	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id,
 	                        optional_ptr<const map<string, string>> table_options = nullptr) const;
