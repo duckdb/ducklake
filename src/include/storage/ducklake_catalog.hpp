@@ -120,7 +120,6 @@ struct DuckLakeAttachedCatalogs : public ObjectCacheEntry {
 	}
 };
 
-//! The value of a config option, unless it is not set
 struct DuckLakeOptionValue {
 	bool is_set = false;
 	string value;

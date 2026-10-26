@@ -5863,7 +5863,6 @@ static void ConfigOptionScope(const DuckLakeConfigOption &option, string &scope,
 	}
 }
 
-//! The condition on the rows of the option
 static string ConfigOptionFilter(const DuckLakeConfigOption &option) {
 	string scope;
 	string scope_id;
