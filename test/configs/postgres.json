@@ -74,7 +74,8 @@
     {
       "reason": "The DDL of a migration waits for the locks of an open transaction on Postgres, so no transaction stays open across it",
       "paths": [
-        "test/sql/migration/stale_rewrite_after_migration.test"
+        "test/sql/migration/stale_rewrite_after_migration.test",
+        "test/sql/migration/stale_expiry_in_open_transaction.test"
       ]
     },
     {

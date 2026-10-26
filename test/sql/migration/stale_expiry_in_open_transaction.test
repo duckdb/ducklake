@@ -1,0 +1,51 @@
+# name: test/sql/migration/stale_expiry_in_open_transaction.test
+# description: a transaction of an attachment at 1.1 that began before another connection migrated the catalog and tagged a snapshot cannot expire it
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS stale (DATA_PATH '{DATA_PATH}/stale_expiry_in_open_transaction', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE stale.t(i INTEGER)
+
+statement ok
+INSERT INTO stale.t VALUES (42)
+
+statement ok
+DELETE FROM stale.t
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM stale.t
+----
+0
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS migrated (METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+CALL ducklake_create_tag('migrated', 'keep', version => 2)
+
+statement error con1
+CALL ducklake_expire_snapshots('stale', versions => [2])
+----
+
+statement ok con1
+ROLLBACK
+
+query III
+SELECT (SELECT count(*) FROM ducklake_tags('migrated') WHERE tag_name = 'keep'),
+       (SELECT count(*) FROM ducklake_snapshots('migrated') WHERE snapshot_id = 2),
+       (SELECT count(*) FROM migrated.t AT (VERSION => 'keep'))
+----
+1	1	1
