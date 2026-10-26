@@ -150,6 +150,8 @@ struct DuckLakeCommitContext {
 	    };
 	//! Whether the commit writes a snapshot, a commit that only changes options writes none.
 	bool write_snapshot = true;
+	//! Whether a failed attempt is retried.
+	bool allow_retry = true;
 	//! Author / message / extra info for the snapshot row.
 	DuckLakeSnapshotCommit commit_info;
 	//! When true, Commit() skips the post-commit DropEmptySupersededInlinedTables cleanup.

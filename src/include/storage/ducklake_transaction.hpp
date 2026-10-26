@@ -281,6 +281,7 @@ public:
 	void MarkDeleteAttempted(TableIndex table_id);
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
+	void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &files);
 	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files);
 	bool InlinedTableFlushed(const string &table_name);
@@ -403,6 +404,8 @@ private:
 	mutex delete_attempted_lock;
 	//! The snapshots expired by this transaction, deleted when it commits
 	vector<DuckLakeSnapshotInfo> expired_snapshots;
+	//! Whether statements wrote to the metadata transaction, which a retried commit rolls back
+	bool metadata_written = false;
 	DuckLakeSnapshot GetLatestSnapshot();
 	//! The latest snapshot in DuckLake when the transaction first looked, the snapshot of the transaction unless the
 	//! catalog is opened at a fixed snapshot

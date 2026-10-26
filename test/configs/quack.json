@@ -133,6 +133,12 @@
       ]
     },
     {
+      "reason": "Quack expires the snapshots of a transaction on the server before its commit, so a commit that then only writes options can still retry",
+      "paths": [
+        "test/sql/settings/set_option_commit_after_expire.test"
+      ]
+    },
+    {
       "reason": "Snapshots expire when the transaction commits on quack so a rollback keeps them, so a cleanup in the same transaction does not see their files yet.",
       "paths": [
         "test/sql/transaction/expire_cleanup_same_transaction.test"

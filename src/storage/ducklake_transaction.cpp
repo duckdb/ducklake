@@ -1709,6 +1709,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		return GetConfigOptionChange(option);
 	};
 	context.write_snapshot = ChangesMade();
+	// a retry rolls back what the statements wrote, so a commit that only writes options fails instead
+	context.allow_retry = context.write_snapshot || !metadata_written;
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
 	context.snapshot_and_stats_query =
@@ -1766,10 +1768,19 @@ void DuckLakeTransaction::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &sn
 	auto &metadata_manager = GetMetadataManager();
 	if (!metadata_manager.CommitsEachStatement()) {
 		metadata_manager.DeleteSnapshots(snapshots);
+		metadata_written = true;
 		return;
 	}
 	// deleted when the transaction commits, so a rollback keeps them
 	expired_snapshots.insert(expired_snapshots.end(), snapshots.begin(), snapshots.end());
+}
+
+void DuckLakeTransaction::RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &files) {
+	auto &metadata_manager = GetMetadataManager();
+	metadata_manager.RemoveFilesScheduledForCleanup(files);
+	if (!metadata_manager.CommitsEachStatement()) {
+		metadata_written = true;
+	}
 }
 
 void DuckLakeTransaction::MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id,
