@@ -48,6 +48,10 @@ public:
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 
 	void ClearCache() override;
+	//! postgres_scanner looks up a table it has not cached
+	bool NewTablesRequireCacheClear() const override {
+		return false;
+	}
 
 protected:
 	string GetLatestSnapshotQuery() const override;

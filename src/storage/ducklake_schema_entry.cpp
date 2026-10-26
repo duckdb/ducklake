@@ -513,6 +513,10 @@ void DuckLakeSchemaEntry::Scan(ClientContext &context, CatalogType type,
 			// this entry exists in both the local and global set - emit only the transaction-local entry
 			continue;
 		}
+		if (entry.second->type == CatalogType::VIEW_ENTRY) {
+			callback(duck_transaction.GetTransactionView(entry.second->Cast<DuckLakeViewEntry>()));
+			continue;
+		}
 		callback(*entry.second);
 	}
 }
@@ -576,6 +580,9 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::LookupEntry(CatalogTransaction t
 	}
 	if (!at_clause && (duck_transaction.IsDeleted(*entry) || duck_transaction.IsRenamed(*entry))) {
 		return nullptr;
+	}
+	if (!at_clause && entry->type == CatalogType::VIEW_ENTRY) {
+		return duck_transaction.GetTransactionView(entry->Cast<DuckLakeViewEntry>());
 	}
 	return *entry;
 }

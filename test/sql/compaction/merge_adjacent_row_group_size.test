@@ -1,0 +1,169 @@
+# name: test/sql/compaction/merge_adjacent_row_group_size.test
+# description: merging adjacent files writes row groups of the size the table options set, as inserts do
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/merge_adjacent_row_group_size', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(id BIGINT, h VARCHAR)
+
+statement ok
+CALL dl.set_option('parquet_row_group_size', '5000', table_name => 't')
+
+loop i 0 3
+
+statement ok
+INSERT INTO dl.t SELECT range, md5(range::VARCHAR) FROM range({i} * 20000, ({i} + 1) * 20000)
+
+endloop
+
+statement ok
+SET VARIABLE files = (SELECT list(data_file) FROM ducklake_list_files('dl', 't'))
+
+statement ok
+SET VARIABLE inserted_rows = (SELECT max(row_group_num_rows) FROM parquet_metadata(getvariable('files')))
+
+query I
+SELECT getvariable('inserted_rows') < 20000
+----
+true
+
+statement ok
+SET VARIABLE rows_before = (SELECT md5(string_agg(rowid || ':' || id || ':' || h, ',' ORDER BY rowid)) FROM dl.t)
+
+statement ok
+SET VARIABLE first_snapshot = (SELECT min(snapshot_id) FROM dl.snapshots() WHERE changes['tables_inserted_into'] IS NOT NULL)
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl', 't', min_file_size => 1, max_file_size => 536870912)
+
+# the rows, their row ids and the history are the same
+query II
+SELECT md5(string_agg(rowid || ':' || id || ':' || h, ',' ORDER BY rowid)) = getvariable('rows_before'), count(*) FROM dl.t
+----
+true	60000
+
+query I
+SELECT count(*) FROM dl.t AT (VERSION => getvariable('first_snapshot'))
+----
+20000
+
+statement ok
+SET VARIABLE files = (SELECT list(data_file) FROM ducklake_list_files('dl', 't'))
+
+query II
+SELECT len(getvariable('files')), max(row_group_num_rows) <= getvariable('inserted_rows') FROM parquet_metadata(getvariable('files'))
+----
+1	true
+
+query II
+SELECT count(*), sum(id) FROM dl.t
+----
+60000	1799970000
+
+# the byte option of a table applies to merges as well
+statement ok
+CREATE TABLE dl.b(id BIGINT, h VARCHAR)
+
+statement ok
+CALL dl.set_option('parquet_row_group_size_bytes', '200KB', table_name => 'b')
+
+statement ok
+SET preserve_insertion_order = false
+
+loop i 0 3
+
+statement ok
+INSERT INTO dl.b SELECT range, md5(range::VARCHAR) FROM range({i} * 20000, ({i} + 1) * 20000)
+
+endloop
+
+statement ok
+SET VARIABLE b_files = (SELECT list(data_file) FROM ducklake_list_files('dl', 'b'))
+
+statement ok
+SET VARIABLE inserted_rows = (SELECT max(row_group_num_rows) FROM parquet_metadata(getvariable('b_files')))
+
+query I
+SELECT getvariable('inserted_rows') < 20000
+----
+true
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl', 'b', min_file_size => 1, max_file_size => 536870912)
+
+statement ok
+SET VARIABLE b_files = (SELECT list(data_file) FROM ducklake_list_files('dl', 'b'))
+
+query II
+SELECT len(getvariable('b_files')), max(row_group_num_rows) <= getvariable('inserted_rows') FROM parquet_metadata(getvariable('b_files'))
+----
+1	true
+
+query II
+SELECT count(*), sum(id) FROM dl.b
+----
+60000	1799970000
+
+# a rewrite and a flush use the row group options of the schema
+statement ok
+CALL dl.set_option('parquet_row_group_size', '5000', schema => 'main')
+
+statement ok
+CREATE TABLE dl.r(id BIGINT, h VARCHAR)
+
+statement ok
+INSERT INTO dl.r SELECT range, md5(range::VARCHAR) FROM range(60000)
+
+statement ok
+DELETE FROM dl.r WHERE id % 10 = 0
+
+statement ok
+CALL ducklake_rewrite_data_files('dl', 'r', delete_threshold => 0)
+
+statement ok
+SET VARIABLE r_files = (SELECT list(data_file) FROM ducklake_list_files('dl', 'r'))
+
+query II
+SELECT count(*) > 0, max(row_group_num_rows) < 10000 FROM parquet_metadata(getvariable('r_files'))
+----
+true	true
+
+query I
+SELECT count(*) FROM dl.r
+----
+54000
+
+statement ok
+CREATE TABLE dl.f(id BIGINT, h VARCHAR)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 100000, table_name => 'f')
+
+statement ok
+INSERT INTO dl.f SELECT range, md5(range::VARCHAR) FROM range(60000)
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'f')
+
+statement ok
+SET VARIABLE f_files = (SELECT list(data_file) FROM ducklake_list_files('dl', 'f'))
+
+query II
+SELECT count(*) > 0, max(row_group_num_rows) < 10000 FROM parquet_metadata(getvariable('f_files'))
+----
+true	true
+
+query I
+SELECT count(*) FROM dl.f
+----
+60000

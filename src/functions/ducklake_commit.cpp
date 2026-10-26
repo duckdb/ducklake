@@ -26,9 +26,9 @@ static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctio
 			continue;
 		}
 		if (entry.first == "max_retry_count") {
-			result->retry_config.max_retry_count = static_cast<idx_t>(entry.second.GetValue<int64_t>());
+			result->retry_config.max_retry_count = entry.second.GetValue<uint64_t>();
 		} else if (entry.first == "retry_wait_ms") {
-			result->retry_config.retry_wait_ms = static_cast<idx_t>(entry.second.GetValue<int64_t>());
+			result->retry_config.retry_wait_ms = entry.second.GetValue<uint64_t>();
 		} else if (entry.first == "retry_backoff") {
 			result->retry_config.retry_backoff = entry.second.GetValue<double>();
 		}
@@ -79,8 +79,8 @@ DuckLakeCommitFunction::DuckLakeCommitFunction()
                         .AddPositionalOnly("schema_version", LogicalType::BIGINT),
                     DuckLakeCommitExecute, DuckLakeCommitBind, DuckLakeRunOnceState::Init) {
 	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
-		options.Add("max_retry_count", LogicalType::BIGINT)
-		    .Add("retry_wait_ms", LogicalType::BIGINT)
+		options.Add("max_retry_count", LogicalType::UBIGINT)
+		    .Add("retry_wait_ms", LogicalType::UBIGINT)
 		    .Add("retry_backoff", LogicalType::DOUBLE);
 	});
 }

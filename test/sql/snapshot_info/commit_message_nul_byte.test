@@ -1,0 +1,62 @@
+# name: test/sql/snapshot_info/commit_message_nul_byte.test
+# description: A commit author, message and extra info with a NUL byte are stored as they are
+# group: [snapshot_info]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/commit_message_nul_byte.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/commit_message_nul_byte')
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_set_commit_message('dl', chr(0), chr(0), extra_info => chr(0))
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_set_commit_message('dl', 'au' || chr(0) || 'thor', 'm' || chr(0), extra_info => chr(0) || 'x')
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+COMMIT
+
+loop i 0 2
+
+query III
+SELECT author = chr(0), commit_message = chr(0), commit_extra_info = chr(0) FROM dl.snapshots() WHERE snapshot_id = 2
+----
+true	true	true
+
+query III
+SELECT author = 'au' || chr(0) || 'thor', commit_message = 'm' || chr(0), commit_extra_info = chr(0) || 'x'
+FROM dl.snapshots() WHERE snapshot_id = 3
+----
+true	true	true
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/commit_message_nul_byte')
+
+endloop

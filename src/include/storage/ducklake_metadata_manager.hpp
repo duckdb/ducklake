@@ -242,9 +242,15 @@ public:
 
 	virtual void ClearCache() {
 	}
+	//! Whether a table that a commit creates is only found once the cache is cleared
+	virtual bool NewTablesRequireCacheClear() const {
+		return true;
+	}
 
 	void MarkPendingCacheClear() {
-		pending_cache_clear = true;
+		if (NewTablesRequireCacheClear()) {
+			pending_cache_clear = true;
+		}
 	}
 	bool TakePendingCacheClear() {
 		bool pending = pending_cache_clear;
@@ -410,6 +416,10 @@ public:
 	//! via GetCatalogForSnapshot) since the diff is computed against it.
 	static string WriteNewPartitionKeys(const vector<DuckLakePartitionInfo> &existing_partitions,
 	                                    const vector<DuckLakePartitionInfo> &new_partitions);
+	//! Maps the id of a last new spec that equals the committed spec, which is not written, to the committed id
+	static unordered_map<idx_t, idx_t>
+	GetUnchangedPartitionIds(const vector<DuckLakePartitionInfo> &existing_partitions,
+	                         const vector<DuckLakePartitionInfo> &new_partitions);
 	//! Emits the sort-key diff SQL. Caller supplies the existing sort state (fetched via
 	//! GetCatalogForSnapshot) since the diff is computed against it.
 	static string WriteNewSortKeys(const vector<DuckLakeSortInfo> &existing_sorts,
@@ -420,6 +430,9 @@ public:
 	//! Rewrite the bounds of committed files and tables written while a widened column was FLOAT
 	static string WriteFloatWidenedStats(const map<TableIndex, set<FieldIndex>> &widened_columns,
 	                                     const map<TableIndex, set<FieldIndex>> &cleared_columns, idx_t next_file_id);
+	//! Clear the bounds of added files of the columns retyped to a finer timestamp unit, and of their tables
+	static string WriteRefinedTimestampStats(const map<TableIndex, set<FieldIndex>> &refined_columns,
+	                                         idx_t next_file_id);
 	static string WriteExpiredColumnTags(const vector<DuckLakeDroppedColumn> &dropped_columns);
 	static string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns);
 	//! Columns added and dropped in the same commit, which begin and end in its snapshot

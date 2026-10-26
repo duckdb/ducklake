@@ -1,0 +1,197 @@
+# name: test/sql/quack/inlined_delete_table_listing.test
+# description: first queries on many tables of a Quack catalog list its inlined deletion tables once per snapshot
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
+
+require quack
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_delete_table_listing', DATA_INLINING_ROW_LIMIT 5)
+
+loop i 0 4
+
+statement ok
+CREATE TABLE dl.t{i}(i INTEGER)
+
+statement ok
+INSERT INTO dl.t{i} SELECT range FROM range(10)
+
+endloop
+
+# a delete from a data file is inlined
+statement ok
+DELETE FROM dl.t1 WHERE i = 0
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_delete_table_listing', DATA_INLINING_ROW_LIMIT 5)
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+query IIII
+SELECT (SELECT count(*) FROM dl.t0), (SELECT count(*) FROM dl.t1), (SELECT count(*) FROM dl.t2), (SELECT count(*) FROM dl.t3)
+----
+10	9	10	10
+
+query I
+SELECT count(*) FROM dl.t2
+----
+10
+
+query I
+SELECT count(*) FROM dl.t3
+----
+10
+
+statement ok
+CALL disable_logging()
+
+# one listing for the snapshot, not one probe per table
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%duckdb_tables()%ducklake_inlined_delete%'
+----
+1
+
+# first queries running at the same time share one listing
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_delete_table_listing', DATA_INLINING_ROW_LIMIT 5)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+concurrentloop i 0 4
+
+query I
+SELECT count(*) >= 9 FROM dl.t{i}
+----
+true
+
+endloop
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%duckdb_tables()%ducklake_inlined_delete%'
+----
+1
+
+# a catalog attached at an older snapshot reads a deletion committed later through a newer snapshot
+query I
+SELECT max(snapshot_id) FROM dl.snapshots()
+----
+9
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dlr (DATA_PATH '{DATA_PATH}/inlined_delete_table_listing', SNAPSHOT_VERSION 9)
+
+query I
+SELECT count(*) FROM dlr.t3
+----
+10
+
+statement ok
+DELETE FROM dl.t3 WHERE i = 0
+
+query I
+SELECT count(*) FROM dlr.t3 AT (VERSION => 10)
+----
+9
+
+statement ok
+DETACH dlr
+
+# a reader that stays attached lists the tables again when another connection commits a new deletion table
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+statement ok con2
+DELETE FROM dl.t2 WHERE i = 0
+
+query II
+SELECT (SELECT count(*) FROM dl.t1), (SELECT count(*) FROM dl.t2)
+----
+9	9
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%duckdb_tables()%ducklake_inlined_delete%'
+----
+true
+
+# transactions at neighboring snapshots keep their listings side by side
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_delete_table_listing', DATA_INLINING_ROW_LIMIT 5)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM dl.t0
+----
+10
+
+statement ok con2
+CREATE TABLE dl.t4(i INTEGER)
+
+statement ok con3
+BEGIN
+
+query I con3
+SELECT count(*) FROM dl.t1
+----
+9
+
+query I con1
+SELECT count(*) FROM dl.t2
+----
+9
+
+query I con3
+SELECT count(*) FROM dl.t3
+----
+9
+
+statement ok con1
+COMMIT
+
+statement ok con3
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%duckdb_tables()%ducklake_inlined_delete%'
+----
+2

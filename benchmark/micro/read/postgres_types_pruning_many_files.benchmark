@@ -1,0 +1,56 @@
+# name: benchmark/micro/read/postgres_types_pruning_many_files.benchmark
+# description: Run 21 selective TIMESTAMP_NS, TIME and UUID range queries that prune ~1024 files through the stats
+# group: [read]
+
+name Postgres Types Pruning Many Files
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+cache_file postgres_types_pruning_ready.marker
+
+load
+@create postgres_types_pruning
+@attach postgres_types_pruning AS lake (DATA_PATH '${BENCHMARK_DIR}/postgres_types_pruning_data')
+CREATE TABLE lake.events (id BIGINT, ts TIMESTAMP_NS, t TIME, u UUID);
+CALL lake.set_option('parquet_row_group_size', 2048, table_name => 'events');
+SET ducklake_target_file_size = '4KB';
+INSERT INTO lake.events
+SELECT i, make_timestamp_ns(1704067200000000000 + i * 1000000000 + 600),
+TIME '00:00:00' + INTERVAL (i * 10) MILLISECOND, printf('00000000-0000-0000-0000-%012x', i)::UUID
+FROM range(1024 * 2048) t(i);
+RESET ducklake_target_file_size;
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 'events')) < 1000
+THEN error('events must consist of ~1024 small files') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+@seal postgres_types_pruning
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/postgres_types_pruning_ready.marker' (FORMAT CSV);
+@attach postgres_types_pruning AS lake (READ_ONLY)
+
+reload
+@attach postgres_types_pruning AS lake (READ_ONLY)
+
+run
+SELECT sum(cnt) FROM (
+@for i in range(1, 8)
+@if i > 1
+UNION ALL
+@end
+SELECT count(*) AS cnt FROM lake.events
+WHERE ts >= make_timestamp_ns(@{1704067200000000000 + i * 104729 * 1000000000})
+AND ts < make_timestamp_ns(@{1704067200000000000 + (i * 104729 + 10) * 1000000000})
+UNION ALL SELECT count(*) AS cnt FROM lake.events
+WHERE t >= TIME '00:00:00' + INTERVAL (@{i * 104729 * 10}) MILLISECOND
+AND t < TIME '00:00:00' + INTERVAL (@{(i * 104729 + 10) * 10}) MILLISECOND
+UNION ALL SELECT count(*) AS cnt FROM lake.events
+WHERE u >= printf('00000000-0000-0000-0000-%012x', @{i * 104729}::BIGINT)::UUID
+AND u < printf('00000000-0000-0000-0000-%012x', @{i * 104729 + 10}::BIGINT)::UUID
+@end
+);
+
+result I
+210

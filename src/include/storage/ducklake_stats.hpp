@@ -36,6 +36,8 @@ inline bool FileStatsShowNulls(const LogicalType &type) {
 
 //! Bounds that cannot be cast are unknown
 optional<Value> TryCastStatsBound(const string &bound, const LogicalType &type);
+//! Orders two stats bounds of the same type, TIMETZ by instant as SQL does
+bool StatsBoundLessThan(const Value &left, const Value &right);
 
 struct DuckLakeColumnStats;
 struct DuckLakeGlobalColumnStatsInfo;
@@ -97,7 +99,8 @@ public:
 	//! Rewrite FLOAT bounds as the DOUBLE values they widen to
 	void WidenFloatBounds();
 	//! Rewrite bounds of the source type as the values they cast to, dropping the bounds that do not cast
-	void CastBoundsFrom(const LogicalType &source);
+	//! Returns the first exact bound that does not cast
+	optional<string> CastBoundsFrom(const LogicalType &source);
 	void CopyMinFrom(const DuckLakeColumnStats &other);
 	void CopyMaxFrom(const DuckLakeColumnStats &other);
 	static bool BoundsSurviveTypePromotion(const LogicalType &source, const LogicalType &target);

@@ -194,7 +194,7 @@ void DuckLakeStagedCommit::EmitDataFileRow(string &sql, const DuckLakeDataFile &
 		sql += StringUtil::Format("INSERT INTO %s VALUES (%llu, %llu, %s);",
 		                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::DATA_FILE_PARTITION),
 		                          local_file_id, part.partition_column_idx,
-		                          DuckLakeUtil::PartitionValueLiteral(part.partition_value));
+		                          DuckLakeUtil::TextLiteralOrNull(part.partition_value));
 	}
 }
 
@@ -272,9 +272,10 @@ string DuckLakeStagedCommit::EmitCommitHeader(const DuckLakeSnapshotCommit &h, c
 	string next_file = has_snapshot ? std::to_string(snap.next_file_id) : "NULL";
 	return StringUtil::Format("INSERT INTO %s VALUES (%s, %s, %s, %s, %s, %s, %s, %s);",
 	                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::COMMIT_HEADER),
-	                          h.author.ToSQLString(), h.commit_message.ToSQLString(), h.commit_extra_info.ToSQLString(),
-	                          snap_id, SQLString::ToString(data_path), SQLString::ToString(separator), next_cat,
-	                          next_file);
+	                          DuckLakeUtil::TextLiteralOrNull(h.author),
+	                          DuckLakeUtil::TextLiteralOrNull(h.commit_message),
+	                          DuckLakeUtil::TextLiteralOrNull(h.commit_extra_info), snap_id,
+	                          SQLString::ToString(data_path), SQLString::ToString(separator), next_cat, next_file);
 }
 
 string DuckLakeStagedCommit::EmitDataFiles(const LocalTableChanges &local_changes, idx_t &local_file_id) const {

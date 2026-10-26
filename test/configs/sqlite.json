@@ -47,13 +47,15 @@
     {
       "reason": "SQLite databases do not support creating new schemas",
       "paths": [
+        "test/sql/general/read_only_attach_create_migrate.test",
         "test/sql/catalog/quoted_identifiers.test"
       ]
     },
     {
-      "reason": "SQLite cannot commit a concurrent insert while the retyping transaction is open",
+      "reason": "SQLite cannot commit a concurrent insert or added file while the retyping transaction is open",
       "paths": [
-        "test/sql/stats/float_to_double_retype_stats_concurrent.test"
+        "test/sql/stats/float_to_double_retype_stats_concurrent.test",
+        "test/sql/add_files/add_files_finer_timestamp_retype_concurrent.test"
       ]
     },
     {
@@ -107,6 +109,7 @@
       "reason": "Test only for Postgres as catalog",
       "paths": [
         "test/sql/metadata/ducklake_settings_postgres.test",
+        "test/sql/metadata/postgres_long_metadata_schema.test",
         "test/sql/retry/postgres_rollback_connection_loss.test",
         "test/sql/metadata/metadata_schema_scoped_attach.test",
         "test/sql/migration/postgres_concurrent_migration.test",
@@ -125,6 +128,8 @@
         "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test",
         "test/sql/compaction/compaction_idle_metadata_transaction.test",
         "test/sql/compaction/postgres_expire_snapshots_time_zone.test",
+        "test/sql/general/postgres_nul_byte_text.test",
+        "test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test"
       ]
     },
