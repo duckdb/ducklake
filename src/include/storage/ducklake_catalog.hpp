@@ -418,14 +418,19 @@ public:
 
 private:
 	void DropSchema(ClientContext &context, DropInfo &info) override;
-	unique_ptr<DuckLakeCatalogSet> LoadSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
+	unique_ptr<DuckLakeCatalogSet> LoadSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
+	                                                     optional_idx table_id = optional_idx());
 	//! Look up (or load) the ObjectCache entry for a given snapshot.
 	shared_ptr<DuckLakeSchemaCacheEntry> GetSchemaCacheEntry(DuckLakeTransaction &transaction,
 	                                                         DuckLakeSnapshot snapshot);
+	//! Look up (or load) the ObjectCache entry that holds one table with its columns at a schema version
+	shared_ptr<DuckLakeSchemaCacheEntry> GetTableCacheEntry(DuckLakeTransaction &transaction, TableIndex table_id,
+	                                                        idx_t schema_version);
 	void LoadNameMaps(DuckLakeTransaction &transaction);
 	string StatsCacheKey(idx_t next_file_id, TableIndex table_id) const;
 	string RecordCountCacheKey(idx_t snapshot_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
+	string TableCacheKey(TableIndex table_id, idx_t schema_version) const;
 	ObjectCache &GetObjectCacheInstance();
 	//! A table stats entry this DuckLake put in the object cache, kept without its key as there is one per table
 	struct TrackedStatsEntry {
