@@ -39,16 +39,18 @@ SELECT count(*) FROM dl.t
 statement ok con1
 CALL dl.set_option('data_inlining_row_limit', 100, table_name => 't')
 
-statement ok con2
+statement error con2
 CALL dl.set_option('data_inlining_row_limit', 200, table_name => 't')
+----
+could not serialize access
 
 statement ok con2
-COMMIT
+ROLLBACK
 
 query II
 SELECT count(*), max(value) FROM dl.options() WHERE option_name = 'data_inlining_row_limit'
 ----
-1	200
+1	100
 
 # an option that exists is updated while another transaction inserts a new one
 statement ok con3
@@ -105,59 +107,25 @@ SELECT count(*) FROM dl.t
 statement ok con1
 CALL dl.set_option('target_file_size', '3MB', schema => CASE WHEN '{scope}' = 'schema' THEN 'main' END)
 
-statement ok con5
+statement error con5
 CALL dl.set_option('target_file_size', '4MB', schema => CASE WHEN '{scope}' = 'schema' THEN 'main' END)
+----
+could not serialize access
 
 statement ok con5
-COMMIT
+ROLLBACK
 
 endloop
 
 query II
 SELECT scope, value FROM dl.options() WHERE option_name = 'target_file_size' ORDER BY ALL
 ----
-GLOBAL	4000000
-SCHEMA	4000000
+GLOBAL	3000000
+SCHEMA	3000000
 TABLE	1000000
 
-# two new options of the same table, schema or global scope are set at the same time
-statement ok
-CREATE TABLE dl.y (i INTEGER)
-
-foreach scope table schema global
-
-statement ok con6
-BEGIN
-
-statement ok con6
-SELECT count(*) FROM dl.t
-
-statement ok con1
-CALL dl.set_option('parquet_compression', 'gzip', table_name => CASE WHEN '{scope}' = 'table' THEN 'y' END,
-    schema => CASE WHEN '{scope}' = 'schema' THEN 'main' END)
-
-statement ok con6
-CALL dl.set_option('parquet_row_group_size', 5000, table_name => CASE WHEN '{scope}' = 'table' THEN 'y' END,
-    schema => CASE WHEN '{scope}' = 'schema' THEN 'main' END)
-
-statement ok con6
-COMMIT
-
-endloop
-
-query III
-SELECT scope, option_name, value FROM dl.options()
-WHERE option_name IN ('parquet_compression', 'parquet_row_group_size') AND (scope <> 'TABLE' OR scope_entry = 'main.y')
-ORDER BY ALL
-----
-GLOBAL	parquet_compression	gzip
-GLOBAL	parquet_row_group_size	5000
-SCHEMA	parquet_compression	gzip
-SCHEMA	parquet_row_group_size	5000
-TABLE	parquet_compression	gzip
-TABLE	parquet_row_group_size	5000
-
-# writers set options while an open transaction sets one of them, and its rollback leaves their values
+# a writer waits for an open transaction that inserts the same option, and inserts it after the rollback,
+# while the option of another table is set without waiting
 concurrentloop threadid 0 3
 
 onlyif threadid=0
@@ -195,74 +163,3 @@ SELECT list(value ORDER BY value) FROM dl.options()
 WHERE option_name = 'data_inlining_row_limit' AND value IN ('10', '20', '30')
 ----
 [20, 30]
-
-# two transactions set new options of two tables in opposite orders
-statement ok
-CREATE TABLE dl.z1 (i INTEGER)
-
-statement ok
-CREATE TABLE dl.z2 (i INTEGER)
-
-concurrentloop threadid 0 2
-
-statement ok
-BEGIN
-
-statement ok
-CALL dl.set_option('target_file_size', '1MB', table_name => CASE WHEN {threadid} = 0 THEN 'z1' ELSE 'z2' END)
-
-statement ok
-SELECT sleep_ms(1000)
-
-statement ok
-CALL dl.set_option('parquet_row_group_size', 1000, table_name => CASE WHEN {threadid} = 0 THEN 'z2' ELSE 'z1' END)
-
-statement ok
-COMMIT
-
-endloop
-
-query II
-SELECT option_name, count(*) FROM dl.options() WHERE scope_entry IN ('main.z1', 'main.z2') GROUP BY ALL ORDER BY ALL
-----
-parquet_row_group_size	2
-target_file_size	2
-
-# a transaction renames a table that another set an option of, and keeps the option it set itself
-statement ok
-CREATE TABLE dl.r1 (i INTEGER)
-
-statement ok
-CREATE TABLE dl.r2 (i INTEGER)
-
-statement ok con7
-BEGIN
-
-statement ok con7
-SELECT count(*) FROM dl.r1
-
-statement ok con7
-CALL dl.set_option('parquet_compression', 'zstd', table_name => 'r2')
-
-statement ok con1
-CALL dl.set_option('target_file_size', '1MB', table_name => 'r1')
-
-statement ok con7
-ALTER TABLE dl.r1 RENAME TO r3
-
-statement ok con7
-COMMIT
-
-statement ok
-DETACH dl
-
-statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
-
-query II
-SELECT scope_entry, value FROM dl.options()
-WHERE option_name IN ('parquet_compression', 'target_file_size') AND scope_entry IN ('main.r2', 'main.r3')
-ORDER BY ALL
-----
-main.r2	zstd
-main.r3	1000000

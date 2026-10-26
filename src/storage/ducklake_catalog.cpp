@@ -1201,108 +1201,53 @@ static option_map_t &GetOptionScope(DuckLakeOptions &options, const DuckLakeConf
 	return options.config_options;
 }
 
-//! Shows the latest value that an open transaction gave the option, or else its committed value
-static void ShowConfigOption(option_map_t &scope, const string &key, const DuckLakeChangedConfigOption &changed) {
-	auto &value = changed.changes.empty() ? changed.committed : changed.changes.back().second;
-	if (value.is_set) {
-		scope[key] = value.value;
-	} else {
-		scope.erase(key);
+static DuckLakeConfigOptionUndo GetConfigOptionUndo(const option_map_t &scope, const DuckLakeConfigOption &option) {
+	DuckLakeConfigOptionUndo undo;
+	undo.option = option;
+	auto entry = scope.find(option.option.key);
+	undo.was_set = entry != scope.end();
+	if (undo.was_set) {
+		undo.previous_value = entry->second;
 	}
+	return undo;
 }
 
-void DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOption &option) {
+DuckLakeConfigOptionUndo DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOption &option) {
 	lock_guard<mutex> guard(config_lock);
 	auto &scope = GetOptionScope(options, option);
-	auto &key = option.option.key;
-	auto entry = changed_config_options.find(make_pair(&scope, key));
-	if (entry == changed_config_options.end()) {
-		scope[key] = option.option.value;
-		return;
-	}
-	entry->second.committed.is_set = true;
-	entry->second.committed.value = option.option.value;
-	ShowConfigOption(scope, key, entry->second);
+	auto undo = GetConfigOptionUndo(scope, option);
+	scope[option.option.key] = option.option.value;
+	return undo;
 }
 
-static vector<pair<const DuckLakeTransaction *, DuckLakeOptionValue>>::iterator
-FindConfigOptionChange(DuckLakeChangedConfigOption &changed, const DuckLakeTransaction &transaction) {
-	return std::find_if(changed.changes.begin(), changed.changes.end(),
-	                    [&](const pair<const DuckLakeTransaction *, DuckLakeOptionValue> &change) {
-		                    return change.first == &transaction;
-	                    });
-}
-
-void DuckLakeCatalog::ChangeConfigOption(const DuckLakeTransaction &transaction,
-                                         const DuckLakeConfigOptionChange &change) {
+DuckLakeConfigOptionUndo DuckLakeCatalog::ResetConfigOption(const DuckLakeConfigOption &option) {
 	lock_guard<mutex> guard(config_lock);
-	auto &scope = GetOptionScope(options, change.option);
-	auto &key = change.option.option.key;
-	auto entry = changed_config_options.find(make_pair(&scope, key));
-	if (entry == changed_config_options.end()) {
-		// no open transaction changed the option, so it holds the committed value
-		DuckLakeChangedConfigOption changed;
-		auto current = scope.find(key);
-		changed.committed.is_set = current != scope.end();
-		if (changed.committed.is_set) {
-			changed.committed.value = current->second;
-		}
-		entry = changed_config_options.emplace(make_pair(&scope, key), std::move(changed)).first;
-	}
-	auto &changed = entry->second;
-	auto own = FindConfigOptionChange(changed, transaction);
-	if (own != changed.changes.end()) {
-		changed.changes.erase(own);
-	}
-	DuckLakeOptionValue value;
-	value.is_set = !change.reset;
-	value.value = change.option.option.value;
-	changed.changes.emplace_back(&transaction, std::move(value));
-	ShowConfigOption(scope, key, changed);
+	auto &scope = GetOptionScope(options, option);
+	auto undo = GetConfigOptionUndo(scope, option);
+	undo.reset = true;
+	scope.erase(option.option.key);
+	return undo;
 }
 
-void DuckLakeCatalog::EndConfigOptionChanges(const DuckLakeTransaction &transaction,
-                                             const vector<DuckLakeConfigOptionChange> &changes, bool committed) {
+void DuckLakeCatalog::UndoConfigOption(const DuckLakeConfigOptionUndo &undo) {
 	lock_guard<mutex> guard(config_lock);
-	for (auto &change : changes) {
-		auto &scope = GetOptionScope(options, change.option);
-		auto &key = change.option.option.key;
-		auto entry = changed_config_options.find(make_pair(&scope, key));
-		if (entry == changed_config_options.end()) {
-			continue;
+	auto &scope = GetOptionScope(options, undo.option);
+	auto entry = scope.find(undo.option.option.key);
+	if (undo.reset) {
+		if (entry == scope.end() && undo.was_set) {
+			scope[undo.option.option.key] = undo.previous_value;
 		}
-		auto &changed = entry->second;
-		auto own = FindConfigOptionChange(changed, transaction);
-		if (own == changed.changes.end()) {
-			continue;
-		}
-		if (committed) {
-			changed.committed = own->second;
-		}
-		changed.changes.erase(own);
-		ShowConfigOption(scope, key, changed);
-		if (changed.changes.empty()) {
-			changed_config_options.erase(entry);
-		}
-	}
-}
-
-void DuckLakeCatalog::CommitConfigOptions(const DuckLakeTransaction &transaction,
-                                          const vector<DuckLakeConfigOptionChange> &changes,
-                                          const vector<DuckLakeConfigOption> &new_table_options,
-                                          const std::function<bool()> &commit) {
-	if (changes.empty() && new_table_options.empty()) {
-		commit();
 		return;
 	}
-	lock_guard<mutex> guard(config_commit_lock);
-	if (!commit()) {
+	if (entry == scope.end() || entry->second != undo.option.option.value) {
+		// another transaction has set the option since - leave its value in place
 		return;
 	}
-	for (auto &option : new_table_options) {
-		SetConfigOption(option);
+	if (undo.was_set) {
+		entry->second = undo.previous_value;
+	} else {
+		scope.erase(entry);
 	}
-	EndConfigOptionChanges(transaction, changes, true);
 }
 
 template <class SCOPE_MAP, class SCOPE_ID>

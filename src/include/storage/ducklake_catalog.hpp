@@ -36,7 +36,7 @@ class ColumnList;
 class DuckLakeFieldData;
 struct DuckLakeFileListEntry;
 struct DuckLakeConfigOption;
-struct DuckLakeConfigOptionChange;
+struct DuckLakeConfigOptionUndo;
 struct DuckLakeSnapshotCommit;
 struct DeleteFileMap;
 struct BoundCreateTableInfo;
@@ -120,18 +120,6 @@ struct DuckLakeAttachedCatalogs : public ObjectCacheEntry {
 	}
 };
 
-struct DuckLakeOptionValue {
-	bool is_set = false;
-	string value;
-};
-
-//! A config option that open transactions changed
-struct DuckLakeChangedConfigOption {
-	DuckLakeOptionValue committed;
-	//! The latest value that each of the open transactions gave it, oldest first
-	vector<pair<const DuckLakeTransaction *, DuckLakeOptionValue>> changes;
-};
-
 //! Holds pins on DuckLake schema cache entries, keeping them alive while they are still referenced.
 class DuckLakeSchemaPinState {
 public:
@@ -208,17 +196,10 @@ public:
 	string &Separator() {
 		return separator;
 	}
-	//! Sets a committed config option
-	void SetConfigOption(const DuckLakeConfigOption &option);
-	//! Records the latest option change of an open transaction
-	void ChangeConfigOption(const DuckLakeTransaction &transaction, const DuckLakeConfigOptionChange &change);
-	//! Ends the option changes of a transaction, the options keep the values it committed
-	void EndConfigOptionChanges(const DuckLakeTransaction &transaction,
-	                            const vector<DuckLakeConfigOptionChange> &changes, bool committed);
-	//! Runs the metadata commit of a transaction, and keeps the option values it committed in the order of commits
-	void CommitConfigOptions(const DuckLakeTransaction &transaction, const vector<DuckLakeConfigOptionChange> &changes,
-	                         const vector<DuckLakeConfigOption> &new_table_options,
-	                         const std::function<bool()> &commit);
+	//! Sets a config option, returning what it held before so a rollback can put it back
+	DuckLakeConfigOptionUndo SetConfigOption(const DuckLakeConfigOption &option);
+	DuckLakeConfigOptionUndo ResetConfigOption(const DuckLakeConfigOption &option);
+	void UndoConfigOption(const DuckLakeConfigOptionUndo &undo);
 	//! Pending table options take precedence
 	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id,
 	                        optional_ptr<const map<string, string>> table_options = nullptr) const;
@@ -472,10 +453,6 @@ private:
 	mutable mutex config_lock;
 	//! The DuckLake options
 	DuckLakeOptions options;
-	//! The options that open transactions changed, by scope and name
-	map<pair<const option_map_t *, string>, DuckLakeChangedConfigOption> changed_config_options;
-	//! Held by the metadata commits of transactions that changed options
-	mutex config_commit_lock;
 	//! The path separator
 	string separator = "/";
 	//! A unique tracker for catalog changes in uncommitted transactions.

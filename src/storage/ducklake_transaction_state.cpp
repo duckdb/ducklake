@@ -1004,31 +1004,19 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(TableIndex table_id,
 //! the server-side commit resolves it too. Only roots matter here: step 3 of the recompute merges inlined stats,
 //! which TryMergeInlinedStats only produces for scalar roots.
 static set<FieldIndex> ReadSkippedStatsFields(TableIndex table_id, const DuckLakeCommitContext &context) {
-	vector<string> values;
-	// the commit writes the change of the transaction itself after this read
-	auto change = context.get_table_option_change(table_id, "skip_stats_columns");
-	if (change) {
-		if (!change->reset) {
-			values.push_back(change->option.option.value);
-		}
-	} else {
-		auto query = StringUtil::Format("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata "
-		                                "WHERE key='skip_stats_columns' AND scope='table' AND scope_id=%d;",
-		                                table_id.index);
-		auto stats_option = context.query_metadata(query);
-		stats_option->ThrowIfError("Failed to read the skip_stats_columns option from DuckLake: ");
-		for (auto &row : *stats_option) {
-			if (row.IsNull(0)) {
-				// LCOV_EXCL_START
-				continue;
-				// LCOV_EXCL_STOP
-			}
-			values.push_back(row.GetValue<string>(0));
-		}
-	}
 	set<FieldIndex> result;
-	for (auto &value : values) {
-		for (auto &entry : StringUtil::Split(value, ',')) {
+	auto query = StringUtil::Format("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata "
+	                                "WHERE key='skip_stats_columns' AND scope='table' AND scope_id=%d;",
+	                                table_id.index);
+	auto stats_option = context.query_metadata(query);
+	stats_option->ThrowIfError("Failed to read the skip_stats_columns option from DuckLake: ");
+	for (auto &row : *stats_option) {
+		if (row.IsNull(0)) {
+			// LCOV_EXCL_START
+			continue;
+			// LCOV_EXCL_STOP
+		}
+		for (auto &entry : StringUtil::Split(row.GetValue<string>(0), ',')) {
 			idx_t field_index;
 			if (TryCast::Operation<string_t, idx_t>(string_t(entry), field_index)) {
 				result.insert(FieldIndex(field_index));
@@ -2753,15 +2741,10 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			can_retry = true;
 			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
 			DuckLakeCommitState commit_state(commit_snapshot);
-			string batch_queries;
-			if (context.write_snapshot) {
-				// write the new snapshot
-				batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
-				batch_queries +=
-				    CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
-				batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
-			}
-			batch_queries += context.write_config_options();
+			// write the new snapshot
+			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
+			batch_queries += CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
+			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
 			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				auto &commit_error = res->GetErrorObject();
@@ -2779,8 +2762,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			retryable_metadata_error = retryable_metadata_error || context.is_retryable_metadata_error(error.Message());
 			// a retryable metadata error in the conflict check is retried, a conflict that it finds is not
 			bool retry_on_error =
-			    context.allow_retry &&
-			    (retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error.Message())));
+			    retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error.Message()));
 			// We perform one initial attempt plus up to max_retry_count retries. Since i is the
 			// zero-based attempt index, we are done retrying once i reaches max_retry_count.
 			bool finished_retrying = i >= retry_config.max_retry_count;
@@ -2820,9 +2802,8 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	}
 	// If we got here, this snapshot was successful
 	context.set_entry_oids(new_entry_oids);
-	if (context.write_snapshot) {
-		context.set_committed_snapshot_id(commit_snapshot.snapshot_id);
-	}
+	context.set_committed_snapshot_id(commit_snapshot.snapshot_id);
+	context.set_table_options(committed_table_options);
 	for (auto &entry : dropped_file_stats) {
 		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);
 	}

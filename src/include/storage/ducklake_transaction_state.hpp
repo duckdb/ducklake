@@ -131,6 +131,10 @@ struct DuckLakeCommitContext {
 	//! Keeps the oids of the entries created by the commit on the catalog.
 	std::function<void(const ducklake_entry_oids_t &)> set_entry_oids = [](const ducklake_entry_oids_t &) {
 	};
+	//! Publishes the options of newly created tables onto the catalog.
+	std::function<void(const vector<DuckLakeConfigOption> &)> set_table_options =
+	    [](const vector<DuckLakeConfigOption> &) {
+	    };
 	//! Invalidates the cached stats entry for a table after a stats-affecting file drop.
 	std::function<void(idx_t, TableIndex)> invalidate_table_stats_cache = [](idx_t, TableIndex) {
 	};
@@ -139,18 +143,6 @@ struct DuckLakeCommitContext {
 	std::function<void(const string &)> report_post_commit_error = [](const string &) {
 	};
 	// LCOV_EXCL_STOP
-	//! Emits the SQL that writes the config options the transaction set and reset.
-	std::function<string()> write_config_options = []() {
-		return string();
-	};
-	//! The latest change of a table option that the transaction made.
-	std::function<optional_ptr<const DuckLakeConfigOptionChange>(TableIndex, const string &)> get_table_option_change =
-	    [](TableIndex, const string &) {
-		    return optional_ptr<const DuckLakeConfigOptionChange>();
-	    };
-	//! Whether the commit writes a snapshot, a commit that only changes options writes none.
-	bool write_snapshot = true;
-	bool allow_retry = true;
 	//! Author / message / extra info for the snapshot row.
 	DuckLakeSnapshotCommit commit_info;
 	//! When true, Commit() skips the post-commit DropEmptySupersededInlinedTables cleanup.

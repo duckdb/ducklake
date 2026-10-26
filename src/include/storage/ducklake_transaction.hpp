@@ -281,8 +281,6 @@ public:
 	void MarkDeleteAttempted(TableIndex table_id);
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
-	void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &files);
-	void MarkMetadataWritten();
 	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files);
 	bool InlinedTableFlushed(const string &table_name);
@@ -322,11 +320,6 @@ public:
 	const DuckLakeNameMapSet &GetNewNameMaps() const {
 		return new_name_maps;
 	}
-	const vector<DuckLakeConfigOptionChange> &GetConfigOptionChanges() const {
-		return config_option_changes;
-	}
-	//! The latest change of the option in this transaction
-	optional_ptr<const DuckLakeConfigOptionChange> GetConfigOptionChange(const DuckLakeConfigOption &option) const;
 	bool FileIsDropped(const string &path) const;
 	//! Check if there are any uncommitted changes for this table (inserts, deletes, or dropped files)
 	bool HasAnyLocalChanges(TableIndex table_id) const;
@@ -370,11 +363,8 @@ private:
 	void FlushChanges();
 	void BeginMetadataTransaction();
 	void FlushNameMapCacheInvalidations();
-	void ChangeConfigOption(const DuckLakeConfigOption &option, bool reset);
-	//! Ends the config option changes of this transaction in the catalog
-	void EndConfigOptionChanges(bool committed);
-	//! Whether the option is set, as this transaction sees it
-	bool ConfigOptionIsSet(const DuckLakeConfigOption &option);
+	//! Puts back the config options this transaction replaced in the catalog
+	void UndoConfigOptions();
 	static DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeSortInfo GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
@@ -405,8 +395,6 @@ private:
 	mutex delete_attempted_lock;
 	//! The snapshots expired by this transaction, deleted when it commits
 	vector<DuckLakeSnapshotInfo> expired_snapshots;
-	//! Whether statements wrote to the metadata transaction, which a retried commit rolls back
-	bool metadata_written = false;
 	DuckLakeSnapshot GetLatestSnapshot();
 	//! The latest snapshot in DuckLake when the transaction first looked, the snapshot of the transaction unless the
 	//! catalog is opened at a fixed snapshot
@@ -427,8 +415,8 @@ private:
 	DuckLakeNameMapSet new_name_maps;
 	//! Name maps deleted by direct metadata operations, applied to the catalog cache on commit
 	vector<MappingIndex> pending_name_map_cache_invalidations;
-	//! The config options set and reset by this transaction, which its commit writes
-	vector<DuckLakeConfigOptionChange> config_option_changes;
+	//! Previous values of config options set by this transaction, for rollback
+	vector<DuckLakeConfigOptionUndo> config_option_undo;
 
 	atomic<idx_t> catalog_version;
 	mutex transaction_views_lock;
