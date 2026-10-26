@@ -38,10 +38,15 @@ ducklake_retired_path
 statement ok
 ATTACH '{DUCKLAKE_CONNECTION}' AS check_meta
 
-query I
-SELECT count(*) FROM (SELECT DISTINCT table_name, column_name FROM duckdb_columns() WHERE database_name = 'check_meta' AND column_name IN ('origin_file_id', 'origin_snapshot'))
+statement error
+SELECT origin_file_id FROM check_meta.ducklake_data_file
 ----
-0
+origin_file_id
+
+statement error
+SELECT origin_file_id FROM check_meta.ducklake_delete_file
+----
+origin_file_id
 
 query I
 SELECT value FROM check_meta.ducklake_metadata WHERE key = 'version'
