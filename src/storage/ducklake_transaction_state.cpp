@@ -2366,9 +2366,14 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::WriteNewColumnMappings(result.new_column_mappings);
 	}
 
+	// the paths the commit publishes, which a cleanup must not have retired
+	vector<string> published_paths;
 	auto write_data_files_sql = [&](const vector<DuckLakeFileInfo> &files) {
 		if (files.empty()) {
 			return string();
+		}
+		for (auto &file : files) {
+			published_paths.push_back(file.file_name);
 		}
 		if (context.try_append_data_files &&
 		    context.try_append_data_files(commit_snapshot, files, new_tables_result, new_schemas_result)) {
@@ -2403,6 +2408,9 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		// write new delete files
 		vector<DuckLakeOverwrittenDeleteFile> overwritten_delete_files;
 		auto file_list = GetNewDeleteFiles(commit_state, overwritten_delete_files);
+		for (auto &file : file_list) {
+			published_paths.push_back(file.path);
+		}
 		batch_queries += DuckLakeMetadataManager::DeleteOverwrittenDeleteFiles(
 		    overwritten_delete_files, relative_paths(overwritten_delete_files));
 		batch_queries += DuckLakeMetadataManager::WriteNewDeleteFiles(
@@ -2480,6 +2488,10 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		}
 	}
 	batch_queries += DuckLakeMetadataManager::InsertNewSchema(commit_snapshot, tables_with_schema_changes);
+	if (context.supports_file_identity && !published_paths.empty()) {
+		batch_queries += DuckLakeMetadataManager::RetiredPathGuardSql(FileSystem::GetFileSystem(db), published_paths,
+		                                                              context.guard_sql);
+	}
 
 	return batch_queries;
 }

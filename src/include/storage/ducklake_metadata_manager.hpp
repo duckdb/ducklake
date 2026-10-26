@@ -236,6 +236,9 @@ public:
 	//! The guard that fails a commit when another connection migrated the catalog after it was attached
 	static string MigratedCatalogGuardSql(const string &attached_version,
 	                                      const std::function<string(const string &, const string &)> &guard_sql);
+	//! The guard that fails a commit batch when the canonical path of one of the files it publishes is retired
+	static string RetiredPathGuardSql(FileSystem &fs, const vector<string> &paths,
+	                                  const std::function<string(const string &, const string &)> &guard_sql);
 	//! Whether the error is one a guard raised, which a retry raises again
 	static bool IsGuardError(const string &message);
 	virtual bool IsTerminalCommitError(const string &message) const;

@@ -1,0 +1,61 @@
+# name: test/sql/retirement/registration_after_retirement.test
+# description: a registration that read its file before a cleanup retired it fails at commit
+# group: [retirement]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/registration_after_retirement', METADATA_CATALOG 'meta')
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT 1 AS i
+
+statement ok con1
+SET VARIABLE compacted = (SELECT data_file FROM ducklake_list_files('dl', 't'))
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+# the compaction schedules the file for deletion
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+statement ok
+CREATE TABLE dl.u(i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_add_data_files('dl', 'u', getvariable('compacted'))
+
+# the cleanup does not see the registration that is not committed
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+2
+
+statement error con1
+COMMIT
+----
+was retired by cleanup
+
+query I
+SELECT count(*) FROM dl.u
+----
+0
+
+query I
+SELECT * FROM dl.t ORDER BY ALL
+----
+1
+2

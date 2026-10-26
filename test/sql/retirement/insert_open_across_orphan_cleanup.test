@@ -1,0 +1,59 @@
+# name: test/sql/retirement/insert_open_across_orphan_cleanup.test
+# description: an insert left open across an orphan cleanup that deleted its file fails at commit, also after another cleanup
+# group: [retirement]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/insert_open_across_orphan_cleanup', METADATA_CATALOG 'meta')
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+# a second attachment does not know the files of the open transactions of the first
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS cleaner (METADATA_CATALOG 'meta')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (1)
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('cleaner', cleanup_all => true)
+----
+1
+
+# a later cleanup with nothing to delete keeps the retirement
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('cleaner', cleanup_all => true)
+----
+0
+
+statement error con1
+COMMIT
+----
+was retired by cleanup
+
+query I
+SELECT count(*) FROM dl.t
+----
+0
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+query I
+SELECT * FROM dl.t
+----
+2

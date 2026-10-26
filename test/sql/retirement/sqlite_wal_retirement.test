@@ -1,0 +1,79 @@
+# name: test/sql/retirement/sqlite_wal_retirement.test
+# description: in its WAL journal mode a SQLite catalog commits the retirement of a cleanup while other transactions are open
+# group: [retirement]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+# the SQLite config skips errors about locks, which none of these statements may raise
+set ignore_error_messages
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_wal_retirement.db' AS dl (DATA_PATH '{TEST_DIR}/sqlite_wal_retirement', META_JOURNAL_MODE 'wal', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT 1 AS i
+
+statement ok con1
+SET VARIABLE compacted = (SELECT data_file FROM ducklake_list_files('dl', 't'))
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+statement ok
+CREATE TABLE dl.u(i INTEGER)
+
+# a registration of a compacted file stays open across the cleanup of old files
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_add_data_files('dl', 'u', getvariable('compacted'))
+
+# the retirement commits before the unlink, a rollback of the cleanup keeps it
+statement ok
+BEGIN
+
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+2
+
+statement ok
+ROLLBACK
+
+statement error con1
+COMMIT
+----
+was retired by cleanup
+
+# an insert stays open across an orphan cleanup of another attachment, which does not know its file
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_wal_retirement.db' AS cleaner (META_JOURNAL_MODE 'wal')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (3)
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('cleaner', cleanup_all => true)
+----
+1
+
+statement error con1
+COMMIT
+----
+was retired by cleanup
+
+query II
+SELECT (SELECT list(i ORDER BY i) FROM dl.t), (SELECT count(*) FROM dl.u)
+----
+[1, 2]	0

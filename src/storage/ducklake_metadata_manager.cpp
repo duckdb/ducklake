@@ -93,7 +93,7 @@ void DuckLakeMetadataManager::FlushChangesServerSide(DuckLakeTransaction &, Duck
 }
 
 //! The texts of the guard errors, free of the words that make an error retryable
-static constexpr const char *GUARD_ERRORS[] = {"was migrated by another connection"};
+static constexpr const char *GUARD_ERRORS[] = {"was migrated by another connection", "was retired by cleanup"};
 
 string DuckLakeMetadataManager::GuardSql(const string &message, const string &source) {
 	return StringUtil::Format("SELECT error(%s) %s;\n", message, source);
@@ -111,6 +111,23 @@ string DuckLakeMetadataManager::MigratedCatalogGuardSql(
 	                                  version);
 	auto source = StringUtil::Format(
 	    "FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version' AND scope IS NULL AND value <> %s", version);
+	return guard_sql(message, source);
+}
+
+string
+DuckLakeMetadataManager::RetiredPathGuardSql(FileSystem &fs, const vector<string> &paths,
+                                             const std::function<string(const string &, const string &)> &guard_sql) {
+	unordered_set<string> keys;
+	vector<string> key_literals;
+	for (auto &path : paths) {
+		auto key = DuckLakeUtil::CanonicalPathKey(fs, path);
+		if (keys.insert(key).second) {
+			key_literals.push_back(SQLString::ToString(key));
+		}
+	}
+	auto message = "'The file ' || path || ' was retired by cleanup, so it cannot be added to DuckLake again'";
+	auto source = StringUtil::Format("FROM {METADATA_CATALOG}.ducklake_retired_path WHERE path IN (%s)",
+	                                 StringUtil::Join(key_literals, ", "));
 	return guard_sql(message, source);
 }
 
@@ -685,7 +702,7 @@ static constexpr const DuckLakeAddedColumn V2_0_DEV2_ADDED_COLUMNS[] = {
     {"ducklake_delete_file", "origin_file_id", "BIGINT"}};
 
 string DuckLakeMetadataManager::GetRetiredPathTableStatement() {
-	return "CREATE TABLE {METADATA_CATALOG}.ducklake_retired_path(path VARCHAR, retired_at TIMESTAMPTZ);";
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_retired_path(path VARCHAR PRIMARY KEY, retired_at TIMESTAMPTZ);";
 }
 
 string DuckLakeMetadataManager::AppendFileIdentityColumns(const string &table_name, string create_statement) {
