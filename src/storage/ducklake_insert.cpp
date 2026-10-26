@@ -317,8 +317,8 @@ void DuckLakeInsert::RemoveEmptyFiles(ClientContext &context, DuckLakeInsertGlob
 	if (gstate.empty_files.empty()) {
 		return;
 	}
-	auto &fs = FileSystem::GetFileSystem(context);
-	fs.RemoveFiles(gstate.empty_files);
+	auto &transaction = DuckLakeTransaction::Get(context, gstate.table.catalog);
+	transaction.DiscardFiles(gstate.empty_files);
 	gstate.empty_files.clear();
 }
 

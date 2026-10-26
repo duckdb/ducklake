@@ -286,13 +286,8 @@ public:
 
 	static void DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context);
 
+	//! Removes the files the transaction wrote, which it does not commit
 	void CleanupFiles();
-	//! Removes the files the committed transaction wrote and dropped again, unless committed rows reference them
-	void RemoveDroppedFiles();
-	//! The written files that committed rows reference and the transaction must keep, all of them without metadata
-	unordered_set<string> ReferencedWrittenFiles(const vector<string> &paths);
-	//! The paths of the given files that committed data or delete file rows reference
-	unordered_set<string> GetReferencedFiles(const vector<string> &paths);
 
 	void EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const;
 
@@ -307,8 +302,8 @@ public:
 	string separator;
 	//! The physical identities that the files this transaction registers take, by path
 	unordered_map<string, idx_t> registration_identities;
-	//! Runs a metadata query outside of a commit attempt, unset when committed rows cannot reference written files
-	std::function<unique_ptr<QueryResult>(string)> query_committed_metadata;
+	//! Removes the files that the transaction wrote and does not commit, by default it unlinks them
+	std::function<void(vector<string>)> remove_owned_files;
 	DuckLakeSnapshotCommit commit_info;
 
 	map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> new_tables;

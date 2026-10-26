@@ -43,8 +43,9 @@ inline CompactionType CompactionTypeFromString(const string &str) {
 }
 
 enum class CleanupType {
-	OLD_FILES,     // If the files are old, e.g., from an expired snapshot and can now be removed.
-	ORPHANED_FILES // If the file is an orphan e.g., the file was generated but never committed to the catalog
+	OLD_FILES,      // If the files are old, e.g., from an expired snapshot and can now be removed.
+	ORPHANED_FILES, // If the file is an orphan e.g., the file was generated but never committed to the catalog
+	WRITTEN_FILES   // Files a transaction wrote and no longer uses, only rows of later snapshots reference them
 };
 
 struct DuckLakeTag {
@@ -499,6 +500,19 @@ struct DuckLakeRetirement {
 
 	bool Empty() const {
 		return unlinked_files.empty() && unscheduled_files.empty();
+	}
+	void Append(DuckLakeRetirement other) {
+		for (auto &file : other.unlinked_files) {
+			unlinked_files.push_back(std::move(file));
+		}
+		for (auto &path : other.retired_paths) {
+			if (std::find(retired_paths.begin(), retired_paths.end(), path) == retired_paths.end()) {
+				retired_paths.push_back(std::move(path));
+			}
+		}
+		for (auto &file_id : other.unscheduled_files) {
+			unscheduled_files.push_back(file_id);
+		}
 	}
 };
 

@@ -414,12 +414,13 @@ public:
 
 	virtual void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files);
 	//! The retirement of the cleanup candidates that no data or delete file references, read after the latest snapshot
-	DuckLakeRetirement GetRetirement(const vector<DuckLakeFileForCleanup> &candidates, CleanupType type);
+	DuckLakeRetirement GetRetirement(const vector<DuckLakeFileForCleanup> &candidates, CleanupType type,
+	                                 idx_t written_after_snapshot = 0);
 	static string RetireFilesSql(const DuckLakeRetirement &retirement);
 	//! The full path, table, physical identity and end snapshot of every data file, ended files included
 	static string DataFileIdentitiesQuery();
-	//! The full paths of the data and delete files whose stored path matches the filter, ended files included
-	static string FilesWithFileNamesQuery(const string &path_filter);
+	//! The full paths of the data and delete files whose rows match the filter, ended files included
+	static string ReferencedFilesQuery(const string &filter);
 	static string DropSchemas(const set<SchemaIndex> &ids);
 	static string DropTables(const set<TableIndex> &ids, bool renamed);
 	static string DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags = false);

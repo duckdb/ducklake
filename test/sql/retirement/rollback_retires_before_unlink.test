@@ -1,0 +1,59 @@
+# name: test/sql/retirement/rollback_retires_before_unlink.test
+# description: a writer that rolls back retires the paths of its files, so a registration that read one fails at commit
+# group: [retirement]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/rollback_retires_before_unlink', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+CREATE TABLE dl.u(i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (42)
+
+# another transaction reads the file of the open insert and registers it, without committing yet
+statement ok
+SET VARIABLE written = (SELECT file FROM glob('{DATA_PATH}/rollback_retires_before_unlink/main/t/*.parquet'))
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_add_data_files('dl', 'u', getvariable('written'))
+
+statement ok con1
+ROLLBACK
+
+query I
+SELECT count(*) FROM glob(getvariable('written'))
+----
+0
+
+statement error
+COMMIT
+----
+was retired by cleanup
+
+query I
+SELECT count(*) FROM dl.u
+----
+0
+
+query I
+SELECT commit_message FROM dl.snapshots() ORDER BY snapshot_id DESC LIMIT 1
+----
+rollback

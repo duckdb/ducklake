@@ -1,0 +1,62 @@
+# name: test/sql/retirement/rollback_keeps_registered_remote_alias.test
+# description: a writer that rolls back keeps the file another transaction registered under a spelling with S3 URL parameters
+# group: [retirement]
+
+require ducklake
+
+require parquet
+
+require httpfs
+
+require-env S3_TEST_SERVER_AVAILABLE 1
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env ALIAS_PATH s3://mybucket/rollback_keeps_registered_remote_alias
+
+statement ok
+DROP SECRET IF EXISTS __default_s3;
+
+# a secret reaches the connection of the writer too
+statement ok
+CREATE SECRET rollback_alias (TYPE S3, KEY_ID 'admin', SECRET 'password', REGION 'us-east-1', ENDPOINT '127.0.0.1:9000', URL_STYLE 'path', USE_SSL false);
+
+statement ok
+SET s3_enable_deprecated_url_parameters=true;
+
+statement ok
+SET enable_external_file_cache=false;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{ALIAS_PATH}/', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER);
+
+statement ok
+CREATE TABLE dl.u(i INTEGER);
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (42)
+
+statement ok
+SET VARIABLE written = (SELECT filename FROM read_blob('{ALIAS_PATH}/main/t/*.parquet') ORDER BY last_modified DESC LIMIT 1)
+
+statement ok
+CALL ducklake_add_data_files('dl', 'u', getvariable('written') || '?s3_region=us-east-1')
+
+statement ok con1
+ROLLBACK
+
+query I
+SELECT count(*) FROM glob('{ALIAS_PATH}/main/t/*.parquet') WHERE file = getvariable('written')
+----
+1
+
+query I
+SELECT i FROM dl.u
+----
+42

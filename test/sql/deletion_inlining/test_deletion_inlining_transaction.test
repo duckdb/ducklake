@@ -118,29 +118,33 @@ SELECT COUNT(*) FROM t;
 statement ok
 COMMIT
 
+# the deletions are dated to the snapshot of the commit
+statement ok
+SET VARIABLE delete_snapshot = (SELECT max(snapshot_id) FROM ducklake_meta.ducklake_snapshot)
+
 query I
 SELECT COUNT(*) FROM t;
 ----
 35
 
 query III
-SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+SELECT file_id, row_id, begin_snapshot = getvariable('delete_snapshot') FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
 ----
-0	0	2
-0	1	2
-0	2	2
-0	3	2
-0	4	2
-0	5	2
-0	6	2
-0	7	2
-0	8	2
-0	9	2
-0	10	2
-0	11	2
-0	12	2
-0	13	2
-0	14	2
+0	0	true
+0	1	true
+0	2	true
+0	3	true
+0	4	true
+0	5	true
+0	6	true
+0	7	true
+0	8	true
+0	9	true
+0	10	true
+0	11	true
+0	12	true
+0	13	true
+0	14	true
 
 statement ok
 BEGIN
@@ -160,23 +164,23 @@ ROLLBACK
 
 # After rollback, the inlined deletions should still be there (flush was rolled back)
 query III
-SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
+SELECT file_id, row_id, begin_snapshot = getvariable('delete_snapshot') FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id
 ----
-0	0	2
-0	1	2
-0	2	2
-0	3	2
-0	4	2
-0	5	2
-0	6	2
-0	7	2
-0	8	2
-0	9	2
-0	10	2
-0	11	2
-0	12	2
-0	13	2
-0	14	2
+0	0	true
+0	1	true
+0	2	true
+0	3	true
+0	4	true
+0	5	true
+0	6	true
+0	7	true
+0	8	true
+0	9	true
+0	10	true
+0	11	true
+0	12	true
+0	13	true
+0	14	true
 
 statement ok
 BEGIN

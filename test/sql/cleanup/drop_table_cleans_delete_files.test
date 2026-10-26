@@ -37,7 +37,10 @@ SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_drop_delete_cleanup/main/tbl/*-d
 statement ok
 DROP TABLE ducklake.tbl
 
-# both data files and delete files should be cleaned up
+statement ok
+COMMIT
+
+# both data files and delete files are cleaned up at the end of the transaction
 query I
 SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_drop_delete_cleanup/main/tbl/*.parquet')
 ----
@@ -47,6 +50,3 @@ query I
 SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_drop_delete_cleanup/main/tbl/*-delete.*')
 ----
 0
-
-statement ok
-COMMIT

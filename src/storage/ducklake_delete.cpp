@@ -268,7 +268,6 @@ void DuckLakeDeleteFileWriter::SetCommitSnapshot(ClientContext &context, DuckLak
 	                                         delete_file.source};
 	MergeDeletesWithSnapshots(deletes, 0, input.positions);
 	auto written_file = Write(context, input, delete_file.format == DeleteFileFormat::PUFFIN);
-	fs.TryRemoveFile(file_name);
 
 	written_file.data_file_id = delete_file.data_file_id;
 	written_file.overwrites_existing_delete = delete_file.overwrites_existing_delete;

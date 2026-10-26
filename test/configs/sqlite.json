@@ -149,6 +149,12 @@
       ]
     },
     {
+      "reason": "The retirement that a rollback commits waits for the open transaction of the other connection on SQLite in its rollback journal mode, so the rollback leaves its file",
+      "paths": [
+        "test/sql/retirement/rollback_retires_before_unlink.test"
+      ]
+    },
+    {
       "reason": "The concurrent INSERT commit fails with \"database is locked\" while the reader transaction is open, which skip_error_messages turns into a silent skip; the partial-file scenario needs a catalog that does not pin reads (quack)",
       "paths": [
         "test/sql/quack/partial_file_count.test"

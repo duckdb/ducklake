@@ -5478,17 +5478,10 @@ FROM
 }
 
 string DuckLakeMetadataManager::GetReferencedFilesQuery() const {
-	return FullFilePathsQuery(R"(
-    SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id
-    FROM {METADATA_CATALOG}.ducklake_data_file f
-    UNION ALL
-    SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id
-    FROM {METADATA_CATALOG}.ducklake_delete_file f
-  )",
-	                          "", "");
+	return ReferencedFilesQuery("TRUE");
 }
 
-string DuckLakeMetadataManager::FilesWithFileNamesQuery(const string &path_filter) {
+string DuckLakeMetadataManager::ReferencedFilesQuery(const string &filter) {
 	return FullFilePathsQuery(StringUtil::Format(R"(
     SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id
     FROM {METADATA_CATALOG}.ducklake_data_file f WHERE %s
@@ -5496,7 +5489,7 @@ string DuckLakeMetadataManager::FilesWithFileNamesQuery(const string &path_filte
     SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id
     FROM {METADATA_CATALOG}.ducklake_delete_file f WHERE %s
   )",
-	                                             path_filter, path_filter),
+	                                             filter, filter),
 	                          "", "");
 }
 
@@ -5592,17 +5585,31 @@ WHERE data_file_id IN (%s);
 }
 
 DuckLakeRetirement DuckLakeMetadataManager::GetRetirement(const vector<DuckLakeFileForCleanup> &candidates,
-                                                          CleanupType type) {
+                                                          CleanupType type, idx_t written_after_snapshot) {
 	DuckLakePathKeys path_keys(transaction.GetCatalog().GetDatabase());
-	bool orphans = type == CleanupType::ORPHANED_FILES;
-	// the scheduled files are known files for orphan cleanup, and the candidates of the cleanup of old files
-	auto referenced_res = Query(orphans ? GetKnownFilesForCleanupQuery() : GetReferencedFilesQuery());
+	// the candidates of orphan cleanup and written files have no schedule entries
+	bool orphans = type != CleanupType::OLD_FILES;
+	string referenced_query;
+	switch (type) {
+	case CleanupType::OLD_FILES:
+		referenced_query = GetReferencedFilesQuery();
+		break;
+	case CleanupType::ORPHANED_FILES:
+		// the scheduled files are known files for orphan cleanup
+		referenced_query = GetKnownFilesForCleanupQuery();
+		break;
+	case CleanupType::WRITTEN_FILES:
+		// only the rows of later snapshots can reference a file that a transaction wrote
+		referenced_query = ReferencedFilesQuery(StringUtil::Format("f.begin_snapshot > %llu", written_after_snapshot));
+		break;
+	}
+	auto referenced_res = Query(referenced_query);
 	referenced_res->ThrowIfError("Failed to read the files DuckLake references: ");
 	unordered_set<string> referenced;
 	for (auto &row : *referenced_res) {
 		referenced.insert(path_keys.Get(row.GetValue<string>(0)));
 	}
-	if (orphans) {
+	if (type == CleanupType::ORPHANED_FILES) {
 		vector<string> written_files;
 		transaction.manager.Cast<DuckLakeTransactionManager>().GetWrittenFiles(written_files);
 		for (auto &path : written_files) {

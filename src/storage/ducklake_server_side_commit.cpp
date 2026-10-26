@@ -114,8 +114,6 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	if (attached_version.empty()) {
 		// clients that do not pass their version predate 2.0-dev2 and cannot have attached such a catalog
 		if (catalog_version >= DuckLakeVersion::V2_0_DEV2) {
-			// the commit fails for good, so the files it owns are removed like those of a failed commit
-			state->CleanupFiles();
 			throw InvalidInputException("The catalog was migrated by another connection to version %s, reattach to "
 			                            "pick up the new version",
 			                            DuckLakeVersionToString(catalog_version));
@@ -166,9 +164,8 @@ void DuckLakeServerSideCommit::ReadCommitHeader() {
 	state = make_uniq<DuckLakeTransactionState>(*context.db, /*require_commit_message=*/false, new_name_maps,
 	                                            std::move(data_path), std::move(separator));
 	if (supports_file_identity) {
-		// a registration of another transaction can reference a file the commit wrote
-		state->query_committed_metadata = [this](string query) {
-			return fresh_conn.Query(SubstitutePlaceholders(std::move(query), DuckLakeSnapshot()));
+		// a registration of another transaction can reference a file the commit wrote, the server cannot retire it
+		state->remove_owned_files = [](vector<string>) {
 		};
 	}
 	state->commit_info.author = row.GetBaseValue(0);

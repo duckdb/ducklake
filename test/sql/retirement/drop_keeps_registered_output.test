@@ -1,0 +1,60 @@
+# name: test/sql/retirement/drop_keeps_registered_output.test
+# description: a transaction that drops the table it compacted keeps a compaction output that another table registered
+# group: [retirement]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/drop_keeps_registered_output', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+CREATE TABLE dl.u(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_merge_adjacent_files('dl', 't')
+
+# another transaction registers the output of the open compaction
+statement ok
+SET VARIABLE written = (SELECT file FROM glob('{DATA_PATH}/drop_keeps_registered_output/main/t/*.parquet') EXCEPT SELECT data_file FROM ducklake_list_files('dl', 't'))
+
+statement ok
+CALL ducklake_add_data_files('dl', 'u', getvariable('written'))
+
+# a renamed table is transaction local, so dropping it drops the compaction output of the transaction
+statement ok con1
+ALTER TABLE dl.t RENAME TO renamed
+
+statement ok con1
+DROP TABLE dl.renamed
+
+statement ok con1
+COMMIT
+
+query I
+SELECT count(*) FROM glob(getvariable('written'))
+----
+1
+
+query I
+SELECT i FROM dl.u ORDER BY i
+----
+1
+2

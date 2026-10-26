@@ -75,6 +75,12 @@ DuckLakeTransactionState::DuckLakeTransactionState(DatabaseInstance &db, bool re
                                                    string separator)
     : db(db), require_commit_message(require_commit_message), new_name_maps(new_name_maps),
       data_path(std::move(data_path)), separator(std::move(separator)) {
+	remove_owned_files = [&db](vector<string> files) {
+		auto &fs = FileSystem::GetFileSystem(db);
+		for (auto &path : files) {
+			fs.TryRemoveFile(path);
+		}
+	};
 }
 
 void DuckLakeTransactionState::EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const {
@@ -91,62 +97,7 @@ DuckLakeTransactionState::~DuckLakeTransactionState() {
 }
 
 void DuckLakeTransactionState::CleanupFiles() {
-	// remove any files that were written, unless a committed row references them
-	vector<string> owned_files;
-	local_changes.GetOwnedFiles(owned_files);
-	local_changes.CleanupFiles(db, ReferencedWrittenFiles(owned_files));
-}
-
-void DuckLakeTransactionState::RemoveDroppedFiles() {
-	vector<string> dropped_files;
-	local_changes.GetDroppedFiles(dropped_files);
-	if (dropped_files.empty()) {
-		return;
-	}
-	local_changes.RemoveDroppedFiles(db, ReferencedWrittenFiles(dropped_files));
-}
-
-unordered_set<string> DuckLakeTransactionState::ReferencedWrittenFiles(const vector<string> &paths) {
-	unordered_set<string> referenced_files;
-	if (!query_committed_metadata) {
-		return referenced_files;
-	}
-	try {
-		referenced_files = GetReferencedFiles(paths);
-	} catch (std::exception &) {
-		// without the metadata nothing shows that a file is unreferenced, so all of them are kept
-		referenced_files.insert(paths.begin(), paths.end());
-	}
-	return referenced_files;
-}
-
-unordered_set<string> DuckLakeTransactionState::GetReferencedFiles(const vector<string> &paths) {
-	unordered_set<string> result;
-	if (paths.empty()) {
-		return result;
-	}
-	DuckLakePathKeys path_keys(db);
-	vector<string> suffixes;
-	for (auto &path : paths) {
-		auto separator_pos = path.find_last_of("/\\");
-		auto file_name = separator_pos == string::npos ? path : path.substr(separator_pos + 1);
-		suffixes.push_back(StringUtil::Format("suffix(f.path, %s)", SQLString(file_name)));
-	}
-	auto query =
-	    StringUtil::Replace(DuckLakeMetadataManager::FilesWithFileNamesQuery(StringUtil::Join(suffixes, " OR ")),
-	                        "{DATA_PATH}", SQLString::ToString(data_path));
-	auto references = query_committed_metadata(std::move(query));
-	references->ThrowIfError("Failed to read the files DuckLake references: ");
-	unordered_set<string> referenced_keys;
-	for (auto &row : *references) {
-		referenced_keys.insert(path_keys.Get(row.GetValue<string>(0)));
-	}
-	for (auto &path : paths) {
-		if (referenced_keys.count(path_keys.Get(path))) {
-			result.insert(path);
-		}
-	}
-	return result;
+	remove_owned_files(local_changes.TakeOwnedFiles());
 }
 
 bool DuckLakeTransactionState::SchemaChangesMade() const {
@@ -2273,7 +2224,9 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	refreshed_table_sizes.clear();
 	auto &commit_snapshot = commit_state.commit_snapshot;
 
-	EnsureCommitInfoProvided(commit_info);
+	if (!context.only_retires_files) {
+		EnsureCommitInfoProvided(commit_info);
+	}
 
 	string batch_queries;
 	// drop entries
@@ -2914,6 +2867,8 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			can_retry = true;
 			// read after the latest snapshot, so a commit the expiry does not see takes the id of the new snapshot
 			auto expired_snapshots = context.get_expired_snapshots(i, commit_snapshot.snapshot_id - 1);
+			// re-dating replaces delete files, which the retirement of the attempt covers
+			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
 			auto retirement = context.get_retirement();
 			if ((expired_snapshots.empty() && context.only_expires_snapshots) ||
 			    (retirement.Empty() && context.only_retires_files)) {
@@ -2927,7 +2882,6 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			for (auto &snapshot : expired_snapshots) {
 				attempt_changes.expired_snapshots.insert(snapshot.id);
 			}
-			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
 			DuckLakeCommitState commit_state(commit_snapshot);
 			// write the new snapshot
 			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();

@@ -91,7 +91,7 @@ void LocalTableDataChanges::AddWrittenFiles(vector<string> &data_files, vector<s
 void LocalTableChanges::Clear() {
 	lock_guard<mutex> guard(lock);
 	changes.clear();
-	dropped_written_files.clear();
+	discarded_files.clear();
 }
 
 bool LocalTableChanges::HasChanges() const {
@@ -99,24 +99,41 @@ bool LocalTableChanges::HasChanges() const {
 	return !changes.empty();
 }
 
-void LocalTableChanges::CleanupFiles(DatabaseInstance &db, const unordered_set<string> &referenced_files) {
-	RemoveDroppedFiles(db, referenced_files);
-	auto &fs = FileSystem::GetFileSystem(db);
+vector<string> LocalTableChanges::TakeOwnedFiles() {
 	lock_guard<mutex> guard(lock);
+	auto result = std::move(discarded_files);
+	discarded_files.clear();
 	for (auto &entry : changes) {
 		auto &table_changes = entry.second;
-		vector<string> written_files;
-		table_changes.AddWrittenFiles(written_files, written_files, false);
-		for (auto &file_name : written_files) {
-			if (!referenced_files.count(file_name)) {
-				fs.TryRemoveFile(file_name);
-			}
-		}
+		table_changes.AddWrittenFiles(result, result, false);
 		table_changes.new_data_files.clear();
 		table_changes.new_delete_files.clear();
 		table_changes.compactions.clear();
 		table_changes.compacted_files.clear();
 	}
+	return result;
+}
+
+void LocalTableChanges::DiscardFiles(const vector<string> &files) {
+	lock_guard<mutex> guard(lock);
+	discarded_files.insert(discarded_files.end(), files.begin(), files.end());
+}
+
+bool LocalTableChanges::HasDiscardedFiles() const {
+	lock_guard<mutex> guard(lock);
+	return !discarded_files.empty();
+}
+
+vector<string> LocalTableChanges::GetDiscardedFiles() const {
+	lock_guard<mutex> guard(lock);
+	return discarded_files;
+}
+
+vector<string> LocalTableChanges::TakeDiscardedFiles() {
+	lock_guard<mutex> guard(lock);
+	auto result = std::move(discarded_files);
+	discarded_files.clear();
+	return result;
 }
 
 optional_ptr<LocalTableDataChanges> LocalTableChanges::Find(TableIndex table_id) {
@@ -140,30 +157,6 @@ void LocalTableChanges::GetWrittenFiles(vector<string> &result) const {
 	for (auto &entry : changes) {
 		entry.second.AddWrittenFiles(result, result, true);
 	}
-}
-
-void LocalTableChanges::GetOwnedFiles(vector<string> &result) const {
-	lock_guard<mutex> guard(lock);
-	for (auto &entry : changes) {
-		entry.second.AddWrittenFiles(result, result, false);
-	}
-	result.insert(result.end(), dropped_written_files.begin(), dropped_written_files.end());
-}
-
-void LocalTableChanges::GetDroppedFiles(vector<string> &result) const {
-	lock_guard<mutex> guard(lock);
-	result.insert(result.end(), dropped_written_files.begin(), dropped_written_files.end());
-}
-
-void LocalTableChanges::RemoveDroppedFiles(DatabaseInstance &db, const unordered_set<string> &referenced_files) {
-	auto &fs = FileSystem::GetFileSystem(db);
-	lock_guard<mutex> guard(lock);
-	for (auto &file_name : dropped_written_files) {
-		if (!referenced_files.count(file_name)) {
-			fs.TryRemoveFile(file_name);
-		}
-	}
-	dropped_written_files.clear();
 }
 
 bool LocalTableChanges::HasTransactionLocalInserts(TableIndex table_id) const {
@@ -202,7 +195,7 @@ shared_ptr<DuckLakeInlinedData> LocalTableChanges::GetTransactionLocalInlinedDat
 	return result;
 }
 
-bool LocalTableChanges::TryDropTransactionLocalFile(ClientContext &context, TableIndex table_id, const string &path) {
+bool LocalTableChanges::TryDropTransactionLocalFile(TableIndex table_id, const string &path) {
 	lock_guard<mutex> guard(lock);
 	auto entry = Find(table_id);
 	if (!entry) {
@@ -213,7 +206,6 @@ bool LocalTableChanges::TryDropTransactionLocalFile(ClientContext &context, Tabl
 	}
 	auto &table_changes = *entry;
 	auto &table_files = table_changes.new_data_files;
-	auto &fs = FileSystem::GetFileSystem(context);
 	for (idx_t i = 0; i < table_files.size(); i++) {
 		auto &file = table_files[i];
 		if (file.file_name == path) {
@@ -221,16 +213,13 @@ bool LocalTableChanges::TryDropTransactionLocalFile(ClientContext &context, Tabl
 				// rows flushed from earlier snapshots keep their history
 				return false;
 			}
-			auto created_by_ducklake = file.created_by_ducklake;
 			for (auto &del_file : file.delete_files) {
-				fs.RemoveFile(del_file.file_name);
+				discarded_files.push_back(del_file.file_name);
 			}
-			file.delete_files.clear();
-			// found the file - delete it from the table list and from disk if DuckLake owns it
+			if (file.created_by_ducklake) {
+				discarded_files.push_back(path);
+			}
 			table_files.erase_at(i);
-			if (created_by_ducklake) {
-				dropped_written_files.push_back(path);
-			}
 			if (table_changes.IsEmpty()) {
 				// no more files remaining
 				changes.erase(table_id);
@@ -670,8 +659,8 @@ void LocalTableChanges::GetLocalInlinedFileDeletesForFile(TableIndex table_id, i
 	result.insert(file_entry->second.begin(), file_entry->second.end());
 }
 
-void LocalTableChanges::TransactionLocalDelete(ClientContext &context, TableIndex table_id,
-                                               const string &data_file_path, DuckLakeDeleteFile delete_file) {
+void LocalTableChanges::TransactionLocalDelete(TableIndex table_id, const string &data_file_path,
+                                               DuckLakeDeleteFile delete_file) {
 	lock_guard<mutex> guard(lock);
 	auto table_changes = Find(table_id);
 	if (!table_changes) {
@@ -682,16 +671,10 @@ void LocalTableChanges::TransactionLocalDelete(ClientContext &context, TableInde
 	}
 	for (auto &file : table_changes->new_data_files) {
 		if (file.file_name == data_file_path) {
-			if (!file.delete_files.empty()) {
-				auto &fs = FileSystem::GetFileSystem(context);
-				vector<string> files_to_delete;
-				files_to_delete.reserve(file.delete_files.size());
-				for (auto &old_file : file.delete_files) {
-					files_to_delete.push_back(old_file.file_name);
-				}
-				fs.RemoveFiles(files_to_delete);
-				file.delete_files.clear();
+			for (auto &old_file : file.delete_files) {
+				discarded_files.push_back(old_file.file_name);
 			}
+			file.delete_files.clear();
 			file.delete_files.push_back(std::move(delete_file));
 			return;
 		}
@@ -699,23 +682,16 @@ void LocalTableChanges::TransactionLocalDelete(ClientContext &context, TableInde
 	throw InternalException("Failed to find matching transaction-local file for written delete file");
 }
 
-void LocalTableChanges::CleanupFiles(ClientContext &context, TableIndex table_id) {
+void LocalTableChanges::CleanupFiles(TableIndex table_id) {
 	lock_guard<mutex> guard(lock);
 	auto table_entry = changes.find(table_id);
 	if (table_entry != changes.end()) {
-		auto &fs = FileSystem::GetFileSystem(context);
-		vector<string> data_files;
-		vector<string> other_files;
-		table_entry->second.AddWrittenFiles(data_files, other_files, false);
-		dropped_written_files.insert(dropped_written_files.end(), data_files.begin(), data_files.end());
-		for (auto &file_name : other_files) {
-			fs.TryRemoveFile(file_name);
-		}
+		table_entry->second.AddWrittenFiles(discarded_files, discarded_files, false);
 		changes.erase(table_entry);
 	}
 }
 
-void LocalTableChanges::AddDeletesToMap(ClientContext &context, vector<DuckLakeDeleteFile> new_deletes,
+void LocalTableChanges::AddDeletesToMap(vector<DuckLakeDeleteFile> new_deletes,
                                         unordered_map<string, vector<DuckLakeDeleteFile>> &table_delete_map) {
 	for (auto &file : new_deletes) {
 		auto &data_file_path = file.data_file_path;
@@ -729,14 +705,13 @@ void LocalTableChanges::AddDeletesToMap(ClientContext &context, vector<DuckLakeD
 			// If not is a regular deletion
 			auto existing_entry = table_delete_map.find(data_file_path);
 			if (existing_entry != table_delete_map.end() && !existing_entry->second.empty()) {
-				// If a file already exists we remove it
-				auto &fs = FileSystem::GetFileSystem(context);
+				// If a file already exists we replace it
 				for (auto &old_file : existing_entry->second) {
 					// the committed delete file that the old file replaced is the one this commit replaces
 					if (old_file.overwritten_delete_file.delete_file_id.IsValid()) {
 						file.overwritten_delete_file = old_file.overwritten_delete_file;
 					}
-					fs.RemoveFile(old_file.file_name);
+					discarded_files.push_back(old_file.file_name);
 				}
 				existing_entry->second.clear();
 			}
@@ -746,14 +721,14 @@ void LocalTableChanges::AddDeletesToMap(ClientContext &context, vector<DuckLakeD
 	}
 }
 
-void LocalTableChanges::AddDeletes(ClientContext &context, TableIndex table_id, vector<DuckLakeDeleteFile> files) {
+void LocalTableChanges::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteFile> files) {
 	if (files.empty()) {
 		return;
 	}
 	lock_guard<mutex> guard(lock);
 	auto &table_changes = changes[table_id];
 	auto &table_delete_map = table_changes.new_delete_files;
-	LocalTableChanges::AddDeletesToMap(context, std::move(files), table_delete_map);
+	AddDeletesToMap(std::move(files), table_delete_map);
 }
 
 bool LocalTableChanges::HasDatedNewDeletes() const {
@@ -771,8 +746,13 @@ void LocalTableChanges::SetDeleteCommitSnapshot(ClientContext &context, DuckLake
 	lock_guard<mutex> guard(lock);
 	for (auto &entry : changes) {
 		ForEachDeleteFile(entry.second, [&](DuckLakeDeleteFile &file) {
-			if (file.DatesNewDeletes()) {
-				DuckLakeDeleteFileWriter::SetCommitSnapshot(context, transaction, file, commit_snapshot);
+			if (!file.DatesNewDeletes()) {
+				return;
+			}
+			auto previous_file = file.file_name;
+			DuckLakeDeleteFileWriter::SetCommitSnapshot(context, transaction, file, commit_snapshot);
+			if (file.file_name != previous_file) {
+				discarded_files.push_back(std::move(previous_file));
 			}
 		});
 	}
@@ -790,10 +770,10 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
 	schema_pins = make_uniq<DuckLakeSchemaPinState>();
 	state = make_uniq<DuckLakeTransactionState>(db, ducklake_catalog.IsCommitInfoRequired(), new_name_maps,
 	                                            ducklake_catalog.DataPath(), ducklake_catalog.Separator());
-	if (ducklake_catalog.SupportsFileIdentity()) {
+	if (RetiresDiscardedFiles()) {
 		// a registration of another transaction can reference a file this transaction wrote
-		state->query_committed_metadata = [this](string query) {
-			return metadata_manager->Query(query);
+		state->remove_owned_files = [this](vector<string> files) {
+			RemoveWrittenFiles(std::move(files));
 		};
 	}
 }
@@ -864,7 +844,7 @@ void DuckLakeTransaction::Commit() {
 		throw;
 	}
 	FlushNameMapCacheInvalidations();
-	state->RemoveDroppedFiles();
+	RemoveDiscardedFiles();
 	connection.reset();
 	state->local_changes.Clear();
 	config_option_undo.clear();
@@ -983,14 +963,91 @@ bool DuckLakeTransaction::ExpiresSnapshotsOnCommit() const {
 }
 
 void DuckLakeTransaction::RetireFilesOnCommit(vector<DuckLakeFileForCleanup> files, CleanupType type,
-                                              vector<DuckLakeFileForCleanup> &unlinked_files_p) {
+                                              vector<DuckLakeFileForCleanup> &unlinked_files_p,
+                                              idx_t written_after_snapshot_p) {
 	files_to_retire = std::move(files);
 	retirement_type = type;
 	unlinked_files = unlinked_files_p;
+	written_after_snapshot = written_after_snapshot_p;
 }
 
 bool DuckLakeTransaction::RetiresFilesOnCommit() const {
-	return !files_to_retire.empty();
+	return !files_to_retire.empty() || (RetiresDiscardedFiles() && state->local_changes.HasDiscardedFiles());
+}
+
+bool DuckLakeTransaction::RetiresDiscardedFiles() const {
+	return ducklake_catalog.SupportsFileIdentity();
+}
+
+vector<DuckLakeFileForCleanup> DuckLakeTransaction::DiscardedFilesToRetire() const {
+	vector<DuckLakeFileForCleanup> result;
+	if (!RetiresDiscardedFiles()) {
+		return result;
+	}
+	vector<string> published_files;
+	state->local_changes.GetWrittenFiles(published_files);
+	unordered_set<string> published(published_files.begin(), published_files.end());
+	for (auto &path : state->local_changes.GetDiscardedFiles()) {
+		if (published.count(path)) {
+			continue;
+		}
+		DuckLakeFileForCleanup file;
+		file.path = path;
+		result.push_back(std::move(file));
+	}
+	return result;
+}
+
+void DuckLakeTransaction::RemoveWrittenFiles(vector<string> files) {
+	if (files.empty()) {
+		return;
+	}
+	vector<DuckLakeFileForCleanup> candidates;
+	for (auto &path : files) {
+		DuckLakeFileForCleanup candidate;
+		candidate.path = std::move(path);
+		candidates.push_back(std::move(candidate));
+	}
+	vector<DuckLakeFileForCleanup> unlinked;
+	try {
+		// the retirement commits in a transaction of its own, so a registration that reads a file fails at its commit
+		Connection retirement_connection(db);
+		auto caller_context = context.lock();
+		if (caller_context) {
+			DuckLakeUtil::CopyExtensionSettings(*caller_context, *retirement_connection.context);
+		}
+		retirement_connection.BeginTransaction();
+		auto &retirement = DuckLakeTransaction::Get(*retirement_connection.context, ducklake_catalog);
+		auto &commit_info = retirement.GetCommitInfo();
+		commit_info.commit_message = Value("rollback");
+		commit_info.is_commit_info_set = true;
+		retirement.RetireFilesOnCommit(std::move(candidates), CleanupType::WRITTEN_FILES, unlinked,
+		                               snapshot ? snapshot->snapshot_id : 0);
+		retirement_connection.Commit();
+	} catch (std::exception &) {
+		// without a committed retirement the files are left to the orphan cleanup
+		return;
+	}
+	auto &fs = FileSystem::GetFileSystem(db);
+	for (auto &file : unlinked) {
+		fs.TryRemoveFile(file.path);
+	}
+}
+
+void DuckLakeTransaction::RemoveDiscardedFiles() {
+	auto discarded_files = state->local_changes.TakeDiscardedFiles();
+	auto &fs = FileSystem::GetFileSystem(db);
+	if (!RetiresDiscardedFiles()) {
+		for (auto &path : discarded_files) {
+			fs.TryRemoveFile(path);
+		}
+		return;
+	}
+	// the files that a committed row references keep their paths
+	for (auto &file : retired_discarded_files) {
+		fs.TryRemoveFile(file.path);
+	}
+	retired_discarded_files.clear();
 }
 
 bool DuckLakeTransaction::SchemaChangesMade() const {
@@ -1617,10 +1674,23 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	if (RetiresFilesOnCommit()) {
 		// a retirement is ordered with the commits that publish files by its snapshot id
 		context.get_retirement = [&]() {
-			return metadata_manager->GetRetirement(files_to_retire, retirement_type);
+			DuckLakeRetirement retirement;
+			if (!files_to_retire.empty()) {
+				retirement = metadata_manager->GetRetirement(files_to_retire, retirement_type, written_after_snapshot);
+			}
+			auto discarded_files = DiscardedFilesToRetire();
+			if (!discarded_files.empty()) {
+				retirement.Append(metadata_manager->GetRetirement(discarded_files, CleanupType::WRITTEN_FILES,
+				                                                  transaction_snapshot.snapshot_id));
+			}
+			return retirement;
 		};
 		context.report_retirement = [&](DuckLakeRetirement &retirement) {
-			*unlinked_files = std::move(retirement.unlinked_files);
+			if (unlinked_files) {
+				*unlinked_files = std::move(retirement.unlinked_files);
+			} else {
+				retired_discarded_files = std::move(retirement.unlinked_files);
+			}
 		};
 		context.only_retires_files = !ChangesMadeBesidesExpiry() && !ExpiresSnapshotsOnCommit();
 	}
@@ -2153,8 +2223,11 @@ shared_ptr<DuckLakeInlinedData> DuckLakeTransaction::GetTransactionLocalInlinedD
 }
 
 bool DuckLakeTransaction::TryDropTransactionLocalFile(TableIndex table_id, const string &path) {
-	auto context_ref = context.lock();
-	return state->local_changes.TryDropTransactionLocalFile(*context_ref, table_id, path);
+	return state->local_changes.TryDropTransactionLocalFile(table_id, path);
+}
+
+void DuckLakeTransaction::DiscardFiles(const vector<string> &files) {
+	state->local_changes.DiscardFiles(files);
 }
 
 void DuckLakeTransaction::AppendFiles(TableIndex table_id, vector<DuckLakeDataFile> files) {
@@ -2214,8 +2287,7 @@ void DuckLakeTransaction::AddNewInlinedFileDeletes(TableIndex table_id, idx_t fi
 }
 
 void DuckLakeTransaction::AddDeletes(TableIndex table_id, vector<DuckLakeDeleteFile> files) {
-	auto context_ref = context.lock();
-	state->local_changes.AddDeletes(*context_ref, table_id, std::move(files));
+	state->local_changes.AddDeletes(table_id, std::move(files));
 }
 
 bool DuckLakeTransaction::AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry) {
@@ -2262,8 +2334,7 @@ void DuckLakeTransaction::GetLocalInlinedFileDeletesForFile(TableIndex table_id,
 
 void DuckLakeTransaction::TransactionLocalDelete(TableIndex table_id, const string &data_file_path,
                                                  DuckLakeDeleteFile delete_file) {
-	auto context_ref = context.lock();
-	state->local_changes.TransactionLocalDelete(*context_ref, table_id, data_file_path, std::move(delete_file));
+	state->local_changes.TransactionLocalDelete(table_id, data_file_path, std::move(delete_file));
 }
 
 DuckLakeTransaction &DuckLakeTransaction::Get(ClientContext &context, Catalog &catalog) {
@@ -2317,9 +2388,7 @@ void DuckLakeTransaction::DropTable(DuckLakeTableEntry &table) {
 	if (table.IsTransactionLocal()) {
 		DropLocalEntry(state->new_tables, table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId(),
 		               table.name.GetIdentifierName());
-		// if we have written any files for this table - clean them up
-		auto context_ref = context.lock();
-		state->local_changes.CleanupFiles(*context_ref, table_id);
+		state->local_changes.CleanupFiles(table_id);
 	}
 
 	// The table exists before the transaction, drop the table anyway.

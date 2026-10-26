@@ -63,10 +63,19 @@
         "test/sql/retirement/retired_path_alias.test",
         "test/sql/retirement/retired_remote_path_alias.test",
         "test/sql/retirement/sqlite_wal_retirement.test",
-        "test/sql/add_files/add_files_registration_rules.test",
         "test/sql/retirement/rollback_keeps_registered_file.test",
         "test/sql/retirement/cleanup_unlinks_retired_files.test",
-        "test/sql/add_files/add_files_flushed_file.test"
+        "test/sql/retirement/rollback_retires_before_unlink.test",
+        "test/sql/retirement/drop_keeps_registered_output.test",
+        "test/sql/retirement/rollback_keeps_registered_remote_alias.test"
+      ]
+    },
+    {
+      "reason": "The registration rules need DuckLake 2.0 and are not applied when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/add_files/add_files_registration_rules.test",
+        "test/sql/add_files/add_files_flushed_file.test",
+        "test/sql/add_files/add_files_remote_query_keys.test"
       ]
     },
     {

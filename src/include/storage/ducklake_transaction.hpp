@@ -106,22 +106,22 @@ public:
 	void Clear();
 	bool HasChanges() const;
 	LocalTableChangeIterationHelper Changes() const;
-	//! Removes the files the transaction wrote, except those that committed rows reference
-	void CleanupFiles(DatabaseInstance &db, const unordered_set<string> &referenced_files);
-	//! Drops the changes of a table, its data files are removed at the end of the transaction
-	void CleanupFiles(ClientContext &context, TableIndex table_id);
-	//! Removes the data files the transaction dropped, except those that committed rows reference
-	void RemoveDroppedFiles(DatabaseInstance &db, const unordered_set<string> &referenced_files);
-	void GetDroppedFiles(vector<string> &result) const;
+	//! Drops the changes of a table, its files are removed at the end of the transaction
+	void CleanupFiles(TableIndex table_id);
 	void GetWrittenFiles(vector<string> &result) const;
-	//! The files the transaction wrote, which a rollback removes
-	void GetOwnedFiles(vector<string> &result) const;
+	//! Takes the files the transaction wrote out of its changes, with the discarded ones
+	vector<string> TakeOwnedFiles();
+	//! Records files the transaction wrote and no longer uses, which are removed at its end
+	void DiscardFiles(const vector<string> &files);
+	bool HasDiscardedFiles() const;
+	vector<string> GetDiscardedFiles() const;
+	vector<string> TakeDiscardedFiles();
 	bool HasTransactionLocalInserts(TableIndex table_id) const;
 	bool HasTransactionInlinedData(TableIndex table_id) const;
 	vector<DuckLakeDataFile> GetTransactionLocalFiles(TableIndex table_id) const;
 	shared_ptr<DuckLakeInlinedData> GetTransactionLocalInlinedData(ClientContext &context, TableIndex table_id) const;
 	//! Returns false for a file whose rows keep their history, the file is removed at the end of the transaction
-	bool TryDropTransactionLocalFile(ClientContext &context, TableIndex table_id, const string &path);
+	bool TryDropTransactionLocalFile(TableIndex table_id, const string &path);
 	void AppendFiles(TableIndex table_id, vector<DuckLakeDataFile> files);
 	void AppendDeleteFiles(TableIndex table_id, const string &data_file_path, vector<DuckLakeDeleteFile> files);
 	void AppendInlinedData(ClientContext &context, TableIndex table_id, unique_ptr<DuckLakeInlinedData> new_data);
@@ -154,23 +154,22 @@ public:
 
 	void GetLocalInlinedFileDeletesForFile(TableIndex table_id, idx_t file_id, set<idx_t> &result) const;
 
-	void TransactionLocalDelete(ClientContext &context, TableIndex table_id, const string &data_file_path,
-	                            DuckLakeDeleteFile delete_file);
-	void AddDeletes(ClientContext &context, TableIndex table_id, vector<DuckLakeDeleteFile> files);
+	void TransactionLocalDelete(TableIndex table_id, const string &data_file_path, DuckLakeDeleteFile delete_file);
+	void AddDeletes(TableIndex table_id, vector<DuckLakeDeleteFile> files);
 	bool HasDatedNewDeletes() const;
 	void SetDeleteCommitSnapshot(ClientContext &context, DuckLakeTransaction &transaction, idx_t commit_snapshot);
-	static void AddDeletesToMap(ClientContext &context, vector<DuckLakeDeleteFile> new_deletes,
-	                            unordered_map<string, vector<DuckLakeDeleteFile>> &delete_file_map);
 
 private:
 	optional_ptr<LocalTableDataChanges> Find(TableIndex table_id);
 	optional_ptr<const LocalTableDataChanges> Find(TableIndex table_id) const;
+	void AddDeletesToMap(vector<DuckLakeDeleteFile> new_deletes,
+	                     unordered_map<string, vector<DuckLakeDeleteFile>> &delete_file_map);
 
 private:
 	mutable mutex lock;
 	map<TableIndex, LocalTableDataChanges> changes;
-	//! The data files the transaction wrote and dropped again, which another transaction can have registered
-	vector<string> dropped_written_files;
+	//! The files the transaction wrote and no longer uses, which another transaction can have registered
+	vector<string> discarded_files;
 };
 
 struct SnapshotAndStats {
@@ -252,6 +251,8 @@ public:
 	vector<DuckLakeDataFile> GetTransactionLocalFiles(TableIndex table_id) const;
 	shared_ptr<DuckLakeInlinedData> GetTransactionLocalInlinedData(TableIndex table_id) const;
 	bool TryDropTransactionLocalFile(TableIndex table_id, const string &path);
+	//! Records files the transaction wrote and no longer uses, which are removed at its end
+	void DiscardFiles(const vector<string> &files);
 	bool HasTransactionLocalInserts(TableIndex table_id) const;
 	bool HasTransactionInlinedData(TableIndex table_id) const;
 	void AppendFiles(TableIndex table_id, vector<DuckLakeDataFile> files);
@@ -297,7 +298,7 @@ public:
 	bool ExpiresSnapshotsOnCommit() const;
 	//! Retires the paths of the cleanup candidates when the transaction commits, and reports the files to unlink
 	void RetireFilesOnCommit(vector<DuckLakeFileForCleanup> files, CleanupType type,
-	                         vector<DuckLakeFileForCleanup> &unlinked_files);
+	                         vector<DuckLakeFileForCleanup> &unlinked_files, idx_t written_after_snapshot = 0);
 	bool RetiresFilesOnCommit() const;
 	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files);
@@ -438,7 +439,18 @@ private:
 	//! The cleanup candidates whose paths the commit retires, and the files it reports for unlinking
 	vector<DuckLakeFileForCleanup> files_to_retire;
 	CleanupType retirement_type = CleanupType::OLD_FILES;
+	idx_t written_after_snapshot = 0;
 	optional_ptr<vector<DuckLakeFileForCleanup>> unlinked_files;
+	//! The discarded files the commit retired, which it unlinks
+	vector<DuckLakeFileForCleanup> retired_discarded_files;
+	//! Whether the files this transaction discards are retired before they are unlinked
+	bool RetiresDiscardedFiles() const;
+	//! The discarded files whose paths the commit retires, without those it publishes again
+	vector<DuckLakeFileForCleanup> DiscardedFilesToRetire() const;
+	//! Unlinks the files this transaction wrote once a retirement of their paths committed
+	void RemoveWrittenFiles(vector<string> files);
+	//! Unlinks the files the committed transaction discarded
+	void RemoveDiscardedFiles();
 	DuckLakeSnapshot GetLatestSnapshot();
 	//! The latest snapshot in DuckLake when the transaction first looked, the snapshot of the transaction unless the
 	//! catalog is opened at a fixed snapshot

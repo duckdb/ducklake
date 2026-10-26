@@ -31,11 +31,12 @@ SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_createq_drop_cleanup/main/tbl/*.
 statement ok
 DROP TABLE ducklake.tbl
 
+statement ok
+COMMIT
+
+# the files of the dropped table are removed at the end of the transaction
 query I
 SELECT COUNT(*) FROM glob('{DATA_PATH}/ducklake_createq_drop_cleanup/main/tbl/*.parquet')
 ----
 0
-
-statement ok
-COMMIT
 
