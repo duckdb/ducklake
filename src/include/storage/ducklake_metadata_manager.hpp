@@ -417,7 +417,7 @@ public:
 	DuckLakeRetirement GetRetirement(const vector<DuckLakeFileForCleanup> &candidates, CleanupType type,
 	                                 idx_t written_after_snapshot = 0);
 	static string RetireFilesSql(const DuckLakeRetirement &retirement);
-	//! The full path, table, physical identity and end snapshot of every data file, ended files included
+	//! The full path, table, physical identity, end snapshot and id of every data file, ended files included
 	static string DataFileIdentitiesQuery();
 	//! The full paths of the data and delete files whose rows match the filter, ended files included
 	static string ReferencedFilesQuery(const string &filter);

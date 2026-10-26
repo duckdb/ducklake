@@ -1577,6 +1577,9 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 	if (stats) {
 		dl_stats = context.build_stats_map(*stats);
 	}
+	// the files of a path that no committed row references take the identity of the first of them
+	DuckLakePathKeys path_keys(db);
+	unordered_map<string, idx_t> new_identities;
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = commit_state.GetTableId(entry.first);
 		if (IsTransactionLocal(table_id)) {
@@ -1609,6 +1612,11 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 			auto identity = registration_identities.find(file.file_name);
 			if (!file.created_by_ducklake && identity != registration_identities.end()) {
 				data_file.origin_file_id = identity->second;
+			} else if (registers_new_paths) {
+				auto first = new_identities.emplace(path_keys.Get(file.file_name), data_file.id.index);
+				if (!first.second) {
+					data_file.origin_file_id = first.first->second;
+				}
 			}
 			for (auto &del_file : file.delete_files) {
 				// this transaction-local file already has deletes - write them out
@@ -2736,6 +2744,7 @@ WHERE idt.schema_version < (
 void DuckLakeTransactionState::CheckRegistrations(TransactionChangeInformation &changes,
                                                   const DuckLakeCommitContext &context) {
 	registration_identities.clear();
+	registers_new_paths = false;
 	vector<pair<TableIndex, string>> registered_files;
 	for (auto &entry : local_changes.Changes()) {
 		for (auto &file : entry.second.new_data_files) {
@@ -2758,7 +2767,9 @@ void DuckLakeTransactionState::CheckRegistrations(TransactionChangeInformation &
 	for (auto &row : *result) {
 		auto key = path_keys.Get(row.GetValue<string>(0));
 		identities.emplace(key, row.GetValue<idx_t>(2));
-		if (row.IsNull(3)) {
+		// the rows that this commit drops are not live after it
+		bool dropped = dropped_files.count(DataFileIndex(row.GetValue<idx_t>(4))) > 0;
+		if (row.IsNull(3) && !dropped) {
 			live_tables[key].insert(row.GetValue<idx_t>(1));
 		}
 	}
@@ -2776,6 +2787,8 @@ void DuckLakeTransactionState::CheckRegistrations(TransactionChangeInformation &
 		if (identity != identities.end()) {
 			registration_identities[path] = identity->second;
 			changes.registered_files.insert(identity->second);
+		} else {
+			registers_new_paths = true;
 		}
 	}
 }

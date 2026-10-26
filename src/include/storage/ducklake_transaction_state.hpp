@@ -302,6 +302,8 @@ public:
 	string separator;
 	//! The physical identities that the files this transaction registers take, by path
 	unordered_map<string, idx_t> registration_identities;
+	//! Whether the transaction registers a path that no committed row references
+	bool registers_new_paths = false;
 	//! Removes the files that the transaction wrote and does not commit, by default it unlinks them
 	std::function<void(vector<string>)> remove_owned_files;
 	DuckLakeSnapshotCommit commit_info;

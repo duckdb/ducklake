@@ -1,0 +1,87 @@
+# name: test/sql/add_files/add_files_registration_one_transaction.test
+# description: the registrations of one transaction share the physical identity of a path, and a path dropped in it can be registered again
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/add_files_registration_one_transaction', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+COPY (SELECT 42 AS i) TO '{DATA_PATH}/add_files_registration_one_transaction.parquet'
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+CREATE TABLE dl.u(i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/add_files_registration_one_transaction.parquet')
+
+statement ok
+CALL ducklake_add_data_files('dl', 'u', '{DATA_PATH}/add_files_registration_one_transaction.parquet')
+
+statement ok
+COMMIT
+
+query I
+SELECT count(DISTINCT COALESCE(origin_file_id, data_file_id)) FROM meta.ducklake_data_file
+----
+1
+
+# a file written in the transaction that registers it shares its identity too
+statement ok
+CREATE TABLE dl.v(i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.v VALUES (7)
+
+statement ok
+SET VARIABLE written = (SELECT file FROM glob('{DATA_PATH}/add_files_registration_one_transaction/main/v/*.parquet'))
+
+statement ok
+CALL ducklake_add_data_files('dl', 'u', getvariable('written'))
+
+statement ok
+COMMIT
+
+query I
+SELECT count(DISTINCT COALESCE(origin_file_id, data_file_id)) FROM meta.ducklake_data_file f JOIN meta.ducklake_table t USING (table_id) WHERE t.table_name = 'v' OR f.path LIKE '%/v/%'
+----
+1
+
+# the rows of the path that the transaction deletes are not live at its commit
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.t
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/add_files_registration_one_transaction.parquet')
+
+statement ok
+COMMIT
+
+query II
+SELECT rowid, i FROM dl.t
+----
+1	42
+
+query I
+SELECT count(DISTINCT COALESCE(origin_file_id, data_file_id)) FROM meta.ducklake_data_file f JOIN meta.ducklake_table t USING (table_id) WHERE t.table_name IN ('t', 'u') AND f.path NOT LIKE '%/v/%'
+----
+1
