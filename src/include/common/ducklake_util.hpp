@@ -37,6 +37,19 @@ struct ParsedCatalogEntry {
 	string SchemaKey() const;
 };
 
+//! Keys the paths of a file so that every spelling of it gets the same key
+class DuckLakePathKeys {
+public:
+	explicit DuckLakePathKeys(DatabaseInstance &db);
+
+	string Get(const string &path) const;
+
+private:
+	FileSystem &fs;
+	//! Whether the query string of an S3 path holds settings instead of a part of the object key
+	bool url_parameters;
+};
+
 class DuckLakeUtil {
 public:
 	//! File systems allow at most 255 bytes in a file name
@@ -62,8 +75,6 @@ public:
 	static string JoinPath(FileSystem &fs, const string &a, const string &b);
 	//! The separator of a path, always '/' for a remote path, also before its file system is loaded
 	static string PathSeparator(FileSystem &fs, const string &path);
-	//! The key of the file a path points to, the same for every spelling of that path
-	static string CanonicalPathKey(FileSystem &fs, const string &path);
 
 	//! Combine two filter expressions - both must hold, so AND their conjuncts and drop duplicates
 	static unique_ptr<Expression> MergeFilterExpressions(unique_ptr<Expression> left, unique_ptr<Expression> right);

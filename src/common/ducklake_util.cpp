@@ -246,17 +246,30 @@ string DuckLakeUtil::PathSeparator(FileSystem &fs, const string &path) {
 	return fs.PathSeparator(path);
 }
 
-string DuckLakeUtil::CanonicalPathKey(FileSystem &fs, const string &path) {
+DuckLakePathKeys::DuckLakePathKeys(DatabaseInstance &db) : fs(FileSystem::GetFileSystem(db)) {
+	Value enabled;
+	url_parameters = DBConfig::GetConfig(db).TryGetCurrentSetting("s3_enable_deprecated_url_parameters", enabled) &&
+	                 !enabled.IsNull() && BooleanValue::Get(enabled);
+}
+
+string DuckLakePathKeys::Get(const string &path) const {
 	auto normalized = StringUtil::Replace(path, "\\", "/");
 	auto parsed = Path::FromString(normalized);
 	if (parsed.IsLocal()) {
 		return fs.CanonicalizePath(normalized);
 	}
-	// key remote paths by authority and path so scheme aliases and query strings match
-	auto path_start = parsed.GetScheme().size();
-	auto query_start = normalized.find('?', path_start);
-	auto path_end = query_start == string::npos ? normalized.size() : query_start;
-	return normalized.substr(path_start, path_end - path_start);
+	auto scheme = parsed.GetScheme();
+	auto object = normalized.substr(scheme.size());
+	// the S3 file system reads these schemes as the same service
+	if (scheme == "s3a://" || scheme == "s3n://") {
+		scheme = "s3://";
+	} else if (scheme == "gcs://") {
+		scheme = "gs://";
+	}
+	if (url_parameters && (scheme == "s3://" || scheme == "gs://" || scheme == "r2://")) {
+		object = object.substr(0, object.find('?'));
+	}
+	return scheme + object;
 }
 
 string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) {

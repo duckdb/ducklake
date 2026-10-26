@@ -125,7 +125,7 @@ unordered_set<string> DuckLakeTransactionState::GetReferencedFiles(const vector<
 	if (paths.empty()) {
 		return result;
 	}
-	auto &fs = FileSystem::GetFileSystem(db);
+	DuckLakePathKeys path_keys(db);
 	vector<string> suffixes;
 	for (auto &path : paths) {
 		auto separator_pos = path.find_last_of("/\\");
@@ -139,10 +139,10 @@ unordered_set<string> DuckLakeTransactionState::GetReferencedFiles(const vector<
 	references->ThrowIfError("Failed to read the files DuckLake references: ");
 	unordered_set<string> referenced_keys;
 	for (auto &row : *references) {
-		referenced_keys.insert(DuckLakeUtil::CanonicalPathKey(fs, row.GetValue<string>(0)));
+		referenced_keys.insert(path_keys.Get(row.GetValue<string>(0)));
 	}
 	for (auto &path : paths) {
-		if (referenced_keys.count(DuckLakeUtil::CanonicalPathKey(fs, path))) {
+		if (referenced_keys.count(path_keys.Get(path))) {
 			result.insert(path);
 		}
 	}
@@ -2552,8 +2552,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	}
 	batch_queries += DuckLakeMetadataManager::InsertNewSchema(commit_snapshot, tables_with_schema_changes);
 	if (context.supports_file_identity && !published_paths.empty()) {
-		batch_queries += DuckLakeMetadataManager::RetiredPathGuardSql(FileSystem::GetFileSystem(db), published_paths,
-		                                                              context.guard_sql);
+		batch_queries +=
+		    DuckLakeMetadataManager::RetiredPathGuardSql(DuckLakePathKeys(db), published_paths, context.guard_sql);
 	}
 
 	return batch_queries;
@@ -2798,12 +2798,12 @@ void DuckLakeTransactionState::CheckRegistrations(TransactionChangeInformation &
 	                                 SQLString::ToString(data_path));
 	auto result = context.query_metadata(std::move(query));
 	result->ThrowIfError("Failed to read the files registered in DuckLake: ");
-	auto &fs = FileSystem::GetFileSystem(db);
+	DuckLakePathKeys path_keys(db);
 	// the physical identity of every path, and the tables that reference it with a live row
 	unordered_map<string, idx_t> identities;
 	unordered_map<string, unordered_set<idx_t>> live_tables;
 	for (auto &row : *result) {
-		auto key = DuckLakeUtil::CanonicalPathKey(fs, row.GetValue<string>(0));
+		auto key = path_keys.Get(row.GetValue<string>(0));
 		identities.emplace(key, row.GetValue<idx_t>(2));
 		if (row.IsNull(3)) {
 			live_tables[key].insert(row.GetValue<idx_t>(1));
@@ -2812,7 +2812,7 @@ void DuckLakeTransactionState::CheckRegistrations(TransactionChangeInformation &
 	set<pair<idx_t, string>> registered_keys;
 	for (auto &registered_file : registered_files) {
 		auto &path = registered_file.second;
-		auto key = DuckLakeUtil::CanonicalPathKey(fs, path);
+		auto key = path_keys.Get(path);
 		auto table_id = registered_file.first.index;
 		auto live = live_tables.find(key);
 		if (!registered_keys.emplace(table_id, key).second ||

@@ -116,12 +116,12 @@ string DuckLakeMetadataManager::MigratedCatalogGuardSql(
 }
 
 string
-DuckLakeMetadataManager::RetiredPathGuardSql(FileSystem &fs, const vector<string> &paths,
+DuckLakeMetadataManager::RetiredPathGuardSql(const DuckLakePathKeys &path_keys, const vector<string> &paths,
                                              const std::function<string(const string &, const string &)> &guard_sql) {
 	unordered_set<string> keys;
 	vector<string> key_literals;
 	for (auto &path : paths) {
-		auto key = DuckLakeUtil::CanonicalPathKey(fs, path);
+		auto key = path_keys.Get(path);
 		if (keys.insert(key).second) {
 			key_literals.push_back(SQLString::ToString(key));
 		}
@@ -5533,10 +5533,10 @@ vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup
 	known_files_res->ThrowIfError("Failed to get files scheduled for deletion from DuckLake: ");
 
 	// compare canonical paths so differently spelled paths to the same file match
-	auto &fs = GetFileSystem();
+	DuckLakePathKeys path_keys(transaction.GetCatalog().GetDatabase());
 	unordered_set<string> known_files;
 	for (auto &row : *known_files_res) {
-		known_files.insert(DuckLakeUtil::CanonicalPathKey(fs, row.GetValue<string>(0)));
+		known_files.insert(path_keys.Get(row.GetValue<string>(0)));
 	}
 
 	auto query = StringUtil::Format(R"(SELECT filename
@@ -5549,13 +5549,13 @@ WHERE (suffix(filename, '.parquet') OR suffix(filename, '.puffin'))
 	res->ThrowIfError("Failed to get files scheduled for deletion from DuckLake: ");
 	transaction_manager.GetWrittenFiles(written_files);
 	for (auto &path : written_files) {
-		known_files.insert(DuckLakeUtil::CanonicalPathKey(fs, path));
+		known_files.insert(path_keys.Get(path));
 	}
 
 	vector<DuckLakeFileForCleanup> result;
 	for (auto &row : *res) {
 		auto path = row.GetValue<string>(0);
-		if (known_files.count(DuckLakeUtil::CanonicalPathKey(fs, path))) {
+		if (known_files.count(path_keys.Get(path))) {
 			continue;
 		}
 		DuckLakeFileForCleanup info;
@@ -5593,26 +5593,26 @@ WHERE data_file_id IN (%s);
 
 DuckLakeRetirement DuckLakeMetadataManager::GetRetirement(const vector<DuckLakeFileForCleanup> &candidates,
                                                           CleanupType type) {
-	auto &fs = GetFileSystem();
+	DuckLakePathKeys path_keys(transaction.GetCatalog().GetDatabase());
 	bool orphans = type == CleanupType::ORPHANED_FILES;
 	// the scheduled files are known files for orphan cleanup, and the candidates of the cleanup of old files
 	auto referenced_res = Query(orphans ? GetKnownFilesForCleanupQuery() : GetReferencedFilesQuery());
 	referenced_res->ThrowIfError("Failed to read the files DuckLake references: ");
 	unordered_set<string> referenced;
 	for (auto &row : *referenced_res) {
-		referenced.insert(DuckLakeUtil::CanonicalPathKey(fs, row.GetValue<string>(0)));
+		referenced.insert(path_keys.Get(row.GetValue<string>(0)));
 	}
 	if (orphans) {
 		vector<string> written_files;
 		transaction.manager.Cast<DuckLakeTransactionManager>().GetWrittenFiles(written_files);
 		for (auto &path : written_files) {
-			referenced.insert(DuckLakeUtil::CanonicalPathKey(fs, path));
+			referenced.insert(path_keys.Get(path));
 		}
 	}
 	vector<string> keys;
 	vector<string> key_literals;
 	for (auto &candidate : candidates) {
-		keys.push_back(DuckLakeUtil::CanonicalPathKey(fs, candidate.path));
+		keys.push_back(path_keys.Get(candidate.path));
 		key_literals.push_back(SQLString::ToString(keys.back()));
 	}
 	unordered_set<string> retired;

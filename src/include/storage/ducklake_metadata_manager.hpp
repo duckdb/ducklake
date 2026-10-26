@@ -40,6 +40,7 @@ struct TransactionChangeInformation;
 class BoundAtClause;
 class SQLStatement;
 class FileSystem;
+class DuckLakePathKeys;
 
 struct SnapshotAndStats;
 struct FlushedInlinedTableInfo;
@@ -237,7 +238,7 @@ public:
 	static string MigratedCatalogGuardSql(const string &attached_version,
 	                                      const std::function<string(const string &, const string &)> &guard_sql);
 	//! The guard that fails a commit batch when the canonical path of one of the files it publishes is retired
-	static string RetiredPathGuardSql(FileSystem &fs, const vector<string> &paths,
+	static string RetiredPathGuardSql(const DuckLakePathKeys &path_keys, const vector<string> &paths,
 	                                  const std::function<string(const string &, const string &)> &guard_sql);
 	//! Whether the error is one a guard raised, which a retry raises again
 	static bool IsGuardError(const string &message);

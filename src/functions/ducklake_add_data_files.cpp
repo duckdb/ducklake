@@ -295,7 +295,7 @@ FROM parquet_full_metadata(%s)
 
 		// Check if we've already processed this file (can happen with overlapping globs)
 		auto &fs = FileSystem::GetFileSystem(context);
-		if (!processed_files.insert(DuckLakeUtil::CanonicalPathKey(fs, filepath)).second) {
+		if (!processed_files.insert(DuckLakePathKeys(*context.db).Get(filepath)).second) {
 			continue;
 		}
 		auto canonical_filepath = fs.CanonicalizePath(filepath);

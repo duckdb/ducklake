@@ -1,0 +1,76 @@
+# name: test/sql/add_files/add_files_remote_query_keys.test
+# description: ducklake_add_data_files registers two S3 objects whose keys differ only after a question mark
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+require httpfs
+
+require-env S3_TEST_SERVER_AVAILABLE 1
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH s3://mybucket
+
+statement ok
+DROP SECRET IF EXISTS __default_s3;
+
+statement ok
+SET s3_region='us-east-1';
+
+statement ok
+SET s3_access_key_id='admin';
+
+statement ok
+SET s3_secret_access_key='password';
+
+statement ok
+SET s3_endpoint='127.0.0.1:9000';
+
+statement ok
+SET s3_url_style='path';
+
+statement ok
+SET s3_use_ssl=false;
+
+# a query string is a part of the object key without S3 URL parameters
+statement ok
+SET s3_enable_deprecated_url_parameters=false;
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_files_remote_query_keys/')
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER);
+
+statement ok
+COPY (SELECT 1 AS i) TO '{DATA_PATH}/add_files_remote_query_keys/manual/a.parquet?key=one' (FORMAT PARQUET);
+
+statement ok
+COPY (SELECT 2 AS i) TO '{DATA_PATH}/add_files_remote_query_keys/manual/a.parquet?key=two' (FORMAT PARQUET);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', ['{DATA_PATH}/add_files_remote_query_keys/manual/a.parquet?key=one', '{DATA_PATH}/add_files_remote_query_keys/manual/a.parquet?key=two']);
+
+query I
+SELECT i FROM ducklake.t ORDER BY i
+----
+1
+2
+
+# s3n is another spelling of s3
+statement ok
+COPY (SELECT 3 AS i) TO '{DATA_PATH}/add_files_remote_query_keys/manual/b.parquet';
+
+statement ok
+CREATE TABLE ducklake.u(i INTEGER);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 'u', '{DATA_PATH}/add_files_remote_query_keys/manual/b.parquet');
+
+statement error
+CALL ducklake_add_data_files('ducklake', 'u', 'S3N://mybucket/add_files_remote_query_keys/manual/b.parquet');
+----
+is already registered in this table
