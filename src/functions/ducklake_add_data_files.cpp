@@ -187,6 +187,8 @@ private:
 	                                                    vector<unique_ptr<ParquetColumn>> &parquet_columns,
 	                                                    const vector<unique_ptr<DuckLakeFieldId>> &field_ids,
 	                                                    const string &prefix = string(), bool repeated = false);
+	//! Whether the column is one of the internal columns of a file that DuckLake wrote
+	bool IsInternalColumn(const string &name) const;
 	void CollectLiveFieldIds(const vector<unique_ptr<DuckLakeFieldId>> &field_ids, unordered_set<idx_t> &result);
 	void ValidateParquetFieldIds(const ParquetFileMetadata &file, const vector<unique_ptr<ParquetColumn>> &columns,
 	                             const unordered_set<idx_t> &live_field_ids, const string &prefix = string());
@@ -1023,6 +1025,12 @@ DuckLakeColumnStats DuckLakeFileProcessor::ConstantColumnStats(const ParquetFile
 	return column_stats;
 }
 
+bool DuckLakeFileProcessor::IsInternalColumn(const string &name) const {
+	// a registration gives the rows of a file that DuckLake wrote new row ids and versions, so they are not read
+	return StringUtil::StartsWith(name, "_ducklake_internal_") &&
+	       table.ParentCatalog().Cast<DuckLakeCatalog>().SupportsFileIdentity();
+}
+
 vector<unique_ptr<DuckLakeNameMapEntry>> DuckLakeFileProcessor::MapColumns(
     ParquetFileMetadata &file_metadata, vector<unique_ptr<ParquetColumn>> &parquet_columns,
     const vector<unique_ptr<DuckLakeFieldId>> &field_ids, const string &prefix, bool repeated) {
@@ -1036,7 +1044,7 @@ vector<unique_ptr<DuckLakeNameMapEntry>> DuckLakeFileProcessor::MapColumns(
 		// find the top-level column to map to
 		auto entry = field_id_map.find(col->name);
 		if (entry == field_id_map.end()) {
-			if (ignore_extra_columns) {
+			if (ignore_extra_columns || (prefix.empty() && IsInternalColumn(col->name))) {
 				continue;
 			}
 			throw InvalidInputException("Column \"%s%s\" exists in file \"%s\" but was not found in table \"%s\"\n* "
