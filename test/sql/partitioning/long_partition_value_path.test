@@ -1,0 +1,216 @@
+# name: test/sql/partitioning/long_partition_value_path.test
+# description: a partition directory whose hive name is too long for a file name is named after its md5 hash
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/long_partition_value_path', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (id INTEGER, name VARCHAR)
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (name)
+
+# 90 bytes of UTF-8 are 270 bytes once url encoded
+statement ok
+INSERT INTO dl.t VALUES (1, repeat('商品', 15)), (2, repeat('x', 250)), (3, repeat('x', 251)), (4, 'short')
+
+query IIII
+SELECT id, length(name), name = repeat('商品', 15), name = repeat('x', 251) FROM dl.t ORDER BY id
+----
+1	30	true	false
+2	250	false	false
+3	251	false	true
+4	5	false	false
+
+# name= and 250 bytes still fit in 255 bytes
+query II
+SELECT count(*) FILTER (contains(data_file, hive_partition_component('name', repeat('x', 250)))),
+       count(*) FILTER (contains(data_file, 'name=short'))
+FROM ducklake_list_files('dl', 't')
+----
+1	1
+
+query II
+SELECT count(*) FILTER (contains(data_file, md5(hive_partition_component('name', repeat('商品', 15))))),
+       count(*) FILTER (contains(data_file, md5(hive_partition_component('name', repeat('x', 251)))))
+FROM ducklake_list_files('dl', 't')
+----
+1	1
+
+query I
+SELECT id FROM dl.t WHERE name = repeat('商品', 15)
+----
+1
+
+# merging the files of a partition writes into the same directory
+statement ok
+INSERT INTO dl.t VALUES (5, repeat('商品', 15))
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+query II
+SELECT count(*), count(*) FILTER (contains(data_file, md5(hive_partition_component('name', repeat('商品', 15)))))
+FROM ducklake_list_files('dl', 't')
+----
+4	1
+
+query II
+SELECT id, length(name) FROM dl.t WHERE name = repeat('商品', 15) ORDER BY id
+----
+1	30
+5	30
+
+# a flush of inlined rows
+statement ok
+CREATE TABLE dl.inlined (id INTEGER, name VARCHAR)
+
+statement ok
+ALTER TABLE dl.inlined SET PARTITIONED BY (name)
+
+statement ok
+ALTER TABLE dl.inlined SET (data_inlining_row_limit = 10)
+
+statement ok
+INSERT INTO dl.inlined VALUES (1, repeat('商品', 15)), (2, 'short')
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 'inlined')
+----
+2
+
+query II
+SELECT id, length(name) FROM dl.inlined ORDER BY id
+----
+1	30
+2	5
+
+# only the component that is too long is replaced, also for a long column name
+statement ok
+CREATE TABLE dl.multi (a INTEGER, b VARCHAR)
+
+statement ok
+ALTER TABLE dl.multi SET PARTITIONED BY (a, b)
+
+statement ok
+INSERT INTO dl.multi VALUES (1, repeat('商品', 15))
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 'multi')
+WHERE contains(replace(data_file, '\', '/'), 'a=1/' || md5(hive_partition_component('b', repeat('商品', 15))) || '/')
+----
+1
+
+# a transformed key next to a long value
+statement ok
+CREATE TABLE dl.transformed (d DATE, name VARCHAR)
+
+statement ok
+ALTER TABLE dl.transformed SET PARTITIONED BY (year(d), name)
+
+statement ok
+INSERT INTO dl.transformed VALUES (DATE '2024-05-01', repeat('商品', 15))
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 'transformed')
+WHERE contains(replace(data_file, '\', '/'), 'year=2024/' || md5(hive_partition_component('name', repeat('商品', 15))) || '/')
+----
+1
+
+query II
+SELECT d, length(name) FROM dl.transformed
+----
+2024-05-01	30
+
+# a checkpoint flushes inlined rows with a long value
+statement ok
+INSERT INTO dl.inlined VALUES (3, repeat('商品', 15))
+
+statement ok
+CHECKPOINT dl
+
+query I
+SELECT sum(f.record_count)
+FROM __ducklake_metadata_dl.ducklake_data_file f
+JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id)
+WHERE t.table_name = 'inlined' AND t.end_snapshot IS NULL AND f.end_snapshot IS NULL
+----
+3
+
+# distinct values with the same text still share a directory
+statement ok
+CREATE TABLE dl.variants (id INTEGER, v VARIANT)
+
+statement ok
+ALTER TABLE dl.variants SET PARTITIONED BY (v)
+
+statement ok
+INSERT INTO dl.variants VALUES (1, 1::VARIANT), (2, '1'::VARIANT)
+
+query II
+SELECT id, variant_typeof(v) FROM dl.variants ORDER BY id
+----
+1	INT32
+2	VARCHAR
+
+statement ok
+CREATE TABLE dl.geometries (id INTEGER, g GEOMETRY, l GEOMETRY[])
+
+statement ok
+ALTER TABLE dl.geometries SET PARTITIONED BY (g)
+
+statement ok
+INSERT INTO dl.geometries VALUES (1, 'POINT EMPTY', NULL), (2, 'POINT (-nan -nan)', NULL)
+
+statement ok
+ALTER TABLE dl.geometries SET PARTITIONED BY (l)
+
+statement ok
+INSERT INTO dl.geometries VALUES (3, NULL, ['POINT EMPTY']), (4, NULL, ['POINT (-nan -nan)'])
+
+query I
+SELECT count(*) FROM dl.geometries
+----
+4
+
+statement ok
+CREATE TABLE dl.long_column (id INTEGER, cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc VARCHAR)
+
+statement ok
+ALTER TABLE dl.long_column SET PARTITIONED BY (cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc)
+
+statement ok
+INSERT INTO dl.long_column VALUES (1, 'v')
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 'long_column')
+WHERE contains(data_file, md5(hive_partition_component('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', 'v')))
+----
+1
+
+statement ok
+INSERT INTO dl.long_column VALUES (2, NULL)
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 'long_column')
+WHERE contains(data_file, md5(hive_partition_component('cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc', NULL)))
+----
+1
+
+query II
+SELECT id, cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc FROM dl.long_column ORDER BY id
+----
+1	v
+2	NULL

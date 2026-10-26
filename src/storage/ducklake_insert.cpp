@@ -634,6 +634,10 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	if (copy_input.partition_data) {
 		// we are partitioning - generate partition expressions (if any)
 		GeneratePartitionExpressions(context, copy_input, result);
+		if (copy.hive_file_pattern && !copy.partition_columns.empty()) {
+			copy.partition_path_expression = DuckLakePartitionUtils::CreatePartitionPathExpression(context, copy);
+			copy.hive_file_pattern = !copy.partition_path_expression;
+		}
 	}
 	return result;
 }

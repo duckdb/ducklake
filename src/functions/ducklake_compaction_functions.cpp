@@ -716,17 +716,18 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 			data_path =
 			    DuckLakePartitionUtils::BuildHivePartitionPath(*partition_table, partition_values, catalog.Separator());
 		} else {
+			// no schema version has the spec, as when it was set and reset in one transaction
 			auto &file_path = source_files[0].file.data.path;
 			auto &table_path = table.DataPath();
-			if (!StringUtil::StartsWith(file_path, table_path)) {
-				throw InternalException("DuckLakeCompactor: failed to resolve partition path");
+			if (StringUtil::StartsWith(file_path, table_path)) {
+				// keep the directory of the source files, which is the table directory without hive_file_pattern
+				auto relative_path = file_path.substr(table_path.size());
+				auto separator_pos = relative_path.rfind(catalog.Separator());
+				if (separator_pos != string::npos) {
+					data_path = relative_path.substr(0, separator_pos + catalog.Separator().size());
+				}
 			}
-			auto relative_path = file_path.substr(table_path.size());
-			auto separator_pos = relative_path.rfind(catalog.Separator());
-			if (separator_pos == string::npos) {
-				throw InternalException("DuckLakeCompactor: failed to resolve partition path");
-			}
-			data_path = relative_path.substr(0, separator_pos + catalog.Separator().size());
+			// files outside the table directory, as added files can be, are written to the table directory
 		}
 	}
 

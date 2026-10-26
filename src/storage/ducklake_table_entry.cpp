@@ -973,6 +973,10 @@ bool TypePromotionIsAllowed(const LogicalType &source, const LogicalType &target
 	return result == target;
 }
 
+static bool IsTimestampWithoutTimeZone(const LogicalType &type) {
+	return LogicalType::TypeIsTimestamp(type) && type.id() != LogicalTypeId::TIMESTAMP_TZ;
+}
+
 bool IsSimpleCast(const ParsedExpression &expr) {
 	if (expr.GetExpressionType() != ExpressionType::OPERATOR_CAST) {
 		return false;
@@ -1079,6 +1083,10 @@ unique_ptr<DuckLakeFieldId> DuckLakeTableEntry::TypePromotion(const DuckLakeFiel
 	// we need to drop and recreate the column
 	// drop the field
 	result.DropField(source_id);
+	if (IsTimestampWithoutTimeZone(source_type) && IsTimestampWithoutTimeZone(target)) {
+		// added files can hold finer timestamps than the bounds kept at the coarser unit
+		result.refined_timestamp_fields.push_back(source_id.GetFieldIndex());
+	}
 
 	// re-create with the new type
 	auto column_data = source_id.GetColumnData().Copy();

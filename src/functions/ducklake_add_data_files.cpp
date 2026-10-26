@@ -1,4 +1,5 @@
 #include "functions/ducklake_table_functions.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "common/ducklake_util.hpp"
@@ -93,6 +94,8 @@ struct ParquetColumn {
 	bool skip_bounds = false;
 	//! Set when the field mapping is made if the bounds are in a type that the reader casts to the field type
 	LogicalType bounds_type;
+	//! The dotted path of the column, set when the field mapping is made
+	string path;
 	//! A root group that the Parquet reader reads as VARIANT
 	bool is_variant = false;
 	vector<DuckLakeColumnStats> column_stats;
@@ -230,6 +233,12 @@ static optional_idx GetOptionalIndex(const VectorIterator<int64_t>::ValueEntry &
 // Negative counts signal a parquet reader underflow
 static bool TryGetCount(const VectorIterator<int64_t>::ValueEntry &entry, idx_t &result) {
 	return entry.IsValid() && TryCast::Operation<int64_t, idx_t>(entry.GetValue(), result);
+}
+
+static InvalidInputException MappingError(const string &column_name, const string &file_path,
+                                          const DuckLakeTableEntry &table, const string &failures) {
+	return InvalidInputException("Failed to map column \"%s\" from file \"%s\" to the column in table \"%s\"\n* %s",
+	                             column_name, file_path, table.name.GetIdentifierName(), failures);
 }
 
 void DuckLakeFileProcessor::ReadParquetFullMetadata(const string &glob, vector<DuckLakeDataFile> &written_files) {
@@ -406,10 +415,11 @@ FROM parquet_full_metadata(%s)
 			auto &column = column_entry->second.get();
 			auto &column_field = column_field_entry->second;
 			DuckLakeColumnStats stats(column_field.second);
-			// min/max are copied out of the footer here, once per row group, so a skipped column
-			// never materializes them - the geo bbox below is untouched, as ClearBounds was too
+			// a skipped column reads its bounds only to check that they fit the table type
+			auto check_bounds = column.bounds_type.id() != LogicalTypeId::INVALID;
+			auto read_bounds = !column.skip_bounds || check_bounds;
 			auto stats_min = stats_entry.GetChildValue<1>();
-			if (!column.skip_bounds && stats_min.IsValid()) {
+			if (read_bounds && stats_min.IsValid()) {
 				stats.has_min = true;
 				stats.min = stats_min.GetValue().GetString();
 				// files without the footer flag conservatively count as truncated
@@ -418,14 +428,22 @@ FROM parquet_full_metadata(%s)
 			}
 
 			auto stats_max = stats_entry.GetChildValue<2>();
-			if (!column.skip_bounds && stats_max.IsValid()) {
+			if (read_bounds && stats_max.IsValid()) {
 				stats.has_max = true;
 				stats.max = stats_max.GetValue().GetString();
 				auto max_is_exact = stats_entry.GetChildValue<9>();
 				stats.max_is_exact = max_is_exact.IsValid() && max_is_exact.GetValue();
 			}
-			if (column.bounds_type.id() != LogicalTypeId::INVALID) {
-				stats.CastBoundsFrom(column.bounds_type);
+			if (check_bounds) {
+				auto dropped_value = stats.CastBoundsFrom(column.bounds_type);
+				if (dropped_value) {
+					throw MappingError(column.path, file.filepath, table,
+					                   StringUtil::Format("The value %s of type %s in the file does not fit type %s",
+					                                      *dropped_value, column.bounds_type, stats.type));
+				}
+			}
+			if (column.skip_bounds) {
+				stats.ClearBounds();
 			}
 
 			stats.has_null_count = TryGetCount(stats_entry.GetChildValue<3>(), stats.null_count);
@@ -535,9 +553,8 @@ bool DuckLakeParquetTypeChecker::CheckTypes(const vector<LogicalType> &types) {
 }
 
 void DuckLakeParquetTypeChecker::Fail() {
-	throw InvalidInputException("Failed to map column \"%s%s\" from file \"%s\" to the column in table \"%s\"\n* %s",
-	                            prefix.empty() ? prefix : prefix + ".", column.name, file_metadata.filepath,
-	                            table.name.GetIdentifierName(), StringUtil::Join(failures, "\n* "));
+	auto column_name = prefix.empty() ? column.name : prefix + "." + column.name;
+	throw MappingError(column_name, file_metadata.filepath, table, StringUtil::Join(failures, "\n* "));
 }
 
 void DuckLakeParquetTypeChecker::CheckSignedInteger() {
@@ -776,6 +793,7 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 		prefix += ".";
 	}
 	prefix += column.name;
+	column.path = prefix;
 
 	auto map_entry = make_uniq<DuckLakeNameMapEntry>();
 	map_entry->source_name = column.name;
@@ -789,8 +807,12 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 	}
 	column.skip_bounds = skipped_fields.count(field_id.GetFieldIndex().index) > 0;
 	auto &field_type = field_id.Type();
-	if (!field_id.HasChildren() && !column.skip_bounds && column.duckdb_type != field_type &&
-	    !DuckLakeColumnStats::BoundsSurviveTypePromotion(column.duckdb_type, field_type)) {
+	auto bounds_survive = DuckLakeColumnStats::BoundsSurviveTypePromotion(column.duckdb_type, field_type);
+	if (bounds_survive && field_type.id() == LogicalTypeId::DECIMAL) {
+		// a decimal with fewer integer digits holds only some values of the file
+		bounds_survive = BoundCastExpression::CastIsInvertible(column.duckdb_type, field_type);
+	}
+	if (!field_id.HasChildren() && column.duckdb_type != field_type && !bounds_survive) {
 		column.bounds_type = column.duckdb_type;
 	}
 

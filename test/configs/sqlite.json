@@ -52,9 +52,10 @@
       ]
     },
     {
-      "reason": "SQLite cannot commit a concurrent insert while the retyping transaction is open",
+      "reason": "SQLite cannot commit a concurrent insert or added file while the retyping transaction is open",
       "paths": [
-        "test/sql/stats/float_to_double_retype_stats_concurrent.test"
+        "test/sql/stats/float_to_double_retype_stats_concurrent.test",
+        "test/sql/add_files/add_files_finer_timestamp_retype_concurrent.test"
       ]
     },
     {

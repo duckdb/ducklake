@@ -35,6 +35,8 @@ class ParsedExpression;
 struct ColumnChangeInfo {
 	vector<DuckLakeNewColumn> new_fields;
 	vector<FieldIndex> dropped_fields;
+	//! Fields retyped to a finer timestamp unit
+	vector<FieldIndex> refined_timestamp_fields;
 
 	void DropField(const DuckLakeFieldId &field_id);
 };

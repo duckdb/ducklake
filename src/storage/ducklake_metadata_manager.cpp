@@ -3458,18 +3458,26 @@ string DuckLakeMetadataManager::WriteColumnIdPairs(const map<TableIndex, set<Fie
 	return StringUtil::Join(pairs, ", ");
 }
 
+//! Rewrites the bounds of the files below next_file_id that match file_filter, and of the tables holding such a file
 static string RewriteColumnStatsBoundsSql(const map<TableIndex, set<FieldIndex>> &columns, const string &bounds,
-                                          idx_t next_file_id) {
+                                          idx_t next_file_id, const string &file_filter = string()) {
 	auto column_pairs = DuckLakeMetadataManager::WriteColumnIdPairs(columns);
 	if (column_pairs.empty()) {
 		return string();
 	}
+	string file_condition;
+	string table_condition;
+	if (!file_filter.empty()) {
+		auto files = StringUtil::Format("FROM {METADATA_CATALOG}.ducklake_data_file WHERE %s", file_filter);
+		file_condition = StringUtil::Format(" AND data_file_id IN (SELECT data_file_id %s)", files);
+		table_condition = StringUtil::Format(" AND table_id IN (SELECT table_id %s)", files);
+	}
 	return StringUtil::Format("UPDATE {METADATA_CATALOG}.ducklake_file_column_stats SET %s "
-	                          "WHERE (table_id, column_id) IN (%s) AND data_file_id < %d;",
-	                          bounds, column_pairs, next_file_id) +
+	                          "WHERE (table_id, column_id) IN (%s) AND data_file_id < %d%s;",
+	                          bounds, column_pairs, next_file_id, file_condition) +
 	       StringUtil::Format("UPDATE {METADATA_CATALOG}.ducklake_table_column_stats SET %s "
-	                          "WHERE (table_id, column_id) IN (%s);",
-	                          bounds, column_pairs);
+	                          "WHERE (table_id, column_id) IN (%s)%s;",
+	                          bounds, column_pairs, table_condition);
 }
 
 string DuckLakeMetadataManager::WriteFloatWidenedStats(const map<TableIndex, set<FieldIndex>> &widened_columns,
@@ -3483,6 +3491,12 @@ string DuckLakeMetadataManager::WriteFloatWidenedStats(const map<TableIndex, set
 	}
 	return RewriteColumnStatsBoundsSql(widened_columns, widened_bounds, next_file_id) +
 	       RewriteColumnStatsBoundsSql(cleared_columns, "min_value = NULL, max_value = NULL", next_file_id);
+}
+
+string DuckLakeMetadataManager::WriteRefinedTimestampStats(const map<TableIndex, set<FieldIndex>> &refined_columns,
+                                                           idx_t next_file_id) {
+	return RewriteColumnStatsBoundsSql(refined_columns, "min_value = NULL, max_value = NULL", next_file_id,
+	                                   "mapping_id IS NOT NULL");
 }
 
 static string ExpireDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns, const string &metadata_table) {
@@ -4924,6 +4938,31 @@ static unordered_map<idx_t, T> GetChangedSpecs(const vector<T> &old_specs, const
 	return new_spec_map;
 }
 
+unordered_map<idx_t, idx_t>
+DuckLakeMetadataManager::GetUnchangedPartitionIds(const vector<DuckLakePartitionInfo> &existing_partitions,
+                                                  const vector<DuckLakePartitionInfo> &new_partitions) {
+	unordered_map<idx_t, idx_t> last_partition_index;
+	unordered_set<idx_t> replaced_tables;
+	for (idx_t i = 0; i < new_partitions.size(); i++) {
+		last_partition_index[new_partitions[i].table_id.index] = i;
+		if (new_partitions[i].replaces_equal_spec) {
+			replaced_tables.insert(new_partitions[i].table_id.index);
+		}
+	}
+	unordered_map<idx_t, idx_t> result;
+	for (auto &existing : existing_partitions) {
+		auto entry = last_partition_index.find(existing.table_id.index);
+		if (entry == last_partition_index.end() || replaced_tables.count(existing.table_id.index)) {
+			continue;
+		}
+		auto &last = new_partitions[entry->second];
+		if (last.id.IsValid() && existing.id.IsValid() && last == existing) {
+			result[last.id.GetIndex()] = existing.id.GetIndex();
+		}
+	}
+	return result;
+}
+
 string DuckLakeMetadataManager::WriteNewPartitionKeys(const vector<DuckLakePartitionInfo> &existing_partitions,
                                                       const vector<DuckLakePartitionInfo> &new_partitions) {
 	if (new_partitions.empty()) {
@@ -5245,7 +5284,9 @@ string DuckLakeMetadataManager::GetKnownFilesForCleanupQuery() const {
            '/'
        ) AS full_path
 FROM
-  (SELECT s.path AS schema_path, t.path AS table_path, file_path, s.path_is_relative AS schema_relative, t.path_is_relative AS table_relative, file_relative FROM (
+  (SELECT COALESCE(s.path, '') AS schema_path, COALESCE(t.path, '') AS table_path, file_path,
+          (s.path IS NULL OR s.path_is_relative) AS schema_relative,
+          (t.path IS NULL OR t.path_is_relative) AS table_relative, file_relative FROM (
     SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id
     FROM {METADATA_CATALOG}.ducklake_data_file f
     UNION ALL
