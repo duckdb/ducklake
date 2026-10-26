@@ -286,6 +286,10 @@ public:
 	vector<DuckLakeSnapshotInfo> ExpireSnapshots(const string &filter);
 	//! Whether the commit writes a snapshot for the expiry of the transaction
 	bool ExpiresSnapshotsOnCommit() const;
+	//! Retires the paths of the cleanup candidates when the transaction commits, and reports the files to unlink
+	void RetireFilesOnCommit(vector<DuckLakeFileForCleanup> files, CleanupType type,
+	                         vector<DuckLakeFileForCleanup> &unlinked_files);
+	bool RetiresFilesOnCommit() const;
 	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files);
 	bool InlinedTableFlushed(const string &table_name);
@@ -422,6 +426,10 @@ private:
 	//! The snapshots the statements of this transaction expired, and the latest snapshot the first expiry saw
 	vector<DuckLakeSnapshotInfo> expired_in_transaction;
 	optional_idx expiry_snapshot_id;
+	//! The cleanup candidates whose paths the commit retires, and the files it reports for unlinking
+	vector<DuckLakeFileForCleanup> files_to_retire;
+	CleanupType retirement_type = CleanupType::OLD_FILES;
+	optional_ptr<vector<DuckLakeFileForCleanup>> unlinked_files;
 	DuckLakeSnapshot GetLatestSnapshot();
 	//! The latest snapshot in DuckLake when the transaction first looked, the snapshot of the transaction unless the
 	//! catalog is opened at a fixed snapshot

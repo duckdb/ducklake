@@ -42,6 +42,15 @@ struct DuckLakeCommitContext {
 	    };
 	//! Whether expiring snapshots is the only change of the transaction
 	bool only_expires_snapshots = false;
+	//! The retirement of cleaned up files the commit attempt records, read after the latest snapshot
+	std::function<DuckLakeRetirement()> get_retirement = []() {
+		return DuckLakeRetirement();
+	};
+	//! Receives the retirement that the commit recorded
+	std::function<void(DuckLakeRetirement &)> report_retirement = [](DuckLakeRetirement &) {
+	};
+	//! Whether retiring files is the only change of the transaction
+	bool only_retires_files = false;
 	//! Rewrites the delete files whose new deletes are not dated to the commit snapshot.
 	std::function<void(idx_t)> set_delete_commit_snapshot = [](idx_t) {
 	};

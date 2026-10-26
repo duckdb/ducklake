@@ -34,6 +34,8 @@ static constexpr DuckLakeOptionMetadata DUCKLAKE_OPTIONS[] = {
     {"delete_older_than", "How old unused files must be to be removed by the 'ducklake_delete_orphaned_files' and "
                           "'ducklake_cleanup_old_files' cleanup functions."},
     {"expire_older_than", "How old snapshots must be, by default, to be expired by: 'ducklake_expire_snapshots'"},
+    {"cleanup_batch_size", "How many files the cleanup functions retire in one metadata transaction before they "
+                           "delete them"},
     {"auto_compact", "Pre-defined schema used as a default value for the following compaction functions "
                      "'ducklake_flush_inlined_data','ducklake_merge_adjacent_files', "
                      "'ducklake_rewrite_data_files', 'ducklake_delete_orphaned_files'"},

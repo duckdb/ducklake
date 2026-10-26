@@ -5380,7 +5380,7 @@ FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion
 	return result;
 }
 
-string DuckLakeMetadataManager::GetKnownFilesForCleanupQuery() const {
+string DuckLakeMetadataManager::GetReferencedFilesQuery() const {
 	return R"(SELECT REPLACE(
            CASE
                WHEN NOT file_relative THEN file_path
@@ -5407,7 +5407,11 @@ FROM
   ) AS f
    JOIN {METADATA_CATALOG}.ducklake_table t ON f.table_id = t.table_id
    JOIN {METADATA_CATALOG}.ducklake_schema s ON t.schema_id = s.schema_id) AS r
-UNION ALL
+)";
+}
+
+string DuckLakeMetadataManager::GetKnownFilesForCleanupQuery() const {
+	return GetReferencedFilesQuery() + R"(UNION ALL
 SELECT REPLACE(
     CASE
         WHEN NOT f.path_is_relative THEN f.path
@@ -5485,6 +5489,92 @@ WHERE data_file_id IN (%s);
 )",
 	                                         deleted_file_ids));
 	result->ThrowIfError("Failed to delete scheduled cleanup files in DuckLake: ");
+}
+
+DuckLakeRetirement DuckLakeMetadataManager::GetRetirement(const vector<DuckLakeFileForCleanup> &candidates,
+                                                          CleanupType type) {
+	auto &fs = GetFileSystem();
+	bool orphans = type == CleanupType::ORPHANED_FILES;
+	// the scheduled files are known files for orphan cleanup, and the candidates of the cleanup of old files
+	auto referenced_res = Query(orphans ? GetKnownFilesForCleanupQuery() : GetReferencedFilesQuery());
+	referenced_res->ThrowIfError("Failed to read the files DuckLake references: ");
+	unordered_set<string> referenced;
+	for (auto &row : *referenced_res) {
+		referenced.insert(DuckLakeUtil::CanonicalPathKey(fs, row.GetValue<string>(0)));
+	}
+	if (orphans) {
+		vector<string> written_files;
+		transaction.manager.Cast<DuckLakeTransactionManager>().GetWrittenFiles(written_files);
+		for (auto &path : written_files) {
+			referenced.insert(DuckLakeUtil::CanonicalPathKey(fs, path));
+		}
+	}
+	vector<string> keys;
+	vector<string> key_literals;
+	for (auto &candidate : candidates) {
+		keys.push_back(DuckLakeUtil::CanonicalPathKey(fs, candidate.path));
+		key_literals.push_back(SQLString::ToString(keys.back()));
+	}
+	unordered_set<string> retired;
+	if (!keys.empty()) {
+		auto retired_res =
+		    Query(StringUtil::Format("SELECT path FROM {METADATA_CATALOG}.ducklake_retired_path WHERE path IN (%s)",
+		                             StringUtil::Join(key_literals, ", ")));
+		retired_res->ThrowIfError("Failed to read the retired paths of DuckLake: ");
+		for (auto &row : *retired_res) {
+			retired.insert(row.GetValue<string>(0));
+		}
+	}
+	unordered_set<idx_t> scheduled;
+	if (!orphans && !candidates.empty()) {
+		auto scheduled_res = Query(StringUtil::Format(
+		    "SELECT data_file_id FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion WHERE data_file_id IN "
+		    "(%s)",
+		    CleanupFileIdList(candidates)));
+		scheduled_res->ThrowIfError("Failed to read the files scheduled for deletion from DuckLake: ");
+		for (auto &row : *scheduled_res) {
+			scheduled.insert(row.GetValue<idx_t>(0));
+		}
+	}
+	DuckLakeRetirement result;
+	unordered_set<string> retired_paths;
+	for (idx_t i = 0; i < candidates.size(); i++) {
+		auto &candidate = candidates[i];
+		auto &key = keys[i];
+		bool is_retired = retired.count(key) > 0;
+		if (!orphans) {
+			if (!scheduled.count(candidate.id.index)) {
+				// another cleanup removed the schedule entry, the file is unlinked when it retired its path
+				if (is_retired) {
+					result.unlinked_files.push_back(candidate);
+				}
+				continue;
+			}
+			result.unscheduled_files.push_back(candidate.id);
+		}
+		if (!is_retired && referenced.count(key)) {
+			continue;
+		}
+		result.unlinked_files.push_back(candidate);
+		if (!is_retired && retired_paths.insert(key).second) {
+			result.retired_paths.push_back(key);
+		}
+	}
+	return result;
+}
+
+string DuckLakeMetadataManager::RetireFilesSql(const DuckLakeRetirement &retirement) {
+	vector<string> retired_rows;
+	for (auto &path : retirement.retired_paths) {
+		retired_rows.push_back(StringUtil::Format("(%s, NOW())", SQLString(path)));
+	}
+	auto result = InsertValuesSql("ducklake_retired_path", retired_rows);
+	if (!retirement.unscheduled_files.empty()) {
+		result += StringUtil::Format(
+		    "DELETE FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion WHERE data_file_id IN (%s);\n",
+		    GenerateIDList(retirement.unscheduled_files));
+	}
+	return result;
 }
 
 idx_t DuckLakeMetadataManager::GetNextColumnId(TableIndex table_id) {

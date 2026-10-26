@@ -1,0 +1,79 @@
+# name: test/sql/retirement/cleanup_retires_before_unlink.test
+# description: the cleanup functions retire the paths of the files in a transaction of their own before they unlink them
+# group: [retirement]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/cleanup_retires_before_unlink', METADATA_CATALOG 'meta')
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT 1 AS i
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+# the compaction schedules both of its sources
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+statement ok
+BEGIN
+
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+2
+
+statement ok
+ROLLBACK
+
+# the retirement committed before the unlink
+query I
+SELECT count(*) FROM meta.ducklake_files_scheduled_for_deletion
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_retired_path
+----
+2
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/cleanup_retires_before_unlink/**/*.parquet')
+----
+1
+
+query I
+SELECT commit_message FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+ducklake_cleanup_old_files
+
+# an orphan is retired too
+statement ok
+COPY (SELECT 3 AS i) TO '{DATA_PATH}/cleanup_retires_before_unlink/main/t/orphan.parquet'
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('dl', cleanup_all => true)
+----
+1
+
+query I
+SELECT count(*) FROM meta.ducklake_retired_path
+----
+3
+
+query I
+SELECT * FROM dl.t ORDER BY ALL
+----
+1
+2

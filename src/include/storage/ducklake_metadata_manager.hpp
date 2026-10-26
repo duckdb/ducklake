@@ -407,6 +407,9 @@ public:
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type);
 
 	virtual void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files);
+	//! The retirement of the cleanup candidates that no data or delete file references, read after the latest snapshot
+	DuckLakeRetirement GetRetirement(const vector<DuckLakeFileForCleanup> &candidates, CleanupType type);
+	static string RetireFilesSql(const DuckLakeRetirement &retirement);
 	static string DropSchemas(const set<SchemaIndex> &ids);
 	static string DropTables(const set<TableIndex> &ids, bool renamed);
 	static string DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags = false);
@@ -696,6 +699,8 @@ protected:
 	string GetColumnType(const DuckLakeColumnInfo &col);
 	string GetColumnDefinitions(const vector<DuckLakeColumnInfo> &columns);
 	string GetKnownFilesForCleanupQuery() const;
+	//! The full paths of every data and delete file, ended files included
+	string GetReferencedFilesQuery() const;
 
 	//! Optimized data file writing using DuckDB Appender API (DuckDB and SQLite metadata managers)
 	string WriteNewDataFilesWithAppender(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,

@@ -707,6 +707,14 @@ static string ParseRowGroupSize(ClientContext &, const string &, const Value &va
 	return to_string(row_group_size);
 }
 
+static string ParseBatchSize(ClientContext &, const string &option, const Value &val) {
+	auto batch_size = val.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
+	if (batch_size == 0) {
+		throw InvalidInputException("The %s option cannot be 0", option);
+	}
+	return to_string(batch_size);
+}
+
 static string ParseRowGroupSizeBytes(ClientContext &, const string &, const Value &val) {
 	auto row_group_size_bytes = DBConfig::ParseMemoryLimitOrMaximum(val.ToString());
 	if (row_group_size_bytes == 0) {
@@ -770,6 +778,7 @@ static const unordered_map<string, config_option_parser_t> &ConfigOptionParsers(
 	    {"rewrite_delete_threshold", ParseDeleteThreshold},
 	    {"delete_older_than", ParseInterval},
 	    {"expire_older_than", ParseInterval},
+	    {"cleanup_batch_size", ParseBatchSize},
 	    {"auto_compact", ParseBoolean},
 	    {"per_thread_output", ParseBoolean},
 	    {"write_deletion_vectors", ParseBoolean},
@@ -795,7 +804,8 @@ string DuckLakeUtil::ParseConfigOptionValue(ClientContext &context, const string
 }
 
 void DuckLakeUtil::ValidateConfigOptionScope(const string &option, bool has_schema, bool has_table) {
-	if ((has_schema || has_table) && (option == "expire_older_than" || option == "delete_older_than")) {
+	if ((has_schema || has_table) &&
+	    (option == "expire_older_than" || option == "delete_older_than" || option == "cleanup_batch_size")) {
 		throw InvalidInputException("The '%s' option can only be set globally, not for a specific schema or table",
 		                            option);
 	}

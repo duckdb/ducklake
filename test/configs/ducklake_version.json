@@ -53,6 +53,13 @@
       ]
     },
     {
+      "reason": "File retirement needs DuckLake 2.0 and is not active when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/retirement/cleanup_keeps_referenced_file.test",
+        "test/sql/retirement/cleanup_retires_before_unlink.test"
+      ]
+    },
+    {
       "reason": "Inlining VARIANT values into a SQLite or Postgres catalog needs 1.1 and is disabled when ducklake_default_version is pinned to 1.0",
       "paths": [
         "test/sql/data_inlining/data_inlining_variant_sql_rollback.test"

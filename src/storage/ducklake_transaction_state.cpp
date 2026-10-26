@@ -2792,7 +2792,9 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			can_retry = true;
 			// read after the latest snapshot, so a commit the expiry does not see takes the id of the new snapshot
 			auto expired_snapshots = context.get_expired_snapshots(i, commit_snapshot.snapshot_id - 1);
-			if (expired_snapshots.empty() && context.only_expires_snapshots) {
+			auto retirement = context.get_retirement();
+			if ((expired_snapshots.empty() && context.only_expires_snapshots) ||
+			    (retirement.Empty() && context.only_retires_files)) {
 				context.commit_connection();
 				wrote_snapshot = false;
 				break;
@@ -2811,6 +2813,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			if (!expired_snapshots.empty()) {
 				batch_queries += DuckLakeMetadataManager::DeleteSnapshotsSql(expired_snapshots);
 			}
+			batch_queries += DuckLakeMetadataManager::RetireFilesSql(retirement);
 			batch_queries += CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
 			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
 			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
@@ -2825,6 +2828,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			flushed_inlined = !flushed_inlined_tables.empty();
 			context.flush_cache_if_pending();
 			context.commit_connection();
+			context.report_retirement(retirement);
 			new_entry_oids = std::move(commit_state.new_entry_oids);
 			break;
 		} catch (std::exception &ex) {

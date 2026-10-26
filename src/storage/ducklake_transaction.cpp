@@ -935,7 +935,7 @@ map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> &DuckLakeTransaction::GetNewMac
 }
 
 bool DuckLakeTransaction::ChangesMade() const {
-	return ChangesMadeBesidesExpiry() || ExpiresSnapshotsOnCommit();
+	return ChangesMadeBesidesExpiry() || ExpiresSnapshotsOnCommit() || RetiresFilesOnCommit();
 }
 
 bool DuckLakeTransaction::ChangesMadeBesidesExpiry() const {
@@ -947,6 +947,17 @@ bool DuckLakeTransaction::ChangesMadeBesidesExpiry() const {
 bool DuckLakeTransaction::ExpiresSnapshotsOnCommit() const {
 	// a commit that expires is ordered with the commits that tag snapshots by its snapshot id
 	return !expiry_filters.empty() && ducklake_catalog.SupportsSnapshotTags();
+}
+
+void DuckLakeTransaction::RetireFilesOnCommit(vector<DuckLakeFileForCleanup> files, CleanupType type,
+                                              vector<DuckLakeFileForCleanup> &unlinked_files_p) {
+	files_to_retire = std::move(files);
+	retirement_type = type;
+	unlinked_files = unlinked_files_p;
+}
+
+bool DuckLakeTransaction::RetiresFilesOnCommit() const {
+	return !files_to_retire.empty();
 }
 
 bool DuckLakeTransaction::SchemaChangesMade() const {
@@ -1569,6 +1580,16 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 			metadata_manager->CleanupExpiredSnapshots(expired);
 		};
 		context.only_expires_snapshots = !ChangesMadeBesidesExpiry();
+	}
+	if (RetiresFilesOnCommit()) {
+		// a retirement is ordered with the commits that publish files by its snapshot id
+		context.get_retirement = [&]() {
+			return metadata_manager->GetRetirement(files_to_retire, retirement_type);
+		};
+		context.report_retirement = [&](DuckLakeRetirement &retirement) {
+			*unlinked_files = std::move(retirement.unlinked_files);
+		};
+		context.only_retires_files = !ChangesMadeBesidesExpiry() && !ExpiresSnapshotsOnCommit();
 	}
 	context.set_delete_commit_snapshot = [&](idx_t commit_snapshot) {
 		// the client context has no active transaction during the commit

@@ -39,12 +39,18 @@ SET s3_use_ssl=false;
 statement ok
 SET s3_enable_deprecated_url_parameters=true;
 
+# clear objects left under the prefix by an earlier run, with a catalog of its own that retires their paths
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{UUID}.db' AS sweep (DATA_PATH '{DATA_PATH}/remote_path_aliases/')
+
+statement ok
+CALL ducklake_delete_orphaned_files('sweep', cleanup_all => true);
+
+statement ok
+DETACH sweep
+
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/remote_path_aliases/')
-
-# clear objects left under the prefix by an interrupted run
-statement ok
-CALL ducklake_delete_orphaned_files('ducklake', cleanup_all => true);
 
 statement ok
 CREATE TABLE ducklake.t(i INTEGER);

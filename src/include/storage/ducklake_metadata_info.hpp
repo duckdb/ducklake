@@ -488,6 +488,20 @@ struct DuckLakeFileForCleanup {
 	timestamp_tz_t time;
 };
 
+//! What the retirement of a batch of cleanup candidates commits
+struct DuckLakeRetirement {
+	//! The files to unlink once the retirement has committed
+	vector<DuckLakeFileForCleanup> unlinked_files;
+	//! The canonical paths that become retired
+	vector<string> retired_paths;
+	//! The schedule entries that the retirement removes
+	vector<DataFileIndex> unscheduled_files;
+
+	bool Empty() const {
+		return unlinked_files.empty() && unscheduled_files.empty();
+	}
+};
+
 struct DuckLakeCompactionFileData : public DuckLakeCompactionBaseFileData {
 	optional_idx row_id_start;
 	//! The origin of the rows that embed none, unset when it is the begin snapshot
