@@ -46,6 +46,10 @@ public:
 
 protected:
 	string MetadataExistsQuery() const override;
+	string SnapshotTimeSql() const override {
+		// the server's clock, the commit batch runs in a new server transaction
+		return "NOW()";
+	}
 };
 
 } // namespace duckdb

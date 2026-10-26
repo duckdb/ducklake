@@ -45,6 +45,18 @@ struct TransactionChangeInformation {
 	set<TableIndex> tables_compacted;
 	set<TableIndex> tables_merge_adjacent;
 	set<TableIndex> tables_rewrite_delete;
+
+	//! The tables whose data or schema the transaction changes
+	vector<TableIndex> GetChangedTables() const {
+		set<TableIndex> result;
+		for (auto tables :
+		     {&altered_tables, &altered_tables_with_schema_version_changes, &tables_set_not_null, &tables_inserted_into,
+		      &tables_deleted_from, &tables_delete_attempted, &tables_inserted_inlined, &tables_deleted_inlined,
+		      &tables_flushed_inlined, &tables_compacted, &tables_merge_adjacent, &tables_rewrite_delete}) {
+			result.insert(tables->begin(), tables->end());
+		}
+		return vector<TableIndex>(result.begin(), result.end());
+	}
 };
 
 struct SnapshotChangeInformation {

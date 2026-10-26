@@ -848,7 +848,7 @@ static double GetDeleteThreshold(DuckLakeTableEntry &table_entry, const DuckLake
 		// If the user manually sets the parameter, this has priority
 		delete_threshold = DoubleValue::Get(delete_threshold_value);
 	}
-	if (delete_threshold > 1 || delete_threshold < 0) {
+	if (!(delete_threshold >= 0 && delete_threshold <= 1)) {
 		throw BinderException("The delete_threshold option must be between 0 and 1");
 	}
 	return delete_threshold;

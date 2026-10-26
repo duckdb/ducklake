@@ -45,14 +45,6 @@ static void ValidateNoReservedInliningColumns(ClientContext &context, DuckLakeCa
 	}
 }
 
-static string GetScopeName(const TableFunctionBindInput &input, const string &name) {
-	auto entry = input.named_parameters.find(Identifier(name));
-	if (entry == input.named_parameters.end() || entry->second.IsNull()) {
-		return string();
-	}
-	return StringValue::Get(entry->second);
-}
-
 struct DuckLakeSetOptionData : public TableFunctionData {
 	DuckLakeSetOptionData(DuckLakeCatalog &catalog, DuckLakeConfigOption option_p)
 	    : catalog(catalog), option(std::move(option_p)) {
@@ -77,8 +69,8 @@ static unique_ptr<FunctionData> DuckLakeSetOptionBind(ClientContext &context, Ta
 	auto &val = input.inputs[2];
 
 	value = DuckLakeUtil::ParseConfigOptionValue(context, option, val);
-	auto schema = GetScopeName(input, "schema");
-	auto table = GetScopeName(input, "table_name");
+	auto schema = DuckLakeTableFunctionUtil::GetStringOption(input, "schema");
+	auto table = DuckLakeTableFunctionUtil::GetStringOption(input, "table_name");
 	DuckLakeUtil::ValidateConfigOptionScope(option, !schema.empty(), !table.empty());
 
 	optional_ptr<DuckLakeTableEntry> table_entry;

@@ -174,6 +174,8 @@ public:
 	static DuckLakeColumnInfo ConvertColumn(const string &name, const LogicalType &type,
 	                                        const DuckLakeFieldId &field_id);
 	void RequireNextColumnId(DuckLakeTransaction &transaction);
+	//! The column id of the next added column, every column id the table gave out is below it
+	idx_t GetNextColumnId(DuckLakeTransaction &transaction);
 
 	const string &DataPath() const;
 	virtual_column_map_t GetVirtualColumns() const override;
@@ -209,6 +211,8 @@ private:
 	bool CanUseGlobalStats(DuckLakeTransaction &transaction) const;
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RenameTableInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, SetPartitionedByInfo &info);
+	//! Whether a bucket column of the new spec changed its bucket type since the last commit
+	bool BucketTypesChanged(DuckLakeTransaction &transaction, DuckLakeTableEntry &table);
 	unique_ptr<CatalogEntry> AlterTable(ClientContext &context, DuckLakeTransaction &transaction, SetNotNullInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, DropNotNullInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
