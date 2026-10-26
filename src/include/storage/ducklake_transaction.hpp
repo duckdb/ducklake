@@ -282,7 +282,6 @@ public:
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &files);
-	//! Records that a statement wrote to the metadata transaction
 	void MarkMetadataWritten();
 	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files);
