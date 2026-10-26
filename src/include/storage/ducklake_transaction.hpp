@@ -368,7 +368,7 @@ private:
 	//! Puts back the config options this transaction replaced in the catalog
 	void UndoConfigOptions();
 	//! The SQL that the commit runs for the options this transaction changed
-	string ConfigOptionCommitSql() const;
+	string ConfigOptionLockSql() const;
 	//! Writes the options of the transaction again, after a failed commit attempt rolled them back
 	void RewriteConfigOptions();
 	static DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);

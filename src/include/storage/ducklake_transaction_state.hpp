@@ -147,7 +147,7 @@ struct DuckLakeCommitContext {
 	};
 	// LCOV_EXCL_STOP
 	//! Runs in every commit attempt of a transaction that changed options.
-	string config_option_sql;
+	string config_option_lock;
 	//! Whether the commit writes a snapshot, a commit that only changes options writes none.
 	bool write_snapshot = true;
 	bool allow_retry = true;

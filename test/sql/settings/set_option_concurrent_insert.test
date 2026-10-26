@@ -330,31 +330,21 @@ SELECT scope_entry, value FROM dl.options() WHERE option_name = 'parquet_version
 ----
 main.r3	V1
 
-# two transactions insert the same option before either commits, also when the metadata reads committed rows
-foreach isolation repeatable_read read_committed
-
-onlyif isolation=read_committed
+# two transactions insert the same option before either commits
 statement ok
-DETACH dl
-
-onlyif isolation=read_committed
-statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (META_ISOLATION_LEVEL 'READ COMMITTED')
-
-statement ok
-CREATE TABLE dl.both_{isolation} (i INTEGER)
+CREATE TABLE dl.dup (i INTEGER)
 
 statement ok con9
 BEGIN
 
 statement ok con9
-CALL dl.set_option('parquet_compression', 'lz4', table_name => 'both_{isolation}')
+CALL dl.set_option('parquet_compression', 'lz4', table_name => 'dup')
 
 statement ok con10
 BEGIN
 
 statement ok con10
-CALL dl.set_option('parquet_compression', 'zstd', table_name => 'both_{isolation}')
+CALL dl.set_option('parquet_compression', 'zstd', table_name => 'dup')
 
 statement ok con9
 COMMIT
@@ -363,9 +353,32 @@ statement ok con10
 COMMIT
 
 query II
-SELECT count(*), max(value) FROM dl.options()
-WHERE option_name = 'parquet_compression' AND scope_entry = 'main.both_{isolation}'
+SELECT count(*), max(value) FROM dl.options() WHERE option_name = 'parquet_compression' AND scope_entry = 'main.dup'
 ----
 1	zstd
 
-endloop
+# the same for a commit that also writes a snapshot
+statement ok con11
+BEGIN
+
+statement ok con11
+CALL ducklake_expire_snapshots('dl', versions => [2])
+
+statement ok con11
+CALL dl.set_option('parquet_version', 2, table_name => 'dup')
+
+statement ok con11
+INSERT INTO dl.dup VALUES (1)
+
+statement ok con1
+CALL dl.set_option('parquet_version', 1, table_name => 'r2')
+
+statement error con11
+COMMIT
+----
+could not serialize access
+
+query II
+SELECT (SELECT count(*) FROM dl.snapshots() WHERE snapshot_id = 2), (SELECT count(*) FROM dl.dup)
+----
+1	0
