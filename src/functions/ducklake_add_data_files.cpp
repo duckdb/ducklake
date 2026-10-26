@@ -291,20 +291,16 @@ FROM parquet_full_metadata(%s)
 		auto file_entry = file_iter[row_idx].GetChildValue(0);
 		auto filepath = file_entry.GetChildValue<0>().GetValue().GetString();
 
-		// Use canonicalize path to detect duplicate files
-		auto &fs = FileSystem::GetFileSystem(context);
-		auto canonical_filepath = fs.CanonicalizePath(filepath);
-
 		// Check if we've already processed this file (can happen with overlapping globs)
-		if (processed_files.count(canonical_filepath)) {
-			// File already processed in a previous glob, skip
+		auto &fs = FileSystem::GetFileSystem(context);
+		if (!processed_files.insert(DuckLakeUtil::CanonicalPathKey(fs, filepath)).second) {
 			continue;
 		}
-		processed_files.insert(canonical_filepath);
+		auto canonical_filepath = fs.CanonicalizePath(filepath);
 
 		// Keep paths inside the DuckLake data directory in the configured path namespace. Canonicalization can rewrite
 		// a symlinked prefix (for example /tmp to /private/tmp), while orphan cleanup scans the configured data path.
-		// The canonical path remains the deduplication key, but the rebased path is persisted.
+		// The canonical path key deduplicates, but the rebased path is persisted.
 		auto persisted_filepath = canonical_filepath;
 		auto &data_path = transaction.GetCatalog().DataPath();
 		if (!data_path.empty()) {

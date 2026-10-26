@@ -13,6 +13,7 @@
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/path.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -243,6 +244,19 @@ string DuckLakeUtil::PathSeparator(FileSystem &fs, const string &path) {
 		return "/";
 	}
 	return fs.PathSeparator(path);
+}
+
+string DuckLakeUtil::CanonicalPathKey(FileSystem &fs, const string &path) {
+	auto normalized = StringUtil::Replace(path, "\\", "/");
+	auto parsed = Path::FromString(normalized);
+	if (parsed.IsLocal()) {
+		return fs.CanonicalizePath(normalized);
+	}
+	// key remote paths by authority and path so scheme aliases and query strings match
+	auto path_start = parsed.GetScheme().size();
+	auto query_start = normalized.find('?', path_start);
+	auto path_end = query_start == string::npos ? normalized.size() : query_start;
+	return normalized.substr(path_start, path_end - path_start);
 }
 
 string DuckLakeUtil::JoinPath(FileSystem &fs, const string &a, const string &b) {

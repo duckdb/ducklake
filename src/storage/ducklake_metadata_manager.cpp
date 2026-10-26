@@ -1,6 +1,5 @@
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/common/file_system.hpp"
-#include "duckdb/common/path.hpp"
 #include "duckdb/common/exception/conversion_exception.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -5431,21 +5430,9 @@ vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetOrphanFilesForCleanup
 
 	// compare canonical paths so differently spelled paths to the same file match
 	auto &fs = GetFileSystem();
-	auto canonical_path = [&](const string &path) {
-		auto normalized = StringUtil::Replace(path, "\\", "/");
-		auto parsed = Path::FromString(normalized);
-		if (parsed.IsLocal()) {
-			return fs.CanonicalizePath(normalized);
-		}
-		// key remote paths by authority and path so scheme aliases and query strings match
-		auto path_start = parsed.GetScheme().size();
-		auto query_start = normalized.find('?', path_start);
-		auto path_end = query_start == string::npos ? normalized.size() : query_start;
-		return normalized.substr(path_start, path_end - path_start);
-	};
 	unordered_set<string> known_files;
 	for (auto &row : *known_files_res) {
-		known_files.insert(canonical_path(row.GetValue<string>(0)));
+		known_files.insert(DuckLakeUtil::CanonicalPathKey(fs, row.GetValue<string>(0)));
 	}
 
 	auto query = StringUtil::Format(R"(SELECT filename
@@ -5458,13 +5445,13 @@ WHERE (suffix(filename, '.parquet') OR suffix(filename, '.puffin'))
 	res->ThrowIfError("Failed to get files scheduled for deletion from DuckLake: ");
 	transaction_manager.GetWrittenFiles(written_files);
 	for (auto &path : written_files) {
-		known_files.insert(canonical_path(path));
+		known_files.insert(DuckLakeUtil::CanonicalPathKey(fs, path));
 	}
 
 	vector<DuckLakeFileForCleanup> result;
 	for (auto &row : *res) {
 		auto path = row.GetValue<string>(0);
-		if (known_files.count(canonical_path(path))) {
+		if (known_files.count(DuckLakeUtil::CanonicalPathKey(fs, path))) {
 			continue;
 		}
 		DuckLakeFileForCleanup info;
