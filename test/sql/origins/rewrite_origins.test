@@ -103,7 +103,7 @@ ORDER BY ALL
 4	3	9	7
 6	5	10	10
 
-# a survivor of the rewrite stays invisible before the rewrite snapshot
+# the compacted copies of the rewrite output stay invisible before the rewrite snapshot
 query II
 SELECT rowid, i FROM dl.t AT (VERSION => 8) ORDER BY i
 ----

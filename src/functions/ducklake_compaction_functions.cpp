@@ -599,7 +599,7 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::PlanRewriteScan(
 	auto scan_function = table.GetScanFunctionById(context, bind_data, info);
 	auto &multi_file_bind_data = bind_data->Cast<MultiFileBindData>();
 	auto &read_info = scan_function.function_info->Cast<DuckLakeFunctionInfo>();
-	// the rewritten rows keep their versions, so 2.0-dev2 catalogs carry their origins
+	// the rewritten rows keep their versions, so they carry their origins where the catalog records them
 	bool write_origin_snapshot = table.ParentCatalog().Cast<DuckLakeCatalog>().SupportsFileIdentity();
 	read_info.reads_origin_snapshots = write_origin_snapshot;
 	multi_file_bind_data.file_list = create_file_list(read_info);
@@ -617,7 +617,6 @@ unique_ptr<LogicalOperator> DuckLakeCompactor::PlanRewriteScan(
 	auto copy_options = DuckLakeInsert::GetCopyOptions(context, copy_input);
 	copy = std::move(copy_options.copy);
 
-	// the virtual columns of the scan include the origin snapshot column of the file list
 	auto virtual_columns = scan_function.get_virtual_columns(context, bind_data.get());
 	auto ducklake_scan =
 	    make_uniq<LogicalGet>(table_idx, BoundTableFunction(std::move(scan_function)), std::move(bind_data),
