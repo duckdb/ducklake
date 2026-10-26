@@ -36,12 +36,16 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS migrated (METADATA_CATALOG 'meta', AU
 statement ok
 CALL ducklake_create_tag('migrated', 'keep', version => 2)
 
-statement error con1
+# the expiry fails on the version row the migration updated, on Quack it runs at the commit and sees the migration
+statement maybe con1
 CALL ducklake_expire_snapshots('stale', versions => [2])
 ----
+Conflict on update
 
-statement ok con1
-ROLLBACK
+statement maybe con1
+COMMIT
+----
+was migrated by another connection
 
 query III
 SELECT (SELECT count(*) FROM ducklake_tags('migrated') WHERE tag_name = 'keep'),
