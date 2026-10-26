@@ -1542,7 +1542,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		state->local_changes.SetDeleteCommitSnapshot(*GetConnection().context, *this, commit_snapshot);
 	};
 	auto config_option_lock = ConfigOptionLockSql();
+	bool option_lock_failed = false;
 	context.execute_commit_batch = [&](DuckLakeSnapshot snapshot, string &query) {
+		option_lock_failed = false;
 		unique_ptr<QueryResult> result;
 		if (!query.empty()) {
 			result = metadata_manager->Execute(snapshot, query);
@@ -1559,11 +1561,13 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 			// the lock is taken last, so that it is only held until the commit
 			auto lock = config_option_lock;
 			result = metadata_manager->Execute(snapshot, lock);
+			// the update of the version row only fails after another commit updated it
+			option_lock_failed = result->HasError();
 		}
 		return result;
 	};
 	context.is_retryable_metadata_error = [&](const string &message) {
-		return metadata_manager->IsRetryableCommitError(message);
+		return option_lock_failed || metadata_manager->IsRetryableCommitError(message);
 	};
 	context.commit_error_hint = [&](const string &message) {
 		return metadata_manager->CommitErrorHint(message);
@@ -1584,6 +1588,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		metadata_manager->ClearCache();
 	};
 	context.prepare_retry = [&]() {
+		option_lock_failed = false;
 		inlined_inserts.clear();
 		metadata_manager->ClearInlinedTableCaches();
 		connection->BeginTransaction();
@@ -1715,8 +1720,6 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		ReportPostCommitError(message);
 	};
 	context.write_snapshot = ChangesMade();
-	// a retry rolls back what the statements wrote, so a commit that locks options fails instead
-	context.allow_retry = config_option_lock.empty() || !metadata_written;
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
 	context.snapshot_and_stats_query =
@@ -1738,7 +1741,8 @@ void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) 
 }
 
 string DuckLakeTransaction::ConfigOptionLockSql() const {
-	if (config_option_undo.empty()) {
+	// a retry after a conflict on the lock rolls back what the statements wrote, so then the commit takes none
+	if (config_option_undo.empty() || metadata_written) {
 		return string();
 	}
 	return metadata_manager->ConfigOptionLockSql();

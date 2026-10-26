@@ -2771,8 +2771,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			retryable_metadata_error = retryable_metadata_error || context.is_retryable_metadata_error(error.Message());
 			// a retryable metadata error in the conflict check is retried, a conflict that it finds is not
 			bool retry_on_error =
-			    context.allow_retry &&
-			    (retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error.Message())));
+			    retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error.Message()));
 			// We perform one initial attempt plus up to max_retry_count retries. Since i is the
 			// zero-based attempt index, we are done retrying once i reaches max_retry_count.
 			bool finished_retrying = i >= retry_config.max_retry_count;

@@ -302,7 +302,7 @@ ORDER BY ALL
 main.r2	zstd
 main.r3	1000000
 
-# a commit that only writes options fails instead of retrying without the snapshot its transaction expired
+# a transaction that expired snapshots commits its options without the lock, so no retry rolls the expiry back
 statement ok con8
 BEGIN
 
@@ -315,19 +315,18 @@ CALL dl.set_option('parquet_version', 2, table_name => 'r2')
 statement ok con1
 CALL dl.set_option('parquet_version', 1, table_name => 'r3')
 
-statement error con8
+statement ok con8
 COMMIT
-----
-could not serialize access
 
 query I
 SELECT count(*) FROM dl.snapshots() WHERE snapshot_id = 1
 ----
-1
+0
 
 query II
 SELECT scope_entry, value FROM dl.options() WHERE option_name = 'parquet_version' ORDER BY ALL
 ----
+main.r2	V2
 main.r3	V1
 
 # two transactions insert the same option before either commits
@@ -373,12 +372,10 @@ INSERT INTO dl.dup VALUES (1)
 statement ok con1
 CALL dl.set_option('parquet_version', 1, table_name => 'r2')
 
-statement error con11
+statement ok con11
 COMMIT
-----
-could not serialize access
 
 query II
 SELECT (SELECT count(*) FROM dl.snapshots() WHERE snapshot_id = 2), (SELECT count(*) FROM dl.dup)
 ----
-1	0
+0	1
