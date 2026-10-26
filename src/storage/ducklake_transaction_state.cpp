@@ -2754,7 +2754,6 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				    CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
 				batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
 			}
-			batch_queries += context.config_option_lock;
 			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				auto &commit_error = res->GetErrorObject();

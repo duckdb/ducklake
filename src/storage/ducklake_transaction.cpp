@@ -1541,8 +1541,12 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		// the client context has no active transaction during the commit
 		state->local_changes.SetDeleteCommitSnapshot(*GetConnection().context, *this, commit_snapshot);
 	};
+	auto config_option_lock = ConfigOptionLockSql();
 	context.execute_commit_batch = [&](DuckLakeSnapshot snapshot, string &query) {
-		auto result = metadata_manager->Execute(snapshot, query);
+		unique_ptr<QueryResult> result;
+		if (!query.empty()) {
+			result = metadata_manager->Execute(snapshot, query);
+		}
 		for (auto &insert : inlined_inserts) {
 			if (result->HasError()) {
 				break;
@@ -1551,6 +1555,11 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 			result = connection->Query(std::move(insert));
 		}
 		inlined_inserts.clear();
+		if ((!result || !result->HasError()) && !config_option_lock.empty()) {
+			// the lock is taken last, so that it is only held until the commit
+			auto lock = config_option_lock;
+			result = metadata_manager->Execute(snapshot, lock);
+		}
 		return result;
 	};
 	context.is_retryable_metadata_error = [&](const string &message) {
@@ -1705,10 +1714,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.report_post_commit_error = [&](const string &message) {
 		ReportPostCommitError(message);
 	};
-	context.config_option_lock = ConfigOptionLockSql();
 	context.write_snapshot = ChangesMade();
 	// a retry rolls back what the statements wrote, so a commit that locks options fails instead
-	context.allow_retry = context.config_option_lock.empty() || !metadata_written;
+	context.allow_retry = config_option_lock.empty() || !metadata_written;
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
 	context.snapshot_and_stats_query =
