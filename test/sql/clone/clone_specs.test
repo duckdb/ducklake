@@ -1,0 +1,110 @@
+# name: test/sql/clone/clone_specs.test
+# description: a clone copies the partition and sort specs, the name maps of registered files and the statistics
+# group: [clone]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/clone_specs', DATA_INLINING_ROW_LIMIT 0, METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE dl.t(p INTEGER, i INTEGER)
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 10), (2, 20)
+
+# files of a retired spec
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (i)
+
+statement ok
+INSERT INTO dl.t VALUES (3, 30)
+
+statement ok
+ALTER TABLE dl.t SET SORTED BY (i DESC)
+
+statement ok
+SET VARIABLE before_clone = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+CALL ducklake_clone_table('dl', 't', 'c')
+
+query II
+SELECT * FROM dl.c ORDER BY i
+----
+1	10
+2	20
+3	30
+
+query II
+SELECT p, i FROM dl.c WHERE p = 2
+----
+2	20
+
+# the clone partitions and sorts new rows like its source
+statement ok
+INSERT INTO dl.c VALUES (4, 40), (5, 5)
+
+query I
+SELECT count(*) FROM meta.ducklake_partition_info p JOIN meta.ducklake_table t USING (table_id) WHERE t.table_name = 'c'
+----
+2
+
+query I
+SELECT count(*) FROM meta.ducklake_sort_info s JOIN meta.ducklake_table t USING (table_id) WHERE t.table_name = 'c' AND s.end_snapshot IS NULL
+----
+1
+
+# a catalog at a snapshot before the clone loads without the specs of the clone
+query II
+SELECT * FROM dl.t AT (VERSION => getvariable('before_clone')) ORDER BY i
+----
+1	10
+2	20
+3	30
+
+# the statistics of the source hold for a clone of its head
+query II
+SELECT min(i), max(i) FROM dl.c
+----
+5	40
+
+query I
+SELECT count(*) FROM dl.c
+----
+5
+
+# a registered file keeps its name map
+statement ok
+CREATE TABLE dl.n(a INTEGER, b INTEGER)
+
+statement ok
+COPY (SELECT 8 AS a, 80 AS b) TO '{DATA_PATH}/clone_specs_named.parquet'
+
+statement ok
+CALL ducklake_add_data_files('dl', 'n', '{DATA_PATH}/clone_specs_named.parquet')
+
+statement ok
+ALTER TABLE dl.n RENAME COLUMN a TO x
+
+statement ok
+CALL ducklake_clone_table('dl', 'n', 'nc')
+
+query II
+SELECT x, b FROM dl.nc
+----
+8	80
+
+query I
+SELECT count(*) FROM meta.ducklake_column_mapping m JOIN meta.ducklake_table t USING (table_id) WHERE t.table_name = 'nc'
+----
+1

@@ -1,0 +1,150 @@
+# name: test/sql/clone/clone_inlined.test
+# description: a clone copies the inlined rows and inlined deletions visible at its snapshot
+# group: [clone]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/clone_inlined', DATA_INLINING_ROW_LIMIT 10, METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+# a schema change starts another inlined data table
+statement ok
+ALTER TABLE dl.t ADD COLUMN s VARCHAR DEFAULT 'x'
+
+statement ok
+INSERT INTO dl.t VALUES (3, 'y')
+
+statement ok
+SET VARIABLE before_delete = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+statement ok
+INSERT INTO dl.t VALUES (4, 'z')
+
+statement ok
+CALL ducklake_clone_table('dl', 't', 'c', version => getvariable('before_delete'))
+
+query IT
+SELECT * FROM dl.c ORDER BY i
+----
+1	x
+2	x
+3	y
+
+statement ok
+CALL ducklake_clone_table('dl', 't', 'd')
+
+query IT
+SELECT * FROM dl.d ORDER BY i
+----
+2	x
+3	y
+4	z
+
+# the inlined rows of the clones change on their own
+statement ok
+DELETE FROM dl.c WHERE i = 2
+
+statement ok
+INSERT INTO dl.c VALUES (5, 'w')
+
+query IT
+SELECT * FROM dl.c ORDER BY i
+----
+1	x
+3	y
+5	w
+
+query IT
+SELECT * FROM dl.t ORDER BY i
+----
+2	x
+3	y
+4	z
+
+query IT
+SELECT * FROM dl.d ORDER BY i
+----
+2	x
+3	y
+4	z
+
+# inlined deletions of a file
+statement ok
+CREATE TABLE dl.f AS SELECT i FROM range(100) t(i)
+
+statement ok
+SET VARIABLE before_file_delete = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+DELETE FROM dl.f WHERE i < 3
+
+statement ok
+CALL ducklake_clone_table('dl', 'f', 'f_before', version => getvariable('before_file_delete'))
+
+statement ok
+CALL ducklake_clone_table('dl', 'f', 'f_after')
+
+# the deletions are inlined, the clone after them has inlined deletions of its own
+statement ok
+SET VARIABLE clone_deletions = (SELECT 'meta.ducklake_inlined_delete_' || table_id FROM meta.ducklake_table WHERE table_name = 'f_after')
+
+query I
+SELECT count(*) FROM query_table(getvariable('clone_deletions'))
+----
+3
+
+query II
+SELECT count(*), min(i) FROM dl.f_before
+----
+100	0
+
+query II
+SELECT count(*), min(i) FROM dl.f_after
+----
+97	3
+
+statement ok
+DELETE FROM dl.f_after WHERE i = 3
+
+query II
+SELECT count(*), min(i) FROM dl.f
+----
+97	3
+
+query II
+SELECT count(*), min(i) FROM dl.f_after
+----
+96	4
+
+# flushing the clone writes its own file
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'c')
+
+query IT
+SELECT * FROM dl.c ORDER BY i
+----
+1	x
+3	y
+5	w
+
+query IT
+SELECT * FROM dl.t ORDER BY i
+----
+2	x
+3	y
+4	z

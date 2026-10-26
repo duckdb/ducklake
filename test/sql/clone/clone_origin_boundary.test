@@ -1,0 +1,47 @@
+# name: test/sql/clone/clone_origin_boundary.test
+# description: a clone at a snapshot before the migration to 2.0-dev2 is refused, rows there have no recorded origins
+# group: [clone]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS old (DATA_PATH '{DATA_PATH}/clone_origin_boundary', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE TABLE old.t(i INTEGER)
+
+statement ok
+INSERT INTO old.t VALUES (1)
+
+statement error
+CALL ducklake_clone_table('old', 't', 'c')
+----
+table clones
+
+statement ok
+DETACH old
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (AUTOMATIC_MIGRATION true, METADATA_CATALOG 'meta')
+
+statement ok
+SET VARIABLE before_migration = (SELECT max(snapshot_id) - 1 FROM dl.snapshots())
+
+statement error
+CALL ducklake_clone_table('dl', 't', 'c', version => getvariable('before_migration'))
+----
+older than the snapshot
+
+statement ok
+CALL ducklake_clone_table('dl', 't', 'c')
+
+query I
+SELECT i FROM dl.c
+----
+1

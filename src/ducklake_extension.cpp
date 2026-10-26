@@ -99,6 +99,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	DuckLakeTagsFunction tags;
 	loader.RegisterFunction(tags);
 
+	DuckLakeCloneTableFunction clone_table;
+	loader.RegisterFunction(clone_table);
+
 	auto table_changes = DuckLakeTableInsertionsFunction::GetDuckLakeTableChanges();
 	loader.RegisterFunction(*table_changes);
 

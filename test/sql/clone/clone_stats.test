@@ -1,0 +1,64 @@
+# name: test/sql/clone/clone_stats.test
+# description: a clone at an older snapshot has a row count and unknown bounds, and its row ids follow those of the source
+# group: [clone]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/clone_stats', DATA_INLINING_ROW_LIMIT 0, METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+statement ok
+DELETE FROM dl.t WHERE i = 3
+
+statement ok
+SET VARIABLE at_delete = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+INSERT INTO dl.t VALUES (100)
+
+statement ok
+CALL ducklake_clone_table('dl', 't', 'c', version => getvariable('at_delete'))
+
+query I
+SELECT record_count FROM meta.ducklake_table_stats s JOIN meta.ducklake_table t USING (table_id) WHERE t.table_name = 'c'
+----
+2
+
+query II
+SELECT count(*), max(i) FROM dl.c
+----
+2	2
+
+# new rows extend unknown bounds
+statement ok
+INSERT INTO dl.c VALUES (0)
+
+query III
+SELECT count(*), min(i), max(i) FROM dl.c
+----
+3	0	2
+
+# the row ids of the clone follow the row ids that the source gave out
+query I
+SELECT rowid FROM dl.c WHERE i = 0
+----
+4
+
+query II
+SELECT rowid, i FROM dl.c ORDER BY rowid
+----
+0	1
+1	2
+4	0

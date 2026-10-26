@@ -1,0 +1,66 @@
+# name: test/sql/clone/clone_refusals.test
+# description: a clone is refused at a snapshot whose state a file holds only in part, or before the origin boundary
+# group: [clone]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/clone_refusals', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+SET VARIABLE between_inserts = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+# the flush writes the rows of both inserts into one file
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement error
+CALL ducklake_clone_table('dl', 't', 'c', version => getvariable('between_inserts'))
+----
+holds rows or deletions of later snapshots
+
+statement ok
+CALL ducklake_clone_table('dl', 't', 'c')
+
+query I
+SELECT list(i ORDER BY i) FROM dl.c
+----
+[1, 2]
+
+statement error
+CALL ducklake_clone_table('dl', 'missing', 'd')
+----
+does not exist
+
+statement ok
+CREATE VIEW dl.v AS SELECT 42 AS i
+
+statement error
+CALL ducklake_clone_table('dl', 'v', 'd')
+----
+not a table
+
+statement error
+CALL ducklake_clone_table('dl', 't', 'missing_schema.d')
+----
+missing_schema
+
+statement error
+CALL ducklake_clone_table('dl', NULL, 'd')
+----
+cannot be NULL

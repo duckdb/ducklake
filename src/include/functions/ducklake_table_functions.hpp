@@ -137,6 +137,11 @@ public:
 	DuckLakeCreateTagFunction();
 };
 
+class DuckLakeCloneTableFunction : public TableFunction {
+public:
+	DuckLakeCloneTableFunction();
+};
+
 class DuckLakeDropTagFunction : public TableFunction {
 public:
 	DuckLakeDropTagFunction();

@@ -71,6 +71,23 @@
       ]
     },
     {
+      "reason": "Table clones need DuckLake 2.0 and are not available when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/clone/clone_at_version.test",
+        "test/sql/clone/clone_basic.test",
+        "test/sql/clone/clone_column_ids.test",
+        "test/sql/clone/clone_compaction_schema.test",
+        "test/sql/clone/clone_concurrent.test",
+        "test/sql/clone/clone_encrypted.test",
+        "test/sql/clone/clone_inlined.test",
+        "test/sql/clone/clone_maintenance.test",
+        "test/sql/clone/clone_refusals.test",
+        "test/sql/clone/clone_specs.test",
+        "test/sql/clone/clone_stats.test",
+        "test/sql/clone/clone_transactions.test"
+      ]
+    },
+    {
       "reason": "The registration rules need DuckLake 2.0 and are not applied when ducklake_default_version is pinned to 1.0",
       "paths": [
         "test/sql/add_files/add_files_registration_rules.test",

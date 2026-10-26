@@ -1,0 +1,82 @@
+# name: test/sql/clone/clone_basic.test
+# description: a clone has the rows of its source and changes independently of it
+# group: [clone]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/clone_basic', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 'a'), (2, 'b'), (3, 'c')
+
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+statement ok
+CALL ducklake_clone_table('dl', 'main.t', 'main.c')
+
+query IT
+SELECT * FROM dl.c ORDER BY i
+----
+1	a
+3	c
+
+# both tables change independently
+statement ok
+INSERT INTO dl.c VALUES (4, 'd')
+
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+query IT
+SELECT * FROM dl.t ORDER BY i
+----
+3	c
+
+query IT
+SELECT * FROM dl.c ORDER BY i
+----
+1	a
+3	c
+4	d
+
+statement ok
+ALTER TABLE dl.c ADD COLUMN x INTEGER DEFAULT 7
+
+query ITI
+SELECT * FROM dl.c ORDER BY i
+----
+1	a	7
+3	c	7
+4	d	7
+
+query IT
+SELECT * FROM dl.t ORDER BY i
+----
+3	c
+
+# the files keep their physical identity
+query I
+SELECT count(*) FROM meta.ducklake_data_file f JOIN meta.ducklake_table t USING (table_id) WHERE t.table_name = 'c' AND f.origin_file_id IS NOT NULL
+----
+1
+
+query I
+SELECT changes_made FROM meta.ducklake_snapshot_changes WHERE changes_made LIKE '%cloned_table%'
+----
+created_table:"main"."c",cloned_table:"main"."c"
+
+query I
+SELECT changes['tables_cloned'] FROM dl.snapshots() WHERE changes['tables_cloned'] IS NOT NULL
+----
+[main.c]

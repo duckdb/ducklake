@@ -1,0 +1,99 @@
+# name: test/sql/clone/clone_maintenance.test
+# description: the maintenance of a clone or of its source keeps the files that the other table reads
+# group: [clone]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/clone_maintenance', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+CALL ducklake_clone_table('dl', 't', 'c')
+
+# the compaction of the source schedules none of the files of the clone
+statement ok
+CALL ducklake_merge_adjacent_files('dl', 't')
+
+statement ok
+CALL ducklake_expire_snapshots('dl', older_than => NOW())
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('dl', cleanup_all => true)
+----
+0
+
+query I
+SELECT list(i ORDER BY i) FROM dl.c
+----
+[1, 2]
+
+query I
+SELECT list(i ORDER BY i) FROM dl.t
+----
+[1, 2]
+
+# the compaction of the clone schedules the files that nothing references anymore
+statement ok
+CALL ducklake_merge_adjacent_files('dl', 'c')
+
+statement ok
+CALL ducklake_expire_snapshots('dl', older_than => NOW())
+
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+2
+
+query I
+SELECT list(i ORDER BY i) FROM dl.c
+----
+[1, 2]
+
+query I
+SELECT list(i ORDER BY i) FROM dl.t
+----
+[1, 2]
+
+# the clone reads its files after its source is dropped and cleaned up
+statement ok
+CREATE TABLE dl.u AS SELECT i FROM range(3) t(i)
+
+statement ok
+CALL ducklake_clone_table('dl', 'u', 'uc')
+
+statement ok
+DROP TABLE dl.u
+
+statement ok
+CALL ducklake_expire_snapshots('dl', older_than => NOW())
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('dl', cleanup_all => true)
+----
+0
+
+query I
+SELECT list(i ORDER BY i) FROM dl.uc
+----
+[0, 1, 2]

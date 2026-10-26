@@ -1,0 +1,161 @@
+# name: test/sql/clone/clone_transactions.test
+# description: a clone and its source keep their rows apart within one transaction, and a clone is used once it commits
+# group: [clone]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/clone_transactions', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT i FROM range(5) t(i)
+
+statement ok
+CALL ducklake_clone_table('dl', 't', 'c')
+
+# a delete from the source leaves the rows of the clone, which shares the file
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.t
+
+query I
+SELECT count(*) FROM dl.c
+----
+5
+
+query I
+SELECT count(*) FROM dl.t
+----
+0
+
+statement ok
+ROLLBACK
+
+# a delete from both tables in one transaction removes the row from both
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+statement ok
+DELETE FROM dl.c WHERE i = 1
+
+statement ok
+COMMIT
+
+query I
+SELECT list(i ORDER BY i) FROM dl.t
+----
+[0, 2, 3, 4]
+
+query I
+SELECT list(i ORDER BY i) FROM dl.c
+----
+[0, 2, 3, 4]
+
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+query I
+SELECT list(i ORDER BY i) FROM dl.c
+----
+[0, 2, 3, 4]
+
+# the metadata of a clone exists once its transaction commits
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_clone_table('dl', 't', 'd')
+
+statement error
+SELECT * FROM dl.d
+----
+is cloned in this transaction
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_clone_table('dl', 't', 'd')
+
+statement error
+INSERT INTO dl.d VALUES (42)
+----
+is cloned in this transaction
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_clone_table('dl', 't', 'd')
+
+statement error
+ALTER TABLE dl.d ADD COLUMN j INTEGER
+----
+is cloned in this transaction
+
+statement ok
+ROLLBACK
+
+statement ok
+CALL ducklake_clone_table('dl', 't', 'd')
+
+query I
+SELECT list(i ORDER BY i) FROM dl.d
+----
+[0, 3, 4]
+
+# a clone that its transaction drops leaves nothing
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_clone_table('dl', 't', 'e')
+
+statement ok
+DROP TABLE dl.e
+
+statement ok
+COMMIT
+
+statement error
+SELECT * FROM dl.e
+----
+does not exist
+
+# a clone needs a name that is free
+statement error
+CALL ducklake_clone_table('dl', 't', 'c')
+----
+already exists
+
+# the source of a clone has no changes in the transaction
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t VALUES (10)
+
+statement error
+CALL ducklake_clone_table('dl', 't', 'f')
+----
+has changes in this transaction
+
+statement ok
+ROLLBACK

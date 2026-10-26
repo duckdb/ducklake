@@ -1,0 +1,65 @@
+# name: test/sql/clone/clone_compaction_schema.test
+# description: the compaction of a clone reads the schema versions of its files from the clone, and keeps files of an incompatible schema apart
+# group: [clone]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/clone_compaction_schema', DATA_INLINING_ROW_LIMIT 0, METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE dl.t(a INTEGER, b VARCHAR)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 'one')
+
+statement ok
+INSERT INTO dl.t VALUES (2, 'two')
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN b
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+statement ok
+INSERT INTO dl.t VALUES (4)
+
+statement ok
+CALL ducklake_clone_table('dl', 't', 'c')
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl', 'c')
+
+query I
+SELECT list(a ORDER BY a) FROM dl.c
+----
+[1, 2, 3, 4]
+
+# the files written before the drop are merged apart from the files after it
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 'c')
+----
+2
+
+query I
+SELECT list(a ORDER BY a) FROM dl.t
+----
+[1, 2, 3, 4]
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 't')
+----
+4
+
+# the copied schema history is the history of the source up to the clone
+query I
+SELECT count(*) FROM meta.ducklake_schema_versions v JOIN meta.ducklake_table t USING (table_id) WHERE t.table_name = 'c'
+----
+3

@@ -1,0 +1,68 @@
+# name: test/sql/clone/clone_concurrent.test
+# description: a clone fails at its commit when its snapshot was expired meanwhile or its name was taken
+# group: [clone]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/clone_concurrent', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+SET VARIABLE first_insert = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok con1
+SET VARIABLE first_insert = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_clone_table('dl', 't', 'c', version => getvariable('first_insert'))
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [getvariable('first_insert')])
+
+statement error con1
+COMMIT
+----
+cannot be cloned, it was expired
+
+statement error
+SELECT * FROM dl.c
+----
+does not exist
+
+# two clones under one name, the second fails at its commit
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_clone_table('dl', 't', 'd')
+
+statement ok
+CALL ducklake_clone_table('dl', 't', 'd')
+
+statement error con1
+COMMIT
+----
+<REGEX>:.*(Transaction conflict|already exists).*
+
+query I
+SELECT list(i ORDER BY i) FROM dl.d
+----
+[1, 2]

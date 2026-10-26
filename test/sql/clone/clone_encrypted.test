@@ -1,0 +1,43 @@
+# name: test/sql/clone/clone_encrypted.test
+# description: a clone of a table of an encrypted catalog reads the files of the source with their keys
+# group: [clone]
+
+require ducklake
+
+require parquet
+
+require httpfs
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/clone_encrypted', ENCRYPTED, DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT i, 'v' || i AS s FROM range(10) t(i)
+
+statement ok
+DELETE FROM dl.t WHERE i % 2 = 0
+
+statement ok
+CALL ducklake_clone_table('dl', 't', 'c')
+
+query II
+SELECT count(*), sum(i) FROM dl.c
+----
+5	25
+
+statement ok
+INSERT INTO dl.c VALUES (100, 'x')
+
+query II
+SELECT count(*), sum(i) FROM dl.c
+----
+6	125
+
+query II
+SELECT count(*), sum(i) FROM dl.t
+----
+5	25

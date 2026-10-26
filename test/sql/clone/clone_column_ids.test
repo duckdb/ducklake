@@ -1,0 +1,105 @@
+# name: test/sql/clone/clone_column_ids.test
+# description: a clone reads its columns by their own history and never reuses the column ids of its source
+# group: [clone]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/clone_column_ids', DATA_INLINING_ROW_LIMIT 0)
+
+# a column added to the clone after a dropped column reads NULL, not the values of the dropped column
+statement ok
+CREATE TABLE dl.t(a INTEGER, x INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 100), (2, 200)
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN x
+
+statement ok
+CALL ducklake_clone_table('dl', 't', 'c')
+
+statement ok
+ALTER TABLE dl.c ADD COLUMN y INTEGER
+
+query II
+SELECT a, y FROM dl.c ORDER BY a
+----
+1	NULL
+2	NULL
+
+# a column added to the source after the snapshot keeps its id reserved on the clone
+statement ok
+CREATE TABLE dl.u(a INTEGER)
+
+statement ok
+INSERT INTO dl.u VALUES (1)
+
+statement ok
+INSERT INTO dl.u VALUES (2)
+
+statement ok
+SET VARIABLE before_add = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+ALTER TABLE dl.u ADD COLUMN b INTEGER DEFAULT 7
+
+# the compaction writes the default of b into the file of the rows of the snapshot
+statement ok
+CALL ducklake_merge_adjacent_files('dl', 'u')
+
+statement ok
+CALL ducklake_clone_table('dl', 'u', 'uc', version => getvariable('before_add'))
+
+statement ok
+ALTER TABLE dl.uc ADD COLUMN x INTEGER
+
+query II
+SELECT a, x FROM dl.uc ORDER BY a
+----
+1	NULL
+2	NULL
+
+query II
+SELECT a, b FROM dl.u ORDER BY a
+----
+1	7
+2	7
+
+# a rename after the snapshot is not part of the clone
+statement ok
+CREATE TABLE dl.r(a INTEGER)
+
+statement ok
+INSERT INTO dl.r VALUES (1)
+
+statement ok
+SET VARIABLE before_rename = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+ALTER TABLE dl.r RENAME COLUMN a TO b
+
+statement ok
+CALL ducklake_clone_table('dl', 'r', 'rc', version => getvariable('before_rename'))
+
+query I
+SELECT a FROM dl.rc
+----
+1
+
+statement error
+SELECT b FROM dl.rc
+----
+not found
+
+query I
+SELECT b FROM dl.r
+----
+1
