@@ -1,0 +1,47 @@
+# name: test/sql/retirement/cleanup_unlinks_retired_files.test
+# description: an orphan cleanup unlinks a file whose path an interrupted cleanup retired but did not unlink
+# group: [retirement]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/cleanup_unlinks_retired_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT 1 AS i
+
+statement ok
+COPY (SELECT 2 AS i) TO '{DATA_PATH}/cleanup_unlinks_retired_files/main/t/retired.parquet'
+
+statement ok
+CALL ducklake_delete_orphaned_files('dl', cleanup_all => true)
+
+# the file is there again, as after a cleanup that stopped between its retirement commit and the unlink
+statement ok
+COPY (SELECT 2 AS i) TO '{DATA_PATH}/cleanup_unlinks_retired_files/main/t/retired.parquet'
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('dl', cleanup_all => true)
+----
+1
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/cleanup_unlinks_retired_files/main/t/*.parquet')
+----
+1
+
+query I
+SELECT count(*) FROM meta.ducklake_retired_path
+----
+1
+
+query I
+SELECT * FROM dl.t
+----
+1

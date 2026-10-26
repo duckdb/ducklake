@@ -65,6 +65,7 @@
         "test/sql/retirement/sqlite_wal_retirement.test",
         "test/sql/add_files/add_files_registration_rules.test",
         "test/sql/retirement/rollback_keeps_registered_file.test",
+        "test/sql/retirement/cleanup_unlinks_retired_files.test",
         "test/sql/add_files/add_files_flushed_file.test"
       ]
     },
