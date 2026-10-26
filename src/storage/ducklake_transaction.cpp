@@ -1768,7 +1768,7 @@ void DuckLakeTransaction::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &sn
 	auto &metadata_manager = GetMetadataManager();
 	if (!metadata_manager.CommitsEachStatement()) {
 		metadata_manager.DeleteSnapshots(snapshots);
-		metadata_written = true;
+		MarkMetadataWritten();
 		return;
 	}
 	// deleted when the transaction commits, so a rollback keeps them
@@ -1776,9 +1776,12 @@ void DuckLakeTransaction::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &sn
 }
 
 void DuckLakeTransaction::RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &files) {
-	auto &metadata_manager = GetMetadataManager();
-	metadata_manager.RemoveFilesScheduledForCleanup(files);
-	if (!metadata_manager.CommitsEachStatement()) {
+	GetMetadataManager().RemoveFilesScheduledForCleanup(files);
+	MarkMetadataWritten();
+}
+
+void DuckLakeTransaction::MarkMetadataWritten() {
+	if (!GetMetadataManager().CommitsEachStatement()) {
 		metadata_written = true;
 	}
 }
