@@ -91,9 +91,9 @@ void QuackMetadataManager::ClearCache() {
 }
 
 void QuackMetadataManager::ProbeServerCapabilities() {
-	// Check whether the quack server has the ducklake_commit function loaded (i.e. the ducklake
-	// extension is available server-side).
-	string probe = "SELECT 1 FROM duckdb_functions() WHERE function_name = 'ducklake_commit' LIMIT 1";
+	// Check whether the quack server has a ducklake_commit function that checks the catalog version of the client
+	string probe = "SELECT 1 FROM duckdb_functions() WHERE function_name = 'ducklake_commit' AND "
+	               "list_contains(parameters, 'catalog_version') LIMIT 1";
 	auto result = Query(probe);
 	if (!result || result->HasError()) {
 		// LCOV_EXCL_START

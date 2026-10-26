@@ -69,7 +69,7 @@ string DuckLakeStagedTable::Columns(DuckLakeStagedTableType type) {
 	case DuckLakeStagedTableType::COMMIT_HEADER:
 		return "commit_author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR, "
 		       "transaction_snapshot_id BIGINT, data_path VARCHAR, path_separator VARCHAR, "
-		       "transaction_next_catalog_id UBIGINT, transaction_next_file_id UBIGINT, catalog_version VARCHAR";
+		       "transaction_next_catalog_id UBIGINT, transaction_next_file_id UBIGINT";
 	case DuckLakeStagedTableType::DATA_FILE:
 		return "data_file_id BIGINT, table_id BIGINT, file_order BIGINT, "
 		       "path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, "
@@ -265,18 +265,17 @@ void DuckLakeStagedCommit::EmitInlinedColumnStatsRow(string &sql, TableIndex tab
 }
 
 string DuckLakeStagedCommit::EmitCommitHeader(const DuckLakeSnapshotCommit &h, const DuckLakeSnapshot &snap,
-                                              const string &data_path, const string &separator,
-                                              const string &catalog_version) const {
+                                              const string &data_path, const string &separator) const {
 	bool has_snapshot = snap.snapshot_id != DConstants::INVALID_INDEX;
 	string snap_id = has_snapshot ? std::to_string(snap.snapshot_id) : "NULL";
 	string next_cat = has_snapshot ? std::to_string(snap.next_catalog_id) : "NULL";
 	string next_file = has_snapshot ? std::to_string(snap.next_file_id) : "NULL";
-	return StringUtil::Format(
-	    "INSERT INTO %s VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);",
-	    DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::COMMIT_HEADER),
-	    DuckLakeUtil::TextLiteralOrNull(h.author), DuckLakeUtil::TextLiteralOrNull(h.commit_message),
-	    DuckLakeUtil::TextLiteralOrNull(h.commit_extra_info), snap_id, SQLString::ToString(data_path),
-	    SQLString::ToString(separator), next_cat, next_file, SQLString::ToString(catalog_version));
+	return StringUtil::Format("INSERT INTO %s VALUES (%s, %s, %s, %s, %s, %s, %s, %s);",
+	                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::COMMIT_HEADER),
+	                          DuckLakeUtil::TextLiteralOrNull(h.author),
+	                          DuckLakeUtil::TextLiteralOrNull(h.commit_message),
+	                          DuckLakeUtil::TextLiteralOrNull(h.commit_extra_info), snap_id,
+	                          SQLString::ToString(data_path), SQLString::ToString(separator), next_cat, next_file);
 }
 
 string DuckLakeStagedCommit::EmitDataFiles(const LocalTableChanges &local_changes, idx_t &local_file_id) const {
@@ -495,9 +494,8 @@ string DuckLakeStagedCommit::Build(DuckLakeTransaction &transaction, const DuckL
 	string batch;
 	batch += DuckLakeStagedTable::CreateAllSql();
 	batch += DuckLakeStagedTable::TruncateAllSql();
-	batch +=
-	    EmitCommitHeader(transaction.GetCommitInfo(), transaction_snapshot, ducklake_catalog.DataPath(),
-	                     ducklake_catalog.Separator(), DuckLakeVersionToString(ducklake_catalog.GetDuckLakeVersion()));
+	batch += EmitCommitHeader(transaction.GetCommitInfo(), transaction_snapshot, ducklake_catalog.DataPath(),
+	                          ducklake_catalog.Separator());
 	idx_t local_file_id = 0;
 	batch += EmitDataFiles(local_changes, local_file_id);
 	batch += EmitCompactions(local_changes, local_file_id);
@@ -512,11 +510,12 @@ string DuckLakeStagedCommit::Build(DuckLakeTransaction &transaction, const DuckL
 	int64_t schema_version_param = transaction_snapshot.snapshot_id != DConstants::INVALID_INDEX
 	                                   ? static_cast<int64_t>(transaction_snapshot.schema_version)
 	                                   : -1;
-	batch += StringUtil::Format("SELECT * FROM ducklake_commit(%s, %lld, "
-	                            "max_retry_count => %llu, retry_wait_ms => %llu, retry_backoff => %f);",
-	                            SQLString::ToString(ducklake_catalog.MetadataSchemaName().GetIdentifierName()),
-	                            schema_version_param, retry_config.max_retry_count, retry_config.retry_wait_ms,
-	                            retry_config.retry_backoff);
+	batch += StringUtil::Format(
+	    "SELECT * FROM ducklake_commit(%s, %lld, "
+	    "max_retry_count => %llu, retry_wait_ms => %llu, retry_backoff => %f, catalog_version => %s);",
+	    SQLString::ToString(ducklake_catalog.MetadataSchemaName().GetIdentifierName()), schema_version_param,
+	    retry_config.max_retry_count, retry_config.retry_wait_ms, retry_config.retry_backoff,
+	    SQLString::ToString(DuckLakeVersionToString(ducklake_catalog.GetDuckLakeVersion())));
 	return batch;
 }
 

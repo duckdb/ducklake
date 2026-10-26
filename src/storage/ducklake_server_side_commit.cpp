@@ -85,10 +85,10 @@ static void FillDeleteFileCommon(DuckLakeDeleteFile &f, const QueryResultRow &ro
 }
 
 DuckLakeServerSideCommit::DuckLakeServerSideCommit(ClientContext &context_p, string metadata_schema_name_p,
-                                                   int64_t schema_version_p)
+                                                   int64_t schema_version_p, string attached_version_p)
     : context(context_p), metadata_schema_name(std::move(metadata_schema_name_p)),
       schema_id(SQLQuotedIdentifier::ToString(metadata_schema_name)), schema_version(schema_version_p),
-      fresh_conn(*context_p.db) {
+      fresh_conn(*context_p.db), attached_version(std::move(attached_version_p)) {
 }
 
 void DuckLakeServerSideCommit::SetRetryConfigOverride(const DuckLakeRetryConfig &retry_config_p) {
@@ -99,6 +99,15 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	auto catalog_version = ReadCatalogVersion();
 	supports_v1_1_metadata = catalog_version >= DuckLakeVersion::V1_1;
 	supports_file_identity = catalog_version >= DuckLakeVersion::V2_0_DEV2;
+	if (attached_version.empty()) {
+		// clients that do not pass their version predate 2.0-dev2 and cannot have attached such a catalog
+		if (catalog_version >= DuckLakeVersion::V2_0_DEV2) {
+			throw InvalidInputException("The catalog was migrated by another connection to version %s, reattach to "
+			                            "pick up the new version",
+			                            DuckLakeVersionToString(catalog_version));
+		}
+		attached_version = DuckLakeVersionToString(catalog_version);
+	}
 	ReadCommitHeader();
 	ReadColumnTypes();
 	ReadStagedDeleteFiles();
@@ -157,9 +166,6 @@ void DuckLakeServerSideCommit::ReadCommitHeader() {
 	state->commit_info.author = row.GetBaseValue(0);
 	state->commit_info.commit_message = row.GetBaseValue(1);
 	state->commit_info.commit_extra_info = row.GetBaseValue(2);
-	if (DuckLakeMetadataManager::ResultHasColumn(*result, "catalog_version") && !row.IsNull(8)) {
-		attached_version = row.GetValue<string>(8);
-	}
 
 	if (row.IsNull(3)) {
 		transaction_snapshot = ReadLatestSnapshot();

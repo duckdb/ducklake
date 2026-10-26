@@ -91,7 +91,7 @@ private:
 
 	//! Emits the commit header row (author, message, snapshot info, paths).
 	string EmitCommitHeader(const DuckLakeSnapshotCommit &h, const DuckLakeSnapshot &snap, const string &data_path,
-	                        const string &separator, const string &catalog_version) const;
+	                        const string &separator) const;
 	//! Emits all new data files and their attached deletes.
 	string EmitDataFiles(const LocalTableChanges &local_changes, idx_t &local_file_id) const;
 	//! Emits inlined data rows, tuple literals, and per-column stats.

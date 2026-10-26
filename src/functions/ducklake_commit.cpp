@@ -9,6 +9,7 @@ struct DuckLakeCommitBindData : public TableFunctionData {
 	string metadata_schema_name;
 	int64_t schema_version = 0;
 	DuckLakeRetryConfig retry_config;
+	string catalog_version;
 };
 
 static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctionBindInput &input,
@@ -31,6 +32,8 @@ static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctio
 			result->retry_config.retry_wait_ms = entry.second.GetValue<uint64_t>();
 		} else if (entry.first == "retry_backoff") {
 			result->retry_config.retry_backoff = entry.second.GetValue<double>();
+		} else if (entry.first == "catalog_version") {
+			result->catalog_version = StringValue::Get(entry.second);
 		}
 	}
 	names.emplace_back("committed_snapshot_id");
@@ -51,7 +54,7 @@ static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &da
 	}
 	state.executed = true;
 
-	DuckLakeServerSideCommit commit(context, data.metadata_schema_name, data.schema_version);
+	DuckLakeServerSideCommit commit(context, data.metadata_schema_name, data.schema_version, data.catalog_version);
 	commit.SetRetryConfigOverride(data.retry_config);
 	DuckLakeServerSideCommitResult result;
 	try {
@@ -81,7 +84,8 @@ DuckLakeCommitFunction::DuckLakeCommitFunction()
 	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
 		options.Add("max_retry_count", LogicalType::UBIGINT)
 		    .Add("retry_wait_ms", LogicalType::UBIGINT)
-		    .Add("retry_backoff", LogicalType::DOUBLE);
+		    .Add("retry_backoff", LogicalType::DOUBLE)
+		    .Add("catalog_version", LogicalType::VARCHAR);
 	});
 }
 
