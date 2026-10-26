@@ -810,7 +810,7 @@ void DuckLakeTransaction::Commit() {
 		}
 	}
 	try {
-		if (ChangesMade()) {
+		if (ChangesMade() || !ConfigOptionLockSql().empty()) {
 			FlushChanges();
 		} else if (connection) {
 			try {
@@ -1447,7 +1447,7 @@ idx_t DuckLakeRetryConfig::WaitMs(idx_t attempt, idx_t remaining_ms, double mult
 }
 
 void DuckLakeTransaction::FlushChanges() {
-	if (!ChangesMade()) {
+	if (!ChangesMade() && ConfigOptionLockSql().empty()) {
 		// LCOV_EXCL_START
 		return;
 		// LCOV_EXCL_STOP
@@ -1705,6 +1705,10 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.report_post_commit_error = [&](const string &message) {
 		ReportPostCommitError(message);
 	};
+	context.config_option_lock = ConfigOptionLockSql();
+	context.write_snapshot = ChangesMade();
+	// a retry rolls back what the statements wrote, so a commit that only writes options fails instead
+	context.allow_retry = context.write_snapshot || !metadata_written;
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
 	context.snapshot_and_stats_query =
@@ -1723,6 +1727,13 @@ void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) 
 	if (metadata_manager->ResetConfigOption(option)) {
 		config_option_undo.push_back(ducklake_catalog.ResetConfigOption(option));
 	}
+}
+
+string DuckLakeTransaction::ConfigOptionLockSql() const {
+	if (config_option_undo.empty()) {
+		return string();
+	}
+	return metadata_manager->ConfigOptionLockSql();
 }
 
 void DuckLakeTransaction::RewriteConfigOptions() {
@@ -1752,10 +1763,22 @@ void DuckLakeTransaction::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &sn
 	auto &metadata_manager = GetMetadataManager();
 	if (!metadata_manager.CommitsEachStatement()) {
 		metadata_manager.DeleteSnapshots(snapshots);
+		MarkMetadataWritten();
 		return;
 	}
 	// deleted when the transaction commits, so a rollback keeps them
 	expired_snapshots.insert(expired_snapshots.end(), snapshots.begin(), snapshots.end());
+}
+
+void DuckLakeTransaction::RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &files) {
+	GetMetadataManager().RemoveFilesScheduledForCleanup(files);
+	MarkMetadataWritten();
+}
+
+void DuckLakeTransaction::MarkMetadataWritten() {
+	if (!GetMetadataManager().CommitsEachStatement()) {
+		metadata_written = true;
+	}
 }
 
 void DuckLakeTransaction::MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id,

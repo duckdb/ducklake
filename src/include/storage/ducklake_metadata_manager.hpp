@@ -234,8 +234,8 @@ public:
 	virtual string CommitErrorHint(const string &) const {
 		return string();
 	}
-	//! SQL run before an option is inserted, so concurrent inserts of an option cannot both succeed
-	virtual string NewConfigOptionLockSql(const DuckLakeConfigOption &) const {
+	//! SQL that the commit of a transaction that changed options runs, so two commits cannot both insert an option
+	virtual string ConfigOptionLockSql() const {
 		return string();
 	}
 

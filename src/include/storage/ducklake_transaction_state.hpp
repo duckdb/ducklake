@@ -146,6 +146,11 @@ struct DuckLakeCommitContext {
 	std::function<void(const string &)> report_post_commit_error = [](const string &) {
 	};
 	// LCOV_EXCL_STOP
+	//! Runs in every commit attempt of a transaction that changed options.
+	string config_option_lock;
+	//! Whether the commit writes a snapshot, a commit that only changes options writes none.
+	bool write_snapshot = true;
+	bool allow_retry = true;
 	//! Author / message / extra info for the snapshot row.
 	DuckLakeSnapshotCommit commit_info;
 	//! When true, Commit() skips the post-commit DropEmptySupersededInlinedTables cleanup.
