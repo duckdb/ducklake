@@ -56,10 +56,10 @@ SELECT (SELECT count(*) FROM lake.wide),
 WHERE database_name = 'lake' AND table_name = 'wide') = (SELECT string_agg(['BIGINT', 'DOUBLE', 'VARCHAR'][j % 3 + 1],
 ',' ORDER BY j) FROM range(120) t(j)),
 (SELECT count(*) FROM glob('{TEST_DIR}/wide_commit_files/**')),
-(SELECT max(snapshot_id) FROM lake.snapshots()),
+(SELECT count(*) FROM lake.snapshots() WHERE commit_message IS DISTINCT FROM 'ducklake_delete_orphaned_files'),
 (SELECT value FROM lake.options() WHERE option_name = 'data_inlining_row_limit' AND scope = 'GLOBAL')
 ----
-0	120	true	0	1	0
+0	120	true	0	2	0
 
 loop row_id 0 8
 
@@ -68,13 +68,14 @@ INSERT INTO lake.wide SELECT * FROM wide_source WHERE c0 = {row_id}
 
 endloop
 
-query IIIII
+# the orphan cleanup of a later iteration commits a snapshot of its own
+query IIII
 SELECT (SELECT count(*) FROM lake.wide),
 (SELECT count(*) FROM (FROM lake.wide EXCEPT ALL FROM wide_source)),
 (SELECT count(*) FROM ducklake_list_files('lake', 'wide')),
-(SELECT count(*) FROM lake.snapshots()), (SELECT max(snapshot_id) FROM lake.snapshots())
+(SELECT count(*) FROM lake.snapshots() WHERE commit_message IS DISTINCT FROM 'ducklake_delete_orphaned_files')
 ----
-8	0	8	10	9
+8	0	8	10
 
 statement ok
 DETACH lake

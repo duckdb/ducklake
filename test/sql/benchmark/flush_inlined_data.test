@@ -120,10 +120,11 @@ SELECT count(*), sum(id), sum(v) FROM lake.f AT (VERSION => 1)
 ----
 1000	499500	1498500
 
-query II
-SELECT count(*), max(snapshot_id) FROM lake.snapshots()
+# the orphan cleanup of a later iteration commits a snapshot of its own
+query I
+SELECT count(*) FROM lake.snapshots() WHERE commit_message IS DISTINCT FROM 'ducklake_delete_orphaned_files'
 ----
-5	4
+5
 
 statement ok
 DETACH lake

@@ -87,10 +87,11 @@ SELECT count(*) FROM (SELECT rowid, id, v FROM lake.events EXCEPT ALL FROM preme
 ----
 0
 
-query II
-SELECT count(*), max(snapshot_id) FROM lake.snapshots()
+# the orphan cleanup of a later iteration commits a snapshot of its own
+query I
+SELECT count(*) FROM lake.snapshots() WHERE commit_message IS DISTINCT FROM 'ducklake_delete_orphaned_files'
 ----
-7	6
+7
 
 query IIII rowsort
 SELECT part, count(*), sum(id), sum(v) FROM lake.events GROUP BY part
