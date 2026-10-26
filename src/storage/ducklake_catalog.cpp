@@ -507,37 +507,34 @@ optional_ptr<DuckLakeTableEntry> DuckLakeCatalog::GetTableAtSchemaVersion(DuckLa
 	return &entry->Cast<DuckLakeTableEntry>();
 }
 
-shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeCatalog::GetTableCacheEntry(DuckLakeTransaction &transaction,
-                                                                         TableIndex table_id, idx_t schema_version) {
+shared_ptr<DuckLakeSchemaCacheEntry>
+DuckLakeCatalog::GetOrLoadCacheEntry(const string &key, const std::function<unique_ptr<DuckLakeCatalogSet>()> &load) {
 	auto &cache = GetObjectCacheInstance();
-	auto key = TableCacheKey(table_id, schema_version);
 	auto cached = cache.Get<DuckLakeSchemaCacheEntry>(key);
 	if (cached) {
 		return cached;
 	}
-	// the columns of the table at the version, read from its own rows without the rest of the catalog
-	DuckLakeSnapshot snapshot(GetBeginSnapshotForSchemaVersion(table_id, schema_version, transaction), schema_version,
-	                          0, 0);
-	auto catalog_set = LoadSchemaForSnapshot(transaction, snapshot, table_id.index);
+	auto catalog_set = load();
 	lock_guard<mutex> guard(cache_entries_lock);
 	auto entry = cache.GetOrCreate<DuckLakeSchemaCacheEntry>(key, std::move(catalog_set));
 	TrackCacheEntry(key, entry);
 	return entry;
 }
 
+shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeCatalog::GetTableCacheEntry(DuckLakeTransaction &transaction,
+                                                                         TableIndex table_id, idx_t schema_version) {
+	return GetOrLoadCacheEntry(TableCacheKey(table_id, schema_version), [&]() {
+		// the columns of the table at the version, read from its own rows without the rest of the catalog
+		DuckLakeSnapshot snapshot(GetBeginSnapshotForSchemaVersion(table_id, schema_version, transaction),
+		                          schema_version, 0, 0);
+		return LoadSchemaForSnapshot(transaction, snapshot, table_id.index);
+	});
+}
+
 shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeCatalog::GetSchemaCacheEntry(DuckLakeTransaction &transaction,
                                                                           DuckLakeSnapshot snapshot) {
-	auto &cache = GetObjectCacheInstance();
-	auto key = SchemaCacheKey(snapshot.schema_version);
-	auto cached = cache.Get<DuckLakeSchemaCacheEntry>(key);
-	if (cached) {
-		return cached;
-	}
-	auto catalog_set = LoadSchemaForSnapshot(transaction, snapshot);
-	lock_guard<mutex> guard(cache_entries_lock);
-	auto entry = cache.GetOrCreate<DuckLakeSchemaCacheEntry>(key, std::move(catalog_set));
-	TrackCacheEntry(key, entry);
-	return entry;
+	return GetOrLoadCacheEntry(SchemaCacheKey(snapshot.schema_version),
+	                           [&]() { return LoadSchemaForSnapshot(transaction, snapshot); });
 }
 
 DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {

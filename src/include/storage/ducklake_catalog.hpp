@@ -426,6 +426,8 @@ private:
 	//! Look up (or load) the ObjectCache entry that holds one table with its columns at a schema version
 	shared_ptr<DuckLakeSchemaCacheEntry> GetTableCacheEntry(DuckLakeTransaction &transaction, TableIndex table_id,
 	                                                        idx_t schema_version);
+	shared_ptr<DuckLakeSchemaCacheEntry>
+	GetOrLoadCacheEntry(const string &key, const std::function<unique_ptr<DuckLakeCatalogSet>()> &load);
 	void LoadNameMaps(DuckLakeTransaction &transaction);
 	string StatsCacheKey(idx_t next_file_id, TableIndex table_id) const;
 	string RecordCountCacheKey(idx_t snapshot_id) const;

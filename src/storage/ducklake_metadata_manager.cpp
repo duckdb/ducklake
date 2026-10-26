@@ -1207,7 +1207,7 @@ DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnaps
 	    ducklake_catalog.Separator(), ducklake_catalog.SupportsV1_1Metadata(), table_id);
 }
 
-//! The rows of the table of a per-table catalog, those of its latest version
+//! Selects the latest row of the table
 static string LatestTableRowFilter(const string &table_alias, idx_t table_id) {
 	return StringUtil::Format("%s.table_id = %llu AND %s.begin_snapshot = (SELECT MAX(begin_snapshot) FROM "
 	                          "{METADATA_CATALOG}.ducklake_table WHERE table_id = %llu)",

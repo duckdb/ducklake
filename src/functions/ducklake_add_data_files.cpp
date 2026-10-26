@@ -1026,7 +1026,7 @@ DuckLakeColumnStats DuckLakeFileProcessor::ConstantColumnStats(const ParquetFile
 }
 
 bool DuckLakeFileProcessor::IsInternalColumn(const string &name) const {
-	// a registration gives the rows of a file that DuckLake wrote new row ids and versions, so they are not read
+	// the rows of a registered file get new row ids and the registration as origin
 	return StringUtil::StartsWith(name, "_ducklake_internal_") &&
 	       table.ParentCatalog().Cast<DuckLakeCatalog>().SupportsFileIdentity();
 }
