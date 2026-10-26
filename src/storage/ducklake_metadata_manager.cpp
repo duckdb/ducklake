@@ -5700,7 +5700,10 @@ string DuckLakeMetadataManager::DeleteSnapshotsSql(const vector<DuckLakeSnapshot
 }
 
 void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
-	auto result = Execute(DeleteSnapshotsSql(snapshots));
+	// an attachment that predates a migration does not know the snapshot tags it may have added
+	auto attached_version = DuckLakeVersionToString(transaction.GetCatalog().GetDuckLakeVersion());
+	auto query = MigratedCatalogGuardSql(attached_version, GuardSql) + DeleteSnapshotsSql(snapshots);
+	auto result = CommitsEachStatement() ? ExecuteInTransaction(query) : Execute(query);
 	result->ThrowIfError("Failed to delete snapshots in DuckLake: ");
 	CleanupExpiredSnapshots(snapshots);
 }
