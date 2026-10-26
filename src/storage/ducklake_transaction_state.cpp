@@ -2810,7 +2810,6 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	if (context.write_snapshot) {
 		context.set_committed_snapshot_id(commit_snapshot.snapshot_id);
 	}
-	context.set_table_options(committed_table_options);
 	for (auto &entry : dropped_file_stats) {
 		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);
 	}

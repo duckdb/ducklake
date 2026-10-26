@@ -131,10 +131,6 @@ struct DuckLakeCommitContext {
 	//! Keeps the oids of the entries created by the commit on the catalog.
 	std::function<void(const ducklake_entry_oids_t &)> set_entry_oids = [](const ducklake_entry_oids_t &) {
 	};
-	//! Publishes the options of newly created tables onto the catalog.
-	std::function<void(const vector<DuckLakeConfigOption> &)> set_table_options =
-	    [](const vector<DuckLakeConfigOption> &) {
-	    };
 	//! Invalidates the cached stats entry for a table after a stats-affecting file drop.
 	std::function<void(idx_t, TableIndex)> invalidate_table_stats_cache = [](idx_t, TableIndex) {
 	};

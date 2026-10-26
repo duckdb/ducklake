@@ -1552,7 +1552,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		}
 	};
 	context.commit_connection = [&]() {
-		ducklake_catalog.CommitConfigOptionChanges(*this, config_option_changes, [&]() { connection->Commit(); });
+		ducklake_catalog.CommitConfigOptions(*this, config_option_changes, state->committed_table_options,
+		                                     [&]() { connection->Commit(); });
 	};
 	context.try_rollback = [&]() {
 		if (connection->context->transaction.HasActiveTransaction()) {
@@ -1672,11 +1673,6 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.set_entry_oids = [&](const ducklake_entry_oids_t &oids) {
 		ducklake_catalog.SetEntryOids(oids);
-	};
-	context.set_table_options = [&](const vector<DuckLakeConfigOption> &options) {
-		for (auto &option : options) {
-			ducklake_catalog.SetConfigOption(option);
-		}
 	};
 	context.invalidate_table_stats_cache = [&](idx_t next_file_id, TableIndex table_id) {
 		ducklake_catalog.InvalidateTableStatsCache(next_file_id, table_id);
