@@ -375,13 +375,26 @@ void DuckLakeTableStats::MergeStats(FieldIndex col_id, const DuckLakeColumnStats
 
 void DuckLakeTableStats::MergeFileStats(const DuckLakeDataFile &file,
                                         const map<FieldIndex, DuckLakeColumnStats> &column_stats) {
+	CountFile(file, column_stats);
+	AllocateRowIds(file);
+}
+
+void DuckLakeTableStats::CountFile(const DuckLakeDataFile &file,
+                                   const map<FieldIndex, DuckLakeColumnStats> &column_stats) {
+	// the rows of a flushed file were counted when they were inlined
 	if (!file.max_partial_file_snapshot.IsValid()) {
 		record_count += file.row_count;
-		next_row_id += file.row_count;
 	}
 	table_size_bytes += file.file_size_bytes;
 	for (auto &entry : column_stats) {
 		MergeStats(entry.first, entry.second);
+	}
+}
+
+void DuckLakeTableStats::AllocateRowIds(const DuckLakeDataFile &file) {
+	// the rows of a flushed file keep the row ids they were inlined with
+	if (!file.max_partial_file_snapshot.IsValid()) {
+		next_row_id += file.row_count;
 	}
 }
 

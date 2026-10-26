@@ -145,6 +145,10 @@ struct DuckLakeTableStats {
 
 	//! Merges a file with the given column stats, which can differ from the file's own
 	void MergeFileStats(const DuckLakeDataFile &file, const map<FieldIndex, DuckLakeColumnStats> &column_stats);
+	//! Counts the rows, the size and the column stats of a file
+	void CountFile(const DuckLakeDataFile &file, const map<FieldIndex, DuckLakeColumnStats> &column_stats);
+	//! Advances the row ids past the rows of a file that take new ones
+	void AllocateRowIds(const DuckLakeDataFile &file);
 
 	//! Skips columns whose type lookup returns nullptr
 	static unique_ptr<DuckLakeTableStats>
