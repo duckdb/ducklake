@@ -323,6 +323,8 @@ protected:
 	void SubstituteCatalogPlaceholders(string &query) const;
 	void SubstituteCatalogPlaceholders(string &query, const string &metadata_catalog) const;
 	void SubstituteTransactionPlaceholders(DuckLakeSnapshot snapshot, string &query) const;
+	//! The snapshot time of a commit, the current time when its batch runs
+	virtual string SnapshotTimeSql() const;
 
 public:
 	static void SubstituteSnapshotPlaceholders(const DuckLakeSnapshot &snapshot, string &query);
