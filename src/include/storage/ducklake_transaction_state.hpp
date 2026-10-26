@@ -209,6 +209,9 @@ public:
 	                       DuckLakeSnapshot transaction_snapshot, const DuckLakeCommitContext &context) const;
 	//! Fails when a snapshot tagged by this transaction was expired meanwhile
 	void CheckTaggedSnapshotsExist(const DuckLakeCommitContext &context) const;
+	//! Fails when a file this transaction registers is registered in its table already, and finds the physical
+	//! identities of the registered files that other rows reference, read after the latest snapshot
+	void CheckRegistrations(TransactionChangeInformation &changes, const DuckLakeCommitContext &context);
 	//! The ids of the snapshots the tags point at, as a SQL list
 	static string TaggedSnapshotIdList(const case_insensitive_map_t<idx_t> &tags);
 	void CheckFileConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
@@ -296,6 +299,8 @@ public:
 	DuckLakeNameMapSet &new_name_maps;
 	string data_path;
 	string separator;
+	//! The physical identities that the files this transaction registers take, by path
+	unordered_map<string, idx_t> registration_identities;
 	DuckLakeSnapshotCommit commit_info;
 
 	map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> new_tables;

@@ -1,0 +1,86 @@
+# name: test/sql/add_files/add_files_registration_rules.test
+# description: a path is registered at most once in a table, a file registered again takes the physical identity of the earlier rows and new row ids
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/add_files_registration_rules', METADATA_CATALOG 'meta')
+
+statement ok
+COPY (SELECT i FROM range(3) t(i)) TO '{DATA_PATH}/add_files_registration_rules.parquet'
+
+statement ok
+CREATE TABLE dl.t(i BIGINT)
+
+statement ok
+CREATE TABLE dl.u(i BIGINT)
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/add_files_registration_rules.parquet')
+
+statement error
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/add_files_registration_rules.parquet')
+----
+is already registered in this table
+
+# two registrations of one transaction
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_add_data_files('dl', 'u', '{DATA_PATH}/add_files_registration_rules.parquet')
+
+statement ok
+CALL ducklake_add_data_files('dl', 'u', '{DATA_PATH}/add_files_registration_rules.parquet')
+
+statement error
+COMMIT
+----
+is already registered in this table
+
+# another table registers the file with the physical identity of the first registration
+statement ok
+CALL ducklake_add_data_files('dl', 'u', '{DATA_PATH}/add_files_registration_rules.parquet')
+
+query II
+SELECT count(*), count(DISTINCT COALESCE(origin_file_id, data_file_id)) FROM meta.ducklake_data_file
+----
+2	1
+
+query I
+SELECT changes['files_registered'] FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+[1]
+
+# a path whose rows are all ended is registered again with new row ids
+statement ok
+DELETE FROM dl.t
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/add_files_registration_rules.parquet')
+
+query II
+SELECT rowid, i FROM dl.t ORDER BY i
+----
+3	0
+4	1
+5	2
+
+query II
+SELECT count(*), count(DISTINCT COALESCE(origin_file_id, data_file_id)) FROM meta.ducklake_data_file
+----
+3	1
+
+query II
+SELECT rowid, i FROM dl.u ORDER BY i
+----
+0	0
+1	1
+2	2

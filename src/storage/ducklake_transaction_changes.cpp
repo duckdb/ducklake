@@ -28,7 +28,8 @@ enum class ChangeType {
 	DROPPED_TABLE_MACRO,
 	CREATED_SNAPSHOT_TAG,
 	DROPPED_SNAPSHOT_TAG,
-	EXPIRED_SNAPSHOT
+	EXPIRED_SNAPSHOT,
+	REGISTERED_FILE
 };
 
 constexpr StringUtil::EnumStringLiteral CHANGE_TYPE_NAMES[] = {
@@ -55,7 +56,8 @@ constexpr StringUtil::EnumStringLiteral CHANGE_TYPE_NAMES[] = {
     {static_cast<uint32_t>(ChangeType::FLUSHED_INLINE_DATA_FOR_TABLE), "inline_flush"},
     {static_cast<uint32_t>(ChangeType::CREATED_SNAPSHOT_TAG), "created_tag"},
     {static_cast<uint32_t>(ChangeType::DROPPED_SNAPSHOT_TAG), "dropped_tag"},
-    {static_cast<uint32_t>(ChangeType::EXPIRED_SNAPSHOT), "expired_snapshot"}};
+    {static_cast<uint32_t>(ChangeType::EXPIRED_SNAPSHOT), "expired_snapshot"},
+    {static_cast<uint32_t>(ChangeType::REGISTERED_FILE), "registered_file"}};
 
 struct ParsedChange {
 	ChangeType change_type;
@@ -214,6 +216,9 @@ SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const stri
 		}
 		case ChangeType::EXPIRED_SNAPSHOT:
 			result.expired_snapshots.insert(StringUtil::ToUnsigned(entry.change_value));
+			break;
+		case ChangeType::REGISTERED_FILE:
+			result.registered_files.insert(StringUtil::ToUnsigned(entry.change_value));
 			break;
 		default:
 			throw InternalException("Unsupported change type in ParseChangesMade");

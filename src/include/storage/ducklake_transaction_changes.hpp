@@ -50,6 +50,8 @@ struct TransactionChangeInformation {
 	case_insensitive_set_t dropped_snapshot_tags;
 	//! The snapshots the commit expires, read in each commit attempt
 	set<idx_t> expired_snapshots;
+	//! The physical identities of existing files that the registrations of the commit take, read in each attempt
+	set<idx_t> registered_files;
 
 	//! Whether the commit changes catalog-wide names, which every commit attempt validates
 	bool HasRefChanges() const {
@@ -80,6 +82,7 @@ struct SnapshotChangeInformation {
 	case_insensitive_set_t created_snapshot_tags;
 	case_insensitive_set_t dropped_snapshot_tags;
 	set<idx_t> expired_snapshots;
+	set<idx_t> registered_files;
 	static SnapshotChangeInformation ParseChangesMade(const string &changes_made);
 };
 

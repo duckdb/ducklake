@@ -87,6 +87,19 @@ static void PushIDChangeList(vector<Value> &change_keys, vector<Value> &change_v
 	change_values.push_back(IDListToValue(id_list));
 }
 
+static void PushNumberChangeList(vector<Value> &change_keys, vector<Value> &change_values, const set<idx_t> &numbers,
+                                 const char *key) {
+	if (numbers.empty()) {
+		return;
+	}
+	vector<Value> list_values;
+	for (auto &number : numbers) {
+		list_values.emplace_back(to_string(number));
+	}
+	change_keys.emplace_back(key);
+	change_values.push_back(Value::LIST(LogicalType::VARCHAR, std::move(list_values)));
+}
+
 static void PushNameChangeList(vector<Value> &change_keys, vector<Value> &change_values,
                                const case_insensitive_set_t &names, const char *key) {
 	if (names.empty()) {
@@ -157,14 +170,8 @@ vector<Value> DuckLakeSnapshotsFunction::GetSnapshotValues(const DuckLakeSnapsho
 	PushIDChangeList(change_keys, change_values, other_changes.tables_compacted, "compacted_table");
 	PushNameChangeList(change_keys, change_values, other_changes.created_snapshot_tags, "tags_created");
 	PushNameChangeList(change_keys, change_values, other_changes.dropped_snapshot_tags, "tags_dropped");
-	if (!other_changes.expired_snapshots.empty()) {
-		vector<Value> expired;
-		for (auto &snapshot_id : other_changes.expired_snapshots) {
-			expired.emplace_back(std::to_string(snapshot_id));
-		}
-		change_keys.emplace_back("snapshots_expired");
-		change_values.push_back(Value::LIST(LogicalType::VARCHAR, std::move(expired)));
-	}
+	PushNumberChangeList(change_keys, change_values, other_changes.expired_snapshots, "snapshots_expired");
+	PushNumberChangeList(change_keys, change_values, other_changes.registered_files, "files_registered");
 
 	row_values.push_back(Value::MAP(LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR),
 	                                std::move(change_keys), std::move(change_values)));

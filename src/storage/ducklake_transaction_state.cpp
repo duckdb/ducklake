@@ -471,6 +471,9 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	for (auto &snapshot_id : changes.expired_snapshots) {
 		changes_made.push_back("expired_snapshot:" + to_string(snapshot_id));
 	}
+	for (auto &identity : changes.registered_files) {
+		changes_made.push_back("registered_file:" + to_string(identity));
+	}
 	SnapshotChangeInfo change_info;
 	change_info.changes_made = StringUtil::Join(changes_made, ",");
 	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
@@ -1598,6 +1601,10 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 			auto row_id_start =
 			    file.flush_row_id_start.IsValid() ? file.flush_row_id_start.GetIndex() : new_stats.next_row_id;
 			auto data_file = GetNewDataFile(file, commit_state, table_id, row_id_start);
+			auto identity = registration_identities.find(file.file_name);
+			if (!file.created_by_ducklake && identity != registration_identities.end()) {
+				data_file.origin_file_id = identity->second;
+			}
 			for (auto &del_file : file.delete_files) {
 				// this transaction-local file already has deletes - write them out
 				DuckLakeDeleteFile delete_file = del_file;
@@ -2717,6 +2724,53 @@ WHERE idt.schema_version < (
 	}
 }
 
+void DuckLakeTransactionState::CheckRegistrations(TransactionChangeInformation &changes,
+                                                  const DuckLakeCommitContext &context) {
+	registration_identities.clear();
+	vector<pair<TableIndex, string>> registered_files;
+	for (auto &entry : local_changes.Changes()) {
+		for (auto &file : entry.second.new_data_files) {
+			if (!file.created_by_ducklake) {
+				registered_files.emplace_back(entry.first, file.file_name);
+			}
+		}
+	}
+	if (registered_files.empty()) {
+		return;
+	}
+	auto query = StringUtil::Replace(DuckLakeMetadataManager::DataFileIdentitiesQuery(), "{DATA_PATH}",
+	                                 SQLString::ToString(data_path));
+	auto result = context.query_metadata(std::move(query));
+	result->ThrowIfError("Failed to read the files registered in DuckLake: ");
+	auto &fs = FileSystem::GetFileSystem(db);
+	// the physical identity of every path, and the tables that reference it with a live row
+	unordered_map<string, idx_t> identities;
+	unordered_map<string, unordered_set<idx_t>> live_tables;
+	for (auto &row : *result) {
+		auto key = DuckLakeUtil::CanonicalPathKey(fs, row.GetValue<string>(0));
+		identities.emplace(key, row.GetValue<idx_t>(2));
+		if (row.IsNull(3)) {
+			live_tables[key].insert(row.GetValue<idx_t>(1));
+		}
+	}
+	set<pair<idx_t, string>> registered_keys;
+	for (auto &registered_file : registered_files) {
+		auto &path = registered_file.second;
+		auto key = DuckLakeUtil::CanonicalPathKey(fs, path);
+		auto table_id = registered_file.first.index;
+		auto live = live_tables.find(key);
+		if (!registered_keys.emplace(table_id, key).second ||
+		    (live != live_tables.end() && live->second.count(table_id))) {
+			throw InvalidInputException("The file %s is already registered in this table", path);
+		}
+		auto identity = identities.find(key);
+		if (identity != identities.end()) {
+			registration_identities[path] = identity->second;
+			changes.registered_files.insert(identity->second);
+		}
+	}
+}
+
 SnapshotAndStats DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
                                                              const TransactionChangeInformation &changes,
                                                              const DuckLakeCommitContext &context) {
@@ -2810,6 +2864,9 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				context.commit_connection();
 				wrote_snapshot = false;
 				break;
+			}
+			if (context.supports_file_identity) {
+				CheckRegistrations(attempt_changes, context);
 			}
 			for (auto &snapshot : expired_snapshots) {
 				attempt_changes.expired_snapshots.insert(snapshot.id);

@@ -413,6 +413,8 @@ public:
 	//! The retirement of the cleanup candidates that no data or delete file references, read after the latest snapshot
 	DuckLakeRetirement GetRetirement(const vector<DuckLakeFileForCleanup> &candidates, CleanupType type);
 	static string RetireFilesSql(const DuckLakeRetirement &retirement);
+	//! The full path, table, physical identity and end snapshot of every data file, ended files included
+	static string DataFileIdentitiesQuery();
 	static string DropSchemas(const set<SchemaIndex> &ids);
 	static string DropTables(const set<TableIndex> &ids, bool renamed);
 	static string DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags = false);

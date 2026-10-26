@@ -93,7 +93,8 @@ void DuckLakeMetadataManager::FlushChangesServerSide(DuckLakeTransaction &, Duck
 }
 
 //! The texts of the guard errors, free of the words that make an error retryable
-static constexpr const char *GUARD_ERRORS[] = {"was migrated by another connection", "was retired by cleanup"};
+static constexpr const char *GUARD_ERRORS[] = {"was migrated by another connection", "was retired by cleanup",
+                                               "is already registered in this table"};
 
 string DuckLakeMetadataManager::GuardSql(const string &message, const string &source) {
 	return StringUtil::Format("SELECT error(%s) %s;\n", message, source);
@@ -5397,8 +5398,9 @@ FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion
 	return result;
 }
 
-string DuckLakeMetadataManager::GetReferencedFilesQuery() const {
-	return R"(SELECT REPLACE(
+//! The full paths of the files the source query selects, with the extra columns that it passes on
+static string FullFilePathsQuery(const string &files, const string &extra_columns, const string &extra_file_columns) {
+	return StringUtil::Format(R"(SELECT REPLACE(
            CASE
                WHEN NOT file_relative THEN file_path
                ELSE CASE
@@ -5411,20 +5413,36 @@ string DuckLakeMetadataManager::GetReferencedFilesQuery() const {
            END,
            '\',
            '/'
-       ) AS full_path
+       ) AS full_path%s
 FROM
   (SELECT COALESCE(s.path, '') AS schema_path, COALESCE(t.path, '') AS table_path, file_path,
           (s.path IS NULL OR s.path_is_relative) AS schema_relative,
-          (t.path IS NULL OR t.path_is_relative) AS table_relative, file_relative FROM (
+          (t.path IS NULL OR t.path_is_relative) AS table_relative, file_relative%s FROM (%s) AS f
+   JOIN {METADATA_CATALOG}.ducklake_table t ON f.table_id = t.table_id
+   JOIN {METADATA_CATALOG}.ducklake_schema s ON t.schema_id = s.schema_id) AS r
+)",
+	                          extra_columns, extra_file_columns, files);
+}
+
+string DuckLakeMetadataManager::GetReferencedFilesQuery() const {
+	return FullFilePathsQuery(R"(
     SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id
     FROM {METADATA_CATALOG}.ducklake_data_file f
     UNION ALL
     SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id
     FROM {METADATA_CATALOG}.ducklake_delete_file f
-  ) AS f
-   JOIN {METADATA_CATALOG}.ducklake_table t ON f.table_id = t.table_id
-   JOIN {METADATA_CATALOG}.ducklake_schema s ON t.schema_id = s.schema_id) AS r
-)";
+  )",
+	                          "", "");
+}
+
+string DuckLakeMetadataManager::DataFileIdentitiesQuery() {
+	return FullFilePathsQuery(R"(
+    SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id,
+           COALESCE(origin_file_id, data_file_id) AS identity, end_snapshot
+    FROM {METADATA_CATALOG}.ducklake_data_file f
+  )",
+	                          ", file_table_id, identity, end_snapshot",
+	                          ", f.table_id AS file_table_id, f.identity, f.end_snapshot");
 }
 
 string DuckLakeMetadataManager::GetKnownFilesForCleanupQuery() const {
