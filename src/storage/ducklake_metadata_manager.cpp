@@ -5891,15 +5891,28 @@ string DuckLakeMetadataManager::DeleteSnapshotsSql(const vector<DuckLakeSnapshot
 	                          snapshot_ids);
 }
 
-void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
-	// an attachment that predates a migration does not know the snapshot tags it may have added
-	auto attached_version = DuckLakeVersionToString(transaction.GetCatalog().GetDuckLakeVersion());
-	auto query = MigratedCatalogGuardSql(attached_version, GuardSql);
-	if (!transaction.GetCatalog().SupportsSnapshotTags()) {
+//! The guard of a transaction of an attachment that may predate a migration
+static string AttachedVersionGuardSql(DuckLakeCatalog &catalog, bool lock_version_row) {
+	string result;
+	if (lock_version_row) {
 		// a transaction that began before a migration conflicts with it on the version row the migration updated
-		query +=
+		result =
 		    "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = value WHERE key = 'version' AND scope IS NULL;\n";
 	}
+	auto attached_version = DuckLakeVersionToString(catalog.GetDuckLakeVersion());
+	return result +
+	       DuckLakeMetadataManager::MigratedCatalogGuardSql(attached_version, DuckLakeMetadataManager::GuardSql);
+}
+
+void DuckLakeMetadataManager::CheckAttachedVersion() {
+	auto result = Execute(AttachedVersionGuardSql(transaction.GetCatalog(), true));
+	result->ThrowIfError("Failed to check the version of the DuckLake catalog: ");
+}
+
+void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
+	// an attachment that predates a migration does not know the snapshot tags it may have added
+	auto &catalog = transaction.GetCatalog();
+	auto query = AttachedVersionGuardSql(catalog, !catalog.SupportsSnapshotTags());
 	query += DeleteSnapshotsSql(snapshots);
 	auto result = CommitsEachStatement() ? ExecuteInTransaction(query) : Execute(query);
 	result->ThrowIfError("Failed to delete snapshots in DuckLake: ");

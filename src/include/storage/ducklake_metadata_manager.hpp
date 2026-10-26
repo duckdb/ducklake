@@ -615,6 +615,8 @@ public:
 	                                      const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped);
 	static string DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots);
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
+	//! Fails once another connection migrated the catalog, and orders the transaction with a migration
+	void CheckAttachedVersion();
 	//! Deletes the metadata that only the deleted snapshots referenced
 	virtual void CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);

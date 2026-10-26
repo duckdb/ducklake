@@ -147,6 +147,8 @@ static vector<vector<Value>> RemoveFiles(ClientContext &context, const CleanupBi
 	auto &fs = FileSystem::GetFileSystem(context);
 	auto &transaction = DuckLakeTransaction::Get(context, data.catalog);
 	if (!data.catalog.SupportsFileIdentity()) {
+		// an attachment that predates a migration unlinks nothing that the migrated catalog can reference
+		transaction.GetMetadataManager().CheckAttachedVersion();
 		vector<string> paths;
 		paths.reserve(data.files.size());
 		for (const auto &file : data.files) {

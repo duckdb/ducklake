@@ -1,0 +1,55 @@
+# name: test/sql/migration/stale_cleanup_after_migration.test
+# description: a cleanup of an attachment at 1.1 unlinks nothing once another connection migrated the catalog
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS stale (DATA_PATH '{DATA_PATH}/stale_cleanup_after_migration', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE stale.t(i INTEGER)
+
+statement ok
+CREATE TABLE stale.u(i INTEGER)
+
+statement ok
+INSERT INTO stale.t VALUES (42)
+
+statement ok
+SET VARIABLE source = (SELECT data_file FROM ducklake_list_files('stale', 't'))
+
+statement ok
+INSERT INTO stale.t VALUES (43)
+
+# the compaction schedules its sources for deletion
+statement ok
+CALL ducklake_merge_adjacent_files('stale', 't')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS upgraded (AUTOMATIC_MIGRATION true, METADATA_CATALOG 'meta')
+
+# the migrated catalog registers a scheduled source in another table
+statement ok
+CALL ducklake_add_data_files('upgraded', 'u', getvariable('source'))
+
+statement error
+CALL ducklake_cleanup_old_files('stale', cleanup_all => true)
+----
+The catalog was migrated by another connection
+
+query I
+SELECT count(*) FROM glob(getvariable('source'))
+----
+1
+
+query I
+SELECT i FROM upgraded.u
+----
+42
