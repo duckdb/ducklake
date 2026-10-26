@@ -1,0 +1,40 @@
+# name: test/sql/add_files/add_files_internal_columns.test
+# description: a registered file whose columns carry the field ids of internal columns gets the row ids and origins of a registration
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+COPY (SELECT 1::INTEGER AS i, 123::BIGINT AS _ducklake_internal_row_id, 5::BIGINT AS _ducklake_internal_snapshot_id, 7::BIGINT AS _ducklake_internal_origin_snapshot) TO '{DATA_PATH}/add_files_internal_columns.parquet' (FIELD_IDS {i: 1, _ducklake_internal_row_id: 2147483540, _ducklake_internal_snapshot_id: 2147483539, _ducklake_internal_origin_snapshot: 2147483538})
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/add_files_internal_columns', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/add_files_internal_columns.parquet', ignore_extra_columns => true)
+
+query III
+SELECT rowid, snapshot_id, i FROM dl.t
+----
+0	2	1
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl', 't')
+
+query III
+SELECT rowid, snapshot_id, i FROM dl.t ORDER BY i
+----
+0	2	1
+1	3	2

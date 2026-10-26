@@ -54,6 +54,31 @@ static optional_idx FindColumnByFieldId(const vector<MultiFileColumnDefinition> 
 	return optional_idx();
 }
 
+//! Whether the file embeds the internal column of the field id
+static bool EmbedsInternalColumn(const MultiFileReaderData &reader_data,
+                                 const vector<MultiFileColumnDefinition> &local_columns, int32_t field_id) {
+	// a file registered with ducklake_add_data_files maps its columns by name, its field ids are not DuckLake's
+	auto &extended_info = reader_data.file_to_be_opened.extended_info;
+	if (extended_info && extended_info->options.find("mapping_id") != extended_info->options.end()) {
+		return false;
+	}
+	return FindColumnByFieldId(local_columns, field_id).IsValid();
+}
+
+//! The value of a virtual column that the file list passes in the options of the file
+static MultiFileReaderVirtualColumnBinding FileOptionBinding(const MultiFileReaderData &reader_data,
+                                                             const string &option) {
+	auto &extended_info = reader_data.file_to_be_opened.extended_info;
+	if (!extended_info) {
+		throw InternalException("Extended info not found for reading the %s column", option);
+	}
+	auto entry = extended_info->options.find(option);
+	if (entry == extended_info->options.end()) {
+		throw InternalException("%s not found for reading the %s column", option, option);
+	}
+	return MultiFileReaderVirtualColumnBinding(entry->second);
+}
+
 //! Add a snapshot filter to the reader's filter set
 static void AddSnapshotFilter(BaseFileReader &reader, const ColumnIndex &col_idx, const LogicalType &col_type,
                               idx_t snapshot_value, ExpressionType comparison_type,
@@ -646,7 +671,7 @@ MultiFileReaderVirtualColumnBinding DuckLakeMultiFileReader::GetVirtualColumnExp
 		// row id column
 		// this is computed as row_id_start + file_row_number OR read from the file
 		// first check if the row id is explicitly defined in this file
-		if (FindColumnByFieldId(local_columns, MultiFileReader::ROW_ID_FIELD_ID).IsValid()) {
+		if (EmbedsInternalColumn(reader_data, local_columns, MultiFileReader::ROW_ID_FIELD_ID)) {
 			return MultiFileReaderVirtualColumnBinding(*row_id_column.get());
 		}
 		// get the row id start for this file
@@ -679,37 +704,20 @@ MultiFileReaderVirtualColumnBinding DuckLakeMultiFileReader::GetVirtualColumnExp
 		bool scans_deleted_rows =
 		    read_info.scan_type == DuckLakeScanType::SCAN_DELETIONS && reader_data.reader->deletion_filter;
 		if (!scans_deleted_rows &&
-		    FindColumnByFieldId(local_columns, MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID).IsValid()) {
+		    EmbedsInternalColumn(reader_data, local_columns, MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID)) {
 			return MultiFileReaderVirtualColumnBinding(*snapshot_id_column.get());
 		}
-		// get the row id start for this file
-		if (!reader_data.file_to_be_opened.extended_info) {
-			throw InternalException("Extended info not found for reading snapshot id column");
-		}
-		auto &options = reader_data.file_to_be_opened.extended_info->options;
-		auto entry = options.find("snapshot_id");
-		if (entry == options.end()) {
-			throw InternalException("snapshot_id not found for reading snapshot_id column");
-		}
-		return MultiFileReaderVirtualColumnBinding(entry->second);
+		return FileOptionBinding(reader_data, "snapshot_id");
 	}
 	if (column_id == COLUMN_IDENTIFIER_ORIGIN_SNAPSHOT) {
-		// rows moved under 2.0-dev2 embed their origin, older moved rows their insert snapshot
-		if (FindColumnByFieldId(local_columns, ORIGIN_SNAPSHOT_FIELD_ID).IsValid()) {
+		// a moved row embeds its origin, or else the insert snapshot it keeps
+		if (EmbedsInternalColumn(reader_data, local_columns, ORIGIN_SNAPSHOT_FIELD_ID)) {
 			return MultiFileReaderVirtualColumnBinding(*origin_snapshot_column.get());
 		}
-		if (FindColumnByFieldId(local_columns, MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID).IsValid()) {
+		if (EmbedsInternalColumn(reader_data, local_columns, MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID)) {
 			return MultiFileReaderVirtualColumnBinding(*snapshot_id_column.get());
 		}
-		if (!reader_data.file_to_be_opened.extended_info) {
-			throw InternalException("Extended info not found for reading origin snapshot column");
-		}
-		auto &options = reader_data.file_to_be_opened.extended_info->options;
-		auto entry = options.find("origin_snapshot");
-		if (entry == options.end()) {
-			throw InternalException("origin_snapshot not found for reading origin snapshot column");
-		}
-		return MultiFileReaderVirtualColumnBinding(entry->second);
+		return FileOptionBinding(reader_data, "origin_snapshot");
 	}
 	return MultiFileReader::GetVirtualColumnExpression(context, reader_data, local_columns, column_id, type, local_idx);
 }

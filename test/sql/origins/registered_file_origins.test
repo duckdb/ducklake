@@ -1,0 +1,39 @@
+# name: test/sql/origins/registered_file_origins.test
+# description: the rows of a registered file originate in the registration, also when its columns carry the field ids of internal columns
+# group: [origins]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+COPY (SELECT 1::INTEGER AS i, 7::BIGINT AS _ducklake_internal_origin_snapshot) TO '{DATA_PATH}/registered_file_origins.parquet' (FIELD_IDS {i: 1, _ducklake_internal_origin_snapshot: 2147483538})
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/registered_file_origins', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+# snapshot 2 registers the file
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/registered_file_origins.parquet', ignore_extra_columns => true)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl', 't')
+
+query III
+SELECT f.i, f._ducklake_internal_row_id, f._ducklake_internal_origin_snapshot
+FROM read_parquet('{DATA_PATH}/registered_file_origins/main/t/*.parquet', filename = true, union_by_name = true) f
+JOIN ducklake_list_files('dl', 't') l ON f.filename = l.data_file
+ORDER BY ALL
+----
+1	0	2
+2	1	3
