@@ -55,6 +55,16 @@ struct DuckLakeCommitContext {
 	std::function<string(const string &)> commit_error_hint = [](const string &) {
 		return string();
 	};
+	//! A statement of the commit batch that fails it with the message the source selects.
+	std::function<string(const string &, const string &)> guard_sql = [](const string &message, const string &source) {
+		return DuckLakeMetadataManager::GuardSql(message, source);
+	};
+	//! Classifies the errors of guards, which no retry clears.
+	std::function<bool(const string &)> is_terminal_commit_error = [](const string &message) {
+		return DuckLakeMetadataManager::IsGuardError(message);
+	};
+	//! The version the catalog was attached at, the commit fails when the catalog has another one.
+	string attached_version;
 	//! Optional hooks below default to a no-op/constant; callers override only the ones they need.
 	//! Clears the metadata manager cache if a clear was pending.
 	std::function<void()> flush_cache_if_pending = []() {

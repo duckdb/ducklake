@@ -93,6 +93,41 @@ void DuckLakeMetadataManager::FlushChangesServerSide(DuckLakeTransaction &, Duck
 	throw InternalException("FlushChangesServerSide invoked on a metadata backend without server-side commit support");
 }
 
+//! The texts of the guard errors, free of the words that make an error retryable
+static constexpr const char *GUARD_ERRORS[] = {"was migrated by another connection"};
+
+string DuckLakeMetadataManager::GuardSql(const string &message, const string &source) {
+	return StringUtil::Format("SELECT error(%s) %s;\n", message, source);
+}
+
+string DuckLakeMetadataManager::CommitGuardSql(const string &message, const string &source) const {
+	return GuardSql(message, source);
+}
+
+string DuckLakeMetadataManager::MigratedCatalogGuardSql(
+    const string &attached_version, const std::function<string(const string &, const string &)> &guard_sql) {
+	auto version = SQLString::ToString(attached_version);
+	auto message = StringUtil::Format("'The catalog was migrated by another connection from version ' || %s || ' to ' "
+	                                  "|| value || ', reattach to pick up the new version'",
+	                                  version);
+	auto source = StringUtil::Format(
+	    "FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version' AND scope IS NULL AND value <> %s", version);
+	return guard_sql(message, source);
+}
+
+bool DuckLakeMetadataManager::IsGuardError(const string &message) {
+	for (auto &guard_error : GUARD_ERRORS) {
+		if (StringUtil::Contains(message, guard_error)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool DuckLakeMetadataManager::IsTerminalCommitError(const string &message) const {
+	return IsGuardError(message);
+}
+
 bool DuckLakeMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 	return true;
 }

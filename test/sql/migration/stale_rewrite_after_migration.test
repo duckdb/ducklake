@@ -1,0 +1,57 @@
+# name: test/sql/migration/stale_rewrite_after_migration.test
+# description: a rewrite of an attachment at 1.1 is refused when another connection migrated the catalog meanwhile
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS stale (DATA_PATH '{DATA_PATH}/stale_rewrite_after_migration', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1')
+
+statement ok
+CALL stale.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE stale.t AS SELECT i FROM range(4) t(i)
+
+statement ok
+DELETE FROM stale.t WHERE i = 1
+
+# the rewrite output of a 1.1 catalog embeds row ids but no origins
+statement ok con1
+BEGIN
+
+query II con1
+SELECT table_name, files_created FROM ducklake_rewrite_data_files('stale', 't', delete_threshold => 0)
+----
+t	1
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS migrated (METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT value FROM migrated.options() WHERE option_name = 'version'
+----
+2.0-dev2
+
+statement error con1
+COMMIT
+----
+The catalog was migrated by another connection from version 1.1 to 2.0-dev2
+
+query I
+SELECT changes FROM migrated.snapshots() ORDER BY snapshot_id DESC LIMIT 1
+----
+{}
+
+query I
+SELECT * FROM migrated.t ORDER BY i
+----
+0
+2
+3

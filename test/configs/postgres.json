@@ -72,6 +72,12 @@
       ]
     },
     {
+      "reason": "The DDL of a migration waits for the locks of an open transaction on Postgres, so no transaction stays open across it",
+      "paths": [
+        "test/sql/migration/stale_rewrite_after_migration.test"
+      ]
+    },
+    {
       "reason": "on_init ends with USE memory, which a DuckLake opened as the main database does not have",
       "paths": [
         "test/sql/attach/ducklake_main_database.test",

@@ -353,6 +353,22 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	}
 }
 
+string PostgresMetadataManager::CommitGuardSql(const string &message, const string &source) const {
+	// the batch runs on the server, so the guard raises the error of a PL/pgSQL block
+	auto schema = SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName());
+	auto body = StringUtil::Format(
+	    "DECLARE guard_error TEXT; BEGIN SELECT %s INTO guard_error %s LIMIT 1; IF guard_error IS NOT NULL THEN RAISE "
+	    "EXCEPTION '%%', guard_error; END IF; END",
+	    message, StringUtil::Replace(source, "{METADATA_CATALOG}", schema));
+	return "DO " + SQLString::ToString(body) + ";\n";
+}
+
+bool PostgresMetadataManager::IsTerminalCommitError(const string &message) const {
+	// the server error follows the failed query, which holds the text of the guard itself
+	auto server_error_start = message.rfind("\": ");
+	return server_error_start != string::npos && IsGuardError(message.substr(server_error_start));
+}
+
 bool PostgresMetadataManager::IsRetryableCommitError(const string &message) const {
 	// the server error follows the failed query, which can contain any text
 	auto server_error_start = message.rfind("\": ");

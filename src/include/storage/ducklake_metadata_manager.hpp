@@ -230,6 +230,15 @@ public:
 	virtual bool IsRetryableCommitError(const string &) const {
 		return false;
 	}
+	//! A statement of a commit batch that fails it with the message selected by the source, when it selects a row
+	static string GuardSql(const string &message, const string &source);
+	virtual string CommitGuardSql(const string &message, const string &source) const;
+	//! The guard that fails a commit when another connection migrated the catalog after it was attached
+	static string MigratedCatalogGuardSql(const string &attached_version,
+	                                      const std::function<string(const string &, const string &)> &guard_sql);
+	//! Whether the error is one a guard raised, which a retry raises again
+	static bool IsGuardError(const string &message);
+	virtual bool IsTerminalCommitError(const string &message) const;
 	//! Advice added to the error of a commit that failed for good
 	virtual string CommitErrorHint(const string &) const {
 		return string();

@@ -157,6 +157,9 @@ void DuckLakeServerSideCommit::ReadCommitHeader() {
 	state->commit_info.author = row.GetBaseValue(0);
 	state->commit_info.commit_message = row.GetBaseValue(1);
 	state->commit_info.commit_extra_info = row.GetBaseValue(2);
+	if (DuckLakeMetadataManager::ResultHasColumn(*result, "catalog_version") && !row.IsNull(8)) {
+		attached_version = row.GetValue<string>(8);
+	}
 
 	if (row.IsNull(3)) {
 		transaction_snapshot = ReadLatestSnapshot();
@@ -637,6 +640,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.skip_drop_empty_inlined = true;
 	ctx.supports_v1_1_metadata = supports_v1_1_metadata;
 	ctx.supports_file_identity = supports_file_identity;
+	ctx.attached_version = attached_version;
 	ctx.snapshot_and_stats_query = DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(supports_v1_1_metadata);
 	ctx.conflict_query_executor = [this](string q) -> unique_ptr<QueryResult> {
 		auto sql = SubstitutePlaceholders(std::move(q), transaction_snapshot);

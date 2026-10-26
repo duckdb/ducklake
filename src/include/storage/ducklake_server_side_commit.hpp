@@ -102,6 +102,8 @@ private:
 	map<TableIndex, shared_ptr<DuckLakeTableStats>> existing_table_stats;
 	bool supports_v1_1_metadata = false;
 	bool supports_file_identity = false;
+	//! The version the client attached the catalog at, empty for a client that does not stage it
+	string attached_version;
 	bool staged_dropped_files_read = false;
 	vector<pair<string, idx_t>> staged_dropped_files;
 	map<TableIndex, DroppedDataFileStats> staged_dropped_file_stats;

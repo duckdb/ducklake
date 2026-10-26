@@ -1592,6 +1592,13 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.commit_error_hint = [&](const string &message) {
 		return metadata_manager->CommitErrorHint(message);
 	};
+	context.guard_sql = [&](const string &message, const string &source) {
+		return metadata_manager->CommitGuardSql(message, source);
+	};
+	context.is_terminal_commit_error = [&](const string &message) {
+		return metadata_manager->IsTerminalCommitError(message);
+	};
+	context.attached_version = DuckLakeVersionToString(ducklake_catalog.GetDuckLakeVersion());
 	context.flush_cache_if_pending = [&]() {
 		if (metadata_manager->TakePendingCacheClear()) {
 			metadata_manager->ClearCache();
