@@ -91,6 +91,7 @@ void LocalTableDataChanges::AddWrittenFiles(vector<string> &data_files, vector<s
 void LocalTableChanges::Clear() {
 	lock_guard<mutex> guard(lock);
 	changes.clear();
+	dropped_written_files.clear();
 }
 
 bool LocalTableChanges::HasChanges() const {
@@ -99,6 +100,7 @@ bool LocalTableChanges::HasChanges() const {
 }
 
 void LocalTableChanges::CleanupFiles(DatabaseInstance &db, const unordered_set<string> &referenced_files) {
+	RemoveDroppedFiles(db, referenced_files);
 	auto &fs = FileSystem::GetFileSystem(db);
 	lock_guard<mutex> guard(lock);
 	for (auto &entry : changes) {
@@ -145,6 +147,23 @@ void LocalTableChanges::GetOwnedFiles(vector<string> &result) const {
 	for (auto &entry : changes) {
 		entry.second.AddWrittenFiles(result, result, false);
 	}
+	result.insert(result.end(), dropped_written_files.begin(), dropped_written_files.end());
+}
+
+void LocalTableChanges::GetDroppedFiles(vector<string> &result) const {
+	lock_guard<mutex> guard(lock);
+	result.insert(result.end(), dropped_written_files.begin(), dropped_written_files.end());
+}
+
+void LocalTableChanges::RemoveDroppedFiles(DatabaseInstance &db, const unordered_set<string> &referenced_files) {
+	auto &fs = FileSystem::GetFileSystem(db);
+	lock_guard<mutex> guard(lock);
+	for (auto &file_name : dropped_written_files) {
+		if (!referenced_files.count(file_name)) {
+			fs.TryRemoveFile(file_name);
+		}
+	}
+	dropped_written_files.clear();
 }
 
 bool LocalTableChanges::HasTransactionLocalInserts(TableIndex table_id) const {
@@ -210,7 +229,7 @@ bool LocalTableChanges::TryDropTransactionLocalFile(ClientContext &context, Tabl
 			// found the file - delete it from the table list and from disk if DuckLake owns it
 			table_files.erase_at(i);
 			if (created_by_ducklake) {
-				fs.RemoveFile(path);
+				dropped_written_files.push_back(path);
 			}
 			if (table_changes.IsEmpty()) {
 				// no more files remaining
@@ -688,9 +707,7 @@ void LocalTableChanges::CleanupFiles(ClientContext &context, TableIndex table_id
 		vector<string> data_files;
 		vector<string> other_files;
 		table_entry->second.AddWrittenFiles(data_files, other_files, false);
-		for (auto &file_name : data_files) {
-			fs.RemoveFile(file_name);
-		}
+		dropped_written_files.insert(dropped_written_files.end(), data_files.begin(), data_files.end());
 		for (auto &file_name : other_files) {
 			fs.TryRemoveFile(file_name);
 		}
@@ -847,6 +864,7 @@ void DuckLakeTransaction::Commit() {
 		throw;
 	}
 	FlushNameMapCacheInvalidations();
+	state->RemoveDroppedFiles();
 	connection.reset();
 	state->local_changes.Clear();
 	config_option_undo.clear();

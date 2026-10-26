@@ -59,3 +59,57 @@ query I
 SELECT count(*) FROM glob('{DATA_PATH}/rollback_keeps_registered_file/main/t/*.parquet')
 ----
 1
+
+# a delete of every row of a file the transaction wrote keeps the file when another transaction registered it
+statement ok
+CREATE TABLE dl.v(i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (3)
+
+statement ok
+SET VARIABLE written = (SELECT file FROM glob('{DATA_PATH}/rollback_keeps_registered_file/main/t/*.parquet') WHERE file <> (SELECT data_file FROM ducklake_list_files('dl', 'u')))
+
+statement ok
+CALL ducklake_add_data_files('dl', 'v', getvariable('written'))
+
+statement ok con1
+DELETE FROM dl.t
+
+statement ok con1
+COMMIT
+
+query I
+SELECT * FROM dl.v
+----
+3
+
+# so does the drop of a table the transaction created
+statement ok con1
+BEGIN
+
+statement ok con1
+CREATE TABLE dl.w AS SELECT 4 AS i
+
+statement ok
+SET VARIABLE written = (SELECT file FROM glob('{DATA_PATH}/rollback_keeps_registered_file/main/w/*.parquet'))
+
+statement ok
+CREATE TABLE dl.x(i INTEGER)
+
+statement ok
+CALL ducklake_add_data_files('dl', 'x', getvariable('written'))
+
+statement ok con1
+DROP TABLE dl.w
+
+statement ok con1
+COMMIT
+
+query I
+SELECT * FROM dl.x
+----
+4

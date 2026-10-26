@@ -92,18 +92,32 @@ DuckLakeTransactionState::~DuckLakeTransactionState() {
 
 void DuckLakeTransactionState::CleanupFiles() {
 	// remove any files that were written, unless a committed row references them
-	unordered_set<string> referenced_files;
-	if (query_committed_metadata) {
-		vector<string> owned_files;
-		local_changes.GetOwnedFiles(owned_files);
-		try {
-			referenced_files = GetReferencedFiles(owned_files);
-		} catch (std::exception &) {
-			// without the metadata nothing shows that a file is unreferenced, so all of them are kept
-			referenced_files.insert(owned_files.begin(), owned_files.end());
-		}
+	vector<string> owned_files;
+	local_changes.GetOwnedFiles(owned_files);
+	local_changes.CleanupFiles(db, ReferencedWrittenFiles(owned_files));
+}
+
+void DuckLakeTransactionState::RemoveDroppedFiles() {
+	vector<string> dropped_files;
+	local_changes.GetDroppedFiles(dropped_files);
+	if (dropped_files.empty()) {
+		return;
 	}
-	local_changes.CleanupFiles(db, referenced_files);
+	local_changes.RemoveDroppedFiles(db, ReferencedWrittenFiles(dropped_files));
+}
+
+unordered_set<string> DuckLakeTransactionState::ReferencedWrittenFiles(const vector<string> &paths) {
+	unordered_set<string> referenced_files;
+	if (!query_committed_metadata) {
+		return referenced_files;
+	}
+	try {
+		referenced_files = GetReferencedFiles(paths);
+	} catch (std::exception &) {
+		// without the metadata nothing shows that a file is unreferenced, so all of them are kept
+		referenced_files.insert(paths.begin(), paths.end());
+	}
+	return referenced_files;
 }
 
 unordered_set<string> DuckLakeTransactionState::GetReferencedFiles(const vector<string> &paths) {

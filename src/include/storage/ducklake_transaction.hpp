@@ -108,7 +108,11 @@ public:
 	LocalTableChangeIterationHelper Changes() const;
 	//! Removes the files the transaction wrote, except those that committed rows reference
 	void CleanupFiles(DatabaseInstance &db, const unordered_set<string> &referenced_files);
+	//! Drops the changes of a table, its data files are removed at the end of the transaction
 	void CleanupFiles(ClientContext &context, TableIndex table_id);
+	//! Removes the data files the transaction dropped, except those that committed rows reference
+	void RemoveDroppedFiles(DatabaseInstance &db, const unordered_set<string> &referenced_files);
+	void GetDroppedFiles(vector<string> &result) const;
 	void GetWrittenFiles(vector<string> &result) const;
 	//! The files the transaction wrote, which a rollback removes
 	void GetOwnedFiles(vector<string> &result) const;
@@ -116,7 +120,7 @@ public:
 	bool HasTransactionInlinedData(TableIndex table_id) const;
 	vector<DuckLakeDataFile> GetTransactionLocalFiles(TableIndex table_id) const;
 	shared_ptr<DuckLakeInlinedData> GetTransactionLocalInlinedData(ClientContext &context, TableIndex table_id) const;
-	//! Returns false for a file whose rows keep their history
+	//! Returns false for a file whose rows keep their history, the file is removed at the end of the transaction
 	bool TryDropTransactionLocalFile(ClientContext &context, TableIndex table_id, const string &path);
 	void AppendFiles(TableIndex table_id, vector<DuckLakeDataFile> files);
 	void AppendDeleteFiles(TableIndex table_id, const string &data_file_path, vector<DuckLakeDeleteFile> files);
@@ -165,6 +169,8 @@ private:
 private:
 	mutable mutex lock;
 	map<TableIndex, LocalTableDataChanges> changes;
+	//! The data files the transaction wrote and dropped again, which another transaction can have registered
+	vector<string> dropped_written_files;
 };
 
 struct SnapshotAndStats {

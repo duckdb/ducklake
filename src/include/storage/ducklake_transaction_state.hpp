@@ -287,6 +287,10 @@ public:
 	static void DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context);
 
 	void CleanupFiles();
+	//! Removes the files the committed transaction wrote and dropped again, unless committed rows reference them
+	void RemoveDroppedFiles();
+	//! The written files that committed rows reference and the transaction must keep, all of them without metadata
+	unordered_set<string> ReferencedWrittenFiles(const vector<string> &paths);
 	//! The paths of the given files that committed data or delete file rows reference
 	unordered_set<string> GetReferencedFiles(const vector<string> &paths);
 
