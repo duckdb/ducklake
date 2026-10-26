@@ -459,7 +459,7 @@ SELECT (SELECT count(*) FROM dl.rn WHERE b = 42), (SELECT max(b) FROM dl.rn)
 ----
 10	42
 
-# a column added while a rewrite of the table is in flight keeps its statistics
+# a column added while a rewrite is in flight must still read its default
 statement ok
 CREATE TABLE dl.cr (a INTEGER)
 
@@ -492,14 +492,16 @@ COMMIT
 statement ok con1
 COMMIT
 
+# A smaller gross count must not make the deleted minimum exact, but nullability stays known.
 query III
 SELECT CAST(s.contains_null AS BOOLEAN), s.min_value, s.max_value FROM issue_1054_meta.ducklake_table_column_stats s
 JOIN issue_1054_meta.ducklake_table t USING (table_id)
 WHERE t.table_name = 'cr' AND s.column_id = 2
 ----
-false	7	42
+false	NULL	NULL
 
-query III
-SELECT (SELECT count(*) FROM dl.cr WHERE b = 42), (SELECT count(*) FROM dl.cr WHERE a = 100), (SELECT max(b) FROM dl.cr)
+query IIII
+SELECT (SELECT count(*) FROM dl.cr WHERE b = 42), (SELECT count(*) FROM dl.cr WHERE a = 100),
+       (SELECT max(b) FROM dl.cr), (SELECT min(a) FROM dl.cr)
 ----
-9	1	42
+9	1	42	1

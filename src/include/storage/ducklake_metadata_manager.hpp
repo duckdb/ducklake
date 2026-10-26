@@ -227,7 +227,9 @@ public:
 	bool ExecuteRetrialsServerSide() const;
 	//! Whether the client can skip the snapshot fetch and let the server read it.
 	virtual bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const;
-	virtual bool IsRetryableCommitError(const string &) const {
+	virtual void ResetCommitAttempt() {
+	}
+	virtual bool IsRetryableCommitError(const string &) {
 		return false;
 	}
 	//! Advice added to the error of a commit that failed for good
@@ -385,6 +387,8 @@ public:
 	static string GetInlinedRowCountsSql(const string &inlined_table_name, const DuckLakeInlinedColNames &col_names);
 	static string GetTableColumnSchemaSql(TableIndex table_id);
 	static string GetInlinedTableNamesSql(TableIndex table_id);
+	virtual unique_ptr<QueryResult> GetInlinedTablesForCommit(const set<TableIndex> &table_ids);
+	static string GetInlinedTableNamesForTablesSql(const set<TableIndex> &table_ids);
 	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id);
 	//! The top-level columns of each inlined data table at the schema version of that table
 	static string GetInlinedTableColumnsSql(optional_idx table_id = optional_idx());
@@ -392,7 +396,7 @@ public:
 	static string InsertValuesSql(const string &table_name, const vector<string> &values);
 	//! The inserts of the given rows into the given table, in batches
 	static string InsertValuesIntoSql(const string &qualified_table_name, const vector<string> &values);
-	unordered_set<string> GetInlinedTableNames(TableIndex table_id);
+	virtual unordered_set<string> GetInlinedTableNames(TableIndex table_id);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
 	virtual vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter);
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type);
@@ -535,6 +539,9 @@ public:
 	static string InsertTableColumnStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
 	//! Set the stored table sizes to the size of the live data files
 	static string RefreshTableSizesSql(const set<TableIndex> &table_ids);
+	static string RefreshTableRowCountSql(TableIndex table_id, const set<string> &inlined_tables,
+	                                      idx_t pending_inlined_rows, const DuckLakeInlinedColNames &col_names,
+	                                      bool include_exactness, bool has_inlined_file_deletions);
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor, const string &query);
