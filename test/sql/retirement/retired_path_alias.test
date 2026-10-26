@@ -1,5 +1,5 @@
 # name: test/sql/retirement/retired_path_alias.test
-# description: a file at a path that a cleanup retired cannot be registered, also under another spelling of the path
+# description: a file at a local path that a cleanup retired cannot be registered, also under another spelling of the path
 # group: [retirement]
 
 require ducklake
@@ -8,10 +8,8 @@ require parquet
 
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
 
-test-env DATA_PATH {TEST_DIR}
-
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/retired_path_alias', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{TEST_DIR}/retired_path_alias', METADATA_CATALOG 'meta')
 
 statement ok
 CALL dl.set_option('data_inlining_row_limit', 0)
@@ -20,7 +18,7 @@ statement ok
 CREATE TABLE dl.t AS SELECT 0 AS i
 
 statement ok
-COPY (SELECT 1 AS i) TO '{DATA_PATH}/retired_path_alias/main/t/orphan.parquet'
+COPY (SELECT 1 AS i) TO '{TEST_DIR}/retired_path_alias/main/t/orphan.parquet'
 
 query I
 SELECT count(*) FROM ducklake_delete_orphaned_files('dl', cleanup_all => true)
@@ -28,15 +26,15 @@ SELECT count(*) FROM ducklake_delete_orphaned_files('dl', cleanup_all => true)
 1
 
 statement ok
-COPY (SELECT 2 AS i) TO '{DATA_PATH}/retired_path_alias/main/t/orphan.parquet'
+COPY (SELECT 2 AS i) TO '{TEST_DIR}/retired_path_alias/main/t/orphan.parquet'
 
 statement error
-CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/retired_path_alias/main/t/orphan.parquet')
+CALL ducklake_add_data_files('dl', 't', '{TEST_DIR}/retired_path_alias/main/t/orphan.parquet')
 ----
 was retired by cleanup
 
 statement error
-CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/retired_path_alias/main/./t/../t/orphan.parquet')
+CALL ducklake_add_data_files('dl', 't', '{TEST_DIR}/retired_path_alias/main/./t/../t/orphan.parquet')
 ----
 was retired by cleanup
 
