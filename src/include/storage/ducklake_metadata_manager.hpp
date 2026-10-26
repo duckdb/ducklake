@@ -415,6 +415,8 @@ public:
 	static string RetireFilesSql(const DuckLakeRetirement &retirement);
 	//! The full path, table, physical identity and end snapshot of every data file, ended files included
 	static string DataFileIdentitiesQuery();
+	//! The full paths of the data and delete files whose stored path matches the filter, ended files included
+	static string FilesWithFileNamesQuery(const string &path_filter);
 	static string DropSchemas(const set<SchemaIndex> &ids);
 	static string DropTables(const set<TableIndex> &ids, bool renamed);
 	static string DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags = false);

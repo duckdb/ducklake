@@ -63,7 +63,8 @@
         "test/sql/retirement/retired_path_alias.test",
         "test/sql/retirement/retired_remote_path_alias.test",
         "test/sql/retirement/sqlite_wal_retirement.test",
-        "test/sql/add_files/add_files_registration_rules.test"
+        "test/sql/add_files/add_files_registration_rules.test",
+        "test/sql/retirement/rollback_keeps_registered_file.test"
       ]
     },
     {

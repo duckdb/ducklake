@@ -165,6 +165,12 @@ void DuckLakeServerSideCommit::ReadCommitHeader() {
 	}
 	state = make_uniq<DuckLakeTransactionState>(*context.db, /*require_commit_message=*/false, new_name_maps,
 	                                            std::move(data_path), std::move(separator));
+	if (supports_file_identity) {
+		// a registration of another transaction can reference a file the commit wrote
+		state->query_committed_metadata = [this](string query) {
+			return fresh_conn.Query(SubstitutePlaceholders(std::move(query), DuckLakeSnapshot()));
+		};
+	}
 	state->commit_info.author = row.GetBaseValue(0);
 	state->commit_info.commit_message = row.GetBaseValue(1);
 	state->commit_info.commit_extra_info = row.GetBaseValue(2);

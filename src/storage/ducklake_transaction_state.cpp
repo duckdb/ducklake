@@ -91,8 +91,48 @@ DuckLakeTransactionState::~DuckLakeTransactionState() {
 }
 
 void DuckLakeTransactionState::CleanupFiles() {
-	// remove any files that were written
-	local_changes.CleanupFiles(db);
+	// remove any files that were written, unless a committed row references them
+	unordered_set<string> referenced_files;
+	if (query_committed_metadata) {
+		vector<string> owned_files;
+		local_changes.GetOwnedFiles(owned_files);
+		try {
+			referenced_files = GetReferencedFiles(owned_files);
+		} catch (std::exception &) {
+			// without the metadata nothing shows that a file is unreferenced, so all of them are kept
+			referenced_files.insert(owned_files.begin(), owned_files.end());
+		}
+	}
+	local_changes.CleanupFiles(db, referenced_files);
+}
+
+unordered_set<string> DuckLakeTransactionState::GetReferencedFiles(const vector<string> &paths) {
+	unordered_set<string> result;
+	if (paths.empty()) {
+		return result;
+	}
+	auto &fs = FileSystem::GetFileSystem(db);
+	vector<string> suffixes;
+	for (auto &path : paths) {
+		auto separator_pos = path.find_last_of("/\\");
+		auto file_name = separator_pos == string::npos ? path : path.substr(separator_pos + 1);
+		suffixes.push_back(StringUtil::Format("suffix(f.path, %s)", SQLString(file_name)));
+	}
+	auto query =
+	    StringUtil::Replace(DuckLakeMetadataManager::FilesWithFileNamesQuery(StringUtil::Join(suffixes, " OR ")),
+	                        "{DATA_PATH}", SQLString::ToString(data_path));
+	auto references = query_committed_metadata(std::move(query));
+	references->ThrowIfError("Failed to read the files DuckLake references: ");
+	unordered_set<string> referenced_keys;
+	for (auto &row : *references) {
+		referenced_keys.insert(DuckLakeUtil::CanonicalPathKey(fs, row.GetValue<string>(0)));
+	}
+	for (auto &path : paths) {
+		if (referenced_keys.count(DuckLakeUtil::CanonicalPathKey(fs, path))) {
+			result.insert(path);
+		}
+	}
+	return result;
 }
 
 bool DuckLakeTransactionState::SchemaChangesMade() const {

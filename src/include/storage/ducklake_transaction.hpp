@@ -106,9 +106,12 @@ public:
 	void Clear();
 	bool HasChanges() const;
 	LocalTableChangeIterationHelper Changes() const;
-	void CleanupFiles(DatabaseInstance &db);
+	//! Removes the files the transaction wrote, except those that committed rows reference
+	void CleanupFiles(DatabaseInstance &db, const unordered_set<string> &referenced_files);
 	void CleanupFiles(ClientContext &context, TableIndex table_id);
 	void GetWrittenFiles(vector<string> &result) const;
+	//! The files the transaction wrote, which a rollback removes
+	void GetOwnedFiles(vector<string> &result) const;
 	bool HasTransactionLocalInserts(TableIndex table_id) const;
 	bool HasTransactionInlinedData(TableIndex table_id) const;
 	vector<DuckLakeDataFile> GetTransactionLocalFiles(TableIndex table_id) const;

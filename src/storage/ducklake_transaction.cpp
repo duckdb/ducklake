@@ -98,7 +98,7 @@ bool LocalTableChanges::HasChanges() const {
 	return !changes.empty();
 }
 
-void LocalTableChanges::CleanupFiles(DatabaseInstance &db) {
+void LocalTableChanges::CleanupFiles(DatabaseInstance &db, const unordered_set<string> &referenced_files) {
 	auto &fs = FileSystem::GetFileSystem(db);
 	lock_guard<mutex> guard(lock);
 	for (auto &entry : changes) {
@@ -106,7 +106,9 @@ void LocalTableChanges::CleanupFiles(DatabaseInstance &db) {
 		vector<string> written_files;
 		table_changes.AddWrittenFiles(written_files, written_files, false);
 		for (auto &file_name : written_files) {
-			fs.TryRemoveFile(file_name);
+			if (!referenced_files.count(file_name)) {
+				fs.TryRemoveFile(file_name);
+			}
 		}
 		table_changes.new_data_files.clear();
 		table_changes.new_delete_files.clear();
@@ -135,6 +137,13 @@ void LocalTableChanges::GetWrittenFiles(vector<string> &result) const {
 	lock_guard<mutex> guard(lock);
 	for (auto &entry : changes) {
 		entry.second.AddWrittenFiles(result, result, true);
+	}
+}
+
+void LocalTableChanges::GetOwnedFiles(vector<string> &result) const {
+	lock_guard<mutex> guard(lock);
+	for (auto &entry : changes) {
+		entry.second.AddWrittenFiles(result, result, false);
 	}
 }
 
@@ -764,6 +773,12 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
 	schema_pins = make_uniq<DuckLakeSchemaPinState>();
 	state = make_uniq<DuckLakeTransactionState>(db, ducklake_catalog.IsCommitInfoRequired(), new_name_maps,
 	                                            ducklake_catalog.DataPath(), ducklake_catalog.Separator());
+	if (ducklake_catalog.SupportsFileIdentity()) {
+		// a registration of another transaction can reference a file this transaction wrote
+		state->query_committed_metadata = [this](string query) {
+			return metadata_manager->Query(query);
+		};
+	}
 }
 
 DuckLakeTransaction::~DuckLakeTransaction() {
@@ -856,9 +871,9 @@ void DuckLakeTransaction::Rollback() {
 			}
 			throw;
 		}
-		connection.reset();
 	}
 	state->CleanupFiles();
+	connection.reset();
 	state->local_changes.Clear();
 	state->new_snapshot_tags.clear();
 	state->dropped_snapshot_tags.clear();

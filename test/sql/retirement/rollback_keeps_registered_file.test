@@ -1,0 +1,61 @@
+# name: test/sql/retirement/rollback_keeps_registered_file.test
+# description: a writer that rolls back after another transaction registered the file it wrote keeps the file
+# group: [retirement]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/rollback_keeps_registered_file', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+CREATE TABLE dl.u(i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (1)
+
+# another transaction registers the file of the open insert
+statement ok
+SET VARIABLE written = (SELECT file FROM glob('{DATA_PATH}/rollback_keeps_registered_file/main/t/*.parquet'))
+
+statement ok
+CALL ducklake_add_data_files('dl', 'u', getvariable('written'))
+
+statement ok con1
+ROLLBACK
+
+query I
+SELECT * FROM dl.u
+----
+1
+
+query I
+SELECT count(*) FROM dl.t
+----
+0
+
+# a rollback without such a registration removes the file it wrote
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (2)
+
+statement ok con1
+ROLLBACK
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/rollback_keeps_registered_file/main/t/*.parquet')
+----
+1

@@ -5460,6 +5460,18 @@ string DuckLakeMetadataManager::GetReferencedFilesQuery() const {
 	                          "", "");
 }
 
+string DuckLakeMetadataManager::FilesWithFileNamesQuery(const string &path_filter) {
+	return FullFilePathsQuery(StringUtil::Format(R"(
+    SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id
+    FROM {METADATA_CATALOG}.ducklake_data_file f WHERE %s
+    UNION ALL
+    SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id
+    FROM {METADATA_CATALOG}.ducklake_delete_file f WHERE %s
+  )",
+	                                             path_filter, path_filter),
+	                          "", "");
+}
+
 string DuckLakeMetadataManager::DataFileIdentitiesQuery() {
 	return FullFilePathsQuery(R"(
     SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id,

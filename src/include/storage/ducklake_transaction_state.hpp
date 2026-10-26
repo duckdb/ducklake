@@ -287,6 +287,8 @@ public:
 	static void DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context);
 
 	void CleanupFiles();
+	//! The paths of the given files that committed data or delete file rows reference
+	unordered_set<string> GetReferencedFiles(const vector<string> &paths);
 
 	void EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const;
 
@@ -301,6 +303,8 @@ public:
 	string separator;
 	//! The physical identities that the files this transaction registers take, by path
 	unordered_map<string, idx_t> registration_identities;
+	//! Runs a metadata query outside of a commit attempt, unset when committed rows cannot reference written files
+	std::function<unique_ptr<QueryResult>(string)> query_committed_metadata;
 	DuckLakeSnapshotCommit commit_info;
 
 	map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> new_tables;
