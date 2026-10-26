@@ -12,8 +12,9 @@ require quack
 
 test-env DATA_PATH {TEST_DIR}
 
+# the older client of this test commits only to a catalog older than 2.0-dev2
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/staged_commit_added_files')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/staged_commit_added_files', DUCKLAKE_VERSION '1.1')
 
 statement ok
 CREATE TABLE lake.events (channel INTEGER, seq BIGINT, payload VARCHAR)
