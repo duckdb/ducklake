@@ -47,7 +47,7 @@ statement ok
 CALL ducklake_expire_snapshots('ducklake', older_than => now());
 
 statement ok
-CALL ducklake.set_option('target_file_size', '1KB');
+CALL ducklake.set_option('target_file_size', '1.5KB');
 
 statement ok
 CREATE TABLE example (key integer);
@@ -139,7 +139,7 @@ statement ok
 CALL ducklake_expire_snapshots('ducklake', older_than => now());
 
 statement ok
-CALL ducklake.set_option('target_file_size', '1KB');
+CALL ducklake.set_option('target_file_size', '1.5KB');
 
 statement ok
 CREATE TABLE table1 (key integer);

@@ -16,7 +16,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/duck
 
 # set target file size very small
 statement ok
-CALL ducklake.set_option('target_file_size', '4KB');
+CALL ducklake.set_option('target_file_size', '5KB');
 
 # snapshot 1
 statement ok
