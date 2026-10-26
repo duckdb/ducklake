@@ -68,11 +68,26 @@ SELECT * FROM ducklake_commit(''main'', -1, catalog_version => ''2.0-dev2'')')
 ----
 3	1	false
 
-# a client that does not pass its version cannot have attached a 2.0-dev2 catalog
+statement ok
+COPY (SELECT 42 AS i) TO '{DATA_PATH}/server_side_commit_staged_protocol_refused.parquet'
+
+# a client that does not pass its version cannot have attached a 2.0-dev2 catalog, the files of its commit are removed
 statement error
-CALL quack_query_by_name('__ducklake_metadata_lake', 'SELECT * FROM ducklake_commit(''main'', -1)')
+CALL quack_query_by_name('__ducklake_metadata_lake', '
+INSERT INTO ducklake_staged_data_file SELECT 0, table_id, 0, ''{DATA_PATH}/server_side_commit_staged_protocol_refused.parquet'',
+       false, ''parquet'', 1, 1000, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, true
+FROM main.ducklake_table WHERE table_name = ''t'' AND end_snapshot IS NULL;
+SELECT * FROM ducklake_commit(''main'', -1)')
 ----
 The catalog was migrated by another connection to version 2.0-dev2
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/server_side_commit_staged_protocol_refused.parquet')
+----
+0
+
+statement ok
+CALL quack_query_by_name('__ducklake_metadata_lake', 'TRUNCATE ducklake_staged_data_file')
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS legacy (DATA_PATH '{DATA_PATH}/server_side_commit_staged_protocol_legacy', METADATA_SCHEMA 'legacy', DUCKLAKE_VERSION '1.1')

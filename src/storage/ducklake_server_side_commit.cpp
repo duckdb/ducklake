@@ -99,15 +99,6 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	auto catalog_version = ReadCatalogVersion();
 	supports_v1_1_metadata = catalog_version >= DuckLakeVersion::V1_1;
 	supports_file_identity = catalog_version >= DuckLakeVersion::V2_0_DEV2;
-	if (attached_version.empty()) {
-		// clients that do not pass their version predate 2.0-dev2 and cannot have attached such a catalog
-		if (catalog_version >= DuckLakeVersion::V2_0_DEV2) {
-			throw InvalidInputException("The catalog was migrated by another connection to version %s, reattach to "
-			                            "pick up the new version",
-			                            DuckLakeVersionToString(catalog_version));
-		}
-		attached_version = DuckLakeVersionToString(catalog_version);
-	}
 	ReadCommitHeader();
 	ReadColumnTypes();
 	ReadStagedDeleteFiles();
@@ -120,6 +111,17 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	ReadStagedCompactions();
 	ReadStagedNameMaps();
 	ReadExistingTableStats();
+	if (attached_version.empty()) {
+		// clients that do not pass their version predate 2.0-dev2 and cannot have attached such a catalog
+		if (catalog_version >= DuckLakeVersion::V2_0_DEV2) {
+			// the commit fails for good, so the files it owns are removed like those of a failed commit
+			state->CleanupFiles();
+			throw InvalidInputException("The catalog was migrated by another connection to version %s, reattach to "
+			                            "pick up the new version",
+			                            DuckLakeVersionToString(catalog_version));
+		}
+		attached_version = DuckLakeVersionToString(catalog_version);
+	}
 
 	// Derive transaction_changes from local_changes the same way DuckLakeTransaction does.
 	for (auto &entry : state->local_changes.Changes()) {
