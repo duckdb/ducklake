@@ -1702,6 +1702,12 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.write_config_options = [&]() {
 		return metadata_manager->WriteConfigOptions(config_option_changes);
 	};
+	context.get_table_option_change = [&](TableIndex table_id, const string &key) {
+		DuckLakeConfigOption option;
+		option.option.key = key;
+		option.table_id = table_id;
+		return GetConfigOptionChange(option);
+	};
 	context.write_snapshot = ChangesMade();
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
@@ -1728,13 +1734,22 @@ void DuckLakeTransaction::ChangeConfigOption(const DuckLakeConfigOption &option,
 	ducklake_catalog.ChangeConfigOption(*this, change);
 }
 
-bool DuckLakeTransaction::ConfigOptionIsSet(const DuckLakeConfigOption &option) {
+optional_ptr<const DuckLakeConfigOptionChange>
+DuckLakeTransaction::GetConfigOptionChange(const DuckLakeConfigOption &option) const {
 	for (auto it = config_option_changes.rbegin(); it != config_option_changes.rend(); ++it) {
 		auto &changed = it->option;
 		if (changed.option.key == option.option.key && changed.schema_id == option.schema_id &&
 		    changed.table_id == option.table_id) {
-			return !it->reset;
+			return &*it;
 		}
+	}
+	return nullptr;
+}
+
+bool DuckLakeTransaction::ConfigOptionIsSet(const DuckLakeConfigOption &option) {
+	auto change = GetConfigOptionChange(option);
+	if (change) {
+		return !change->reset;
 	}
 	return metadata_manager->ConfigOptionExists(option);
 }

@@ -143,6 +143,11 @@ struct DuckLakeCommitContext {
 	std::function<string()> write_config_options = []() {
 		return string();
 	};
+	//! The latest change of a table option that the transaction made.
+	std::function<optional_ptr<const DuckLakeConfigOptionChange>(TableIndex, const string &)> get_table_option_change =
+	    [](TableIndex, const string &) {
+		    return optional_ptr<const DuckLakeConfigOptionChange>();
+	    };
 	//! Whether the commit writes a snapshot, a commit that only changes options writes none.
 	bool write_snapshot = true;
 	//! Author / message / extra info for the snapshot row.

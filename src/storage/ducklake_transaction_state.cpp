@@ -1004,19 +1004,31 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(TableIndex table_id,
 //! the server-side commit resolves it too. Only roots matter here: step 3 of the recompute merges inlined stats,
 //! which TryMergeInlinedStats only produces for scalar roots.
 static set<FieldIndex> ReadSkippedStatsFields(TableIndex table_id, const DuckLakeCommitContext &context) {
-	set<FieldIndex> result;
-	auto query = StringUtil::Format("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata "
-	                                "WHERE key='skip_stats_columns' AND scope='table' AND scope_id=%d;",
-	                                table_id.index);
-	auto stats_option = context.query_metadata(query);
-	stats_option->ThrowIfError("Failed to read the skip_stats_columns option from DuckLake: ");
-	for (auto &row : *stats_option) {
-		if (row.IsNull(0)) {
-			// LCOV_EXCL_START
-			continue;
-			// LCOV_EXCL_STOP
+	vector<string> values;
+	// the commit writes the change of the transaction itself after this read
+	auto change = context.get_table_option_change(table_id, "skip_stats_columns");
+	if (change) {
+		if (!change->reset) {
+			values.push_back(change->option.option.value);
 		}
-		for (auto &entry : StringUtil::Split(row.GetValue<string>(0), ',')) {
+	} else {
+		auto query = StringUtil::Format("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata "
+		                                "WHERE key='skip_stats_columns' AND scope='table' AND scope_id=%d;",
+		                                table_id.index);
+		auto stats_option = context.query_metadata(query);
+		stats_option->ThrowIfError("Failed to read the skip_stats_columns option from DuckLake: ");
+		for (auto &row : *stats_option) {
+			if (row.IsNull(0)) {
+				// LCOV_EXCL_START
+				continue;
+				// LCOV_EXCL_STOP
+			}
+			values.push_back(row.GetValue<string>(0));
+		}
+	}
+	set<FieldIndex> result;
+	for (auto &value : values) {
+		for (auto &entry : StringUtil::Split(value, ',')) {
 			idx_t field_index;
 			if (TryCast::Operation<string_t, idx_t>(string_t(entry), field_index)) {
 				result.insert(FieldIndex(field_index));

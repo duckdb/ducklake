@@ -323,6 +323,8 @@ public:
 	const vector<DuckLakeConfigOptionChange> &GetConfigOptionChanges() const {
 		return config_option_changes;
 	}
+	//! The latest change of the option in this transaction
+	optional_ptr<const DuckLakeConfigOptionChange> GetConfigOptionChange(const DuckLakeConfigOption &option) const;
 	bool FileIsDropped(const string &path) const;
 	//! Check if there are any uncommitted changes for this table (inserts, deletes, or dropped files)
 	bool HasAnyLocalChanges(TableIndex table_id) const;
