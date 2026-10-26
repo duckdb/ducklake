@@ -46,6 +46,16 @@ static unique_ptr<FunctionData> DuckLakeTableChangesBind(ClientContext &context,
 	return_types = function_info.column_types;
 	function_info.start_snapshot =
 	    make_uniq<DuckLakeSnapshot>(transaction.GetSnapshot(start_at_clause, SnapshotBound::LOWER_BOUND));
+	if (catalog.SupportsFileIdentity()) {
+		// the copied rows of a clone keep the insert snapshots of its source
+		auto fork_snapshot = transaction.GetMetadataManager().GetForkSnapshot(table.GetTableId());
+		if (fork_snapshot.IsValid() && function_info.start_snapshot->snapshot_id < fork_snapshot.GetIndex()) {
+			throw InvalidInputException("The changes of table \"%s\" start at snapshot %llu, the table is a clone "
+			                            "created at snapshot %llu",
+			                            table.name.GetIdentifierName(), function_info.start_snapshot->snapshot_id,
+			                            fork_snapshot.GetIndex());
+		}
+	}
 	function_info.scan_type = scan_type;
 	if (scan_type == DuckLakeScanType::SCAN_DELETIONS) {
 		// Per-row deletion snapshots are populated after the file reader applies pushed filters.

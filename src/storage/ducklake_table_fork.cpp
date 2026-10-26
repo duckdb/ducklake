@@ -83,6 +83,22 @@ LIMIT 1)",
 	}
 }
 
+optional_idx DuckLakeMetadataManager::GetForkSnapshot(TableIndex table_id) {
+	auto result = Query(StringUtil::Format(R"(
+SELECT t.begin_snapshot FROM {METADATA_CATALOG}.ducklake_table t
+WHERE t.table_id = %llu AND t.begin_snapshot = (
+	SELECT MIN(begin_snapshot) FROM {METADATA_CATALOG}.ducklake_table WHERE table_id = %llu)
+AND EXISTS (
+	SELECT 1 FROM {METADATA_CATALOG}.ducklake_schema_versions v WHERE v.table_id = %llu AND
+	v.begin_snapshot < t.begin_snapshot))",
+	                                       table_id.index, table_id.index, table_id.index));
+	result->ThrowIfError("Failed to read the creation of a table in DuckLake: ");
+	for (auto &row : *result) {
+		return row.GetValue<idx_t>(0);
+	}
+	return optional_idx();
+}
+
 //! Whether no snapshot after the fork snapshot changed the source, so that its current statistics hold for the copy
 static bool ForkAtHead(DuckLakeMetadataManager &metadata_manager, const DuckLakeForkInfo &fork) {
 	auto result = metadata_manager.Query(StringUtil::Format(

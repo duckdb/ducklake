@@ -80,3 +80,20 @@ query I
 SELECT changes['tables_cloned'] FROM dl.snapshots() WHERE changes['tables_cloned'] IS NOT NULL
 ----
 [main.c]
+
+# the change feed of a clone starts at its creation, its copied rows keep the insert snapshots of the source
+statement ok
+SET VARIABLE clone_snapshot = (SELECT snapshot_id FROM dl.snapshots() WHERE changes['tables_cloned'] IS NOT NULL)
+
+statement error
+SELECT * FROM ducklake_table_insertions('dl', 'main', 'c', 0, getvariable('clone_snapshot'))
+----
+the table is a clone created at snapshot
+
+statement ok
+SET VARIABLE latest_snapshot = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+query I
+SELECT i FROM ducklake_table_insertions('dl', 'main', 'c', getvariable('clone_snapshot'), getvariable('latest_snapshot'))
+----
+4
