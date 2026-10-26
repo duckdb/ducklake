@@ -1201,11 +1201,6 @@ static option_map_t &GetOptionScope(DuckLakeOptions &options, const DuckLakeConf
 	return options.config_options;
 }
 
-void DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOption &option) {
-	lock_guard<mutex> guard(config_lock);
-	GetOptionScope(options, option)[option.option.key] = option.option.value;
-}
-
 //! Shows the latest value that an open transaction gave the option, or else its committed value
 static void ShowConfigOption(option_map_t &scope, const string &key, const DuckLakeChangedConfigOption &changed) {
 	auto &value = changed.changes.empty() ? changed.committed : changed.changes.back().second;
@@ -1214,6 +1209,20 @@ static void ShowConfigOption(option_map_t &scope, const string &key, const DuckL
 	} else {
 		scope.erase(key);
 	}
+}
+
+void DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOption &option) {
+	lock_guard<mutex> guard(config_lock);
+	auto &scope = GetOptionScope(options, option);
+	auto &key = option.option.key;
+	auto entry = changed_config_options.find(make_pair(&scope, key));
+	if (entry == changed_config_options.end()) {
+		scope[key] = option.option.value;
+		return;
+	}
+	entry->second.committed.is_set = true;
+	entry->second.committed.value = option.option.value;
+	ShowConfigOption(scope, key, entry->second);
 }
 
 static vector<pair<const DuckLakeTransaction *, DuckLakeOptionValue>>::iterator
@@ -1258,7 +1267,6 @@ void DuckLakeCatalog::EndConfigOptionChanges(const DuckLakeTransaction &transact
 	for (auto &change : changes) {
 		auto &scope = GetOptionScope(options, change.option);
 		auto &key = change.option.option.key;
-		// an option that the transaction changed more than once ends with its first change
 		auto entry = changed_config_options.find(make_pair(&scope, key));
 		if (entry == changed_config_options.end()) {
 			continue;
@@ -1277,6 +1285,18 @@ void DuckLakeCatalog::EndConfigOptionChanges(const DuckLakeTransaction &transact
 			changed_config_options.erase(entry);
 		}
 	}
+}
+
+void DuckLakeCatalog::CommitConfigOptionChanges(const DuckLakeTransaction &transaction,
+                                                const vector<DuckLakeConfigOptionChange> &changes,
+                                                const std::function<void()> &commit) {
+	if (changes.empty()) {
+		commit();
+		return;
+	}
+	lock_guard<mutex> guard(config_commit_lock);
+	commit();
+	EndConfigOptionChanges(transaction, changes, true);
 }
 
 template <class SCOPE_MAP, class SCOPE_ID>

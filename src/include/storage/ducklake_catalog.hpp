@@ -211,11 +211,15 @@ public:
 	}
 	//! Sets a committed config option
 	void SetConfigOption(const DuckLakeConfigOption &option);
-	//! Sets or resets a config option for an open transaction, every reader sees it until the transaction ends
+	//! Records the latest option change of an open transaction
 	void ChangeConfigOption(const DuckLakeTransaction &transaction, const DuckLakeConfigOptionChange &change);
 	//! Ends the option changes of a transaction, the options keep the values it committed
 	void EndConfigOptionChanges(const DuckLakeTransaction &transaction,
 	                            const vector<DuckLakeConfigOptionChange> &changes, bool committed);
+	//! Runs the metadata commit of a transaction, and keeps the option values it committed in the order of commits
+	void CommitConfigOptionChanges(const DuckLakeTransaction &transaction,
+	                               const vector<DuckLakeConfigOptionChange> &changes,
+	                               const std::function<void()> &commit);
 	//! Pending table options take precedence
 	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id,
 	                        optional_ptr<const map<string, string>> table_options = nullptr) const;
@@ -471,6 +475,8 @@ private:
 	DuckLakeOptions options;
 	//! The options that open transactions changed, by scope and name
 	map<pair<const option_map_t *, string>, DuckLakeChangedConfigOption> changed_config_options;
+	//! Held by the metadata commits of transactions that changed options
+	mutex config_commit_lock;
 	//! The path separator
 	string separator = "/";
 	//! A unique tracker for catalog changes in uncommitted transactions.

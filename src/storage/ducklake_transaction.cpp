@@ -1552,7 +1552,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		}
 	};
 	context.commit_connection = [&]() {
-		connection->Commit();
+		ducklake_catalog.CommitConfigOptionChanges(*this, config_option_changes, [&]() { connection->Commit(); });
 	};
 	context.try_rollback = [&]() {
 		if (connection->context->transaction.HasActiveTransaction()) {
