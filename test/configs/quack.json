@@ -32,6 +32,12 @@
       ]
     },
     {
+      "reason": "The Quack server runs each statement of a client transaction in a server transaction of its own, so the expiry already sees the tag of the other connection",
+      "paths": [
+        "test/sql/tags/tags_expire_conflict.test"
+      ]
+    },
+    {
       "reason": "Test only for SQLite as catalog",
       "paths": [
         "test/sql/metadata/ducklake_settings_sqlite.test",
