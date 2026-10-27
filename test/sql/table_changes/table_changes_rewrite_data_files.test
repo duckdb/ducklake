@@ -1,0 +1,166 @@
+# name: test/sql/table_changes/table_changes_rewrite_data_files.test
+# description: A rewrite of data files changes no rows, so the change feed reports nothing for it
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/table_changes_rewrite_data_files')
+
+statement ok
+USE ducklake
+
+statement ok
+CALL set_option('data_inlining_row_limit', 2)
+
+statement ok
+CREATE TABLE t (id INTEGER)
+
+statement ok
+INSERT INTO t SELECT range FROM range(10)
+
+# a delete file
+statement ok
+DELETE FROM t WHERE id < 3
+
+# an inlined deletion
+statement ok
+DELETE FROM t WHERE id = 3
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
+
+query I
+SELECT changes FROM snapshots() WHERE snapshot_id = 5
+----
+{rewrite_delete=[1]}
+
+query I
+SELECT COUNT(*) FROM table_insertions('t', 5, 5)
+----
+0
+
+query I
+SELECT COUNT(*) FROM table_deletions('t', 5, 5)
+----
+0
+
+query I
+SELECT COUNT(*) FROM table_changes('t', 5, 5)
+----
+0
+
+query IIII
+SELECT snapshot_id, rowid, change_type, id FROM table_changes('t', 0, 5) ORDER BY ALL
+----
+2	0	insert	0
+2	1	insert	1
+2	2	insert	2
+2	3	insert	3
+2	4	insert	4
+2	5	insert	5
+2	6	insert	6
+2	7	insert	7
+2	8	insert	8
+2	9	insert	9
+3	0	delete	0
+3	1	delete	1
+3	2	delete	2
+4	3	delete	3
+
+query IIII
+SELECT snapshot_id, rowid, change_type, id FROM table_changes('t', 3, 5) ORDER BY ALL
+----
+3	0	delete	0
+3	1	delete	1
+3	2	delete	2
+4	3	delete	3
+
+# merge the rewritten file with a newer one
+statement ok
+INSERT INTO t SELECT range FROM range(100, 103)
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake')
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't')
+----
+1
+
+query II
+SELECT rowid, id FROM ducklake_table_insertions('ducklake', 'main', 't', 5, 7) ORDER BY ALL
+----
+10	100
+11	101
+12	102
+
+query I
+SELECT COUNT(*) FROM table_insertions('t', 0, 7)
+----
+13
+
+query I
+SELECT COUNT(*) FROM table_changes('t', 0, 7) WHERE change_type LIKE 'update%'
+----
+0
+
+# changes after the rewrite are reported as before
+statement ok
+UPDATE t SET id = 50 WHERE id = 5
+
+statement ok
+DELETE FROM t WHERE id = 6
+
+query IIII
+SELECT snapshot_id, rowid, change_type, id FROM table_changes('t', 8, 9) ORDER BY ALL
+----
+8	5	update_postimage	50
+8	5	update_preimage	5
+9	6	delete	6
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
+
+query I
+SELECT changes FROM snapshots() WHERE snapshot_id = 10
+----
+{rewrite_delete=[1]}
+
+query I
+SELECT COUNT(*) FROM table_changes('t', 10, 10)
+----
+0
+
+query I
+SELECT COUNT(*) FROM table_changes('t', 10, 5)
+----
+0
+
+query IIII
+SELECT snapshot_id, rowid, change_type, id FROM table_changes('t', 6, 10) ORDER BY ALL
+----
+6	10	insert	100
+6	11	insert	101
+6	12	insert	102
+8	5	update_postimage	50
+8	5	update_preimage	5
+9	6	delete	6
+
+query II
+SELECT rowid, id FROM t ORDER BY ALL
+----
+4	4
+5	50
+7	7
+8	8
+9	9
+10	100
+11	101
+12	102

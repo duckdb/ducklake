@@ -185,6 +185,6 @@ SELECT count(*) FROM metadata.ducklake_name_mapping
 0
 
 query I
-SELECT count(*) = 1 FROM ducklake_snapshots('ducklake')
+SELECT count(*) = 1 FROM ducklake_snapshots('ducklake') WHERE NOT map_contains(changes, 'snapshots_expired')
 ----
 true

@@ -11,6 +11,17 @@ unzip data/old_ducklake/compacted_files.db.gz {TEST_DIR}/legacy_compacted_table_
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/legacy_compacted_table_changes.db' AS ducklake (DATA_PATH '{TEST_DIR}/legacy_compacted_table_changes', OVERRIDE_DATA_PATH TRUE, AUTOMATIC_MIGRATION TRUE)
 
+# the migration of a catalog of an older release ends at the current version
+query I
+SELECT value FROM ducklake.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query I
+SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_snapshot_tag
+----
+0
+
 query II
 SELECT snapshot_id, changes FROM ducklake.snapshots() WHERE snapshot_id BETWEEN 7 AND 9 ORDER BY snapshot_id
 ----

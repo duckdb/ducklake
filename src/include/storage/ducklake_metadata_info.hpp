@@ -318,6 +318,15 @@ struct DuckLakeSnapshotInfo {
 	Value commit_extra_info;
 };
 
+struct DuckLakeSnapshotTagInfo {
+	string name;
+	idx_t snapshot_id;
+	//! NULL when the tagged snapshot is gone
+	Value snapshot_time;
+	//! The snapshot that created the tag, unset until its transaction commits
+	optional_idx created_snapshot_id;
+};
+
 struct DuckLakeViewColumnTag {
 	string column_name;
 	string key;
@@ -409,6 +418,8 @@ struct DuckLakeFileListEntry {
 	optional_idx snapshot_filter_max;
 	//! Lower bound filter, we only include rows where _ducklake_internal_snapshot_id >= snapshot_filter_min
 	optional_idx snapshot_filter_min;
+	//! We skip the rows whose _ducklake_internal_snapshot_id is one of these rewrite snapshots
+	vector<idx_t> snapshot_filter_excluded;
 	MappingIndex mapping_id;
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
 	//! The data file id

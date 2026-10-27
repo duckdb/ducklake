@@ -4,6 +4,7 @@
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 
 #include "storage/ducklake_storage.hpp"
+#include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_secret.hpp"
@@ -41,7 +42,7 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 		if (options.at_clause) {
 			throw InvalidInputException("Cannot specify both VERSION and TIMESTAMP");
 		}
-		options.at_clause = make_uniq<BoundAtClause>("version", value.DefaultCastAs(LogicalType::BIGINT));
+		options.at_clause = make_uniq<BoundAtClause>(DuckLakeTableFunctionUtil::VersionAtClauseFromValue(value));
 	} else if (lcase == "snapshot_time") {
 		if (options.at_clause) {
 			throw InvalidInputException("Cannot specify both VERSION and TIMESTAMP");

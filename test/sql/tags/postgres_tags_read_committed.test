@@ -1,0 +1,157 @@
+# name: test/sql/tags/postgres_tags_read_committed.test
+# description: tags and expiry on Postgres under READ COMMITTED, in a schema whose name needs quoting
+# group: [tags]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS "tags''$$rc" CASCADE')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/tags_rc', METADATA_SCHEMA 'tags''$$rc', META_ISOLATION_LEVEL 'READ COMMITTED')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+CALL ducklake_create_tag('dl', 'two', version => 2)
+
+query I
+SELECT i FROM dl.t AT (VERSION => 'two')
+----
+1
+
+# an open expiry reads its snapshots again when it commits and keeps the one tagged meanwhile
+statement ok con1
+BEGIN
+
+query I con1
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [1, 3])
+----
+1
+3
+
+statement ok con2
+CALL ducklake_create_tag('dl', 'three', version => 3)
+
+statement ok con1
+COMMIT
+
+query I
+SELECT snapshot_id FROM ducklake_snapshots('dl') ORDER BY snapshot_id
+----
+0
+2
+3
+4
+5
+6
+
+query I
+SELECT changes FROM ducklake_snapshots('dl') WHERE snapshot_id = 6
+----
+{snapshots_expired=[1]}
+
+# a commit that reads the latest snapshot again expires again when a commit came after its expiry
+statement ok con1
+BEGIN
+
+query I con1
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [4])
+----
+4
+
+statement ok con1
+CALL ducklake_create_tag('dl', 'pending', version => 6)
+
+statement ok con2
+CALL ducklake_create_tag('dl', 'four', version => 4)
+
+statement ok con1
+COMMIT
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') ORDER BY tag_name
+----
+four	4
+pending	6
+three	3
+two	2
+
+# a tag of a snapshot that a concurrent transaction expired is not created
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_drop_tag('dl', 'three')
+
+statement ok con1
+COMMIT
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_create_tag('dl', 'late', version => 3)
+
+statement ok con2
+CALL ducklake_expire_snapshots('dl', versions => [3])
+
+statement error con1
+COMMIT
+----
+another transaction has expired the snapshot
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') ORDER BY tag_name
+----
+four	4
+pending	6
+two	2
+
+statement ok
+DETACH dl
+
+# a read-only session fails the tag commit at once
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION} options=-cdefault_transaction_read_only=on' AS dl_ro
+(DATA_PATH '{DATA_PATH}/tags_rc', METADATA_SCHEMA 'tags''$$rc')
+
+statement error
+CALL ducklake_create_tag('dl_ro', 'read_only', version => 2)
+----
+<!REGEX>:.*Exceeded the maximum retry count.*
+
+statement error
+CALL ducklake_create_tag('dl_ro', 'read_only', version => 2)
+----
+read-only transaction
+
+statement ok
+DETACH dl_ro
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA "tags''$$rc" CASCADE')
+
+statement ok
+DETACH pg
