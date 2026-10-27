@@ -14,9 +14,10 @@ require-env DUCKLAKE_CONNECTION
 
 test-env DATA_PATH {TEST_DIR}
 
+# a retried commit on 1.1 does not expire again
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
-(DATA_PATH '{DATA_PATH}/set_option_read_committed', META_ISOLATION_LEVEL 'READ COMMITTED')
+(DATA_PATH '{DATA_PATH}/set_option_read_committed', META_ISOLATION_LEVEL 'READ COMMITTED', DUCKLAKE_VERSION '1.1')
 
 statement ok
 CREATE TABLE dl.t (i INTEGER)

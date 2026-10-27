@@ -62,6 +62,7 @@
         "test/sql/compaction/postgres_expire_snapshots_time_zone.test",
         "test/sql/settings/set_option_concurrent_insert.test",
         "test/sql/settings/set_option_concurrent_insert_read_committed.test",
+        "test/sql/settings/set_option_concurrent_insert_expiry.test",
         "test/sql/tags/postgres_tags_read_committed.test",
         "test/sql/general/postgres_nul_byte_text.test",
         "test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test",
