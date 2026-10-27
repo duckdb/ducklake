@@ -548,9 +548,12 @@ public:
 	//! Selects the given tables or views renamed after the snapshot
 	static string GetRenamedAfterSnapshotSql(const string &metadata_table_name, const string &id_name,
 	                                         const set<TableIndex> &ids);
+	//! Whether a row of the file table has the physical identity of another row, which copies and registrations give
+	static bool FilesShareIdentities(const std::function<unique_ptr<QueryResult>(string)> &query,
+	                                 const string &file_table);
 	//! Caller supplies one resolved path per overwritten file, in the same order.
 	static string DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverwrittenDeleteFile> &overwritten_files,
-	                                           const vector<DuckLakePath> &resolved_paths, bool supports_file_identity);
+	                                           const vector<DuckLakePath> &resolved_paths, bool check_identities);
 	//! Caller supplies one resolved path per new delete file, in the same order.
 	static string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
 	                                  const vector<DuckLakePath> &resolved_paths, bool write_row_group_count,
@@ -561,12 +564,12 @@ public:
 	static string WriteNewColumnMappings(const vector<DuckLakeColumnMappingInfo> &new_column_mappings);
 	//! Caller supplies one resolved path per compaction, in the same order.
 	static string WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions,
-	                                 const vector<DuckLakePath> &resolved_paths, bool supports_file_identity);
+	                                 const vector<DuckLakePath> &resolved_paths, bool check_identities);
 	static string WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions);
 	//! For MERGE_ADJACENT_TABLES, resolved_paths is one path per compaction; for REWRITE_DELETES it
 	//! is ignored.
 	static string WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions, CompactionType type,
-	                               const vector<DuckLakePath> &resolved_paths, bool supports_file_identity);
+	                               const vector<DuckLakePath> &resolved_paths, bool check_identities);
 	//! SQL templates with {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders, shared with the
 	//! server-side commit path.
 	static string InsertSnapshotSql();

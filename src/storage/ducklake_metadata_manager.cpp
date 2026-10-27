@@ -4832,12 +4832,19 @@ static string ScheduledDeletionTuple(idx_t file_id, const DuckLakePath &path) {
 	                          DuckLakeUtil::BoolLiteral(path.path_is_relative));
 }
 
+bool DuckLakeMetadataManager::FilesShareIdentities(const std::function<unique_ptr<QueryResult>(string)> &query,
+                                                   const string &file_table) {
+	auto result = query(
+	    StringUtil::Format("SELECT 1 FROM {METADATA_CATALOG}.%s WHERE origin_file_id IS NOT NULL LIMIT 1", file_table));
+	result->ThrowIfError("Failed to read the file identities of DuckLake: ");
+	return result->Fetch() != nullptr;
+}
+
 //! Schedules the files for deletion before their rows are removed, except files whose physical identity another
-//! row keeps
+//! row keeps when the rows can share identities
 static string ScheduleDeletionsSql(const vector<string> &scheduled_deletions, const string &file_table,
-                                   const string &file_id_column, const string &removed_ids,
-                                   bool supports_file_identity) {
-	if (!supports_file_identity) {
+                                   const string &file_id_column, const string &removed_ids, bool check_identities) {
+	if (!check_identities) {
 		return DuckLakeMetadataManager::InsertValuesSql("ducklake_files_scheduled_for_deletion", scheduled_deletions);
 	}
 	return ChunkValuesStatements(scheduled_deletions, [&](const string &tuples) {
@@ -4857,7 +4864,7 @@ WHERE NOT EXISTS (
 string
 DuckLakeMetadataManager::DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverwrittenDeleteFile> &overwritten_files,
                                                       const vector<DuckLakePath> &resolved_paths,
-                                                      bool supports_file_identity) {
+                                                      bool check_identities) {
 	if (overwritten_files.empty()) {
 		return {};
 	}
@@ -4873,7 +4880,7 @@ DuckLakeMetadataManager::DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverw
 	}
 	auto deleted_id_list = GenerateIDList(deleted_file_ids);
 	auto batch_query = ScheduleDeletionsSql(scheduled_deletions, "ducklake_delete_file", "delete_file_id",
-	                                        deleted_id_list, supports_file_identity);
+	                                        deleted_id_list, check_identities);
 	return batch_query + StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_delete_file
 WHERE delete_file_id IN (%s);
@@ -5798,8 +5805,7 @@ idx_t DuckLakeMetadataManager::GetNextColumnId(TableIndex table_id) {
 }
 
 string DuckLakeMetadataManager::WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions,
-                                                   const vector<DuckLakePath> &resolved_paths,
-                                                   bool supports_file_identity) {
+                                                   const vector<DuckLakePath> &resolved_paths, bool check_identities) {
 	if (compactions.empty()) {
 		return {};
 	}
@@ -5817,7 +5823,7 @@ string DuckLakeMetadataManager::WriteMergeAdjacent(const vector<DuckLakeCompacte
 	auto deleted_file_ids = GenerateIDList(source_ids);
 	// add the files we clear to the deletion schedule
 	auto batch_query = ScheduleDeletionsSql(scheduled_deletions, "ducklake_data_file", "data_file_id", deleted_file_ids,
-	                                        supports_file_identity);
+	                                        check_identities);
 	// for each file that has been compacted - delete it from the list of data files entirely
 	// including all other info (stats, delete files, partition values, etc)
 	vector<string> tables_to_delete_from {"ducklake_data_file", "ducklake_file_column_stats", "ducklake_delete_file",
@@ -5877,10 +5883,10 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 
 string DuckLakeMetadataManager::WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions,
                                                  CompactionType type, const vector<DuckLakePath> &resolved_paths,
-                                                 bool supports_file_identity) {
+                                                 bool check_identities) {
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES:
-		return WriteMergeAdjacent(compactions, resolved_paths, supports_file_identity);
+		return WriteMergeAdjacent(compactions, resolved_paths, check_identities);
 	case CompactionType::REWRITE_DELETES:
 		return WriteDeleteRewrites(compactions);
 	default:
@@ -6082,9 +6088,10 @@ AND NOT EXISTS (
 		for (auto &file : files) {
 			scheduled_deletions.push_back(ScheduledDeletionTuple(file.id.index, GetRelativePath(file.path)));
 		}
-		auto result =
-		    Execute(ScheduleDeletionsSql(scheduled_deletions, file_table, file_id_column, CleanupFileIdList(files),
-		                                 transaction.GetCatalog().SupportsFileIdentity()));
+		auto check_identities = transaction.GetCatalog().SupportsFileIdentity() &&
+		                        FilesShareIdentities([&](string query) { return Query(query); }, file_table);
+		auto result = Execute(ScheduleDeletionsSql(scheduled_deletions, file_table, file_id_column,
+		                                           CleanupFileIdList(files), check_identities));
 		result->ThrowIfError("Failed to schedule files for clean-up in DuckLake: ");
 	};
 
