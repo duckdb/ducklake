@@ -369,6 +369,8 @@ private:
 	void UndoConfigOptions();
 	//! The SQL that the commit runs for the options this transaction changed
 	string ConfigOptionLockSql() const;
+	//! The rows an option has after the change, which an earlier change of the option in the attempt decides
+	idx_t ConfigOptionRows(idx_t change_index, idx_t written_rows) const;
 	//! Whether other commits wrote rows of the options this transaction changed, which READ COMMITTED shows
 	bool ConfigOptionsWrittenByOthers();
 	//! Writes the options of the transaction again, after a failed commit attempt rolled them back

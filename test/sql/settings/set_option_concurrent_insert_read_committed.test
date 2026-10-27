@@ -48,6 +48,34 @@ WHERE option_name = 'parquet_compression' AND scope_entry = 'main.t'
 ----
 1	zstd
 
+# a transaction that sets the option again counts the row of the other commit, which is still found
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL dl.set_option('target_file_size', '1MB', table_name => 't')
+
+statement ok con2
+BEGIN
+
+statement ok con2
+CALL dl.set_option('target_file_size', '2MB', table_name => 't')
+
+statement ok con1
+COMMIT
+
+statement ok con2
+CALL dl.set_option('target_file_size', '3MB', table_name => 't')
+
+statement ok con2
+COMMIT
+
+query IT
+SELECT count(*), max(value) FROM dl.options()
+WHERE option_name = 'target_file_size' AND scope_entry = 'main.t'
+----
+1	3000000
+
 # a retry would roll back the expiry of this transaction, so its commit fails instead
 statement ok con3
 BEGIN

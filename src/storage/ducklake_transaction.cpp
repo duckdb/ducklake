@@ -1745,7 +1745,7 @@ void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
 	auto metadata_rows = metadata_manager->SetConfigOption(option);
 	// the catalog copy is not transactional - remember the previous value so a rollback can restore it
 	config_option_undo.push_back(ducklake_catalog.SetConfigOption(option));
-	config_option_undo.back().metadata_rows = metadata_rows;
+	config_option_undo.back().metadata_rows = ConfigOptionRows(config_option_undo.size() - 1, metadata_rows);
 }
 
 void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) {
@@ -1764,6 +1764,17 @@ string DuckLakeTransaction::ConfigOptionLockSql() const {
 
 static bool IsSameConfigOption(const DuckLakeConfigOption &a, const DuckLakeConfigOption &b) {
 	return a.option.key == b.option.key && a.schema_id == b.schema_id && a.table_id == b.table_id;
+}
+
+idx_t DuckLakeTransaction::ConfigOptionRows(idx_t change_index, idx_t written_rows) const {
+	for (idx_t earlier = change_index; earlier > 0; earlier--) {
+		auto &previous = config_option_undo[earlier - 1];
+		if (IsSameConfigOption(previous.option, config_option_undo[change_index].option)) {
+			// the rows that other commits added since the earlier change are not the transaction's
+			return MaxValue<idx_t>(previous.metadata_rows, 1);
+		}
+	}
+	return written_rows;
 }
 
 bool DuckLakeTransaction::ConfigOptionsWrittenByOthers() {
@@ -1786,11 +1797,12 @@ void DuckLakeTransaction::RewriteConfigOptions() {
 		// the option writes were committed when they were made, the rollback kept them
 		return;
 	}
-	for (auto &change : config_option_undo) {
+	for (idx_t i = 0; i < config_option_undo.size(); i++) {
+		auto &change = config_option_undo[i];
 		if (change.reset) {
 			metadata_manager->ResetConfigOption(change.option);
 		} else {
-			change.metadata_rows = metadata_manager->SetConfigOption(change.option);
+			change.metadata_rows = ConfigOptionRows(i, metadata_manager->SetConfigOption(change.option));
 		}
 		rewrote_config_options = true;
 	}
