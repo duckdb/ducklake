@@ -281,6 +281,9 @@ public:
 	void MarkDeleteAttempted(TableIndex table_id);
 
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
+	void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &files);
+	//! Removes the cleaned up files from storage, once the metadata changes of the cleanup are committed
+	void RemoveCleanedUpFiles(ClientContext &context, vector<string> paths);
 	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files);
 	bool InlinedTableFlushed(const string &table_name);
@@ -367,6 +370,7 @@ private:
 	void UndoConfigOptions();
 	//! Writes the options of the transaction again, after a failed commit attempt rolled them back
 	void RewriteConfigOptions();
+	void RemoveCleanedUpFilesAfterCommit();
 	static DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeSortInfo GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
@@ -421,6 +425,11 @@ private:
 	vector<DuckLakeConfigOptionUndo> config_option_undo;
 	//! Whether a retried commit attempt wrote the options again
 	bool rewrote_config_options = false;
+	//! Whether the metadata transaction expired snapshots or cleaned up files, which a retried commit cannot write
+	//! again
+	bool expired_or_cleaned_up = false;
+	//! The cleaned up files, removed from storage once the transaction commits
+	vector<string> cleaned_up_files;
 
 	atomic<idx_t> catalog_version;
 	mutex transaction_views_lock;

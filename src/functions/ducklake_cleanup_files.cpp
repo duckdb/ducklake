@@ -121,18 +121,16 @@ void DuckLakeCleanupExecute(ClientContext &context, TableFunctionInput &data_p, 
 	}
 	if (!state.executed && !data.dry_run) {
 		// delete the files
-		auto &fs = FileSystem::GetFileSystem(context);
 		vector<string> paths;
 		paths.reserve(data.files.size());
 		for (const auto &file : data.files) {
 			paths.push_back(file.path);
 		}
-		fs.RemoveFiles(paths);
+		auto &transaction = DuckLakeTransaction::Get(context, data.catalog);
+		transaction.RemoveCleanedUpFiles(context, std::move(paths));
 		if (data.type == CleanupType::OLD_FILES) {
 			// If we are removing old files, we need to remove them from the catalog
-			auto &transaction = DuckLakeTransaction::Get(context, data.catalog);
-			auto &metadata_manager = transaction.GetMetadataManager();
-			metadata_manager.RemoveFilesScheduledForCleanup(data.files);
+			transaction.RemoveFilesScheduledForCleanup(data.files);
 		}
 		state.executed = true;
 	}

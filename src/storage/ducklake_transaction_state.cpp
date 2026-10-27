@@ -2729,6 +2729,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			if (i > 0) {
 				// we failed our first commit due to another transaction committing
 				// retry - but first check for conflicts
+				context.verify_retry();
 				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);
 				stats = &commit_stats_snapshot.stats;
 			} else {

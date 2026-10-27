@@ -1,0 +1,63 @@
+# name: test/sql/cleanup/expire_cleanup_in_transaction.test
+# description: A cleanup in a transaction that expires snapshots deletes the files only once the transaction commits
+# group: [cleanup]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/expire_cleanup_in_transaction', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DELETE FROM dl.t
+
+# a rollback keeps the snapshot and its files
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+statement ok
+ROLLBACK
+
+query I
+SELECT i FROM dl.t AT (VERSION => 1)
+----
+42
+
+# a commit deletes the files once it succeeds
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/expire_cleanup_in_transaction/main/t/*.parquet')
+----
+1
+
+statement ok
+COMMIT
+
+query II
+SELECT (SELECT count(*) FROM glob('{DATA_PATH}/expire_cleanup_in_transaction/main/t/*.parquet')),
+       (SELECT count(*) FROM dl.snapshots() WHERE snapshot_id = 1)
+----
+0	0

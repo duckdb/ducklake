@@ -212,6 +212,13 @@
       "paths": [
         "test/sql/data_inlining/inlined_commit_append.test"
       ]
+    },
+    {
+      "reason": "Quack expires snapshots when the transaction commits, so a cleanup in that transaction finds none of their files and a concurrent commit keeps the expiry",
+      "paths": [
+        "test/sql/cleanup/expire_cleanup_in_transaction.test",
+        "test/sql/cleanup/expire_cleanup_concurrent_commit.test"
+      ]
     }
   ]
 }
