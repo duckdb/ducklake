@@ -1569,7 +1569,16 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.is_retryable_metadata_error = [&](const string &message) {
 		return option_lock_failed || metadata_manager->IsRetryableCommitError(message);
 	};
+	// a retry rolls back what the statements wrote to the metadata
+	context.skip_retry = [&]() {
+		return option_lock_failed && metadata_written;
+	};
 	context.commit_error_hint = [&](const string &message) {
+		if (context.skip_retry()) {
+			return string("Another transaction changed options at the same time, and a retry would undo what the "
+			              "statements of this transaction wrote to the metadata, such as expired snapshots. Run the "
+			              "transaction again.\n");
+		}
 		return metadata_manager->CommitErrorHint(message);
 	};
 	context.flush_cache_if_pending = [&]() {
@@ -1741,8 +1750,8 @@ void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) 
 }
 
 string DuckLakeTransaction::ConfigOptionLockSql() const {
-	// a retry after a conflict on the lock rolls back what the statements wrote, so then the commit takes none
-	if (config_option_undo.empty() || metadata_written) {
+	// a commit that failed on the lock would restore expired snapshots whose files are gone, so it takes none
+	if (config_option_undo.empty() || removed_files_after_expiry) {
 		return string();
 	}
 	return metadata_manager->ConfigOptionLockSql();
@@ -1776,6 +1785,7 @@ void DuckLakeTransaction::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &sn
 	if (!metadata_manager.CommitsEachStatement()) {
 		metadata_manager.DeleteSnapshots(snapshots);
 		MarkMetadataWritten();
+		snapshots_expired = true;
 		return;
 	}
 	// deleted when the transaction commits, so a rollback keeps them
@@ -1785,6 +1795,9 @@ void DuckLakeTransaction::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &sn
 void DuckLakeTransaction::RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &files) {
 	GetMetadataManager().RemoveFilesScheduledForCleanup(files);
 	MarkMetadataWritten();
+	if (snapshots_expired) {
+		removed_files_after_expiry = true;
+	}
 }
 
 void DuckLakeTransaction::MarkMetadataWritten() {

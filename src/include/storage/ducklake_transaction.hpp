@@ -403,6 +403,9 @@ private:
 	vector<DuckLakeSnapshotInfo> expired_snapshots;
 	//! Whether statements wrote to the metadata transaction, which a retried commit rolls back
 	bool metadata_written = false;
+	bool snapshots_expired = false;
+	//! Whether statements removed files after expiring snapshots, which a rollback restores without their files
+	bool removed_files_after_expiry = false;
 	DuckLakeSnapshot GetLatestSnapshot();
 	//! The latest snapshot in DuckLake when the transaction first looked, the snapshot of the transaction unless the
 	//! catalog is opened at a fixed snapshot
