@@ -44,7 +44,7 @@ The schema option must be a non-null string
 statement error
 FROM ducklake_list_files('dl', 't', snapshot_version => NULL)
 ----
-The snapshot_version option must be a non-null integer
+The snapshot_version option must be a non-null snapshot id or tag name
 
 statement error
 FROM ducklake_list_files('dl', 't', snapshot_time => NULL)

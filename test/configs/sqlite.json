@@ -52,9 +52,10 @@
       ]
     },
     {
-      "reason": "SQLite cannot commit a concurrent insert while the retyping transaction is open",
+      "reason": "SQLite cannot commit a concurrent insert or added file while the retyping transaction is open",
       "paths": [
-        "test/sql/stats/float_to_double_retype_stats_concurrent.test"
+        "test/sql/stats/float_to_double_retype_stats_concurrent.test",
+        "test/sql/add_files/add_files_finer_timestamp_retype_concurrent.test"
       ]
     },
     {
@@ -127,6 +128,7 @@
         "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test",
         "test/sql/compaction/compaction_idle_metadata_transaction.test",
         "test/sql/compaction/postgres_expire_snapshots_time_zone.test",
+        "test/sql/tags/postgres_tags_read_committed.test",
         "test/sql/general/postgres_nul_byte_text.test",
         "test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test"

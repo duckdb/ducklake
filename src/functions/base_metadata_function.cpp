@@ -72,16 +72,29 @@ string DuckLakeTableFunctionUtil::GetTableName(const Value &input) {
 }
 
 BoundAtClause DuckLakeTableFunctionUtil::AtClauseFromValue(const Value &input) {
+	if (input.type().id() == LogicalTypeId::TIMESTAMP_TZ && !input.IsNull()) {
+		return BoundAtClause("timestamp", input);
+	}
+	// rejects a NULL of any type
+	return VersionAtClauseFromValue(input);
+}
+
+BoundAtClause DuckLakeTableFunctionUtil::VersionAtClauseFromValue(const Value &input) {
 	if (input.IsNull()) {
 		throw BinderException("Snapshot identifier cannot be NULL");
 	}
 	switch (input.type().id()) {
 	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::VARCHAR:
 		return BoundAtClause("version", input);
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return BoundAtClause("timestamp", input);
-	default:
-		throw InternalException("Unsupported type for At Clause");
+	default: {
+		auto snapshot_id = input.DefaultTryCastAs(LogicalType::BIGINT);
+		if (!snapshot_id) {
+			throw BinderException("A snapshot is identified by a snapshot id, a tag name or a timestamp, not by a %s",
+			                      input.type().ToString());
+		}
+		return BoundAtClause("version", *snapshot_id);
+	}
 	}
 }
 

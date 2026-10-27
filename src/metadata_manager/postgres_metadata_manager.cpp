@@ -23,10 +23,6 @@ static bool IsInfinityLiteral(const string &value) {
 	return value == "infinity" || value == "-infinity";
 }
 
-static string WithPostgresBinaryCollation(const string &expression) {
-	return "(" + expression + " COLLATE \"C\")";
-}
-
 static bool IsPostgresTemporalStatsType(const LogicalType &type) {
 	switch (type.id()) {
 	case LogicalTypeId::DATE:
@@ -120,7 +116,7 @@ string PostgresMetadataManager::CastValueToTarget(const Value &value, const Logi
 	}
 	if (type.id() == LogicalTypeId::UUID) {
 		// canonical text sorts like the bytes
-		return WithPostgresBinaryCollation(SQLString::ToString(value.ToString()));
+		return DuckLakeUtil::WithBinaryCollation(SQLString::ToString(value.ToString()));
 	}
 	if (!RequiresValueComparison(type) && type.id() != LogicalTypeId::VARCHAR) {
 		return string();
@@ -158,7 +154,7 @@ string PostgresMetadataManager::CastValueToTarget(const Value &value, const Logi
 	}
 	auto literal = SQLString::ToString(value.ToString());
 	if (type.id() == LogicalTypeId::VARCHAR) {
-		return WithPostgresBinaryCollation(literal);
+		return DuckLakeUtil::WithBinaryCollation(literal);
 	}
 	if (IsPostgresTemporalStatsType(type)) {
 		return literal + "::" + GetPostgresStatsType(type);
@@ -225,7 +221,7 @@ string PostgresMetadataManager::CastStatsToTarget(const string &stats, const Log
 		return stats + "::" + GetPostgresStatsType(type);
 	}
 	if (type.id() == LogicalTypeId::VARCHAR || type.id() == LogicalTypeId::UUID) {
-		return WithPostgresBinaryCollation(stats);
+		return DuckLakeUtil::WithBinaryCollation(stats);
 	}
 	return string();
 }
@@ -469,6 +465,13 @@ unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapsh
 	auto result = transaction.GetConnection().Query(
 	    StringUtil::Format("CALL postgres_execute(%s, %s, prepare=FALSE)", catalog_literal, SQLString(query)));
 	return std::move(result);
+}
+
+unique_ptr<QueryResult> PostgresMetadataManager::ExecuteDropInTransaction(string &query) {
+	// DROP TABLE waits for every open transaction that read the table and the readers queued behind it fail, so it
+	// gives up instead and leaves the table to a later cleanup
+	auto batch = "CALL postgres_execute({METADATA_CATALOG_NAME_LITERAL}, 'SET LOCAL lock_timeout = 1');\n" + query;
+	return ExecuteInTransaction(batch);
 }
 
 void PostgresMetadataManager::ClearCache() {

@@ -1,0 +1,44 @@
+# name: test/sql/tags/tags_parallel.test
+# description: the tag functions of one statement execute on several threads
+# group: [tags]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_parallel_files')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+SET threads = 8
+
+loop i 0 40
+
+statement ok
+SELECT COUNT(*) FROM (SELECT * FROM ducklake_create_tag('dl', 'a{i}', version => 1) UNION ALL SELECT * FROM ducklake_create_tag('dl', 'b{i}', version => 1) UNION ALL SELECT * FROM ducklake_create_tag('dl', 'c{i}', version => 1) UNION ALL SELECT * FROM ducklake_create_tag('dl', 'd{i}', version => 1))
+
+endloop
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl')
+----
+160
+
+loop i 0 40
+
+statement ok
+SELECT COUNT(*) FROM (SELECT * FROM ducklake_drop_tag('dl', 'a{i}') UNION ALL SELECT * FROM ducklake_drop_tag('dl', 'b{i}') UNION ALL SELECT * FROM ducklake_drop_tag('dl', 'c{i}') UNION ALL SELECT * FROM ducklake_drop_tag('dl', 'd{i}'))
+
+endloop
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl')
+----
+0

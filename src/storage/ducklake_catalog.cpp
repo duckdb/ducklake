@@ -368,9 +368,7 @@ void DuckLakeCatalog::FinalizeLoad(optional_ptr<ClientContext> context) {
 }
 
 static bool CanGeneratePathFromName(const string &name) {
-	// file systems allow at most 255 bytes in a file name
-	static constexpr idx_t MAX_FILE_NAME_LENGTH = 255;
-	if (name.size() > MAX_FILE_NAME_LENGTH) {
+	if (name.size() > DuckLakeUtil::MAX_FILE_NAME_LENGTH) {
 		return false;
 	}
 	for (auto c : name) {
@@ -1033,7 +1031,8 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 }
 
 shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransaction &transaction,
-                                                              DuckLakeSnapshot snapshot, TableIndex table_id) {
+                                                              DuckLakeSnapshot snapshot, TableIndex table_id,
+                                                              optional_ptr<const vector<TableIndex>> load_tables) {
 	auto &cache = GetObjectCacheInstance();
 	auto key = StatsCacheKey(snapshot.next_file_id, table_id);
 	auto cached = cache.Get<DuckLakeTableStatsCacheEntry>(key);
@@ -1052,15 +1051,30 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 		// a table that is not part of the snapshot, e.g. one created in this transaction, has no stats in it
 		return nullptr;
 	}
-	// one query for the whole snapshot, caching the tables without stats as well
-	auto global_stats = transaction.GetMetadataManager().GetGlobalTableStats(snapshot);
+	// one query for the whole snapshot or for the given tables, caching the tables without stats as well
+	vector<TableIndex> cache_tables;
+	if (!load_tables) {
+		for (auto &table_entry : table_map) {
+			cache_tables.push_back(table_entry.first);
+		}
+	} else {
+		unordered_set<idx_t> seen;
+		cache_tables.push_back(table_id);
+		seen.insert(table_id.index);
+		for (auto &load_table : *load_tables) {
+			if (table_map.find(load_table) != table_map.end() && seen.insert(load_table.index).second) {
+				cache_tables.push_back(load_table);
+			}
+		}
+	}
+	auto global_stats = transaction.GetMetadataManager().GetGlobalTableStats(
+	    snapshot, load_tables ? cache_tables : vector<TableIndex>());
 	auto lake_stats = ConstructStatsMap(global_stats, schema_entry->catalog_set);
 
 	shared_ptr<DuckLakeTableStatsCacheEntry> requested_entry;
 	vector<pair<TableIndex, shared_ptr<ObjectCacheEntry>>> cache_entries_to_put;
-	cache_entries_to_put.reserve(table_map.size());
-	for (auto &table_entry : table_map) {
-		auto current_id = table_entry.first;
+	cache_entries_to_put.reserve(cache_tables.size());
+	for (auto &current_id : cache_tables) {
 		shared_ptr<DuckLakeTableStatsCacheEntry> entry;
 		auto stats_entry = lake_stats->table_stats.find(current_id);
 		if (stats_entry == lake_stats->table_stats.end()) {
@@ -1448,6 +1462,35 @@ void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckL
 		inlined_deletion_not_exists.erase(table_id.index);
 	} else {
 		inlined_deletion_not_exists[table_id.index] = snapshot.snapshot_id;
+	}
+}
+
+bool DuckLakeCatalog::TryGetRewriteSnapshots(TableIndex table_id, idx_t start_snapshot, idx_t end_snapshot,
+                                             set<idx_t> &result) {
+	lock_guard<mutex> guard(rewrite_snapshots_lock);
+	if (!rewrite_snapshots_read_until.IsValid() || rewrite_snapshots_read_until.GetIndex() < end_snapshot) {
+		return false;
+	}
+	auto entry = rewrite_snapshots.find(table_id.index);
+	if (entry != rewrite_snapshots.end() && start_snapshot <= end_snapshot) {
+		auto &snapshots = entry->second;
+		result.insert(snapshots.lower_bound(start_snapshot), snapshots.upper_bound(end_snapshot));
+	}
+	return true;
+}
+
+idx_t DuckLakeCatalog::GetFirstUnreadRewriteSnapshot() {
+	lock_guard<mutex> guard(rewrite_snapshots_lock);
+	return rewrite_snapshots_read_until.IsValid() ? rewrite_snapshots_read_until.GetIndex() + 1 : 0;
+}
+
+void DuckLakeCatalog::CacheRewriteSnapshots(const vector<pair<TableIndex, idx_t>> &rewrites, idx_t end_snapshot) {
+	lock_guard<mutex> guard(rewrite_snapshots_lock);
+	for (auto &rewrite : rewrites) {
+		rewrite_snapshots[rewrite.first.index].insert(rewrite.second);
+	}
+	if (!rewrite_snapshots_read_until.IsValid() || rewrite_snapshots_read_until.GetIndex() < end_snapshot) {
+		rewrite_snapshots_read_until = end_snapshot;
 	}
 }
 

@@ -1,0 +1,57 @@
+# name: test/sql/time_travel/snapshot_time_commit.test
+# description: The snapshot time is the time of the commit, not of the first metadata access of its transaction
+# group: [time_travel]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/snapshot_time_commit')
+
+statement ok
+CREATE TABLE lake.t (i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (0)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO lake.t VALUES (1)
+
+sleep 10 milliseconds
+
+# tmid lies between the insert of con1 and its commit
+statement ok con2
+SET VARIABLE tmid = get_current_timestamp()
+
+query I con2
+SELECT list(i ORDER BY i) FROM lake.t
+----
+[0]
+
+sleep 10 milliseconds
+
+statement ok con1
+COMMIT
+
+query I con2
+SELECT snapshot_time > getvariable('tmid') FROM lake.snapshots() WHERE snapshot_id = 3
+----
+true
+
+query I con2
+SELECT list(i ORDER BY i) FROM lake.t AT (TIMESTAMP => getvariable('tmid'))
+----
+[0]
+
+query I con2
+SELECT list(i ORDER BY i) FROM ducklake_table_changes('lake', 'main', 't', getvariable('tmid'), get_current_timestamp())
+----
+[1]
