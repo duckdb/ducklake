@@ -307,14 +307,13 @@ public:
 	bool ExpiresSnapshotsOnCommit() const;
 	//! Retires the paths of the cleanup candidates when the transaction commits, and reports the files to unlink
 	void RetireFilesOnCommit(vector<DuckLakeFileForCleanup> files, CleanupType type,
-	                         vector<DuckLakeFileForCleanup> &unlinked_files, idx_t written_after_snapshot = 0);
+	                         vector<DuckLakeFileForCleanup> &unlinked_files, idx_t first_file_id = 0);
 	bool RetiresFilesOnCommit() const;
 	//! Commits the retirement of the files in a DuckLake transaction of its own and returns the files to unlink
 	static vector<DuckLakeFileForCleanup> CommitRetirement(optional_ptr<ClientContext> caller_context,
 	                                                       DuckLakeCatalog &catalog,
 	                                                       vector<DuckLakeFileForCleanup> files, CleanupType type,
-	                                                       const string &commit_message,
-	                                                       idx_t written_after_snapshot = 0);
+	                                                       const string &commit_message, idx_t first_file_id = 0);
 	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files);
 	bool InlinedTableFlushed(const string &table_name);
@@ -456,7 +455,7 @@ private:
 	//! The cleanup candidates whose paths the commit retires, and the files it reports for unlinking
 	vector<DuckLakeFileForCleanup> files_to_retire;
 	CleanupType retirement_type = CleanupType::OLD_FILES;
-	idx_t written_after_snapshot = 0;
+	idx_t first_file_id = 0;
 	optional_ptr<vector<DuckLakeFileForCleanup>> unlinked_files;
 	//! Whether the commit retired the discarded files, and those it unlinks
 	bool discarded_files_retired = false;
@@ -475,10 +474,10 @@ private:
 	//! catalog is opened at a fixed snapshot
 	mutex snapshot_lock;
 	unique_ptr<DuckLakeSnapshot> snapshot;
-	//! The snapshot id the transaction first loaded, which a retry does not reload
-	optional_idx first_snapshot_id;
-	//! Only the rows of later snapshots can reference a file the transaction wrote
-	idx_t FirstSnapshotId() const;
+	//! The next file id of the snapshot the transaction first loaded, which a retry does not reload
+	optional_idx first_next_file_id;
+	//! Only the rows that later commits write, which get larger file ids, can reference a file the transaction wrote
+	idx_t FirstNewFileId() const;
 	idx_t local_catalog_id;
 	//! Set when this transaction inlines into a table that does not yet have an inlined-data table
 	atomic<bool> requires_new_inlined_table {false};

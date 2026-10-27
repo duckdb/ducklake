@@ -984,12 +984,11 @@ bool DuckLakeTransaction::ExpiresSnapshotsOnCommit() const {
 }
 
 void DuckLakeTransaction::RetireFilesOnCommit(vector<DuckLakeFileForCleanup> files, CleanupType type,
-                                              vector<DuckLakeFileForCleanup> &unlinked_files_p,
-                                              idx_t written_after_snapshot_p) {
+                                              vector<DuckLakeFileForCleanup> &unlinked_files_p, idx_t first_file_id_p) {
 	files_to_retire = std::move(files);
 	retirement_type = type;
 	unlinked_files = unlinked_files_p;
-	written_after_snapshot = written_after_snapshot_p;
+	first_file_id = first_file_id_p;
 }
 
 bool DuckLakeTransaction::RetiresFilesOnCommit() const {
@@ -998,8 +997,8 @@ bool DuckLakeTransaction::RetiresFilesOnCommit() const {
 	       (RetiresDiscardedFiles() && state->local_changes.HasDiscardedFiles() && ChangesMadeBesidesExpiry());
 }
 
-idx_t DuckLakeTransaction::FirstSnapshotId() const {
-	return first_snapshot_id.IsValid() ? first_snapshot_id.GetIndex() : 0;
+idx_t DuckLakeTransaction::FirstNewFileId() const {
+	return first_next_file_id.IsValid() ? first_next_file_id.GetIndex() : 0;
 }
 
 bool DuckLakeTransaction::RetiresDiscardedFiles() const {
@@ -1058,7 +1057,7 @@ void DuckLakeTransaction::RemoveWrittenFiles(vector<string> files) {
 		// a registration that read one of the files fails at its commit
 		auto caller_context = context.lock();
 		unlinked = CommitRetirement(caller_context.get(), ducklake_catalog, std::move(candidates),
-		                            CleanupType::WRITTEN_FILES, "rollback", FirstSnapshotId());
+		                            CleanupType::WRITTEN_FILES, "rollback", FirstNewFileId());
 	} catch (std::exception &) {
 		// without a committed retirement the files are left to the orphan cleanup
 		return;
@@ -1072,7 +1071,7 @@ vector<DuckLakeFileForCleanup> DuckLakeTransaction::CommitRetirement(optional_pt
                                                                      DuckLakeCatalog &catalog,
                                                                      vector<DuckLakeFileForCleanup> files,
                                                                      CleanupType type, const string &commit_message,
-                                                                     idx_t written_after_snapshot) {
+                                                                     idx_t first_file_id) {
 	Connection connection(catalog.GetDatabase());
 	if (caller_context) {
 		DuckLakeUtil::CopyExtensionSettings(*caller_context, *connection.context);
@@ -1083,7 +1082,7 @@ vector<DuckLakeFileForCleanup> DuckLakeTransaction::CommitRetirement(optional_pt
 	auto &commit_info = transaction.GetCommitInfo();
 	commit_info.commit_message = Value(commit_message);
 	commit_info.is_commit_info_set = true;
-	transaction.RetireFilesOnCommit(std::move(files), type, unlinked_files, written_after_snapshot);
+	transaction.RetireFilesOnCommit(std::move(files), type, unlinked_files, first_file_id);
 	connection.Commit();
 	return unlinked_files;
 }
@@ -1735,12 +1734,12 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		context.get_retirement = [&]() {
 			DuckLakeRetirement retirement;
 			if (!files_to_retire.empty()) {
-				retirement = metadata_manager->GetRetirement(files_to_retire, retirement_type, written_after_snapshot);
+				retirement = metadata_manager->GetRetirement(files_to_retire, retirement_type, first_file_id);
 			}
 			auto discarded_files = DiscardedFilesToRetire();
 			if (!discarded_files.empty()) {
 				retirement.Append(
-				    metadata_manager->GetRetirement(discarded_files, CleanupType::WRITTEN_FILES, FirstSnapshotId()));
+				    metadata_manager->GetRetirement(discarded_files, CleanupType::WRITTEN_FILES, FirstNewFileId()));
 			}
 			return retirement;
 		};
@@ -2231,8 +2230,8 @@ DuckLakeSnapshot DuckLakeTransaction::GetLatestSnapshot() {
 	if (!snapshot) {
 		// no snapshot loaded yet for this transaction - load it
 		snapshot = metadata_manager->GetSnapshot();
-		if (!first_snapshot_id.IsValid()) {
-			first_snapshot_id = snapshot->snapshot_id;
+		if (!first_next_file_id.IsValid()) {
+			first_next_file_id = snapshot->next_file_id;
 		}
 	}
 	return *snapshot;

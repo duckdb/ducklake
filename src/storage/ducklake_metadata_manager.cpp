@@ -5575,10 +5575,10 @@ FROM
 }
 
 string DuckLakeMetadataManager::GetReferencedFilesQuery() const {
-	return ReferencedFilesQuery("TRUE");
+	return ReferencedFilesQuery("TRUE", "TRUE");
 }
 
-string DuckLakeMetadataManager::ReferencedFilesQuery(const string &filter) {
+string DuckLakeMetadataManager::ReferencedFilesQuery(const string &data_file_filter, const string &delete_file_filter) {
 	return FullFilePathsQuery(StringUtil::Format(R"(
     SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id
     FROM {METADATA_CATALOG}.ducklake_data_file f WHERE %s
@@ -5586,7 +5586,7 @@ string DuckLakeMetadataManager::ReferencedFilesQuery(const string &filter) {
     SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id
     FROM {METADATA_CATALOG}.ducklake_delete_file f WHERE %s
   )",
-	                                             filter, filter),
+	                                             data_file_filter, delete_file_filter),
 	                          "", "");
 }
 
@@ -5682,7 +5682,7 @@ WHERE data_file_id IN (%s);
 }
 
 DuckLakeRetirement DuckLakeMetadataManager::GetRetirement(const vector<DuckLakeFileForCleanup> &candidates,
-                                                          CleanupType type, idx_t written_after_snapshot) {
+                                                          CleanupType type, idx_t first_file_id) {
 	DuckLakePathKeys path_keys(transaction.GetCatalog().GetDatabase());
 	// the candidates of orphan cleanup and written files have no schedule entries
 	bool orphans = type != CleanupType::OLD_FILES;
@@ -5696,8 +5696,9 @@ DuckLakeRetirement DuckLakeMetadataManager::GetRetirement(const vector<DuckLakeF
 		referenced_query = GetKnownFilesForCleanupQuery();
 		break;
 	case CleanupType::WRITTEN_FILES:
-		// only the rows of later snapshots can reference a file that a transaction wrote
-		referenced_query = ReferencedFilesQuery(StringUtil::Format("f.begin_snapshot > %llu", written_after_snapshot));
+		// only the rows of later commits, which get larger file ids, can reference a file that a transaction wrote
+		referenced_query = ReferencedFilesQuery(StringUtil::Format("f.data_file_id >= %llu", first_file_id),
+		                                        StringUtil::Format("f.delete_file_id >= %llu", first_file_id));
 		break;
 	}
 	auto referenced_res = Query(referenced_query);
