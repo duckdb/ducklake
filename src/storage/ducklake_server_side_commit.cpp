@@ -120,6 +120,8 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 		attached_version = DuckLakeVersionToString(catalog_version);
 	}
 	DuckLakeMetadataManager::CheckCatalogVersion(attached_version, DuckLakeVersionToString(catalog_version));
+	// the catalog can have been migrated between the reads of its version and of the latest snapshot
+	DuckLakeMetadataManager::CheckCatalogVersion(attached_version, latest_snapshot_version);
 
 	// Derive transaction_changes from local_changes the same way DuckLakeTransaction does.
 	for (auto &entry : state->local_changes.Changes()) {
@@ -597,7 +599,7 @@ DuckLakeVersion DuckLakeServerSideCommit::ReadCatalogVersion() {
 DuckLakeSnapshot DuckLakeServerSideCommit::ReadLatestSnapshot() {
 	string sql = StringUtil::Replace(DuckLakeMetadataManager::LatestSnapshotQuery(), "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read latest snapshot");
-	auto snapshot = DuckLakeMetadataManager::ParseSnapshot(*result);
+	auto snapshot = DuckLakeMetadataManager::ParseSnapshot(*result, &latest_snapshot_version);
 	if (!snapshot) {
 		throw IOException("Server-side ducklake_commit: no snapshot found");
 	}

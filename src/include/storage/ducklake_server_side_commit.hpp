@@ -107,6 +107,8 @@ private:
 	bool supports_file_identity = false;
 	//! The version the client attached the catalog at, empty for a client that does not pass it
 	string attached_version;
+	//! The catalog version read with the latest snapshot, for a commit without a transaction snapshot
+	string latest_snapshot_version;
 	bool staged_dropped_files_read = false;
 	vector<pair<string, idx_t>> staged_dropped_files;
 	map<TableIndex, DroppedDataFileStats> staged_dropped_file_stats;
