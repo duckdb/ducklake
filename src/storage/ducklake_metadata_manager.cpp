@@ -5027,7 +5027,9 @@ SELECT
     NULL AS min_value,
     NULL AS max_value,
     NULL AS extra_stats)" +
-	       snapshot_arm_padding + R"(
+	       snapshot_arm_padding + R"(,
+    (SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version' AND scope IS NULL)
+        AS catalog_version
     FROM {METADATA_CATALOG}.ducklake_snapshot
     WHERE snapshot_id = (
         SELECT MAX(snapshot_id)
@@ -5049,7 +5051,8 @@ SELECT
     min_value,
     max_value,
     extra_stats)" +
-	       stats_arm_columns + R"(
+	       stats_arm_columns + R"(,
+    NULL
 FROM {METADATA_CATALOG}.ducklake_table_stats
 LEFT JOIN {METADATA_CATALOG}.ducklake_table_column_stats
     USING (table_id)
@@ -5061,6 +5064,7 @@ SnapshotChangeInfo DuckLakeMetadataManager::ParseSnapshotAndStatsAndChanges(Quer
                                                                             SnapshotAndStats &current_snapshot) {
 	SnapshotChangeInfo change_info;
 	bool has_exactness = ResultHasColumn(result, "min_is_exact");
+	bool has_catalog_version = ResultHasColumn(result, "catalog_version");
 	bool first_row = true;
 	for (auto &row : result) {
 		if (first_row) {
@@ -5069,6 +5073,10 @@ SnapshotChangeInfo DuckLakeMetadataManager::ParseSnapshotAndStatsAndChanges(Quer
 			current_snapshot.snapshot.next_catalog_id = row.GetValue<idx_t>(2);
 			current_snapshot.snapshot.next_file_id = row.GetValue<idx_t>(3);
 			change_info.changes_made = row.GetValue<string>(4);
+			auto version_column = result.ColumnCount() - 1;
+			if (has_catalog_version && !row.IsNull(version_column)) {
+				change_info.catalog_version = row.GetValue<string>(version_column);
+			}
 		} else {
 			TransformGlobalStatsRow(row, current_snapshot.stats, 5, has_exactness);
 		}
@@ -5129,13 +5137,16 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
 	if (!snapshot) {
 		throw InvalidInputException("No snapshot found in DuckLake");
 	}
-	auto attached_version = DuckLakeVersionToString(transaction.GetCatalog().GetDuckLakeVersion());
+	CheckCatalogVersion(DuckLakeVersionToString(transaction.GetCatalog().GetDuckLakeVersion()), catalog_version);
+	return snapshot;
+}
+
+void DuckLakeMetadataManager::CheckCatalogVersion(const string &attached_version, const string &catalog_version) {
 	if (!catalog_version.empty() && catalog_version != attached_version) {
 		throw InvalidInputException("The catalog was migrated by another connection from version %s to %s, reattach "
 		                            "to pick up the new version",
 		                            attached_version, catalog_version);
 	}
-	return snapshot;
 }
 
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound,

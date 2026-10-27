@@ -234,6 +234,8 @@ public:
 	//! A statement of a commit batch that fails it with the message selected by the source, when it selects a row
 	static string GuardSql(const string &message, const string &source);
 	virtual string CommitGuardSql(const string &message, const string &source) const;
+	//! Fails when another connection migrated the catalog after it was attached
+	static void CheckCatalogVersion(const string &attached_version, const string &catalog_version);
 	//! The guard that fails a commit when another connection migrated the catalog after it was attached
 	static string MigratedCatalogGuardSql(const string &attached_version,
 	                                      const std::function<string(const string &, const string &)> &guard_sql);

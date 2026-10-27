@@ -2854,6 +2854,10 @@ SnapshotAndStats DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot tr
 	// get all changes made to the system after the current snapshot was started
 	auto changes_made = DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(
 	    snapshot_and_stats, context.conflict_query_executor, context.snapshot_and_stats_query);
+	// a migration commits a snapshot of its own, so a commit that began before it retries and finds the new version
+	if (!context.attached_version.empty()) {
+		DuckLakeMetadataManager::CheckCatalogVersion(context.attached_version, changes_made.catalog_version);
+	}
 	// parse changes made by other transactions
 	auto other_changes = SnapshotChangeInformation::ParseChangesMade(changes_made.changes_made);
 
@@ -2962,10 +2966,6 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			DuckLakeCommitState commit_state(commit_snapshot);
 			// write the new snapshot
 			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
-			if (!context.attached_version.empty()) {
-				batch_queries +=
-				    DuckLakeMetadataManager::MigratedCatalogGuardSql(context.attached_version, context.guard_sql);
-			}
 			if (!expired_snapshots.empty()) {
 				batch_queries += DuckLakeMetadataManager::DeleteSnapshotsSql(expired_snapshots);
 			}

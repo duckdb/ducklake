@@ -318,6 +318,8 @@ struct DuckLakeGlobalStatsInfo {
 
 struct SnapshotChangeInfo {
 	string changes_made;
+	//! The version of the catalog at the snapshot, empty when the query does not read it
+	string catalog_version;
 };
 
 struct SnapshotDeletedFromFiles {

@@ -119,6 +119,7 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 		}
 		attached_version = DuckLakeVersionToString(catalog_version);
 	}
+	DuckLakeMetadataManager::CheckCatalogVersion(attached_version, DuckLakeVersionToString(catalog_version));
 
 	// Derive transaction_changes from local_changes the same way DuckLakeTransaction does.
 	for (auto &entry : state->local_changes.Changes()) {
