@@ -1,0 +1,28 @@
+# name: test/sql/quack/attach_errors_as_json.test
+# description: A failed attach of a Quack metadata catalog reports its error as text, also under a global errors_as_json
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
+
+require quack
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET GLOBAL errors_as_json = true
+
+statement ok
+SET errors_as_json = false
+
+# nothing listens on this port
+statement error
+ATTACH 'ducklake:quack:localhost:1' AS dl (DATA_PATH '{DATA_PATH}/attach_errors_as_json')
+----
+<REGEX>:IO Error: Failed to attach DuckLake MetaData[^{]*connect to server[^{]*
+
+statement ok
+SET GLOBAL errors_as_json = false

@@ -1,0 +1,47 @@
+# name: test/sql/time_travel/time_travel_null.test
+# description: A NULL version or timestamp in an AT clause gives the same binder error as the table functions
+# group: [time_travel]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/time_travel_null')
+
+statement ok
+CREATE TABLE lake.t (i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1)
+
+statement error
+SELECT count(*) FROM lake.t AT (VERSION => NULL)
+----
+Binder Error: Snapshot identifier cannot be NULL
+
+statement error
+SELECT count(*) FROM lake.t AT (VERSION => getvariable('unset_version'))
+----
+Binder Error: Snapshot identifier cannot be NULL
+
+statement error
+SELECT count(*) FROM lake.t AT (TIMESTAMP => NULL::TIMESTAMPTZ)
+----
+Binder Error: Snapshot identifier cannot be NULL
+
+statement error
+SELECT count(*) FROM ducklake_table_insertions('lake', 'main', 't', NULL, 2)
+----
+Binder Error: Snapshot identifier cannot be NULL
+
+query I
+SELECT count(*) FROM lake.t AT (VERSION => 2)
+----
+1
