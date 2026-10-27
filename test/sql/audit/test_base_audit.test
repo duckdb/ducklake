@@ -12,7 +12,7 @@ test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_audit')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_audit', DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 CREATE TABLE ducklake.test(a integer, b varchar);

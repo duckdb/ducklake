@@ -7,7 +7,7 @@ require ducklake
 require parquet
 
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/ducklake_last_snapshot_commit.db' AS ducklake;
+ATTACH 'ducklake:{TEST_DIR}/ducklake_last_snapshot_commit.db' AS ducklake (DATA_INLINING_ROW_LIMIT 10);
 
 query I
 FROM ducklake_last_committed_snapshot('ducklake')

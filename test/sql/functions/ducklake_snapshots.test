@@ -12,7 +12,7 @@ test-env DATA_PATH {TEST_DIR}
 
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_snapshots_files')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_snapshots_files', DATA_INLINING_ROW_LIMIT 10)
 
 # initial snapshot
 query III
