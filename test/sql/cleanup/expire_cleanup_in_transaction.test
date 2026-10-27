@@ -40,6 +40,24 @@ SELECT i FROM dl.t AT (VERSION => 1)
 ----
 42
 
+# the files of the expired snapshot are still scheduled, so an orphan cleanup keeps them
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+statement ok
+CALL ducklake_delete_orphaned_files('dl', cleanup_all => true)
+
+statement ok
+ROLLBACK
+
+query I
+SELECT i FROM dl.t AT (VERSION => 1)
+----
+42
+
 # a dry run lists the files, and a cleanup after the expiry commits deletes them
 statement ok
 BEGIN
@@ -65,3 +83,30 @@ SELECT (SELECT count(*) FROM glob('{DATA_PATH}/expire_cleanup_in_transaction/mai
        (SELECT count(*) FROM dl.snapshots() WHERE snapshot_id = 1)
 ----
 0	0
+
+# a cleanup that is rolled back leaves the files scheduled, and the next cleanup removes them
+statement ok
+CREATE TABLE dl.v AS SELECT 7 AS i
+
+statement ok
+DELETE FROM dl.v
+
+statement ok
+CALL ducklake_expire_snapshots('dl', older_than => now())
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+statement ok
+ROLLBACK
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+query I
+SELECT count(*) FROM __ducklake_metadata_dl.ducklake_files_scheduled_for_deletion
+----
+0

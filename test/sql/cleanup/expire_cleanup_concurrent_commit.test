@@ -47,6 +47,30 @@ SELECT (SELECT i FROM dl.t AT (VERSION => 1)), (SELECT count(*) FROM dl.snapshot
 ----
 42	1	20
 
+# also without retries, the error is the conflict and not the retry count
+statement ok a
+SET ducklake_max_retry_count = 0
+
+statement ok a
+BEGIN
+
+statement ok a
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+statement ok a
+INSERT INTO dl.t VALUES (10)
+
+statement ok b
+INSERT INTO dl.u VALUES (5)
+
+statement error a
+COMMIT
+----
+<REGEX>:.*Transaction conflict - a concurrent commit preceded the commit of a transaction that expires snapshots.*
+
+statement ok a
+RESET ducklake_max_retry_count
+
 # the retry removes the cleaned up files from the schedule again
 statement ok
 CALL ducklake_expire_snapshots('dl', versions => [1])
@@ -70,4 +94,4 @@ query III
 SELECT (SELECT count(*) FROM __ducklake_metadata_dl.ducklake_files_scheduled_for_deletion),
        (SELECT sum(i) FROM dl.t), (SELECT sum(i) FROM dl.u)
 ----
-0	10	50
+0	10	55

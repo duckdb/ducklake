@@ -283,7 +283,7 @@ public:
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &files);
 	//! Whether the metadata transaction expired snapshots, which a rollback restores
-	bool ExpiredSnapshotsInMetadataTransaction() const;
+	bool ExpiredSnapshotsInMetadataTransaction();
 	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files);
 	bool InlinedTableFlushed(const string &table_name);
@@ -425,6 +425,8 @@ private:
 	vector<DuckLakeConfigOptionUndo> config_option_undo;
 	//! Whether a retried commit attempt wrote the options again
 	bool rewrote_config_options = false;
+	//! Expiries and cleanups of the transaction can run in parallel statements
+	mutex maintenance_lock;
 	//! Whether the metadata transaction expired snapshots, which a retried commit cannot write again
 	bool expired_in_metadata_transaction = false;
 	//! The files the metadata transaction removed from the deletion schedule

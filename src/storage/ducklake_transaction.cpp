@@ -1584,7 +1584,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		snapshot.reset();
 	};
 	context.verify_retry = [&]() {
-		if (expired_in_metadata_transaction) {
+		if (ExpiredSnapshotsInMetadataTransaction()) {
 			// the rollback of the failed attempt undid the expiry, which depends on the snapshots it saw
 			throw TransactionException("Transaction conflict - a concurrent commit preceded the commit of a "
 			                           "transaction that expires snapshots");
@@ -1739,6 +1739,7 @@ void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) 
 }
 
 void DuckLakeTransaction::ClearMaintenanceChanges() {
+	lock_guard<mutex> guard(maintenance_lock);
 	expired_in_metadata_transaction = false;
 	cleaned_up_files.clear();
 }
@@ -1769,8 +1770,12 @@ void DuckLakeTransaction::SetCommitMessage(const DuckLakeSnapshotCommit &option)
 void DuckLakeTransaction::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
 	auto &metadata_manager = GetMetadataManager();
 	if (!metadata_manager.CommitsEachStatement()) {
+		if (!snapshots.empty()) {
+			// set first, a failure part way leaves some of the snapshots deleted
+			lock_guard<mutex> guard(maintenance_lock);
+			expired_in_metadata_transaction = true;
+		}
 		metadata_manager.DeleteSnapshots(snapshots);
-		expired_in_metadata_transaction = expired_in_metadata_transaction || !snapshots.empty();
 		return;
 	}
 	// deleted when the transaction commits, so a rollback keeps them
@@ -1782,11 +1787,13 @@ void DuckLakeTransaction::RemoveFilesScheduledForCleanup(const vector<DuckLakeFi
 	metadata_manager.RemoveFilesScheduledForCleanup(files);
 	if (!metadata_manager.CommitsEachStatement()) {
 		// a retried commit removes them from the schedule again
+		lock_guard<mutex> guard(maintenance_lock);
 		cleaned_up_files.insert(cleaned_up_files.end(), files.begin(), files.end());
 	}
 }
 
-bool DuckLakeTransaction::ExpiredSnapshotsInMetadataTransaction() const {
+bool DuckLakeTransaction::ExpiredSnapshotsInMetadataTransaction() {
+	lock_guard<mutex> guard(maintenance_lock);
 	return expired_in_metadata_transaction;
 }
 
