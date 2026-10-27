@@ -71,7 +71,8 @@
         "test/sql/retirement/discarded_files_retirement.test",
         "test/sql/retirement/discarded_alias_published.test",
         "test/sql/retirement/discarded_remote_alias_published.test",
-        "test/sql/retirement/redated_delete_retirement.test"
+        "test/sql/retirement/redated_delete_retirement.test",
+        "test/sql/retirement/retired_path_placeholder_name.test"
       ]
     },
     {

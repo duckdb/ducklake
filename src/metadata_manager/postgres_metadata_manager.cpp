@@ -359,7 +359,7 @@ string PostgresMetadataManager::CommitGuardSql(const string &message, const stri
 	auto body = StringUtil::Format(
 	    "DECLARE guard_error TEXT; BEGIN SELECT %s INTO guard_error %s LIMIT 1; IF guard_error IS NOT NULL THEN RAISE "
 	    "EXCEPTION '%%', guard_error; END IF; END",
-	    message, StringUtil::Replace(source, "{METADATA_CATALOG}", schema));
+	    message, DuckLakeUtil::ReplacePlaceholders(source, {{"{METADATA_CATALOG}", schema}}));
 	return "DO " + SQLString::ToString(body) + ";\n";
 }
 
