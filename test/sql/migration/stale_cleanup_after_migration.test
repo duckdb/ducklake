@@ -45,7 +45,7 @@ CALL ducklake_cleanup_old_files('stale', cleanup_all => true)
 The catalog was migrated by another connection
 
 query I
-SELECT count(*) FROM glob(getvariable('source'))
+SELECT count(*) FROM glob('{DATA_PATH}/stale_cleanup_after_migration/main/t/*.parquet') WHERE file = getvariable('source')
 ----
 1
 

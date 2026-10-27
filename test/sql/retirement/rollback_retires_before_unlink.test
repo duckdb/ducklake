@@ -39,7 +39,7 @@ statement ok con1
 ROLLBACK
 
 query I
-SELECT count(*) FROM glob(getvariable('written'))
+SELECT count(*) FROM glob('{DATA_PATH}/rollback_retires_before_unlink/main/t/*.parquet') WHERE file = getvariable('written')
 ----
 0
 

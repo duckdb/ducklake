@@ -49,7 +49,7 @@ statement ok con1
 COMMIT
 
 query I
-SELECT count(*) FROM glob(getvariable('written'))
+SELECT count(*) FROM glob('{DATA_PATH}/drop_keeps_registered_output/main/t/*.parquet') WHERE file = getvariable('written')
 ----
 1
 
