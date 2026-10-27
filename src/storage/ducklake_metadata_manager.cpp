@@ -5585,18 +5585,13 @@ FROM
 }
 
 string DuckLakeMetadataManager::GetReferencedFilesQuery() const {
-	return ReferencedFilesQuery("TRUE", "TRUE");
-}
-
-string DuckLakeMetadataManager::ReferencedFilesQuery(const string &data_file_filter, const string &delete_file_filter) {
-	return FullFilePathsQuery(StringUtil::Format(R"(
+	return FullFilePathsQuery(R"(
     SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id
-    FROM {METADATA_CATALOG}.ducklake_data_file f WHERE %s
+    FROM {METADATA_CATALOG}.ducklake_data_file f
     UNION ALL
     SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id
-    FROM {METADATA_CATALOG}.ducklake_delete_file f WHERE %s
+    FROM {METADATA_CATALOG}.ducklake_delete_file f
   )",
-	                                             data_file_filter, delete_file_filter),
 	                          "", "");
 }
 
@@ -5696,6 +5691,7 @@ DuckLakeRetirement DuckLakeMetadataManager::GetRetirement(const vector<DuckLakeF
 	DuckLakePathKeys path_keys(transaction.GetCatalog().GetDatabase());
 	// the candidates of orphan cleanup and written files have no schedule entries
 	bool orphans = type != CleanupType::OLD_FILES;
+	unordered_set<string> referenced;
 	string referenced_query;
 	switch (type) {
 	case CleanupType::OLD_FILES:
@@ -5705,17 +5701,26 @@ DuckLakeRetirement DuckLakeMetadataManager::GetRetirement(const vector<DuckLakeF
 		// the scheduled files are known files for orphan cleanup
 		referenced_query = GetKnownFilesForCleanupQuery();
 		break;
-	case CleanupType::WRITTEN_FILES:
+	case CleanupType::WRITTEN_FILES: {
 		// only the rows of later commits, which get larger file ids, can reference a file that a transaction wrote
-		referenced_query = ReferencedFilesQuery(StringUtil::Format("f.data_file_id >= %llu", first_file_id),
-		                                        StringUtil::Format("f.delete_file_id >= %llu", first_file_id));
+		auto result = Query(StringUtil::Format(R"(
+SELECT table_id, path, path_is_relative FROM {METADATA_CATALOG}.ducklake_data_file WHERE data_file_id >= %llu
+UNION ALL
+SELECT table_id, path, path_is_relative FROM {METADATA_CATALOG}.ducklake_delete_file WHERE delete_file_id >= %llu)",
+		                                       first_file_id, first_file_id));
+		result->ThrowIfError("Failed to read the files DuckLake references: ");
+		for (auto &row : *result) {
+			referenced.insert(path_keys.Get(FromRelativePath(TableIndex(row.GetValue<idx_t>(0)), ReadPath(row, 1))));
+		}
 		break;
 	}
-	auto referenced_res = Query(referenced_query);
-	referenced_res->ThrowIfError("Failed to read the files DuckLake references: ");
-	unordered_set<string> referenced;
-	for (auto &row : *referenced_res) {
-		referenced.insert(path_keys.Get(row.GetValue<string>(0)));
+	}
+	if (!referenced_query.empty()) {
+		auto referenced_res = Query(referenced_query);
+		referenced_res->ThrowIfError("Failed to read the files DuckLake references: ");
+		for (auto &row : *referenced_res) {
+			referenced.insert(path_keys.Get(row.GetValue<string>(0)));
+		}
 	}
 	if (type == CleanupType::ORPHANED_FILES) {
 		vector<string> written_files;
