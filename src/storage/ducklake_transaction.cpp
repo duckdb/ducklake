@@ -2500,6 +2500,9 @@ bool DuckLakeTransaction::HasTableForks() const {
 	return !state->table_forks.empty();
 }
 
+bool DuckLakeTransaction::ChangesTable(TableIndex table_id) const {
+	return state->ChangesTable(table_id);
+}
 
 void DuckLakeTransaction::CheckNotCloned(TableIndex table_id) const {
 	if (state->table_forks.count(table_id)) {

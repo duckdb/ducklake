@@ -106,6 +106,23 @@ bool DuckLakeTransactionState::SchemaChangesMade() const {
 	       !new_table_macros.empty() || !dropped_scalar_macros.empty() || !dropped_table_macros.empty();
 }
 
+bool DuckLakeTransactionState::ChangesTable(TableIndex table_id) const {
+	if (local_changes.HasAnyLocalChanges(table_id) || tables_deleted_from.count(table_id) ||
+	    dropped_file_stats.count(table_id) || dropped_tables.count(table_id) || renamed_tables.count(table_id) ||
+	    flushed_inlined_file_deletions.count(table_id)) {
+		return true;
+	}
+	for (auto &schema_entry : new_tables) {
+		for (auto &entry : schema_entry.second->GetEntries()) {
+			if (entry.second->type == CatalogType::TABLE_ENTRY &&
+			    entry.second->Cast<DuckLakeTableEntry>().GetTableId() == table_id) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 bool DuckLakeTransactionState::InlinedTableFlushed(const string &table_name) const {
 	return std::any_of(flushed_inlined_tables.begin(), flushed_inlined_tables.end(),
 	                   [&](const FlushedInlinedTableInfo &flushed_table) {
@@ -1932,6 +1949,11 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 				fork = table_forks.find(old_table_id);
 			}
 			bool is_fork = fork != table_forks.end();
+			if (is_fork && ChangesTable(fork->second.source_table_id)) {
+				// a copy takes the committed state of its source, which this transaction must not change too
+				throw NotImplementedException("A table that this transaction clones was changed by it after the "
+				                              "clone, commit the changes of the source and the clone separately");
+			}
 			if (is_fork) {
 				// the fork copies the columns, specs and tags of its source with their history
 				new_table.columns.clear();

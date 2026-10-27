@@ -159,3 +159,52 @@ has changes in this transaction
 
 statement ok
 ROLLBACK
+
+# a change of the source after the clone in the same transaction fails the commit
+statement ok
+CREATE TABLE dl.g(i INTEGER)
+
+statement ok
+INSERT INTO dl.g VALUES (1)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_clone_table('dl', 'g', 'gc')
+
+statement ok
+INSERT INTO dl.g VALUES (2)
+
+statement error
+COMMIT
+----
+was changed by it after the clone
+
+statement error
+SELECT * FROM dl.gc
+----
+does not exist
+
+query I
+SELECT list(i) FROM dl.g
+----
+[1]
+
+# also a change before a clone at an older snapshot
+statement ok
+SET VARIABLE g_version = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.g ADD COLUMN j INTEGER
+
+statement error
+CALL ducklake_clone_table('dl', 'g', 'gc', version => getvariable('g_version'))
+----
+has changes in this transaction
+
+statement ok
+ROLLBACK

@@ -288,6 +288,8 @@ public:
 	//! Records that the commit fills the table with the state of the source at the snapshot
 	void AddTableFork(TableIndex table_id, TableIndex source_table_id, idx_t snapshot_id);
 	bool HasTableForks() const;
+	//! Whether the transaction changes the data, the files or the definition of a committed table
+	bool ChangesTable(TableIndex table_id) const;
 	//! Fails for a table that the transaction clones, whose rows exist once the transaction commits
 	void CheckNotCloned(const DuckLakeTableEntry &table) const;
 	void DropView(DuckLakeViewEntry &view);

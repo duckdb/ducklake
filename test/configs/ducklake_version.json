@@ -83,6 +83,7 @@
         "test/sql/clone/clone_compaction_schema.test",
         "test/sql/clone/clone_concurrent.test",
         "test/sql/clone/clone_encrypted.test",
+        "test/sql/clone/clone_flush_in_transaction.test",
         "test/sql/clone/clone_inlined.test",
         "test/sql/clone/clone_maintenance.test",
         "test/sql/clone/clone_refusals.test",

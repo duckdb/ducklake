@@ -90,7 +90,7 @@ static void CloneTableExecute(ClientContext &context, TableFunctionInput &data_p
 	}
 	auto &source = entry->Cast<DuckLakeTableEntry>();
 	// the copy holds the committed state of the source at the snapshot
-	if (source.IsTransactionLocal() || transaction.HasAnyLocalChanges(source.GetTableId())) {
+	if (source.IsTransactionLocal() || transaction.ChangesTable(source.GetTableId())) {
 		throw NotImplementedException(
 		    "Cannot clone table \"%s\", it has changes in this transaction, commit them first",
 		    source.name.GetIdentifierName());

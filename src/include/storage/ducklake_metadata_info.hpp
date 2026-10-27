@@ -122,7 +122,6 @@ struct DuckLakeForkInfo {
 	//! The snapshot whose state of the source the copy takes
 	idx_t snapshot_id;
 	TableIndex table_id;
-	//! The data paths of the source and of the copy
 	string source_path;
 	string table_path;
 };

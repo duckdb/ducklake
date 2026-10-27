@@ -297,6 +297,8 @@ public:
 	void EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const;
 
 	bool SchemaChangesMade() const;
+	//! Whether the transaction changes the data, the files or the definition of a committed table
+	bool ChangesTable(TableIndex table_id) const;
 	bool InlinedTableFlushed(const string &table_name) const;
 
 public:
