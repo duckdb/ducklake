@@ -1717,6 +1717,7 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 		switch (local_change.type) {
 		case LocalChangeType::SET_PARTITION_KEY: {
 			auto partition_key = DuckLakeTransaction::GetNewPartitionKey(commit_state, table);
+			partition_key.replaces_equal_spec = table.StartsPartitionSpec();
 			result.new_partition_keys.push_back(std::move(partition_key));
 
 			transaction_changes.altered_tables.insert(table_id);
@@ -1804,6 +1805,9 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			// note that in case of nested types we might be dropping multiple columns here
 			auto &changed_fields = table.GetChangedFields();
 			HandleChangedFields(commit_state.GetTableId(table), changed_fields, result, txn_added_fields);
+			for (auto &field_index : changed_fields.refined_timestamp_fields) {
+				commit_state.refined_timestamp_columns[commit_state.GetTableId(table)].insert(field_index);
+			}
 			if (table.StartsPartitionSpec()) {
 				auto partition_key = DuckLakeTransaction::GetNewPartitionKey(commit_state, table);
 				partition_key.replaces_equal_spec = true;
@@ -2262,6 +2266,15 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		                                                     data_path, separator, context.supports_v1_1_metadata);
 		batch_queries +=
 		    DuckLakeMetadataManager::WriteNewPartitionKeys(existing_catalog.partitions, result.new_partition_keys);
+		auto unchanged_partition_ids =
+		    DuckLakeMetadataManager::GetUnchangedPartitionIds(existing_catalog.partitions, result.new_partition_keys);
+		for (auto &partition_id : commit_state.committed_partition_ids) {
+			// files of a spec that equals the committed one keep the committed spec
+			auto unchanged = unchanged_partition_ids.find(partition_id.second);
+			if (unchanged != unchanged_partition_ids.end()) {
+				partition_id.second = unchanged->second;
+			}
+		}
 		batch_queries += DuckLakeMetadataManager::WriteNewViews(result.new_views);
 		batch_queries += DuckLakeMetadataManager::WriteNewTags(result.new_tags);
 		batch_queries += DuckLakeMetadataManager::WriteNewColumnTags(result.new_column_tags);
@@ -2394,6 +2407,9 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		auto compacted_tables = local_changes.GetCompactedTables();
 		refreshed_table_sizes.insert(compacted_tables.begin(), compacted_tables.end());
 	}
+	// runs after this commit writes its files and table stats, so it clears those too
+	batch_queries += DuckLakeMetadataManager::WriteRefinedTimestampStats(commit_state.refined_timestamp_columns,
+	                                                                     commit_snapshot.next_file_id);
 	batch_queries += DuckLakeMetadataManager::RefreshTableSizesSql(refreshed_table_sizes);
 
 	// delete the flushed inlined rows and inlined file deletions after the deletes of the transaction
@@ -2724,12 +2740,20 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				commit_snapshot.schema_version++;
 			}
 			can_retry = true;
+			if (i > 0) {
+				// the rollback of the failed attempt also undid what the transaction wrote before its commit
+				context.rewrite_before_retry();
+			}
 			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
 			DuckLakeCommitState commit_state(commit_snapshot);
-			// write the new snapshot
-			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
-			batch_queries += CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
-			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
+			string batch_queries;
+			if (context.write_snapshot) {
+				// write the new snapshot
+				batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
+				batch_queries +=
+				    CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
+				batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
+			}
 			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				auto &commit_error = res->GetErrorObject();
@@ -2787,7 +2811,9 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	}
 	// If we got here, this snapshot was successful
 	context.set_entry_oids(new_entry_oids);
-	context.set_committed_snapshot_id(commit_snapshot.snapshot_id);
+	if (context.write_snapshot) {
+		context.set_committed_snapshot_id(commit_snapshot.snapshot_id);
+	}
 	context.set_table_options(committed_table_options);
 	for (auto &entry : dropped_file_stats) {
 		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);

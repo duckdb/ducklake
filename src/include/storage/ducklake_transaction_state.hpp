@@ -59,10 +59,13 @@ struct DuckLakeCommitContext {
 	//! Resets per-attempt state before a retry.
 	std::function<void()> prepare_retry = []() {
 	};
+	//! Writes again what the transaction wrote to the metadata before its commit, in a retried attempt.
+	std::function<void()> rewrite_before_retry = []() {
+	};
 	// LCOV_EXCL_STOP
 	//! Runs a metadata-DB query during post-commit cleanup.
 	std::function<unique_ptr<QueryResult>(string)> query_metadata;
-	//! Runs cleanup statements atomically.
+	//! Runs cleanup statements that drop metadata tables atomically.
 	std::function<unique_ptr<QueryResult>(string)> execute_in_transaction;
 	//! Runs a snapshot-templated metadata-DB query (handles {SNAPSHOT_ID} substitution).
 	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> query_metadata_with_snapshot;
@@ -143,6 +146,8 @@ struct DuckLakeCommitContext {
 	std::function<void(const string &)> report_post_commit_error = [](const string &) {
 	};
 	// LCOV_EXCL_STOP
+	//! Whether the commit writes a snapshot, a commit that only changes options writes none.
+	bool write_snapshot = true;
 	//! Author / message / extra info for the snapshot row.
 	DuckLakeSnapshotCommit commit_info;
 	//! When true, Commit() skips the post-commit DropEmptySupersededInlinedTables cleanup.

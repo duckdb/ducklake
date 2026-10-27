@@ -19,12 +19,6 @@
   ],
   "skip_tests": [
     {
-      "reason": "The second set_option of a new option waits for the open transaction of the first, which this sequential test never ends",
-      "paths": [
-        "test/sql/stats/skip_stats_columns_concurrent_rollback.test"
-      ]
-    },
-    {
       "reason": "Postgres text cannot hold a NUL byte, test/sql/general/postgres_nul_byte_text.test covers the error",
       "paths": [
         "test/sql/snapshot_info/commit_message_nul_byte.test"
@@ -92,6 +86,7 @@
         "test/sql/data_inlining/sqlite_column_limit.test",
         "test/sql/data_inlining/sqlite_system_column_names.test",
         "test/sql/issues/issue_1309.test",
+        "test/sql/retry/sqlite_lock_retry_errors_as_json.test",
         "test/sql/issues/issue_sqlite_snapshot_time.test",
         "test/sql/data_inlining/data_inlining_variant_sql_rollback.test"
       ]

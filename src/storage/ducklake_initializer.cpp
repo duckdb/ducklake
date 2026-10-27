@@ -175,6 +175,8 @@ void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction) {
 	auto result = transaction.GetMetadataManager().AttachMetadata(attach_query);
 	result->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
 	                     catalog.MetadataPath() + "\"");
+	// a rollback of the transaction can undo the attach and the creation or migration of the catalog
+	transaction.MarkMetadataWritten();
 }
 
 bool DuckLakeInitializer::DuckLakeIsInitialized(DuckLakeTransaction &transaction) {

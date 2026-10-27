@@ -1,0 +1,180 @@
+# name: test/sql/compaction/compaction_transient_partition_spec.test
+# description: files of a partition spec set and reset in one transaction can be merged and rewritten
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/compaction_transient_spec/', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(p INTEGER, v INTEGER)
+
+# the files are written directly in the table directory
+statement ok
+CALL lake.set_option('hive_file_pattern', false, table_name => 't')
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO lake.t VALUES (1, 10), (2, 30), (NULL, 50)
+
+statement ok
+INSERT INTO lake.t VALUES (1, 20), (2, 40), (NULL, 60)
+
+statement ok
+ALTER TABLE lake.t RESET PARTITIONED BY
+
+statement ok
+COMMIT
+
+query III
+SELECT table_name, sum(files_processed), sum(files_created) FROM ducklake_merge_adjacent_files('lake', 't') GROUP BY ALL
+----
+t	6	3
+
+query II
+SELECT * FROM lake.t ORDER BY v
+----
+1	10
+1	20
+2	30
+2	40
+NULL	50
+NULL	60
+
+# the merged files stay in the table directory and keep the spec and their partition values
+query I
+SELECT bool_and(regexp_matches(data_file, '[/\\]main[/\\]t[/\\][^/\\]+\.parquet$')) FROM ducklake_list_files('lake', 't')
+----
+true
+
+statement ok
+SET VARIABLE t_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't')
+
+statement ok
+SET VARIABLE spec_ids = (SELECT list(partition_id) FROM meta.ducklake_partition_info WHERE table_id = getvariable('t_id'))
+
+statement ok
+SET VARIABLE t_files = (SELECT list(data_file_id) FROM meta.ducklake_data_file WHERE end_snapshot IS NULL AND table_id = getvariable('t_id'))
+
+query II
+SELECT count(DISTINCT partition_id), bool_and(list_contains(getvariable('spec_ids'), partition_id))
+FROM meta.ducklake_data_file
+WHERE end_snapshot IS NULL AND table_id = getvariable('t_id')
+----
+1	true
+
+query I
+SELECT list(partition_value ORDER BY partition_value NULLS LAST)
+FROM meta.ducklake_file_partition_value
+WHERE list_contains(getvariable('t_files'), data_file_id)
+----
+[1, 2, NULL]
+
+statement ok
+DELETE FROM lake.t WHERE v = 10
+
+query I
+SELECT count(*) FROM ducklake_rewrite_data_files('lake', 't', delete_threshold => 0)
+----
+1
+
+query II
+SELECT * FROM lake.t WHERE p = 1
+----
+1	20
+
+# files added from outside the table directory are written to the table directory
+statement ok
+COPY (SELECT 1 AS p, 70 AS v) TO '{DATA_PATH}/compaction_transient_spec_ext1' (FORMAT parquet, PARTITION_BY (p))
+
+statement ok
+COPY (SELECT 1 AS p, 80 AS v) TO '{DATA_PATH}/compaction_transient_spec_ext2' (FORMAT parquet, PARTITION_BY (p))
+
+statement ok
+CREATE TABLE lake.e(p INTEGER, v INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.e SET PARTITIONED BY (p)
+
+statement ok
+CALL ducklake_add_data_files('lake', 'e', '{DATA_PATH}/compaction_transient_spec_ext1/**/*.parquet', hive_partitioning => true)
+
+statement ok
+CALL ducklake_add_data_files('lake', 'e', '{DATA_PATH}/compaction_transient_spec_ext2/**/*.parquet', hive_partitioning => true)
+
+statement ok
+ALTER TABLE lake.e RESET PARTITIONED BY
+
+statement ok
+COMMIT
+
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 'e')
+----
+e	2	1
+
+query II
+SELECT bool_and(regexp_matches(data_file, '[/\\]main[/\\]e[/\\][^/\\]+\.parquet$')), count(*) FROM ducklake_list_files('lake', 'e')
+----
+true	1
+
+query II
+SELECT * FROM lake.e ORDER BY v
+----
+1	70
+1	80
+
+# an added file is rewritten directly
+statement ok
+COPY (SELECT 3 AS p, i::INTEGER AS v FROM range(4) t(i)) TO '{DATA_PATH}/compaction_transient_spec_ext3' (FORMAT parquet, PARTITION_BY (p))
+
+statement ok
+CREATE TABLE lake.r(p INTEGER, v INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.r SET PARTITIONED BY (p)
+
+statement ok
+CALL ducklake_add_data_files('lake', 'r', '{DATA_PATH}/compaction_transient_spec_ext3/**/*.parquet', hive_partitioning => true)
+
+statement ok
+ALTER TABLE lake.r RESET PARTITIONED BY
+
+statement ok
+COMMIT
+
+statement ok
+DELETE FROM lake.r WHERE v = 0
+
+query I
+SELECT count(*) FROM ducklake_rewrite_data_files('lake', 'r', delete_threshold => 0)
+----
+1
+
+query II
+SELECT bool_and(regexp_matches(data_file, '[/\\]main[/\\]r[/\\][^/\\]+\.parquet$')), count(*) FROM ducklake_list_files('lake', 'r')
+----
+true	1
+
+query II
+SELECT p, list(v ORDER BY v) FROM lake.r GROUP BY p
+----
+3	[1, 2, 3]

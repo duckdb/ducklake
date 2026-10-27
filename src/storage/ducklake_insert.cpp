@@ -606,12 +606,19 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	static constexpr idx_t MINIMUM_WRITE_FILE_SIZE = 4096;
 	copy.file_size_bytes = MaxValue<idx_t>(target_file_size, MINIMUM_WRITE_FILE_SIZE);
 	copy.rotate = true;
-	copy.batch_size = catalog.GetConfigOption<idx_t>("parquet_row_group_size", schema_id, table_id,
-	                                                 DEFAULT_ROW_GROUP_SIZE, &copy_input.table_options);
+	// the batch copy computes with its sizes as BIGINT, and no row group reaches a larger size
+	static constexpr idx_t MAXIMUM_BATCH_SIZE = NumericLimits<int64_t>::Maximum();
+	copy.batch_size = MinValue<idx_t>(catalog.GetConfigOption<idx_t>("parquet_row_group_size", schema_id, table_id,
+	                                                                 DEFAULT_ROW_GROUP_SIZE, &copy_input.table_options),
+	                                  MAXIMUM_BATCH_SIZE);
 	string row_group_size_bytes;
 	if (catalog.TryGetConfigOption("parquet_row_group_size_bytes", row_group_size_bytes, schema_id, table_id,
 	                               &copy_input.table_options)) {
-		copy.batch_size_bytes = DBConfig::ParseMemoryLimit(row_group_size_bytes + " bytes");
+		auto batch_size_bytes = DBConfig::ParseMemoryLimit(row_group_size_bytes + " bytes");
+		if (batch_size_bytes.IsValid()) {
+			batch_size_bytes = MinValue<idx_t>(batch_size_bytes.GetIndex(), MAXIMUM_BATCH_SIZE);
+		}
+		copy.batch_size_bytes = batch_size_bytes;
 	}
 	if (copy_input.partition_data) {
 		copy.partition_output = true;
@@ -634,6 +641,10 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	if (copy_input.partition_data) {
 		// we are partitioning - generate partition expressions (if any)
 		GeneratePartitionExpressions(context, copy_input, result);
+		if (copy.hive_file_pattern && !copy.partition_columns.empty()) {
+			copy.partition_path_expression = DuckLakePartitionUtils::CreatePartitionPathExpression(context, copy);
+			copy.hive_file_pattern = !copy.partition_path_expression;
+		}
 	}
 	return result;
 }

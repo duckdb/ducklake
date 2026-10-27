@@ -1,0 +1,52 @@
+# name: test/sql/stats/timetz_table_stats_order.test
+# description: The table stats of a TIMETZ column order its values by instant, as ORDER BY does
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/timetz_table_stats_order', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE lake.t (c TIMETZ)
+
+# 20:00, 18:00 and 21:00 UTC
+statement ok
+INSERT INTO lake.t VALUES (TIMETZ '20:00:00+00'), (TIMETZ '23:00:00+05'), (TIMETZ '12:00:00-09')
+
+query II
+SELECT min_value, max_value FROM __ducklake_metadata_lake.ducklake_table_column_stats
+----
+23:00:00+05	12:00:00-09
+
+query II
+SELECT first(c ORDER BY c)::VARCHAR, last(c ORDER BY c)::VARCHAR FROM lake.t
+----
+23:00:00+05	12:00:00-09
+
+# 22:00 UTC
+statement ok
+INSERT INTO lake.t VALUES (TIMETZ '13:00:00-09')
+
+query II
+SELECT min_value, max_value FROM __ducklake_metadata_lake.ducklake_table_column_stats
+----
+23:00:00+05	13:00:00-09
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+# a file of 18:30 UTC, whose stats the Parquet writer stores in UTC
+statement ok
+INSERT INTO lake.t SELECT TIMETZ '23:30:00+05' FROM range(20)
+
+query II
+SELECT min_value, max_value FROM __ducklake_metadata_lake.ducklake_table_column_stats
+----
+23:00:00+05	13:00:00-09

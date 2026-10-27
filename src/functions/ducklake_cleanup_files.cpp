@@ -130,9 +130,7 @@ void DuckLakeCleanupExecute(ClientContext &context, TableFunctionInput &data_p, 
 		fs.RemoveFiles(paths);
 		if (data.type == CleanupType::OLD_FILES) {
 			// If we are removing old files, we need to remove them from the catalog
-			auto &transaction = DuckLakeTransaction::Get(context, data.catalog);
-			auto &metadata_manager = transaction.GetMetadataManager();
-			metadata_manager.RemoveFilesScheduledForCleanup(data.files);
+			DuckLakeTransaction::Get(context, data.catalog).RemoveFilesScheduledForCleanup(data.files);
 		}
 		state.executed = true;
 	}
