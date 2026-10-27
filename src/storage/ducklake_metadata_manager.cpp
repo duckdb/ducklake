@@ -116,13 +116,12 @@ string DuckLakeMetadataManager::MigratedCatalogGuardSql(
 }
 
 string
-DuckLakeMetadataManager::RetiredPathGuardSql(const DuckLakePathKeys &path_keys, const vector<string> &paths,
+DuckLakeMetadataManager::RetiredPathGuardSql(const vector<string> &keys,
                                              const std::function<string(const string &, const string &)> &guard_sql) {
-	unordered_set<string> keys;
+	unordered_set<string> distinct_keys;
 	vector<string> key_literals;
-	for (auto &path : paths) {
-		auto key = path_keys.Get(path);
-		if (keys.insert(key).second) {
+	for (auto &key : keys) {
+		if (distinct_keys.insert(key).second) {
 			key_literals.push_back(SQLString::ToString(key));
 		}
 	}

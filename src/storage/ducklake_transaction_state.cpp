@@ -2562,8 +2562,13 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	}
 	batch_queries += DuckLakeMetadataManager::InsertNewSchema(commit_snapshot, tables_with_schema_changes);
 	if (context.supports_file_identity && !published_paths.empty()) {
-		batch_queries +=
-		    DuckLakeMetadataManager::RetiredPathGuardSql(DuckLakePathKeys(db), published_paths, context.guard_sql);
+		DuckLakePathKeys path_keys(db);
+		vector<string> keys;
+		for (auto &path : published_paths) {
+			auto client_key = context.published_path_keys.find(path);
+			keys.push_back(client_key == context.published_path_keys.end() ? path_keys.Get(path) : client_key->second);
+		}
+		batch_queries += DuckLakeMetadataManager::RetiredPathGuardSql(keys, context.guard_sql);
 	}
 
 	return batch_queries;

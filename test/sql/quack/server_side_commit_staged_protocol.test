@@ -75,7 +75,7 @@ COPY (SELECT 42 AS i) TO '{DATA_PATH}/server_side_commit_staged_protocol_refused
 statement error
 CALL quack_query_by_name('__ducklake_metadata_lake', '
 INSERT INTO ducklake_staged_data_file SELECT 0, table_id, 0, ''{DATA_PATH}/server_side_commit_staged_protocol_refused.parquet'',
-       false, ''parquet'', 1, 1000, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, true
+       false, ''parquet'', 1, 1000, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, true, NULL
 FROM main.ducklake_table WHERE table_name = ''t'' AND end_snapshot IS NULL;
 SELECT * FROM ducklake_commit(''main'', -1)')
 ----
@@ -196,7 +196,8 @@ INSERT INTO ducklake_staged_commit SELECT NULL, NULL, NULL, snapshot_id, NULL, N
 FROM main.ducklake_snapshot ORDER BY snapshot_id DESC LIMIT 1;
 INSERT INTO ducklake_staged_delete_file
 SELECT del.table_id, data.path, del.data_file_id, del.path, del.format, del.delete_count, del.file_size_bytes,
-       del.footer_size, del.encryption_key, NULL, NULL, ''REGULAR'', true, del.delete_file_id, del.path, NULL, NULL
+       del.footer_size, del.encryption_key, NULL, NULL, ''REGULAR'', true, del.delete_file_id, del.path, NULL, NULL,
+       NULL
 FROM main.ducklake_delete_file del JOIN main.ducklake_data_file data USING (data_file_id)
 JOIN main.ducklake_table tbl ON tbl.table_id = del.table_id AND tbl.end_snapshot IS NULL
 WHERE del.end_snapshot IS NULL AND tbl.table_name = ''d'';

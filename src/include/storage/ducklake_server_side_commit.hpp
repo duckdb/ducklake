@@ -121,6 +121,8 @@ private:
 	map<idx_t, vector<DuckLakeDeleteFile>> attached_deletes;
 	//! Compaction-output files indexed by compaction_id, then ordered by file_order.
 	map<idx_t, map<idx_t, DuckLakeDataFile>> compaction_output_files;
+	//! The keys that the client computed for the paths the commit publishes
+	unordered_map<string, string> published_path_keys;
 };
 
 } // namespace duckdb

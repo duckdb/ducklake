@@ -21,6 +21,7 @@ namespace duckdb {
 class ClientContext;
 class DataChunk;
 class DuckLakeMetadataManager;
+class DuckLakePathKeys;
 class DuckLakeTransaction;
 class Value;
 enum class CompactionType;
@@ -72,11 +73,18 @@ public:
 //! Builds the SQL batch that stages a commit into temporary tables and calls ducklake_commit.
 class DuckLakeStagedCommit {
 public:
+	DuckLakeStagedCommit();
+	~DuckLakeStagedCommit();
+
 	//! Build the full SQL batch from transaction state.
 	string Build(DuckLakeTransaction &transaction, const DuckLakeSnapshot &transaction_snapshot,
-	             const DuckLakeRetryConfig &retry_config) const;
+	             const DuckLakeRetryConfig &retry_config);
 
 private:
+	//! The keys of the published paths on a catalog with file identity, which follow the file system of the client
+	unique_ptr<DuckLakePathKeys> path_keys;
+	//! The key of a published path as a literal, NULL without file identity
+	string PathKeyLiteral(const string &path) const;
 	//! Emits INSERT for a single data file, its column stats, and partition values.
 	void EmitDataFileRow(string &sql, const DuckLakeDataFile &file, idx_t local_file_id, TableIndex table_id,
 	                     idx_t file_order, const string &compaction_id_literal) const;

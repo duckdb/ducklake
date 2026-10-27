@@ -276,10 +276,14 @@ void DuckLakeServerSideCommit::ReadStagedDataFiles() {
 	map<TableIndex, vector<DuckLakeDataFile>> files_per_table;
 	auto files_result = ScanStagedTable(DuckLakeStagedTableType::DATA_FILE);
 	bool has_created_by_ducklake = DuckLakeMetadataManager::ResultHasColumn(*files_result, "created_by_ducklake");
+	bool has_path_key = DuckLakeMetadataManager::ResultHasColumn(*files_result, "path_key");
 	for (auto &row : *files_result) {
 		DataFileIndex local_file_id(AsIdx(row, 0));
 		DuckLakeDataFile f;
 		f.file_name = row.GetValue<string>(3);
+		if (has_path_key && !row.IsNull(18)) {
+			published_path_keys[f.file_name] = row.GetValue<string>(18);
+		}
 		f.row_count = AsIdx(row, 6);
 		f.file_size_bytes = AsIdx(row, 7);
 		f.footer_size = OptIdx(row, 8);
@@ -396,9 +400,13 @@ void DuckLakeServerSideCommit::ReadStagedInlinedFileDeletes() {
 
 void DuckLakeServerSideCommit::ReadStagedDeleteFiles() {
 	auto result = ScanStagedTable(DuckLakeStagedTableType::DELETE_FILE);
+	bool has_path_key = DuckLakeMetadataManager::ResultHasColumn(*result, "path_key");
 
 	map<pair<TableIndex, string>, vector<DuckLakeDeleteFile>> grouped;
 	for (auto &row : *result) {
+		if (has_path_key && !row.IsNull(17)) {
+			published_path_keys[row.GetValue<string>(3)] = row.GetValue<string>(17);
+		}
 		if (!row.IsNull(15)) {
 			DuckLakeDeleteFile f;
 			FillDeleteFileCommon(f, row, /*base=*/3);
@@ -667,6 +675,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.skip_drop_empty_inlined = true;
 	ctx.supports_v1_1_metadata = supports_v1_1_metadata;
 	ctx.supports_file_identity = supports_file_identity;
+	ctx.published_path_keys = published_path_keys;
 	ctx.attached_version = attached_version;
 	ctx.snapshot_and_stats_query = DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(supports_v1_1_metadata);
 	ctx.conflict_query_executor = [this](string q) -> unique_ptr<QueryResult> {
