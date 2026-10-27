@@ -79,6 +79,17 @@ SELECT ((stats(x)).min)::{type}, ((stats(x)).max)::{type} FROM dl.t LIMIT 1
 ----
 1.0	2.0
 
+statement ok
+DELETE FROM dl.t
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+query I
+SELECT sum(CASE WHEN v > 1 THEN 1 ELSE 0 END) FROM (SELECT COALESCE(x, 0) AS v FROM dl.t)
+----
+1
+
 endloop
 
 # added files and added columns do not say whether they hold NaN, so no bound is taken from them
@@ -106,6 +117,13 @@ SELECT count(*) FROM dl.t WHERE x > 1
 ----
 1
 
+# unknown bounds are not empty bounds, so a comparison over a derived value is not folded
+query I
+SELECT sum(CASE WHEN v > 1 THEN 1 ELSE 0 END)
+FROM (SELECT COALESCE(b.x, 0) AS v FROM dl.t a LEFT JOIN dl.t b ON a.x = b.x)
+----
+1
+
 statement ok
 ALTER TABLE dl.t ADD COLUMN y {type} DEFAULT 7.5
 
@@ -121,6 +139,12 @@ true	true
 
 query I
 SELECT count(*) FROM dl.t WHERE y = 7.5
+----
+2
+
+query I
+SELECT sum(CASE WHEN v = 7.5 THEN 1 ELSE 0 END)
+FROM (SELECT COALESCE(b.y, 0) AS v FROM dl.t a LEFT JOIN dl.t b ON a.x = b.x)
 ----
 2
 

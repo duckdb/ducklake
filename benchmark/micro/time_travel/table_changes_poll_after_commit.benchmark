@@ -1,0 +1,33 @@
+# name: benchmark/micro/time_travel/table_changes_poll_after_commit.benchmark
+# description: Ten commits into a lake with 20001 snapshots, each followed by a table_changes poll of its snapshot
+# group: [time_travel]
+
+name Table Changes Poll After Commit
+group micro
+subgroup time_travel
+
+require ducklake
+
+require parquet
+
+argument work poll_after_commit_work
+
+# Warming with a poll of the last fixture snapshot also reads the changes of the whole history before the run
+argument warm_table lake.table_changes('t',20000,20000)
+
+include benchmark/micro/fixtures/snap20k.benchmark.in
+
+run
+@for k in range(1, 11)
+INSERT INTO lake.t VALUES (@{k}, 'v@{k}');
+SELECT * FROM lake.table_changes('t', @{20000 + k}, @{20000 + k});
+@end
+
+include benchmark/micro/fixtures/restore_cleanup_warm.benchmark.in
+
+# A missed reset gives the polled snapshots other rows, and an extra commit a snapshot after 20010
+result_query III
+SELECT count(*), sum(id), (SELECT max(snapshot_id) FROM lake.snapshots())
+FROM lake.table_changes('t', 20001, 20010) WHERE change_type = 'insert'
+----
+10	55	20010

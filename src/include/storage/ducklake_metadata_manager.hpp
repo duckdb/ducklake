@@ -384,6 +384,9 @@ public:
 	                                                          DuckLakeSnapshot start_snapshot,
 	                                                          DuckLakeSnapshot snapshot,
 	                                                          bool include_local_changes = true);
+	//! The snapshots of the range that rewrote data files of the table without changing its rows
+	set<idx_t> GetTableRewriteSnapshots(TableIndex table_id, DuckLakeSnapshot start_snapshot,
+	                                    DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeFileListExtendedEntry>
 	GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                         const FilterPushdownInfo *filter_info = nullptr);
@@ -686,6 +689,8 @@ protected:
 	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
 
 	virtual string GetLatestSnapshotQuery() const;
+	//! The changes of the snapshots from first_snapshot to last_snapshot that recorded a rewrite
+	virtual string GetRewriteSnapshotsQuery(idx_t first_snapshot, idx_t last_snapshot) const;
 
 	virtual string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
 	                                              const string &metadata_table_prefix);

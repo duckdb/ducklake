@@ -51,6 +51,7 @@ benchmark/micro/write/alter_float_to_double.benchmark
 benchmark/micro/time_travel/at_version_local_changes.benchmark
 benchmark/micro/time_travel/table_changes_flushed.benchmark
 benchmark/micro/time_travel/table_changes_inlined_deletes.benchmark
+benchmark/micro/time_travel/table_changes_poll_after_commit.benchmark
 benchmark/micro/maintenance/flush_inlined_superseded.benchmark
 benchmark/micro/write/delete_commits_rewrite.benchmark
 benchmark/micro/write/delete_commits_rewrite_retry.benchmark
