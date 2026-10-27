@@ -1491,10 +1491,9 @@ WHERE  {SNAPSHOT_ID} >= ducklake_macro.begin_snapshot AND ({SNAPSHOT_ID} < duckl
 			return StringUtil::Format(" AND %s.table_id = %llu", alias, table_id.GetIndex());
 		}
 		// a copied table has specs from before its own creation
-		return StringUtil::Format(
-		    " AND %s.table_id IN (SELECT table_id FROM {METADATA_CATALOG}.ducklake_table tbl WHERE {SNAPSHOT_ID} >= "
-		    "tbl.begin_snapshot AND ({SNAPSHOT_ID} < tbl.end_snapshot OR tbl.end_snapshot IS NULL))",
-		    alias);
+		return StringUtil::Format(" AND %s.table_id NOT IN (SELECT table_id FROM {METADATA_CATALOG}.ducklake_table "
+		                          "GROUP BY table_id HAVING MIN(begin_snapshot) > {SNAPSHOT_ID})",
+		                          alias);
 	};
 	// load partition information
 	result = query_executor(snapshot, StringUtil::Format(R"(
