@@ -359,16 +359,19 @@ string PostgresMetadataManager::CommitGuardSql(const string &message, const stri
 	return "DO " + SQLString::ToString(body) + ";\n";
 }
 
-bool PostgresMetadataManager::IsTerminalCommitError(const string &message) const {
-	// the server error follows the failed query, which holds the text of the guard itself
+//! The error without the failed query that a failed batch puts before it, the query can contain any text
+static string ServerError(const string &message) {
 	auto server_error_start = message.rfind("\": ");
-	return server_error_start != string::npos && IsGuardError(message.substr(server_error_start));
+	return server_error_start == string::npos ? message : message.substr(server_error_start);
+}
+
+bool PostgresMetadataManager::IsTerminalCommitError(const string &message) const {
+	// the failed query holds the text of the guard itself, an error of a check on the client holds no query
+	return IsGuardError(ServerError(message));
 }
 
 bool PostgresMetadataManager::IsRetryableCommitError(const string &message) const {
-	// the server error follows the failed query, which can contain any text
-	auto server_error_start = message.rfind("\": ");
-	auto server_error = server_error_start == string::npos ? message : message.substr(server_error_start);
+	auto server_error = ServerError(message);
 	// constraint names are not translated, so a conflict on a metadata primary key is found in any language
 	for (auto end = server_error.find("_pkey"); end != string::npos; end = server_error.find("_pkey", end + 1)) {
 		auto start = end;
