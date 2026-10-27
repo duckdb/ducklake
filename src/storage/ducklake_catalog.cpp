@@ -496,9 +496,16 @@ idx_t DuckLakeCatalog::GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx
 
 optional_ptr<DuckLakeTableEntry> DuckLakeCatalog::GetTableAtSchemaVersion(DuckLakeTransaction &transaction,
                                                                           TableIndex table_id, idx_t schema_version) {
-	auto cache_entry = GetTableCacheEntry(transaction, table_id, schema_version);
-	auto entry = cache_entry->catalog_set.GetEntryById(table_id);
-	transaction.PinSchemaCacheEntry(std::move(cache_entry));
+	DuckLakeSnapshot snapshot(GetBeginSnapshotForSchemaVersion(table_id, schema_version, transaction), schema_version,
+	                          0, 0);
+	// the tables that existed at the version share its catalog
+	auto entry = GetEntryById(transaction, snapshot, table_id);
+	if (!entry) {
+		// a copy has the history from before its creation in its own rows
+		auto cache_entry = GetTableCacheEntry(transaction, table_id, snapshot);
+		entry = cache_entry->catalog_set.GetEntryById(table_id);
+		transaction.PinSchemaCacheEntry(std::move(cache_entry));
+	}
 	if (!entry) {
 		// LCOV_EXCL_START
 		return nullptr;
@@ -521,12 +528,10 @@ DuckLakeCatalog::GetOrLoadCacheEntry(const string &key, const std::function<uniq
 	return entry;
 }
 
-shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeCatalog::GetTableCacheEntry(DuckLakeTransaction &transaction,
-                                                                         TableIndex table_id, idx_t schema_version) {
-	return GetOrLoadCacheEntry(TableCacheKey(table_id, schema_version), [&]() {
+shared_ptr<DuckLakeSchemaCacheEntry>
+DuckLakeCatalog::GetTableCacheEntry(DuckLakeTransaction &transaction, TableIndex table_id, DuckLakeSnapshot snapshot) {
+	return GetOrLoadCacheEntry(TableCacheKey(table_id, snapshot.schema_version), [&]() {
 		// the columns of the table at the version, read from its own rows without the rest of the catalog
-		DuckLakeSnapshot snapshot(GetBeginSnapshotForSchemaVersion(table_id, schema_version, transaction),
-		                          schema_version, 0, 0);
 		return LoadSchemaForSnapshot(transaction, snapshot, table_id.index);
 	});
 }
