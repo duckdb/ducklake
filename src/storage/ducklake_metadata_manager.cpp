@@ -5691,7 +5691,20 @@ DuckLakeRetirement DuckLakeMetadataManager::GetRetirement(const vector<DuckLakeF
 	DuckLakePathKeys path_keys(transaction.GetCatalog().GetDatabase());
 	// the candidates of orphan cleanup and written files have no schedule entries
 	bool orphans = type != CleanupType::OLD_FILES;
+	vector<string> keys;
+	vector<string> key_literals;
+	for (auto &candidate : candidates) {
+		keys.push_back(path_keys.Get(candidate.path));
+		key_literals.push_back(SQLString::ToString(keys.back()));
+	}
+	string retired_query;
+	if (!keys.empty()) {
+		retired_query =
+		    StringUtil::Format("SELECT path FROM {METADATA_CATALOG}.ducklake_retired_path WHERE path IN (%s)",
+		                       StringUtil::Join(key_literals, ", "));
+	}
 	unordered_set<string> referenced;
+	unordered_set<string> retired;
 	string referenced_query;
 	switch (type) {
 	case CleanupType::OLD_FILES:
@@ -5702,14 +5715,23 @@ DuckLakeRetirement DuckLakeMetadataManager::GetRetirement(const vector<DuckLakeF
 		referenced_query = GetKnownFilesForCleanupQuery();
 		break;
 	case CleanupType::WRITTEN_FILES: {
-		// only the rows of later commits, which get larger file ids, can reference a file that a transaction wrote
-		auto result = Query(StringUtil::Format(R"(
+		// only rows of later commits, with larger file ids, can reference a written file, read with the retired paths
+		auto query = StringUtil::Format(R"(
 SELECT table_id, path, path_is_relative FROM {METADATA_CATALOG}.ducklake_data_file WHERE data_file_id >= %llu
 UNION ALL
 SELECT table_id, path, path_is_relative FROM {METADATA_CATALOG}.ducklake_delete_file WHERE delete_file_id >= %llu)",
-		                                       first_file_id, first_file_id));
+		                                first_file_id, first_file_id);
+		if (!retired_query.empty()) {
+			query += "\nUNION ALL\nSELECT NULL, path, NULL FROM (" + retired_query + ")";
+			retired_query.clear();
+		}
+		auto result = Query(query);
 		result->ThrowIfError("Failed to read the files DuckLake references: ");
 		for (auto &row : *result) {
+			if (row.IsNull(0)) {
+				retired.insert(row.GetValue<string>(1));
+				continue;
+			}
 			referenced.insert(path_keys.Get(FromRelativePath(TableIndex(row.GetValue<idx_t>(0)), ReadPath(row, 1))));
 		}
 		break;
@@ -5729,17 +5751,8 @@ SELECT table_id, path, path_is_relative FROM {METADATA_CATALOG}.ducklake_delete_
 			referenced.insert(path_keys.Get(path));
 		}
 	}
-	vector<string> keys;
-	vector<string> key_literals;
-	for (auto &candidate : candidates) {
-		keys.push_back(path_keys.Get(candidate.path));
-		key_literals.push_back(SQLString::ToString(keys.back()));
-	}
-	unordered_set<string> retired;
-	if (!keys.empty()) {
-		auto retired_res =
-		    Query(StringUtil::Format("SELECT path FROM {METADATA_CATALOG}.ducklake_retired_path WHERE path IN (%s)",
-		                             StringUtil::Join(key_literals, ", ")));
+	if (!retired_query.empty()) {
+		auto retired_res = Query(retired_query);
 		retired_res->ThrowIfError("Failed to read the retired paths of DuckLake: ");
 		for (auto &row : *retired_res) {
 			retired.insert(row.GetValue<string>(0));
