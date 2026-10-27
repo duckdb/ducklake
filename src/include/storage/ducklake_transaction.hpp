@@ -454,7 +454,7 @@ private:
 	bool rewrote_config_options = false;
 	//! Expiries and cleanups of the transaction can run in parallel statements
 	mutex maintenance_lock;
-	//! Whether the metadata transaction expired snapshots, which a retried commit cannot write again
+	//! Whether the metadata transaction expired snapshots
 	bool expired_in_metadata_transaction = false;
 	//! The files the metadata transaction removed from the deletion schedule
 	vector<DuckLakeFileForCleanup> cleaned_up_files;
