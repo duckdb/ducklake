@@ -367,6 +367,15 @@ bool PostgresMetadataManager::IsRetryableCommitError(const string &message) cons
 	return false;
 }
 
+bool PostgresMetadataManager::AcquireCommitLock() {
+	auto &catalog = transaction.GetCatalog();
+	auto metadata_schema = SQLQuotedIdentifier::ToString(catalog.MetadataSchemaName());
+	string query = StringUtil::Format("LOCK TABLE %s.ducklake_snapshot IN SHARE ROW EXCLUSIVE MODE", metadata_schema);
+	auto result = Execute({}, query);
+	result->ThrowIfError("Failed to acquire DuckLake PostgreSQL commit lock: ");
+	return true;
+}
+
 bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_name) {
 	auto &catalog = transaction.GetCatalog();
 	auto remote_query = StringUtil::Format(

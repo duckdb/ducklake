@@ -230,6 +230,10 @@ public:
 	virtual bool IsRetryableCommitError(const string &) const {
 		return false;
 	}
+	//! Serializes the short metadata commit section when the catalog supports it.
+	virtual bool AcquireCommitLock() {
+		return false;
+	}
 	//! Advice added to the error of a commit that failed for good
 	virtual string CommitErrorHint(const string &) const {
 		return string();

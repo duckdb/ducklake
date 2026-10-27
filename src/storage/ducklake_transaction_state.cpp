@@ -2775,9 +2775,10 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		auto attempt_changes = transaction_changes;
 		auto attempt_dropped_file_stats = dropped_file_stats;
 		try {
+			bool serialized_commit = context.acquire_commit_lock();
 			can_retry = false;
-			if (i > 0 || attempt_changes.HasRefChanges()) {
-				// a retry, or a commit of catalog-wide names, checks for conflicts first
+			if (serialized_commit || i > 0 || attempt_changes.HasRefChanges()) {
+				// a serialized commit, retry, or catalog-wide name change checks for conflicts first
 				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);
 				stats = &commit_stats_snapshot.stats;
 			} else {

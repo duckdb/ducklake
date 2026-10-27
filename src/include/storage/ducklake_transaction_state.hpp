@@ -51,6 +51,10 @@ struct DuckLakeCommitContext {
 	std::function<bool(const string &)> is_retryable_metadata_error = [](const string &) {
 		return false;
 	};
+	//! Serializes Postgres catalog commits without serializing the data-writing work.
+	std::function<bool()> acquire_commit_lock = []() {
+		return false;
+	};
 	//! Advice for a commit error that is not retried.
 	std::function<string(const string &)> commit_error_hint = [](const string &) {
 		return string();
