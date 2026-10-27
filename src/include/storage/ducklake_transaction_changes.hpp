@@ -45,6 +45,16 @@ struct TransactionChangeInformation {
 	set<TableIndex> tables_compacted;
 	set<TableIndex> tables_merge_adjacent;
 	set<TableIndex> tables_rewrite_delete;
+	//! The snapshot tags created and dropped, by name
+	case_insensitive_set_t created_snapshot_tags;
+	case_insensitive_set_t dropped_snapshot_tags;
+	//! The snapshots the commit expires, read in each commit attempt
+	set<idx_t> expired_snapshots;
+
+	//! Whether the commit changes catalog-wide names, which every commit attempt validates
+	bool HasRefChanges() const {
+		return !created_snapshot_tags.empty() || !dropped_snapshot_tags.empty();
+	}
 
 	//! The tables whose data or schema the transaction changes
 	vector<TableIndex> GetChangedTables() const {
@@ -79,6 +89,9 @@ struct SnapshotChangeInformation {
 	set<TableIndex> tables_inserted_inlined;
 	set<TableIndex> tables_deleted_inlined;
 	set<TableIndex> tables_flushed_inlined;
+	case_insensitive_set_t created_snapshot_tags;
+	case_insensitive_set_t dropped_snapshot_tags;
+	set<idx_t> expired_snapshots;
 	static SnapshotChangeInformation ParseChangesMade(const string &changes_made);
 };
 

@@ -20,6 +20,7 @@
         "test/sql/add_files/add_files_stats_exactness.test",
         "test/sql/attach/attach_ducklake_version.test",
         "test/sql/migration/v11_dev1_to_v11.test",
+        "test/sql/migration/v20_dev1_new_catalog.test",
         "test/sql/metadata/row_group_count.test",
         "test/sql/metadata/sqlite_large_commit.test",
         "test/sql/migration/v10_row_group_count.test",
@@ -28,6 +29,23 @@
         "test/sql/stats/stats_exactness_inlined.test",
         "test/sql/types/null_type_version_gate.test",
         "test/sql/macros/null_default_version_gate.test"
+      ]
+    },
+    {
+      "reason": "Snapshot tags need DuckLake 2.0 and are not available when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/settings/set_option_concurrent_insert_expiry.test",
+        "test/sql/tags/tags_basic.test",
+        "test/sql/tags/tags_conflict.test",
+        "test/sql/tags/tags_expire.test",
+        "test/sql/tags/tags_expire_conflict.test",
+        "test/sql/tags/tags_expire_dropped.test",
+        "test/sql/tags/tags_expire_files.test",
+        "test/sql/tags/tags_expire_history.test",
+        "test/sql/tags/tags_expire_open_conflict.test",
+        "test/sql/tags/tags_parallel.test",
+        "test/sql/tags/tags_time_travel.test",
+        "test/sql/tags/tags_transaction.test"
       ]
     },
     {

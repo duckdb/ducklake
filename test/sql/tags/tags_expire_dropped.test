@@ -1,0 +1,59 @@
+# name: test/sql/tags/tags_expire_dropped.test
+# description: a tag dropped in the transaction no longer protects its snapshot from an expiry of the same transaction
+# group: [tags]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_expire_dropped_files')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+CALL ducklake_create_tag('dl', 'v2', version => 2)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_drop_tag('dl', 'v2')
+
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [2], dry_run => true)
+----
+2
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [2])
+
+statement ok
+COMMIT
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = 2
+----
+0
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl')
+----
+0
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2

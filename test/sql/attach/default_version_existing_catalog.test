@@ -76,7 +76,7 @@ ATTACH 'ducklake:{TEST_DIR}/default_version_10.ducklake' AS l10 (AUTOMATIC_MIGRA
 query II
 SELECT (SELECT value FROM __ducklake_metadata_l10.ducklake_metadata WHERE key = 'version'), i FROM l10.t
 ----
-1.1	1
+2.0-dev1	1
 
 statement ok
 RESET ducklake_default_version

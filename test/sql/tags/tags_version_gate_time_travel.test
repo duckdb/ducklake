@@ -1,0 +1,27 @@
+# name: test/sql/tags/tags_version_gate_time_travel.test
+# description: a string version is a snapshot id on a catalog without snapshot tags
+# group: [tags]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_version_gate_time_travel_files', DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+query I
+SELECT i FROM dl.t AT (VERSION => '1')
+----
+42
+
+statement error
+SELECT i FROM dl.t AT (VERSION => 'one')
+----
+No snapshot found at version one

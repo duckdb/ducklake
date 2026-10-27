@@ -501,6 +501,10 @@ string DuckLakeUtil::EncryptionKeyLiteral(const string &key) {
 	return "'" + Blob::ToBase64(string_t(key)) + "'";
 }
 
+string DuckLakeUtil::WithBinaryCollation(const string &expression) {
+	return "(" + expression + " COLLATE \"C\")";
+}
+
 const char *DuckLakeUtil::BoolLiteral(bool v) {
 	return v ? "true" : "false";
 }
@@ -808,6 +812,11 @@ bool DuckLakeUtil::TryGetLiteralValue(const ParsedExpression &expr, Value &resul
 	}
 	result = std::move(*value);
 	return true;
+}
+
+optional<Value> DuckLakeUtil::TryParseSnapshotId(const Value &version) {
+	// the cast of a string to the BIGINT version parameters
+	return version.DefaultTryCastAs(LogicalType::BIGINT);
 }
 
 bool DuckLakeUtil::TryReadTextAs(const Value &text, const LogicalType &type, Value &result) {

@@ -1,0 +1,94 @@
+# name: test/sql/tags/tags_version_gate.test
+# description: snapshot tags need a 2.0 catalog
+# group: [tags]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_version_gate_files', DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement error
+CALL ducklake_create_tag('dl', 'v1')
+----
+DuckLake 1.1 does not support snapshot tags
+
+statement error
+CALL ducklake_drop_tag('dl', 'v1')
+----
+DuckLake 1.1 does not support snapshot tags
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl')
+----
+0
+
+# expiry does not look for tags
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [0], dry_run => true)
+----
+0
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [0])
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('dl')
+----
+1
+
+statement ok
+DETACH dl
+
+# the migration enables tags
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_version_gate_files', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+CALL ducklake_create_tag('dl', 'v1')
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl')
+----
+v1	1
+
+statement ok
+DETACH dl
+
+# tags are not changed through a read-only attach
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_version_gate_files', READ_ONLY)
+
+statement error
+CALL ducklake_create_tag('dl', 'v2')
+----
+attached in read-only mode
+
+statement error
+CALL ducklake_drop_tag('dl', 'v1')
+----
+attached in read-only mode
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl')
+----
+v1	1
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_version_gate_files', SNAPSHOT_VERSION 1)
+
+statement error
+CALL ducklake_create_tag('dl', 'v2')
+----
+attached in read-only mode
