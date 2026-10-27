@@ -1749,10 +1749,7 @@ void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
 }
 
 void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) {
-	// another commit can have removed the rows that an earlier set of the transaction expects
-	auto earlier = EarlierConfigOptionChange(option, config_option_undo.size());
-	bool after_set = earlier.IsValid() && !config_option_undo[earlier.GetIndex()].reset;
-	if (metadata_manager->ResetConfigOption(option) || after_set) {
+	if (metadata_manager->ResetConfigOption(option)) {
 		config_option_undo.push_back(ducklake_catalog.ResetConfigOption(option));
 	}
 }

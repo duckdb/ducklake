@@ -120,12 +120,6 @@
       "paths": [
         "test/sql/issues/issue_1146_column_insert_batches.test"
       ]
-    },
-    {
-      "reason": "A Postgres commit of the resetting transaction retries after the concurrent set, and its resets remove the option",
-      "paths": [
-        "test/sql/settings/reset_option_twice_concurrent.test"
-      ]
     }
   ]
 }
