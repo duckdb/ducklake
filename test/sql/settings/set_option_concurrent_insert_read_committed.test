@@ -76,6 +76,55 @@ WHERE option_name = 'target_file_size' AND scope_entry = 'main.t'
 ----
 1	3000000
 
+# a transaction resets an option that another one removed while its set waited, and the option stays reset
+statement ok
+CALL dl.set_option('parquet_compression', 'zstd', table_name => 'u')
+
+concurrentloop threadid 0 2
+
+onlyif threadid=0
+statement ok
+BEGIN
+
+onlyif threadid=0
+statement ok
+ALTER TABLE dl.u RESET (parquet_compression)
+
+onlyif threadid=0
+statement ok
+SELECT sleep_ms(1500)
+
+onlyif threadid=0
+statement ok
+COMMIT
+
+onlyif threadid=1
+statement ok
+SELECT sleep_ms(500)
+
+onlyif threadid=1
+statement ok
+BEGIN
+
+onlyif threadid=1
+statement ok
+CALL dl.set_option('parquet_compression', 'gzip', table_name => 'u')
+
+onlyif threadid=1
+statement ok
+ALTER TABLE dl.u RESET (parquet_compression)
+
+onlyif threadid=1
+statement ok
+COMMIT
+
+endloop
+
+query I
+SELECT count(*) FROM dl.options() WHERE option_name = 'parquet_compression' AND scope_entry = 'main.u'
+----
+0
+
 # a retry would roll back the expiry of this transaction, so its commit fails instead
 statement ok con3
 BEGIN

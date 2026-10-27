@@ -369,7 +369,9 @@ private:
 	void UndoConfigOptions();
 	//! The SQL that the commit runs for the options this transaction changed
 	string ConfigOptionLockSql() const;
-	//! The rows an option has after the change, which an earlier change of the option in the attempt decides
+	//! The last change of the option before the change at the index
+	optional_idx EarlierConfigOptionChange(const DuckLakeConfigOption &option, idx_t change_index) const;
+	//! The rows an option is expected to have after a set, which an earlier change of the option decides
 	idx_t ConfigOptionRows(idx_t change_index, idx_t written_rows) const;
 	//! Whether other commits wrote rows of the options this transaction changed, which READ COMMITTED shows
 	bool ConfigOptionsWrittenByOthers();

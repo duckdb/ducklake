@@ -1749,7 +1749,9 @@ void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
 }
 
 void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) {
-	if (metadata_manager->ResetConfigOption(option)) {
+	// another commit can have removed the rows that an earlier change of the transaction expects
+	if (metadata_manager->ResetConfigOption(option) ||
+	    EarlierConfigOptionChange(option, config_option_undo.size()).IsValid()) {
 		config_option_undo.push_back(ducklake_catalog.ResetConfigOption(option));
 	}
 }
@@ -1766,15 +1768,23 @@ static bool IsSameConfigOption(const DuckLakeConfigOption &a, const DuckLakeConf
 	return a.option.key == b.option.key && a.schema_id == b.schema_id && a.table_id == b.table_id;
 }
 
-idx_t DuckLakeTransaction::ConfigOptionRows(idx_t change_index, idx_t written_rows) const {
+optional_idx DuckLakeTransaction::EarlierConfigOptionChange(const DuckLakeConfigOption &option,
+                                                            idx_t change_index) const {
 	for (idx_t earlier = change_index; earlier > 0; earlier--) {
-		auto &previous = config_option_undo[earlier - 1];
-		if (IsSameConfigOption(previous.option, config_option_undo[change_index].option)) {
-			// the rows that other commits added since the earlier change are not the transaction's
-			return MaxValue<idx_t>(previous.metadata_rows, 1);
+		if (IsSameConfigOption(config_option_undo[earlier - 1].option, option)) {
+			return earlier - 1;
 		}
 	}
-	return written_rows;
+	return optional_idx();
+}
+
+idx_t DuckLakeTransaction::ConfigOptionRows(idx_t change_index, idx_t written_rows) const {
+	auto earlier = EarlierConfigOptionChange(config_option_undo[change_index].option, change_index);
+	if (!earlier.IsValid()) {
+		return written_rows;
+	}
+	// the rows that other commits added since the earlier change are not the transaction's
+	return MaxValue<idx_t>(config_option_undo[earlier.GetIndex()].metadata_rows, 1);
 }
 
 bool DuckLakeTransaction::ConfigOptionsWrittenByOthers() {
