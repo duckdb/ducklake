@@ -1526,6 +1526,21 @@ void DuckLakeCatalog::CacheSchemaVersionBeginSnapshot(TableIndex table_id, idx_t
 	schema_version_begin_snapshots[make_pair(table_id.index, schema_version)] = begin_snapshot;
 }
 
+bool DuckLakeCatalog::TryGetForkSnapshot(TableIndex table_id, optional_idx &fork_snapshot) {
+	lock_guard<mutex> guard(schema_version_snapshot_lock);
+	auto entry = fork_snapshots.find(table_id.index);
+	if (entry == fork_snapshots.end()) {
+		return false;
+	}
+	fork_snapshot = entry->second;
+	return true;
+}
+
+void DuckLakeCatalog::CacheForkSnapshot(TableIndex table_id, optional_idx fork_snapshot) {
+	lock_guard<mutex> guard(schema_version_snapshot_lock);
+	fork_snapshots[table_id.index] = fork_snapshot;
+}
+
 bool DuckLakeCatalog::ColumnHoldsValues(TableIndex table_id, FieldIndex column_id, idx_t snapshot_id) {
 	lock_guard<mutex> guard(columns_with_values_lock);
 	if (!columns_with_values_snapshot.IsValid() || columns_with_values_snapshot.GetIndex() != snapshot_id) {
