@@ -1,0 +1,45 @@
+# name: test/sql/settings/reset_option_twice_concurrent.test
+# description: a second reset of an option that finds no row keeps the value that another transaction set meanwhile
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/reset_option_twice_concurrent')
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL dl.set_option('data_inlining_row_limit', 5, table_name => 't')
+
+statement ok con1
+ALTER TABLE dl.t RESET (data_inlining_row_limit)
+
+statement ok con2
+CALL dl.set_option('data_inlining_row_limit', 0, table_name => 't')
+
+statement ok con1
+ALTER TABLE dl.t RESET (data_inlining_row_limit)
+
+statement ok con1
+COMMIT
+
+# the insert is written to a file, as the limit of 0 that is stored says
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+query II
+SELECT (SELECT value FROM dl.options() WHERE option_name = 'data_inlining_row_limit' AND scope_entry = 'main.t'),
+       (SELECT count(*) FROM ducklake_list_files('dl', 't'))
+----
+0	1

@@ -214,6 +214,12 @@
       "paths": [
         "test/sql/data_inlining/inlined_commit_append.test"
       ]
+    },
+    {
+      "reason": "A quack catalog commits each statement, so the second reset removes the option of the concurrent set",
+      "paths": [
+        "test/sql/settings/reset_option_twice_concurrent.test"
+      ]
     }
   ]
 }
