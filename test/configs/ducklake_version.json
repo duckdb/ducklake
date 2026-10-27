@@ -67,7 +67,8 @@
         "test/sql/retirement/cleanup_unlinks_retired_files.test",
         "test/sql/retirement/rollback_retires_before_unlink.test",
         "test/sql/retirement/drop_keeps_registered_output.test",
-        "test/sql/retirement/rollback_keeps_registered_remote_alias.test"
+        "test/sql/retirement/rollback_keeps_registered_remote_alias.test",
+        "test/sql/retirement/discarded_files_retirement.test"
       ]
     },
     {

@@ -1,0 +1,88 @@
+# name: test/sql/retirement/discarded_files_retirement.test
+# description: the files that a transaction wrote and discarded are retired with its commit, or like a rollback when it has no other changes
+# group: [retirement]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/discarded_files_retirement', DATA_INLINING_ROW_LIMIT 0, METADATA_CATALOG 'meta')
+
+statement ok
+CALL dl.set_option('require_commit_message', true)
+
+statement ok
+SET VARIABLE snapshots_before = (SELECT count(*) FROM dl.snapshots())
+
+# a transaction that drops the table it filled has no other changes
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE dl.t AS SELECT i FROM range(10) t(i)
+
+statement ok
+DROP TABLE dl.t
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/discarded_files_retirement/**/*.parquet')
+----
+0
+
+query II
+SELECT count(*) - getvariable('snapshots_before'), max(commit_message) FROM dl.snapshots()
+----
+1	rollback
+
+query I
+SELECT count(*) FROM meta.ducklake_retired_path
+----
+1
+
+statement ok
+CALL dl.set_option('require_commit_message', false)
+
+# a transaction with other changes retires the files it discarded in its own commit
+statement ok
+CREATE TABLE dl.u AS SELECT i FROM range(10) t(i)
+
+statement ok
+BEGIN
+
+statement ok
+CALL dl.set_commit_message('author', 'insert after a delete')
+
+statement ok
+INSERT INTO dl.u VALUES (10)
+
+statement ok
+DELETE FROM dl.u WHERE i = 10
+
+statement ok
+INSERT INTO dl.u VALUES (11)
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM meta.ducklake_retired_path
+----
+2
+
+query I
+SELECT commit_message FROM dl.snapshots() ORDER BY snapshot_id DESC LIMIT 1
+----
+insert after a delete
+
+query I
+SELECT count(*) FROM dl.u
+----
+11

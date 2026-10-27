@@ -446,7 +446,8 @@ private:
 	CleanupType retirement_type = CleanupType::OLD_FILES;
 	idx_t written_after_snapshot = 0;
 	optional_ptr<vector<DuckLakeFileForCleanup>> unlinked_files;
-	//! The discarded files the commit retired, which it unlinks
+	//! Whether the commit retired the discarded files, and those it unlinks
+	bool discarded_files_retired = false;
 	vector<DuckLakeFileForCleanup> retired_discarded_files;
 	void CheckNotCloned(TableIndex table_id) const;
 	//! Whether the files this transaction discards are retired before they are unlinked

@@ -2248,9 +2248,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	refreshed_table_sizes.clear();
 	auto &commit_snapshot = commit_state.commit_snapshot;
 
-	if (!context.only_retires_files) {
-		EnsureCommitInfoProvided(commit_info);
-	}
+	EnsureCommitInfoProvided(commit_info);
 
 	string batch_queries;
 	// drop entries

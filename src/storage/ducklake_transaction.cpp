@@ -972,7 +972,9 @@ void DuckLakeTransaction::RetireFilesOnCommit(vector<DuckLakeFileForCleanup> fil
 }
 
 bool DuckLakeTransaction::RetiresFilesOnCommit() const {
-	return !files_to_retire.empty() || (RetiresDiscardedFiles() && state->local_changes.HasDiscardedFiles());
+	// a transaction without other changes retires its discarded files like a rollback
+	return !files_to_retire.empty() ||
+	       (RetiresDiscardedFiles() && state->local_changes.HasDiscardedFiles() && ChangesMadeBesidesExpiry());
 }
 
 bool DuckLakeTransaction::RetiresDiscardedFiles() const {
@@ -1043,11 +1045,16 @@ void DuckLakeTransaction::RemoveDiscardedFiles() {
 		}
 		return;
 	}
+	if (!discarded_files_retired) {
+		RemoveWrittenFiles(std::move(discarded_files));
+		return;
+	}
 	// the files that a committed row references keep their paths
 	for (auto &file : retired_discarded_files) {
 		fs.TryRemoveFile(file.path);
 	}
 	retired_discarded_files.clear();
+	discarded_files_retired = false;
 }
 
 bool DuckLakeTransaction::SchemaChangesMade() const {
@@ -1695,6 +1702,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 				*unlinked_files = std::move(retirement.unlinked_files);
 			} else {
 				retired_discarded_files = std::move(retirement.unlinked_files);
+				discarded_files_retired = true;
 			}
 		};
 		context.only_retires_files = !ChangesMadeBesidesExpiry() && !ExpiresSnapshotsOnCommit();
