@@ -54,6 +54,13 @@ string SQLiteMetadataManager::CommitErrorHint(const string &message) const {
 	       "time.\n";
 }
 
+string SQLiteMetadataManager::CommitGuardSql(const string &message, const string &source) const {
+	// sqlite_scan pushes no filter into SQLite, so SQLite selects the rows of the guard itself
+	auto native_query = "SELECT * " + StringUtil::Replace(source, "{METADATA_CATALOG}", "main");
+	return GuardSql(
+	    message, StringUtil::Format("FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, %s)", SQLString(native_query)));
+}
+
 string SQLiteMetadataManager::GetColumnTypeInternal(const LogicalType &column_type) {
 	switch (column_type.id()) {
 	case LogicalTypeId::FLOAT:

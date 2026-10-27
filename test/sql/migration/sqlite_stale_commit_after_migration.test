@@ -1,0 +1,42 @@
+# name: test/sql/migration/sqlite_stale_commit_after_migration.test
+# description: on a SQLite catalog the commit of an attachment at 1.1 is refused when another connection migrated it
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+# the SQLite config skips errors about locks, which none of these statements may raise
+set ignore_error_messages
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_stale_commit_after_migration.db' AS stale (DATA_PATH '{TEST_DIR}/sqlite_stale_commit_after_migration', METADATA_CATALOG 'meta', META_JOURNAL_MODE 'wal', DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE stale.t AS SELECT 1 AS i
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO stale.t VALUES (2)
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_stale_commit_after_migration.db' AS migrated (METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT value FROM migrated.options() WHERE option_name = 'version'
+----
+2.0-dev2
+
+statement error con1
+COMMIT
+----
+The catalog was migrated by another connection from version 1.1 to 2.0-dev2
+
+query I
+SELECT * FROM migrated.t
+----
+1
