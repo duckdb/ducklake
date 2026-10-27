@@ -319,6 +319,8 @@ public:
 	virtual unique_ptr<QueryResult> Execute(string &query);
 	//! Runs the statements in a transaction of their own, rolled back when one of them fails
 	virtual unique_ptr<QueryResult> ExecuteInTransaction(string &query);
+	//! Runs statements that drop metadata tables atomically, failing where the drop would wait for their readers
+	virtual unique_ptr<QueryResult> ExecuteDropInTransaction(string &query);
 
 	virtual unique_ptr<QueryResult> Query(DuckLakeSnapshot snapshot, string &query);
 	virtual unique_ptr<QueryResult> Query(string &query);
@@ -334,6 +336,8 @@ protected:
 	void SubstituteCatalogPlaceholders(string &query) const;
 	void SubstituteCatalogPlaceholders(string &query, const string &metadata_catalog) const;
 	void SubstituteTransactionPlaceholders(DuckLakeSnapshot snapshot, string &query) const;
+	//! The snapshot time of a commit, the current time when its batch runs
+	virtual string SnapshotTimeSql() const;
 
 public:
 	static void SubstituteSnapshotPlaceholders(const DuckLakeSnapshot &snapshot, string &query);
@@ -341,7 +345,8 @@ public:
 	//! Both used by the regular metadata-manager methods and by server-side commit, which runs the
 	//! SQL on a fresh Connection without going through the metadata-manager wrapper.
 	static string LatestSnapshotQuery();
-	static string GlobalTableStatsQuery(bool include_exactness);
+	//! With table ids only those tables' stats are read
+	static string GlobalTableStatsQuery(bool include_exactness, const vector<TableIndex> &table_ids = {});
 	//! Pure parsers for the results of the above queries.
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
 	                                                  optional_ptr<string> catalog_version = nullptr);
@@ -363,8 +368,9 @@ public:
 	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
 	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata = false,
 	                        optional_idx table_id = optional_idx());
-	//! The global stats of every table of the snapshot
-	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot);
+	//! The global stats of every table of the snapshot, or of the given tables
+	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot,
+	                                                            const vector<TableIndex> &table_ids = {});
 	//! Get the record count of every table that has global stats
 	virtual map<TableIndex, idx_t> GetTableRecordCounts(DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeFileListEntry> GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
@@ -379,6 +385,8 @@ public:
 	virtual vector<DuckLakeFileListExtendedEntry>
 	GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                         const FilterPushdownInfo *filter_info = nullptr);
+	//! Sets the schema version of the partition spec of the files written with an older spec
+	void SetPartitionSchemaVersions(DuckLakeTableEntry &table, vector<DuckLakeCompactionFileEntry> &files);
 	virtual vector<DuckLakeCompactionFileEntry> GetFilesForCompaction(DuckLakeTableEntry &table, CompactionType type,
 	                                                                  double deletion_threshold,
 	                                                                  DuckLakeSnapshot snapshot,
@@ -612,8 +620,8 @@ public:
 	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
-	//! The live snapshot tags
-	virtual vector<DuckLakeSnapshotTagInfo> GetSnapshotTags();
+	//! The live snapshot tags, with the times of their snapshots if requested
+	virtual vector<DuckLakeSnapshotTagInfo> GetSnapshotTags(bool with_snapshot_time = true);
 	//! The snapshot of the live snapshot tag with the name, if any
 	optional_idx GetTaggedSnapshot(const string &name);
 	//! The snapshot id of a VERSION value, a snapshot id or the name of a snapshot tag
@@ -621,10 +629,11 @@ public:
 	static string WriteSnapshotTagChanges(const case_insensitive_map_t<idx_t> &created,
 	                                      const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped);
 	static string DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots);
+	//! Deletes the snapshots once the caller checked the catalog version
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	//! Fails once another connection migrated the catalog, and orders the transaction with a migration
 	void CheckAttachedVersion();
-	//! Deletes the metadata that only the deleted snapshots referenced
+	//! Deletes the metadata that only the deleted snapshots referenced, once the caller checked the catalog version
 	virtual void CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	//! The tables with data files that are not dropped

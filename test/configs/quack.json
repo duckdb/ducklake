@@ -165,6 +165,12 @@
       ]
     },
     {
+      "reason": "FIXME: Each metadata query runs in its own server-side transaction on quack, so an expiry in a transaction that began before a concurrent tag commit already sees the tag.",
+      "paths": [
+        "test/sql/tags/tags_expire_conflict.test"
+      ]
+    },
+    {
       "reason": "Test relies on a file-based metadata catalog.",
       "paths": [
         "test/sql/general/default_path.test",

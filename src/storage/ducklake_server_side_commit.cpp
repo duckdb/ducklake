@@ -110,7 +110,6 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	ReadStagedFlushedInlinedTables();
 	ReadStagedCompactions();
 	ReadStagedNameMaps();
-	ReadExistingTableStats();
 	if (attached_version.empty()) {
 		// clients that do not pass their version predate 2.0-dev2 and cannot have attached such a catalog
 		if (catalog_version >= DuckLakeVersion::V2_0_DEV2) {
@@ -130,6 +129,7 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	                                               state->tables_deleted_from.end());
 	transaction_changes.tables_delete_attempted.insert(state->tables_delete_attempted.begin(),
 	                                                   state->tables_delete_attempted.end());
+	commit_tables = transaction_changes.GetChangedTables();
 
 	idx_t committed_snapshot_id = 0;
 	idx_t committed_schema_version = static_cast<idx_t>(schema_version);
@@ -545,18 +545,34 @@ unique_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::BuildTableStats(const D
 	});
 }
 
-void DuckLakeServerSideCommit::ReadExistingTableStats() {
-	string sql = StringUtil::Replace(DuckLakeMetadataManager::GlobalTableStatsQuery(supports_v1_1_metadata),
-	                                 "{METADATA_CATALOG}", schema_id);
+shared_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::GetExistingTableStats(TableIndex table_id) {
+	auto entry = existing_table_stats.find(table_id);
+	if (entry != existing_table_stats.end()) {
+		return entry->second;
+	}
+	// the tables the commit writes are read in one query, not the whole lake
+	vector<TableIndex> read_tables;
+	for (auto &commit_table : commit_tables) {
+		if (!existing_table_stats.count(commit_table) && commit_table != table_id) {
+			read_tables.push_back(commit_table);
+		}
+	}
+	read_tables.push_back(table_id);
+	string sql =
+	    StringUtil::Replace(DuckLakeMetadataManager::GlobalTableStatsQuery(supports_v1_1_metadata, read_tables),
+	                        "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read existing table stats");
 	auto global_stats = DuckLakeMetadataManager::ParseGlobalTableStats(*result);
 	DuckLakeMetadataManager::FillMissingTableSizes(global_stats, [&](string query) {
 		return RunQuery(StringUtil::Replace(query, "{METADATA_CATALOG}", schema_id), "read missing table sizes");
 	});
-
-	for (auto &gs : global_stats) {
-		existing_table_stats.emplace(gs.table_id, BuildTableStats(gs));
+	for (auto &read_table : read_tables) {
+		existing_table_stats[read_table] = nullptr;
 	}
+	for (auto &gs : global_stats) {
+		existing_table_stats[gs.table_id] = BuildTableStats(gs);
+	}
+	return existing_table_stats[table_id];
 }
 
 DuckLakeVersion DuckLakeServerSideCommit::ReadCatalogVersion() {
@@ -694,8 +710,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		return DuckLakeMetadataManager::WriteNewInlinedFileDeletesSql(new_deletes, created_new_table);
 	};
 	ctx.get_table_stats = [this](TableIndex table_id) -> shared_ptr<DuckLakeTableStats> {
-		auto it = existing_table_stats.find(table_id);
-		return it == existing_table_stats.end() ? nullptr : it->second;
+		return GetExistingTableStats(table_id);
 	};
 	ctx.build_stats_map = [this](vector<DuckLakeGlobalStatsInfo> &stats) {
 		return BuildStatsMap(stats);
