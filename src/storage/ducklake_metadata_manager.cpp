@@ -5988,7 +5988,7 @@ INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES (%s, %s, %s, %s)
 )",
 		                                    SQLString(option_key), SQLString(option_value), scope, scope_id));
 	} else {
-		// option already exists - update it, or insert it when another commit removed it under READ COMMITTED
+		// update the option, or insert it when another commit removed it under READ COMMITTED
 		result = Execute(StringUtil::Format(R"(
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value=%s WHERE key=%s AND %s;
 INSERT INTO {METADATA_CATALOG}.ducklake_metadata SELECT %s, %s, %s, %s
