@@ -1,0 +1,32 @@
+# name: benchmark/micro/fixtures/wide_files.benchmark.in
+# description: Read-only lake with a 31-column table in 1000 files of 3 rows and a delete file in every 20th file
+# group: [fixtures]
+
+cache_file wide_files_ready.marker
+
+# One INSERT per file keeps every file at 3 rows
+load
+SET VARIABLE wide_rows_sql = (SELECT 'SELECT CAST(id AS INTEGER) AS id, ' ||
+string_agg('CAST(id * ' || j || ' AS INTEGER) AS c' || j, ', ' ORDER BY j) || ' FROM range(3000) t(id)'
+FROM range(1, 31) t(j));
+CREATE TEMP TABLE wide_rows AS FROM query(getvariable('wide_rows_sql'));
+@create wide_files
+@attach wide_files AS lake (DATA_PATH '${BENCHMARK_DIR}/wide_files_data')
+CALL lake.set_option('data_inlining_row_limit', 0);
+CREATE TABLE lake.t AS FROM wide_rows WHERE false;
+BEGIN;
+@for f in range(1000)
+INSERT INTO lake.t FROM wide_rows WHERE id // 3 = @{f};
+@end
+COMMIT;
+DELETE FROM lake.t WHERE id % 60 = 0;
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_list_files('lake', 't')) <> 1000
+THEN error('t must consist of 1000 files') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+@seal wide_files
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/wide_files_ready.marker' (FORMAT CSV);
+@attach wide_files AS lake (READ_ONLY)
+
+reload
+@attach wide_files AS lake (READ_ONLY)

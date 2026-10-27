@@ -111,8 +111,8 @@ SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
            length('wherecolumn_id=1andtable_id=1')
        AND length(query) - length(replace(query, 'wherecolumn_id=2andtable_id=1', '')) =
            length('wherecolumn_id=2andtable_id=1')
-       AND length(query) - length(replace(query, 'col_1_statsas(', '')) =
-           length('col_1_statsas('))
+       AND length(query) - length(replace(query, 'col_1_statsasmaterialized(', '')) =
+           length('col_1_statsasmaterialized('))
     ELSE true END
 ----
 true

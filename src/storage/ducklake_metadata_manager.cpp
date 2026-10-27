@@ -242,6 +242,15 @@ static DuckLakePath ReadPath(const QueryResultRow &row, idx_t col) {
 	return path;
 }
 
+//! A schema or table without a stored path uses the path of its parent
+static string ReadPathOrParent(const QueryResultRow &row, idx_t col, const string &parent_path,
+                               const string &separator) {
+	if (row.IsNull(col)) {
+		return parent_path;
+	}
+	return DuckLakeMetadataManager::FromRelativePath(ReadPath(row, col), parent_path, separator);
+}
+
 string DuckLakeMetadataManager::ListAggregation(const vector<pair<string, string>> &fields, const string &order) {
 	// DuckDB syntax: LIST({'key1': val1, 'key2': val2, ...})
 	auto fields_part = StringUtil::Join(fields, fields.size(), ", ", [](const pair<string, string> &entry) {
@@ -1243,13 +1252,7 @@ WHERE %s
 		schema.id = SchemaIndex(row.GetValue<uint64_t>(0));
 		schema.uuid = row.GetValue<string>(1);
 		schema.name = row.GetValue<string>(2);
-		if (row.IsNull(3)) {
-			// no path provided - fallback to base data path
-			schema.path = base_data_path;
-		} else {
-			// path is provided - load it
-			schema.path = FromRelativePath(ReadPath(row, 3), base_data_path, separator);
-		}
+		schema.path = ReadPathOrParent(row, 3, base_data_path, separator);
 		if (!parent_schema_select.empty() && !row.IsNull(5)) {
 			schema.parent_id = SchemaIndex(row.GetValue<uint64_t>(5));
 		}
@@ -1340,13 +1343,7 @@ ORDER BY table_id ASC, parent_column ASC NULLS FIRST, column_order ASC
 				    table_info.id.index, table_info.schema_id.index);
 			}
 			auto &schema = catalog.schemas[schema_entry->second];
-			if (row.IsNull(6)) {
-				// no path provided - fallback to schema path
-				table_info.path = schema.path;
-			} else {
-				// path is provided - load it
-				table_info.path = FromRelativePath(ReadPath(row, 6), schema.path, separator);
-			}
+			table_info.path = ReadPathOrParent(row, 6, schema.path, separator);
 			tables.push_back(std::move(table_info));
 			column_paths.clear();
 		}
@@ -2196,14 +2193,20 @@ string DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const map<idx
 		return "";
 	}
 
+	// a single stats join is planned well either way
+	auto cte_keyword = requirements.size() > 1 && MaterializeStatsCTEs() ? " AS MATERIALIZED (\n" : " AS (\n";
 	vector<string> ctes;
 	for (const auto &entry : requirements) {
 		const auto &req = entry.second;
-		// each CTE is referenced by exactly one join, so there is nothing for a materialization hint to buy
-		ctes.push_back(StatsCteName(req.column_field_index) + " AS (\n" +
+		ctes.push_back(StatsCteName(req.column_field_index) + cte_keyword +
 		               GenerateFileColumnStatsCTEBody(req, table_id, metadata_table_prefix) + ")");
 	}
 	return "WITH " + StringUtil::Join(ctes, ",\n") + "\n";
+}
+
+bool DuckLakeMetadataManager::MaterializeStatsCTEs() const {
+	// each CTE is referenced by exactly one join, which DuckDB plans well when it inlines the CTE
+	return false;
 }
 
 //! Whether equal values can hash to other buckets, as for NaNs and for zeros inside nested values
@@ -4455,15 +4458,14 @@ string DuckLakeMetadataManager::GetPathForSchema(SchemaIndex schema_id,
 			return FromRelativePath(DuckLakePath {schema.path, false}, base_data_path, separator);
 		}
 	}
-	// a schema without a path of its own is at the base data path
 	auto query = StringUtil::Format(R"(
-SELECT COALESCE(path, ''), path IS NULL OR path_is_relative
+SELECT path, path_is_relative
 FROM {METADATA_CATALOG}.ducklake_schema
 WHERE schema_id = %d;)",
 	                                schema_id.index);
 	auto result = query_executor(query);
 	for (auto &row : *result) {
-		return FromRelativePath(ReadPath(row, 0), base_data_path, separator);
+		return ReadPathOrParent(row, 0, base_data_path, separator);
 	}
 	// LCOV_EXCL_START
 	throw InvalidInputException("Failed to get path for schema with id %d - schema not found in metadata catalog",
@@ -4480,13 +4482,12 @@ string DuckLakeMetadataManager::GetPathForTable(TableIndex table_id, const vecto
 			return FromRelativePath(DuckLakePath {new_table.path, false}, base_data_path, separator);
 		}
 	}
-	// a schema or table without a path of its own is at the path of its parent
 	auto query = StringUtil::Format(R"(
 SELECT
-	COALESCE(s.path, '') AS s_path,
-	s.path IS NULL OR s.path_is_relative AS s_path_is_relative,
-	COALESCE(t.path, '') AS t_path,
-	t.path IS NULL OR t.path_is_relative AS t_path_is_relative
+	s.path AS s_path,
+	s.path_is_relative AS s_path_is_relative,
+	t.path AS t_path,
+	t.path_is_relative AS t_path_is_relative
 FROM {METADATA_CATALOG}.ducklake_schema s
 JOIN {METADATA_CATALOG}.ducklake_table t
 USING (schema_id)
@@ -4494,8 +4495,8 @@ WHERE table_id = %d;)",
 	                                table_id.index);
 	auto result = query_executor(query);
 	for (auto &row : *result) {
-		auto resolved_schema_path = FromRelativePath(ReadPath(row, 0), base_data_path, separator);
-		return FromRelativePath(ReadPath(row, 2), resolved_schema_path, separator);
+		auto resolved_schema_path = ReadPathOrParent(row, 0, base_data_path, separator);
+		return ReadPathOrParent(row, 2, resolved_schema_path, separator);
 	}
 	// LCOV_EXCL_START
 	throw InvalidInputException("Failed to get path for table with id %d - table not found in metadata catalog",
@@ -5208,6 +5209,7 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot(BoundAtClause 
                                                                   idx_t newest_snapshot_id) {
 	auto &unit = at_clause.Unit();
 	auto &val = at_clause.GetValue();
+	DuckLakeTableFunctionUtil::VerifySnapshotIdentifier(val);
 	unique_ptr<QueryResult> result;
 	const string timestamp_order = bound == SnapshotBound::LOWER_BOUND ? "ASC" : "DESC";
 	const string timestamp_condition = bound == SnapshotBound::LOWER_BOUND ? ">" : "<";

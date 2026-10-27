@@ -9,6 +9,7 @@
 #include "storage/ducklake_transaction_state.hpp"
 #include "common/ducklake_types.hpp"
 #include "common/ducklake_util.hpp"
+#include "functions/ducklake_table_functions.hpp"
 #include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/common/thread.hpp"
 #include "duckdb/common/sql_identifier.hpp"
@@ -2256,9 +2257,7 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 		return GetSnapshot();
 	}
 	auto &version = at_clause->GetValue();
-	if (version.IsNull()) {
-		throw InvalidInputException("Snapshot identifier cannot be NULL");
-	}
+	DuckLakeTableFunctionUtil::VerifySnapshotIdentifier(version);
 	if (at_clause->Unit() == "version" && version.type().id() == LogicalTypeId::VARCHAR &&
 	    !DuckLakeUtil::TryParseSnapshotId(version)) {
 		// the tags of this transaction are not in the metadata yet

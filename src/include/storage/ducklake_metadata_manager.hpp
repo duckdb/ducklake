@@ -785,6 +785,8 @@ protected:
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
 	string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements, TableIndex table_id,
 	                                          const string &metadata_table_prefix);
+	//! Whether the stats CTEs of the file list query are materialized, for a database that plans the query itself
+	virtual bool MaterializeStatsCTEs() const;
 	//! Join each column's stats CTE once. Leading newline per join, empty when there are none.
 	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
 	virtual bool ValueIsFinite(const Value &val);

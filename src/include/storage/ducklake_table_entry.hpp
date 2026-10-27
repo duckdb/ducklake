@@ -239,7 +239,7 @@ private:
 	unique_ptr<DuckLakeFieldId> TypePromotion(const DuckLakeFieldId &source_id, const LogicalType &target,
 	                                          ColumnChangeInfo &result, optional_idx parent_idx);
 
-	void CheckSupportedTypes();
+	void CheckSupportedType(const LogicalType &type);
 
 public:
 	// ! Create a DuckLakeTableEntry from an ALTER

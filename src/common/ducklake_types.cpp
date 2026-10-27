@@ -193,6 +193,9 @@ void DuckLakeTypes::CheckSupportedType(const LogicalType &type, DuckLakeVersion 
 		if (type.id() == LogicalTypeId::SQLNULL && version < DuckLakeVersion::V1_1) {
 			ThrowUnsupportedByVersion(version, "the NULL type");
 		}
+		if (type.id() == LogicalTypeId::TIMESTAMP_TZ_NS && version < DuckLakeVersion::V1_1) {
+			ThrowUnsupportedByVersion(version, "the TIMESTAMPTZ_NS type");
+		}
 		DuckLakeTypes::ToString(type);
 		return type;
 	});
