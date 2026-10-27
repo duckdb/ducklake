@@ -40,6 +40,7 @@
         "test/sql/tags/tags_expire_conflict.test",
         "test/sql/tags/tags_expire_dropped.test",
         "test/sql/tags/tags_expire_files.test",
+        "test/sql/tags/tags_expire_history.test",
         "test/sql/tags/tags_expire_open_conflict.test",
         "test/sql/tags/tags_parallel.test",
         "test/sql/tags/tags_time_travel.test",

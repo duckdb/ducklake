@@ -102,6 +102,9 @@ public:
 
 	static string EncryptionKeyLiteral(const string &key);
 
+	//! The text expression compared byte for byte, in DuckDB and in Postgres
+	static string WithBinaryCollation(const string &expression);
+
 	static const char *BoolLiteral(bool v);
 
 	static string TextLiteralOrNull(const Value &v);

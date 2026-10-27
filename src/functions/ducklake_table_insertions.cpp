@@ -84,14 +84,19 @@ static void DuckLakeChangesExecute(ClientContext &context, TableFunctionInput &d
 
 static TableFunctionSet GetChangesFunctions(const char *name, table_function_bind_t bind) {
 	TableFunctionSet set(name);
-	vector<LogicalType> at_types {LogicalType::BIGINT, LogicalType::TIMESTAMP_TZ, LogicalType::VARCHAR};
-	for (auto &type : at_types) {
+	// a tag mixes only with a snapshot id, so a quoted timestamp next to a timestamp stays a timestamp
+	vector<pair<LogicalType, LogicalType>> bound_types {{LogicalType::BIGINT, LogicalType::BIGINT},
+	                                                    {LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_TZ},
+	                                                    {LogicalType::VARCHAR, LogicalType::VARCHAR},
+	                                                    {LogicalType::BIGINT, LogicalType::VARCHAR},
+	                                                    {LogicalType::VARCHAR, LogicalType::BIGINT}};
+	for (auto &types : bound_types) {
 		set.AddFunction(TableFunction(FunctionSignature()
 		                                  .AddPositionalOnly("catalog", LogicalType::VARCHAR)
 		                                  .AddPositionalOnly("schema_name", LogicalType::VARCHAR)
 		                                  .AddPositionalOnly("table_name", LogicalType::VARCHAR)
-		                                  .AddPositionalOnly("start_snapshot", type)
-		                                  .AddPositionalOnly("end_snapshot", type),
+		                                  .AddPositionalOnly("start_snapshot", types.first)
+		                                  .AddPositionalOnly("end_snapshot", types.second),
 		                              DuckLakeChangesExecute, bind));
 	}
 	return set;

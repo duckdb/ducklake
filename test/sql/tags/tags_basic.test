@@ -213,3 +213,30 @@ query I
 SELECT COUNT(*) FROM dl.t
 ----
 2
+
+# a drop keeps a tag that differs beyond ASCII case, also on the same snapshot and of the same commit
+statement ok
+SET GLOBAL default_collation = 'nocase'
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_create_tag('dl', 'Ö', version => 1)
+
+statement ok
+CALL ducklake_create_tag('dl', 'ö', version => 1)
+
+statement ok
+COMMIT
+
+statement ok
+CALL ducklake_drop_tag('dl', 'Ö')
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') WHERE tag_name IN ('Ö', 'ö')
+----
+ö	1
+
+statement ok
+RESET GLOBAL default_collation

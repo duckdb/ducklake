@@ -5971,12 +5971,13 @@ DuckLakeMetadataManager::WriteSnapshotTagChanges(const case_insensitive_map_t<id
                                                  const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped) {
 	string result;
 	for (auto &entry : dropped) {
-		// the snapshots single out the row when the collation of the catalog folds names
+		// the collation of the catalog can fold names, so they compare byte for byte
 		auto &tag = entry.second;
 		result += StringUtil::Format(
 		    "UPDATE {METADATA_CATALOG}.ducklake_snapshot_tag SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS "
-		    "NULL AND tag_name = %s AND snapshot_id = %d AND begin_snapshot = %d;\n",
-		    SQLString(tag.name), tag.snapshot_id, tag.created_snapshot_id.GetIndex());
+		    "NULL AND %s = %s AND snapshot_id = %d AND begin_snapshot = %d;\n",
+		    DuckLakeUtil::WithBinaryCollation("tag_name"), SQLString(tag.name), tag.snapshot_id,
+		    tag.created_snapshot_id.GetIndex());
 	}
 	for (auto &tag : created) {
 		result += StringUtil::Format(

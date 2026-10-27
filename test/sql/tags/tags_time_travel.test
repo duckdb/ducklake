@@ -151,6 +151,25 @@ SELECT * FROM ducklake_table_insertions('dl', 'main', 't', 'one', 'three')
 ----
 No snapshot tag with the name "three" exists
 
+# a tag at one bound goes with a snapshot id at the other
+query I
+SELECT i FROM dl.table_changes('t', 1, 'two') ORDER BY i
+----
+1
+2
+
+query I
+SELECT i FROM ducklake_table_deletions('dl', 'main', 't', 'two', 6)
+----
+1
+
+# a quoted timestamp next to a timestamp is a timestamp
+query I
+SELECT i FROM ducklake_table_insertions('dl', 'main', 't', '1970-01-01', now()) ORDER BY i
+----
+1
+2
+
 # a string that reads as a number is a snapshot id, as the BIGINT parameters read it
 query I
 SELECT i FROM ducklake_table_insertions('dl', 'main', 't', '-0.4', 'two') ORDER BY i
