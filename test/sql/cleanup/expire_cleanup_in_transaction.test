@@ -1,5 +1,5 @@
 # name: test/sql/cleanup/expire_cleanup_in_transaction.test
-# description: A cleanup in a transaction that expires snapshots deletes the files only once the transaction commits
+# description: A cleanup does not delete the files of snapshots that its transaction expired
 # group: [cleanup]
 
 require ducklake
@@ -20,15 +20,17 @@ CREATE TABLE dl.t AS SELECT 42 AS i
 statement ok
 DELETE FROM dl.t
 
-# a rollback keeps the snapshot and its files
+# a rollback of the expiry would keep the snapshot without its files
 statement ok
 BEGIN
 
 statement ok
 CALL ducklake_expire_snapshots('dl', versions => [1])
 
-statement ok
+statement error
 CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+cannot delete files in a transaction that expired snapshots
 
 statement ok
 ROLLBACK
@@ -38,23 +40,25 @@ SELECT i FROM dl.t AT (VERSION => 1)
 ----
 42
 
-# a commit deletes the files once it succeeds
+# a dry run lists the files, and a cleanup after the expiry commits deletes them
 statement ok
 BEGIN
 
 statement ok
 CALL ducklake_expire_snapshots('dl', versions => [1])
 
-statement ok
-CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
-
 query I
-SELECT count(*) FROM glob('{DATA_PATH}/expire_cleanup_in_transaction/main/t/*.parquet')
+SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true, dry_run => true)
 ----
 1
 
 statement ok
 COMMIT
+
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+1
 
 query II
 SELECT (SELECT count(*) FROM glob('{DATA_PATH}/expire_cleanup_in_transaction/main/t/*.parquet')),

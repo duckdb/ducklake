@@ -826,11 +826,10 @@ void DuckLakeTransaction::Commit() {
 	} catch (...) {
 		// a failed commit never reaches Rollback - the transaction manager only reports the error
 		UndoConfigOptions();
-		cleaned_up_files.clear();
-		expired_or_cleaned_up = false;
+		ClearMaintenanceChanges();
 		throw;
 	}
-	RemoveCleanedUpFilesAfterCommit();
+	ClearMaintenanceChanges();
 	if (rewrote_config_options) {
 		// the retried commit wrote its options last, also where another transaction set them meanwhile
 		for (auto &change : config_option_undo) {
@@ -852,8 +851,7 @@ void DuckLakeTransaction::Commit() {
 
 void DuckLakeTransaction::Rollback() {
 	UndoConfigOptions();
-	cleaned_up_files.clear();
-	expired_or_cleaned_up = false;
+	ClearMaintenanceChanges();
 	if (connection) {
 		// rollback any changes made to the metadata catalog
 		try {
@@ -1586,14 +1584,17 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		snapshot.reset();
 	};
 	context.verify_retry = [&]() {
-		if (expired_or_cleaned_up) {
-			// the rollback of the failed attempt undid them, while the cleaned up files may already be gone
+		if (expired_in_metadata_transaction) {
+			// the rollback of the failed attempt undid the expiry, which depends on the snapshots it saw
 			throw TransactionException("Transaction conflict - a concurrent commit preceded the commit of a "
-			                           "transaction that expires snapshots or cleans up files");
+			                           "transaction that expires snapshots");
 		}
 	};
 	context.rewrite_before_retry = [&]() {
 		RewriteConfigOptions();
+		if (!cleaned_up_files.empty()) {
+			metadata_manager->RemoveFilesScheduledForCleanup(cleaned_up_files);
+		}
 	};
 	context.query_metadata = [&](string q) {
 		return metadata_manager->Query(q);
@@ -1737,6 +1738,11 @@ void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) 
 	}
 }
 
+void DuckLakeTransaction::ClearMaintenanceChanges() {
+	expired_in_metadata_transaction = false;
+	cleaned_up_files.clear();
+}
+
 void DuckLakeTransaction::RewriteConfigOptions() {
 	if (metadata_manager->CommitsEachStatement()) {
 		// the option writes were committed when they were made, the rollback kept them
@@ -1764,7 +1770,7 @@ void DuckLakeTransaction::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &sn
 	auto &metadata_manager = GetMetadataManager();
 	if (!metadata_manager.CommitsEachStatement()) {
 		metadata_manager.DeleteSnapshots(snapshots);
-		expired_or_cleaned_up = expired_or_cleaned_up || !snapshots.empty();
+		expired_in_metadata_transaction = expired_in_metadata_transaction || !snapshots.empty();
 		return;
 	}
 	// deleted when the transaction commits, so a rollback keeps them
@@ -1774,33 +1780,14 @@ void DuckLakeTransaction::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &sn
 void DuckLakeTransaction::RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &files) {
 	auto &metadata_manager = GetMetadataManager();
 	metadata_manager.RemoveFilesScheduledForCleanup(files);
-	expired_or_cleaned_up = expired_or_cleaned_up || !metadata_manager.CommitsEachStatement();
+	if (!metadata_manager.CommitsEachStatement()) {
+		// a retried commit removes them from the schedule again
+		cleaned_up_files.insert(cleaned_up_files.end(), files.begin(), files.end());
+	}
 }
 
-void DuckLakeTransaction::RemoveCleanedUpFiles(ClientContext &context, vector<string> paths) {
-	if (GetMetadataManager().CommitsEachStatement()) {
-		// the metadata changes of the cleanup are already committed
-		FileSystem::GetFileSystem(context).RemoveFiles(paths);
-		return;
-	}
-	// a rollback keeps the metadata that still references the files
-	cleaned_up_files.insert(cleaned_up_files.end(), paths.begin(), paths.end());
-}
-
-void DuckLakeTransaction::RemoveCleanedUpFilesAfterCommit() {
-	expired_or_cleaned_up = false;
-	if (cleaned_up_files.empty()) {
-		return;
-	}
-	auto files = std::move(cleaned_up_files);
-	cleaned_up_files.clear();
-	try {
-		auto client_context = context.lock();
-		auto &fs = client_context ? FileSystem::GetFileSystem(*client_context) : FileSystem::GetFileSystem(db);
-		fs.RemoveFiles(files);
-	} catch (std::exception &ex) {
-		ReportPostCommitError(ErrorData(ex).Message());
-	}
+bool DuckLakeTransaction::ExpiredSnapshotsInMetadataTransaction() const {
+	return expired_in_metadata_transaction;
 }
 
 void DuckLakeTransaction::MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id,

@@ -1,5 +1,5 @@
 # name: test/sql/cleanup/expire_cleanup_concurrent_commit.test
-# description: A transaction that expires snapshots fails to commit after a concurrent commit, and keeps the files
+# description: A commit retried after a concurrent commit keeps the cleanup, and fails rather than undo an expiry
 # group: [cleanup]
 
 require ducklake
@@ -23,15 +23,12 @@ DELETE FROM dl.t
 statement ok
 CREATE TABLE dl.u (i INTEGER)
 
-# with a cleanup, a retry of the commit would restore the snapshot without its files
+# the retry would undo the expiry
 statement ok a
 BEGIN
 
 statement ok a
 CALL ducklake_expire_snapshots('dl', versions => [1])
-
-statement ok a
-CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
 
 statement ok a
 INSERT INTO dl.t VALUES (10)
@@ -44,17 +41,21 @@ COMMIT
 ----
 Transaction conflict
 
-query II
-SELECT (SELECT i FROM dl.t AT (VERSION => 1)), (SELECT count(*) FROM dl.snapshots() WHERE snapshot_id = 1)
+query III
+SELECT (SELECT i FROM dl.t AT (VERSION => 1)), (SELECT count(*) FROM dl.snapshots() WHERE snapshot_id = 1),
+       (SELECT sum(i) FROM dl.u)
 ----
-42	1
+42	1	20
 
-# without a cleanup, a retry would undo the expiry
+# the retry removes the cleaned up files from the schedule again
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
 statement ok a
 BEGIN
 
 statement ok a
-CALL ducklake_expire_snapshots('dl', versions => [1])
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
 
 statement ok a
 INSERT INTO dl.t VALUES (10)
@@ -62,12 +63,11 @@ INSERT INTO dl.t VALUES (10)
 statement ok b
 INSERT INTO dl.u VALUES (30)
 
-statement error a
+statement ok a
 COMMIT
-----
-Transaction conflict
 
-query II
-SELECT (SELECT sum(i) FROM dl.t), (SELECT sum(i) FROM dl.u)
+query III
+SELECT (SELECT count(*) FROM __ducklake_metadata_dl.ducklake_files_scheduled_for_deletion),
+       (SELECT sum(i) FROM dl.t), (SELECT sum(i) FROM dl.u)
 ----
-NULL	50
+0	10	50

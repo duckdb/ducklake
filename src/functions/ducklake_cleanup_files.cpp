@@ -89,6 +89,12 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 	bool skip_cleanup = type == CleanupType::ORPHANED_FILES && !ducklake_catalog.AutoCompactEnabled();
 	if (!skip_cleanup) {
 		auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
+		if (type == CleanupType::OLD_FILES && !result->dry_run && transaction.ExpiredSnapshotsInMetadataTransaction()) {
+			throw InvalidInputException("%s cannot delete files in a transaction that expired snapshots, since a "
+			                            "rollback of the expiry would keep the snapshots without their files. Commit "
+			                            "the expiry first",
+			                            result->GetFunctionName());
+		}
 		auto &metadata_manager = transaction.GetMetadataManager();
 		result->files = metadata_manager.GetFilesForCleanup(result->GetFilter(), type);
 		for (auto &file : result->files) {
@@ -121,16 +127,16 @@ void DuckLakeCleanupExecute(ClientContext &context, TableFunctionInput &data_p, 
 	}
 	if (!state.executed && !data.dry_run) {
 		// delete the files
+		auto &fs = FileSystem::GetFileSystem(context);
 		vector<string> paths;
 		paths.reserve(data.files.size());
 		for (const auto &file : data.files) {
 			paths.push_back(file.path);
 		}
-		auto &transaction = DuckLakeTransaction::Get(context, data.catalog);
-		transaction.RemoveCleanedUpFiles(context, std::move(paths));
+		fs.RemoveFiles(paths);
 		if (data.type == CleanupType::OLD_FILES) {
 			// If we are removing old files, we need to remove them from the catalog
-			transaction.RemoveFilesScheduledForCleanup(data.files);
+			DuckLakeTransaction::Get(context, data.catalog).RemoveFilesScheduledForCleanup(data.files);
 		}
 		state.executed = true;
 	}

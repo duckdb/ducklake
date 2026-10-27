@@ -59,7 +59,7 @@ struct DuckLakeCommitContext {
 	//! Resets per-attempt state before a retry.
 	std::function<void()> prepare_retry = []() {
 	};
-	//! Throws when the transaction cannot be retried, before the conflict check of the retry.
+	//! Throws when a failed attempt of the transaction cannot be retried.
 	std::function<void()> verify_retry = []() {
 	};
 	//! Writes again what the transaction wrote to the metadata before its commit, in a retried attempt.
