@@ -1,5 +1,5 @@
 # name: test/sql/cleanup/expire_cleanup_concurrent_commit.test
-# description: A commit retried after a concurrent commit keeps the cleanup, and fails rather than undo an expiry
+# description: On a 1.1 catalog a retried commit keeps the cleanup, and fails rather than undo an expiry
 # group: [cleanup]
 
 require ducklake
@@ -12,7 +12,7 @@ test-env DATA_PATH {TEST_DIR}
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
-(DATA_PATH '{DATA_PATH}/expire_cleanup_concurrent_commit', DATA_INLINING_ROW_LIMIT 0)
+(DATA_PATH '{DATA_PATH}/expire_cleanup_concurrent_commit', DATA_INLINING_ROW_LIMIT 0, DUCKLAKE_VERSION '1.1')
 
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
