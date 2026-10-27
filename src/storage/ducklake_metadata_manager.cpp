@@ -4402,8 +4402,9 @@ string DuckLakeMetadataManager::GetPathForSchema(SchemaIndex schema_id,
 			return FromRelativePath(DuckLakePath {schema.path, false}, base_data_path, separator);
 		}
 	}
+	// a schema without a path of its own is at the base data path
 	auto query = StringUtil::Format(R"(
-SELECT path, path_is_relative
+SELECT COALESCE(path, ''), path IS NULL OR path_is_relative
 FROM {METADATA_CATALOG}.ducklake_schema
 WHERE schema_id = %d;)",
 	                                schema_id.index);
@@ -4426,12 +4427,13 @@ string DuckLakeMetadataManager::GetPathForTable(TableIndex table_id, const vecto
 			return FromRelativePath(DuckLakePath {new_table.path, false}, base_data_path, separator);
 		}
 	}
+	// a schema or table without a path of its own is at the path of its parent
 	auto query = StringUtil::Format(R"(
 SELECT
-	s.path AS s_path,
-	s.path_is_relative AS s_path_is_relative,
-	t.path AS t_path,
-	t.path_is_relative AS t_path_is_relative
+	COALESCE(s.path, '') AS s_path,
+	s.path IS NULL OR s.path_is_relative AS s_path_is_relative,
+	COALESCE(t.path, '') AS t_path,
+	t.path IS NULL OR t.path_is_relative AS t_path_is_relative
 FROM {METADATA_CATALOG}.ducklake_schema s
 JOIN {METADATA_CATALOG}.ducklake_table t
 USING (schema_id)
