@@ -2,6 +2,7 @@
 #include "common/ducklake_row_helpers.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/connection.hpp"
+#include "duckdb/main/settings.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_staged_commit.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -34,6 +35,8 @@ unique_ptr<QueryResult> QuackMetadataManager::AttachMetadata(const string &attac
 	auto query = attach_query;
 	SubstituteCatalogPlaceholders(query);
 	Connection fresh_conn(transaction.GetCatalog().GetDatabase());
+	// the attach error becomes part of the error of the DuckLake attach, which a global SET errors_as_json would nest
+	Settings::Set<ErrorsAsJSONSetting>(*fresh_conn.context, SetScope::SESSION, Value::BOOLEAN(false));
 	auto result = fresh_conn.Query(query);
 
 	for (idx_t attempt = 0; attempt < 5 && result->HasError(); attempt++) {

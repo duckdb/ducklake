@@ -9,6 +9,7 @@
 #include "storage/ducklake_transaction_state.hpp"
 #include "common/ducklake_types.hpp"
 #include "common/ducklake_util.hpp"
+#include "functions/ducklake_table_functions.hpp"
 #include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/common/thread.hpp"
 #include "duckdb/common/sql_identifier.hpp"
@@ -1839,6 +1840,7 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 		// no AT-clause - get the latest snapshot
 		return GetSnapshot();
 	}
+	DuckLakeTableFunctionUtil::VerifySnapshotIdentifier(at_clause->GetValue());
 	// snapshots committed after the transaction started are not visible to it
 	auto newest_snapshot_id = GetNewestVisibleSnapshotId();
 	// construct a struct value from the AT clause and the bound in the form of {"unit": value, "bound": bound}

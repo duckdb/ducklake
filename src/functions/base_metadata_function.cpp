@@ -71,10 +71,14 @@ string DuckLakeTableFunctionUtil::GetTableName(const Value &input) {
 	return input.GetValue<string>();
 }
 
-BoundAtClause DuckLakeTableFunctionUtil::AtClauseFromValue(const Value &input) {
+void DuckLakeTableFunctionUtil::VerifySnapshotIdentifier(const Value &input) {
 	if (input.IsNull()) {
 		throw BinderException("Snapshot identifier cannot be NULL");
 	}
+}
+
+BoundAtClause DuckLakeTableFunctionUtil::AtClauseFromValue(const Value &input) {
+	VerifySnapshotIdentifier(input);
 	switch (input.type().id()) {
 	case LogicalTypeId::BIGINT:
 		return BoundAtClause("version", input);

@@ -11,6 +11,10 @@
 namespace duckdb {
 
 static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option, const Value &value) {
+	// options of a secret skip the NULL check of ATTACH
+	if (value.IsNull()) {
+		throw BinderException("NULL is not supported as a valid option for ATTACH option \"%s\"", option);
+	}
 	auto lcase = StringUtil::Lower(option);
 	if (lcase == "data_path") {
 		options.data_path = value.ToString();

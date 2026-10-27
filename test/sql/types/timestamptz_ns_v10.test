@@ -1,0 +1,68 @@
+# name: test/sql/types/timestamptz_ns_v10.test
+# description: A catalog kept at 1.0 refuses TIMESTAMPTZ_NS columns, which DuckLake 1.0 cannot load
+# group: [types]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/timestamptz_ns_v10', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE lake.d (id INTEGER, d DATE)
+
+statement error
+CREATE TABLE lake.t (ts TIMESTAMPTZ_NS)
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+statement error
+CREATE TABLE lake.t (ts TIMESTAMPTZ_NS[])
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+statement error
+ALTER TABLE lake.d ADD COLUMN extra TIMESTAMPTZ_NS
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+statement error
+ALTER TABLE lake.d ALTER d TYPE TIMESTAMPTZ_NS
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+statement ok
+CREATE TABLE lake.s (s STRUCT(i INTEGER))
+
+statement error
+ALTER TABLE lake.s ADD COLUMN s.ts TIMESTAMPTZ_NS
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+statement error
+CREATE TABLE lake.t AS SELECT '2026-01-01 00:00:00.123456789+00'::TIMESTAMPTZ_NS AS ts
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+statement ok
+COPY (SELECT '2026-01-01 00:00:00.123456789+00'::TIMESTAMPTZ_NS AS ts) TO '{DATA_PATH}/timestamptz_ns_v10.parquet'
+
+statement error
+CREATE TABLE lake.t AS SELECT * FROM read_parquet('{DATA_PATH}/timestamptz_ns_v10.parquet')
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+statement ok
+CREATE TABLE lake.ok (ts TIMESTAMPTZ, tns TIMESTAMP_NS)
+
+query I
+SELECT count(*) FROM __ducklake_metadata_lake.ducklake_column WHERE column_type = 'timestamptz_ns'
+----
+0

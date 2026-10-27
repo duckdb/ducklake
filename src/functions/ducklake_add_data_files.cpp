@@ -59,6 +59,9 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 	} else if (file_list.type() == LogicalType::LIST(LogicalType::VARCHAR)) {
 		auto paths = ListValue::GetChildren(file_list);
 		for (const auto &path : paths) {
+			if (path.IsNull()) {
+				throw InvalidInputException("File list cannot contain NULL");
+			}
 			result->globs.push_back(StringValue::Get(path));
 		}
 	} else {
