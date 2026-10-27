@@ -2953,8 +2953,8 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	bool has_origins = transaction.GetCatalog().SupportsFileIdentity();
 	string data_select_list = "data.data_file_id, data.record_count, data.row_id_start, data.begin_snapshot, "
 	                          "data.end_snapshot, data.mapping_id, sr.schema_version , data.partial_max, " +
-	                          string(has_origins ? "data.origin_snapshot, " : "") + "data.partition_id, partition_info.keys, " +
-	                          GetDataFileSelectList("data");
+	                          string(has_origins ? "data.origin_snapshot, " : "") +
+	                          "data.partition_id, partition_info.keys, " + GetDataFileSelectList("data");
 	string delete_select_list = "del.data_file_id AS del_data_file_id,"
 	                            "del.delete_file_id AS del_delete_file_id, "
 	                            "del.delete_count, "
@@ -3999,6 +3999,12 @@ string DuckLakeMetadataManager::InlinedFileDeletionTableName(TableIndex table_id
 	return StringUtil::Format("ducklake_inlined_delete_%d", table_id.index);
 }
 
+string DuckLakeMetadataManager::InlinedFileDeletionTableDdl(const string &table_name) {
+	return StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(file_id BIGINT, row_id BIGINT, "
+	                          "begin_snapshot BIGINT);\n",
+	                          table_name);
+}
+
 string
 DuckLakeMetadataManager::WriteNewInlinedFileDeletesSql(const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes,
                                                        bool &created_new_table) {
@@ -4011,9 +4017,7 @@ DuckLakeMetadataManager::WriteNewInlinedFileDeletesSql(const vector<DuckLakeInli
 	for (auto &entry : new_deletes) {
 		auto table_name = InlinedFileDeletionTableName(entry.table_id);
 		if (created_tables.insert(entry.table_id.index).second) {
-			batch_queries += StringUtil::Format("CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s"
-			                                    "(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT);\n",
-			                                    table_name);
+			batch_queries += InlinedFileDeletionTableDdl(table_name);
 			created_new_table = true;
 		}
 		vector<string> tuples;
@@ -5996,6 +6000,23 @@ static string AttachedVersionGuardSql(DuckLakeCatalog &catalog, bool lock_versio
 	auto attached_version = DuckLakeVersionToString(catalog.GetDuckLakeVersion());
 	return result +
 	       DuckLakeMetadataManager::MigratedCatalogGuardSql(attached_version, DuckLakeMetadataManager::GuardSql);
+}
+
+bool DuckLakeMetadataManager::CatalogWasMigrated() {
+	auto attached_version = DuckLakeVersionToString(transaction.GetCatalog().GetDuckLakeVersion());
+	try {
+		auto result =
+		    Query("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version' AND scope IS NULL");
+		if (result->HasError()) {
+			return true;
+		}
+		for (auto &row : *result) {
+			return row.GetValue<string>(0) != attached_version;
+		}
+	} catch (std::exception &) {
+		return true;
+	}
+	return true;
 }
 
 void DuckLakeMetadataManager::CheckAttachedVersion() {

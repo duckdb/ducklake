@@ -331,12 +331,12 @@ FROM {METADATA_CATALOG}.ducklake_file_partition_value v JOIN %s AS m ON v.data_f
 	}
 	if (has_inlined_deletions) {
 		auto copied_table = InlinedFileDeletionTableName(fork.table_id);
+		batch += InlinedFileDeletionTableDdl(copied_table);
 		batch += StringUtil::Format(
-		    "CREATE TABLE IF NOT EXISTS {METADATA_CATALOG}.%s(file_id BIGINT, row_id BIGINT, begin_snapshot BIGINT);\n"
 		    "INSERT INTO {METADATA_CATALOG}.%s (file_id, row_id, begin_snapshot) SELECT m.new_id, d.row_id, "
 		    "d.begin_snapshot FROM {METADATA_CATALOG}.%s d JOIN %s AS m ON d.file_id = m.old_id WHERE d.begin_snapshot "
 		    "<= %llu;\n",
-		    SQLIdentifier(copied_table), SQLIdentifier(copied_table), SQLIdentifier(deletion_table), data_files, at);
+		    SQLIdentifier(copied_table), SQLIdentifier(deletion_table), data_files, at);
 		MarkPendingCacheClear();
 	}
 

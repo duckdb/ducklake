@@ -1,0 +1,52 @@
+# name: test/sql/retirement/redated_delete_retirement.test
+# description: a delete file that a retried commit dates again replaces one that the commit retires and unlinks
+# group: [retirement]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/redated_delete_retirement', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT i::INTEGER AS i FROM range(10) t(i)
+
+statement ok
+CREATE TABLE dl.u(i INTEGER)
+
+statement ok
+DELETE FROM dl.t WHERE i = 0
+
+statement ok con1
+BEGIN
+
+statement ok con1
+DELETE FROM dl.t WHERE i = 1
+
+# another commit makes the pending delete commit at a later snapshot than it wrote its file for
+statement ok
+INSERT INTO dl.u VALUES (1)
+
+statement ok con1
+COMMIT
+
+query I
+SELECT list(i ORDER BY i) FROM dl.t
+----
+[2, 3, 4, 5, 6, 7, 8, 9]
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('dl', cleanup_all => true, dry_run => true)
+----
+0
+
+# the commit of the delete retires the file it replaced, without a retirement of its own
+query I
+SELECT count(*) FROM dl.snapshots() WHERE commit_message = 'rollback'
+----
+0

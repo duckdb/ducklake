@@ -502,6 +502,7 @@ public:
 	                                      const vector<string> &cells_per_row);
 	//! Static deterministic name of the per-table inlined deletion table.
 	static string InlinedFileDeletionTableName(TableIndex table_id);
+	static string InlinedFileDeletionTableDdl(const string &table_name);
 	//! Pure SQL builder for inlined file deletions (CREATE TABLE IF NOT EXISTS + INSERT). Sets
 	//! created_new_table when a new ducklake_inlined_delete_<id> table was emitted.
 	static string WriteNewInlinedFileDeletesSql(const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes,
@@ -633,6 +634,8 @@ public:
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	//! Fails once another connection migrated the catalog, and orders the transaction with a migration
 	void CheckAttachedVersion();
+	//! Whether another connection migrated the catalog, also when its version cannot be read
+	bool CatalogWasMigrated();
 	//! Deletes the metadata that only the deleted snapshots referenced, once the caller checked the catalog version
 	virtual void CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);

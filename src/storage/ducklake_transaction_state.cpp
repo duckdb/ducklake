@@ -2908,9 +2908,15 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			// re-dating replaces delete files, which the retirement of the attempt covers
 			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
 			auto retirement = context.get_retirement();
-			if ((expired_snapshots.empty() && context.only_expires_snapshots) ||
-			    (retirement.Empty() && context.only_retires_files)) {
+			if (expired_snapshots.empty() && context.only_expires_snapshots) {
 				context.commit_connection();
+				wrote_snapshot = false;
+				break;
+			}
+			if (retirement.WritesNothing() && context.only_retires_files) {
+				context.commit_connection();
+				// the files whose paths are retired already are unlinked without another retirement
+				context.report_retirement(retirement);
 				wrote_snapshot = false;
 				break;
 			}

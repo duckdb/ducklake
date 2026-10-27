@@ -68,7 +68,10 @@
         "test/sql/retirement/rollback_retires_before_unlink.test",
         "test/sql/retirement/drop_keeps_registered_output.test",
         "test/sql/retirement/rollback_keeps_registered_remote_alias.test",
-        "test/sql/retirement/discarded_files_retirement.test"
+        "test/sql/retirement/discarded_files_retirement.test",
+        "test/sql/retirement/discarded_alias_published.test",
+        "test/sql/retirement/discarded_remote_alias_published.test",
+        "test/sql/retirement/redated_delete_retirement.test"
       ]
     },
     {

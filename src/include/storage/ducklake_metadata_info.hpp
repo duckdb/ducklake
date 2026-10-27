@@ -509,8 +509,9 @@ struct DuckLakeRetirement {
 	//! The schedule entries that the retirement removes
 	vector<DataFileIndex> unscheduled_files;
 
-	bool Empty() const {
-		return unlinked_files.empty() && unscheduled_files.empty();
+	//! Whether the retirement writes no metadata, the files it unlinks are retired already
+	bool WritesNothing() const {
+		return retired_paths.empty() && unscheduled_files.empty();
 	}
 	void Append(DuckLakeRetirement other) {
 		for (auto &file : other.unlinked_files) {

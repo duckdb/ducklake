@@ -124,22 +124,6 @@ struct CleanupState : public DuckLakeRunOnceState {
 	}
 };
 
-//! Commits the retirement of the files in a transaction of its own, so that it holds before any of them is unlinked
-static vector<DuckLakeFileForCleanup> RetireFiles(ClientContext &context, const CleanupBindData &data,
-                                                  vector<DuckLakeFileForCleanup> files) {
-	Connection connection(data.catalog.GetDatabase());
-	DuckLakeUtil::CopyExtensionSettings(context, *connection.context);
-	connection.BeginTransaction();
-	vector<DuckLakeFileForCleanup> unlinked_files;
-	auto &transaction = DuckLakeTransaction::Get(*connection.context, data.catalog);
-	auto &commit_info = transaction.GetCommitInfo();
-	commit_info.commit_message = Value(data.GetFunctionName());
-	commit_info.is_commit_info_set = true;
-	transaction.RetireFilesOnCommit(std::move(files), data.type, unlinked_files);
-	connection.Commit();
-	return unlinked_files;
-}
-
 static vector<vector<Value>> RemoveFiles(ClientContext &context, const CleanupBindData &data) {
 	if (data.dry_run || data.files.empty()) {
 		return data.rows;
@@ -172,7 +156,10 @@ static vector<vector<Value>> RemoveFiles(ClientContext &context, const CleanupBi
 		vector<DuckLakeFileForCleanup> batch(data.files.begin() + NumericCast<int64_t>(start),
 		                                     data.files.begin() + NumericCast<int64_t>(end));
 		vector<string> paths;
-		for (auto &file : RetireFiles(context, data, std::move(batch))) {
+		// the retirement commits in a transaction of its own, so that it holds before any of the files is unlinked
+		auto unlinked_files = DuckLakeTransaction::CommitRetirement(context, data.catalog, std::move(batch), data.type,
+		                                                            data.GetFunctionName());
+		for (auto &file : unlinked_files) {
 			rows.push_back({Value(file.path)});
 			paths.push_back(std::move(file.path));
 		}

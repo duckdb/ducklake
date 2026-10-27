@@ -124,6 +124,18 @@ bool LocalTableChanges::HasDiscardedFiles() const {
 	return !discarded_files.empty();
 }
 
+bool LocalTableChanges::HasRegisteredFiles() const {
+	lock_guard<mutex> guard(lock);
+	for (auto &entry : changes) {
+		for (auto &file : entry.second.new_data_files) {
+			if (!file.created_by_ducklake) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
 vector<string> LocalTableChanges::GetDiscardedFiles() const {
 	lock_guard<mutex> guard(lock);
 	return discarded_files;
@@ -770,12 +782,10 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
 	schema_pins = make_uniq<DuckLakeSchemaPinState>();
 	state = make_uniq<DuckLakeTransactionState>(db, ducklake_catalog.IsCommitInfoRequired(), new_name_maps,
 	                                            ducklake_catalog.DataPath(), ducklake_catalog.Separator());
-	if (RetiresDiscardedFiles()) {
-		// a registration of another transaction can reference a file this transaction wrote
-		state->remove_owned_files = [this](vector<string> files) {
-			RemoveWrittenFiles(std::move(files));
-		};
-	}
+	// a registration of another transaction can reference a file this transaction wrote
+	state->remove_owned_files = [this](vector<string> files) {
+		RemoveWrittenFiles(std::move(files));
+	};
 }
 
 DuckLakeTransaction::~DuckLakeTransaction() {
@@ -988,6 +998,10 @@ bool DuckLakeTransaction::RetiresFilesOnCommit() const {
 	       (RetiresDiscardedFiles() && state->local_changes.HasDiscardedFiles() && ChangesMadeBesidesExpiry());
 }
 
+idx_t DuckLakeTransaction::FirstSnapshotId() const {
+	return first_snapshot_id.IsValid() ? first_snapshot_id.GetIndex() : 0;
+}
+
 bool DuckLakeTransaction::RetiresDiscardedFiles() const {
 	return ducklake_catalog.SupportsFileIdentity();
 }
@@ -997,11 +1011,19 @@ vector<DuckLakeFileForCleanup> DuckLakeTransaction::DiscardedFilesToRetire() con
 	if (!RetiresDiscardedFiles()) {
 		return result;
 	}
+	auto discarded_files = state->local_changes.GetDiscardedFiles();
+	if (discarded_files.empty()) {
+		return result;
+	}
+	DuckLakePathKeys path_keys(db);
 	vector<string> published_files;
 	state->local_changes.GetWrittenFiles(published_files);
-	unordered_set<string> published(published_files.begin(), published_files.end());
-	for (auto &path : state->local_changes.GetDiscardedFiles()) {
-		if (published.count(path)) {
+	unordered_set<string> published;
+	for (auto &path : published_files) {
+		published.insert(path_keys.Get(path));
+	}
+	for (auto &path : discarded_files) {
+		if (published.count(path_keys.Get(path))) {
 			continue;
 		}
 		DuckLakeFileForCleanup file;
@@ -1015,6 +1037,16 @@ void DuckLakeTransaction::RemoveWrittenFiles(vector<string> files) {
 	if (files.empty()) {
 		return;
 	}
+	auto &fs = FileSystem::GetFileSystem(db);
+	if (!RetiresDiscardedFiles()) {
+		// a registration through a catalog that another connection migrated meanwhile can reference the files
+		if (!GetMetadataManager().CatalogWasMigrated()) {
+			for (auto &path : files) {
+				fs.TryRemoveFile(path);
+			}
+		}
+		return;
+	}
 	vector<DuckLakeFileForCleanup> candidates;
 	for (auto &path : files) {
 		DuckLakeFileForCleanup candidate;
@@ -1023,43 +1055,46 @@ void DuckLakeTransaction::RemoveWrittenFiles(vector<string> files) {
 	}
 	vector<DuckLakeFileForCleanup> unlinked;
 	try {
-		// the retirement commits in a transaction of its own, so a registration that reads a file fails at its commit
-		Connection retirement_connection(db);
+		// a registration that read one of the files fails at its commit
 		auto caller_context = context.lock();
-		if (caller_context) {
-			DuckLakeUtil::CopyExtensionSettings(*caller_context, *retirement_connection.context);
-		}
-		retirement_connection.BeginTransaction();
-		auto &retirement = DuckLakeTransaction::Get(*retirement_connection.context, ducklake_catalog);
-		auto &commit_info = retirement.GetCommitInfo();
-		commit_info.commit_message = Value("rollback");
-		commit_info.is_commit_info_set = true;
-		retirement.RetireFilesOnCommit(std::move(candidates), CleanupType::WRITTEN_FILES, unlinked,
-		                               snapshot ? snapshot->snapshot_id : 0);
-		retirement_connection.Commit();
+		unlinked = CommitRetirement(caller_context.get(), ducklake_catalog, std::move(candidates),
+		                            CleanupType::WRITTEN_FILES, "rollback", FirstSnapshotId());
 	} catch (std::exception &) {
 		// without a committed retirement the files are left to the orphan cleanup
 		return;
 	}
-	auto &fs = FileSystem::GetFileSystem(db);
 	for (auto &file : unlinked) {
 		fs.TryRemoveFile(file.path);
 	}
 }
 
+vector<DuckLakeFileForCleanup> DuckLakeTransaction::CommitRetirement(optional_ptr<ClientContext> caller_context,
+                                                                     DuckLakeCatalog &catalog,
+                                                                     vector<DuckLakeFileForCleanup> files,
+                                                                     CleanupType type, const string &commit_message,
+                                                                     idx_t written_after_snapshot) {
+	Connection connection(catalog.GetDatabase());
+	if (caller_context) {
+		DuckLakeUtil::CopyExtensionSettings(*caller_context, *connection.context);
+	}
+	connection.BeginTransaction();
+	vector<DuckLakeFileForCleanup> unlinked_files;
+	auto &transaction = DuckLakeTransaction::Get(*connection.context, catalog);
+	auto &commit_info = transaction.GetCommitInfo();
+	commit_info.commit_message = Value(commit_message);
+	commit_info.is_commit_info_set = true;
+	transaction.RetireFilesOnCommit(std::move(files), type, unlinked_files, written_after_snapshot);
+	connection.Commit();
+	return unlinked_files;
+}
+
 void DuckLakeTransaction::RemoveDiscardedFiles() {
 	auto discarded_files = state->local_changes.TakeDiscardedFiles();
-	auto &fs = FileSystem::GetFileSystem(db);
-	if (!RetiresDiscardedFiles()) {
-		for (auto &path : discarded_files) {
-			fs.TryRemoveFile(path);
-		}
-		return;
-	}
-	if (!discarded_files_retired) {
+	if (!RetiresDiscardedFiles() || !discarded_files_retired) {
 		RemoveWrittenFiles(std::move(discarded_files));
 		return;
 	}
+	auto &fs = FileSystem::GetFileSystem(db);
 	// the files that a committed row references keep their paths
 	for (auto &file : retired_discarded_files) {
 		fs.TryRemoveFile(file.path);
@@ -1694,8 +1729,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		};
 		context.only_expires_snapshots = !ChangesMadeBesidesExpiry();
 	}
-	if (RetiresFilesOnCommit()) {
-		// a retirement is ordered with the commits that publish files by its snapshot id
+	if (RetiresFilesOnCommit() || RetiresDiscardedFiles()) {
+		// a retirement is ordered with the commits that publish files by its snapshot id, the files that a commit
+		// attempt discards are retired too
 		context.get_retirement = [&]() {
 			DuckLakeRetirement retirement;
 			if (!files_to_retire.empty()) {
@@ -1703,8 +1739,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 			}
 			auto discarded_files = DiscardedFilesToRetire();
 			if (!discarded_files.empty()) {
-				retirement.Append(metadata_manager->GetRetirement(discarded_files, CleanupType::WRITTEN_FILES,
-				                                                  transaction_snapshot.snapshot_id));
+				retirement.Append(
+				    metadata_manager->GetRetirement(discarded_files, CleanupType::WRITTEN_FILES, FirstSnapshotId()));
 			}
 			return retirement;
 		};
@@ -2195,6 +2231,9 @@ DuckLakeSnapshot DuckLakeTransaction::GetLatestSnapshot() {
 	if (!snapshot) {
 		// no snapshot loaded yet for this transaction - load it
 		snapshot = metadata_manager->GetSnapshot();
+		if (!first_snapshot_id.IsValid()) {
+			first_snapshot_id = snapshot->snapshot_id;
+		}
 	}
 	return *snapshot;
 }
@@ -2460,6 +2499,7 @@ void DuckLakeTransaction::AddTableFork(TableIndex table_id, TableIndex source_ta
 bool DuckLakeTransaction::HasTableForks() const {
 	return !state->table_forks.empty();
 }
+
 
 void DuckLakeTransaction::CheckNotCloned(TableIndex table_id) const {
 	if (state->table_forks.count(table_id)) {

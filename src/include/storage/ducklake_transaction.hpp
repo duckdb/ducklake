@@ -114,6 +114,8 @@ public:
 	//! Records files the transaction wrote and no longer uses, which are removed at its end
 	void DiscardFiles(const vector<string> &files);
 	bool HasDiscardedFiles() const;
+	//! Whether the transaction registers files that DuckLake did not write
+	bool HasRegisteredFiles() const;
 	vector<string> GetDiscardedFiles() const;
 	vector<string> TakeDiscardedFiles();
 	bool HasTransactionLocalInserts(TableIndex table_id) const;
@@ -305,6 +307,12 @@ public:
 	void RetireFilesOnCommit(vector<DuckLakeFileForCleanup> files, CleanupType type,
 	                         vector<DuckLakeFileForCleanup> &unlinked_files, idx_t written_after_snapshot = 0);
 	bool RetiresFilesOnCommit() const;
+	//! Commits the retirement of the files in a DuckLake transaction of its own and returns the files to unlink
+	static vector<DuckLakeFileForCleanup> CommitRetirement(optional_ptr<ClientContext> caller_context,
+	                                                       DuckLakeCatalog &catalog,
+	                                                       vector<DuckLakeFileForCleanup> files, CleanupType type,
+	                                                       const string &commit_message,
+	                                                       idx_t written_after_snapshot = 0);
 	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files);
 	bool InlinedTableFlushed(const string &table_name);
@@ -465,6 +473,10 @@ private:
 	//! catalog is opened at a fixed snapshot
 	mutex snapshot_lock;
 	unique_ptr<DuckLakeSnapshot> snapshot;
+	//! The snapshot id the transaction first loaded, which a retry does not reload
+	optional_idx first_snapshot_id;
+	//! Only the rows of later snapshots can reference a file the transaction wrote
+	idx_t FirstSnapshotId() const;
 	idx_t local_catalog_id;
 	//! Set when this transaction inlines into a table that does not yet have an inlined-data table
 	atomic<bool> requires_new_inlined_table {false};
