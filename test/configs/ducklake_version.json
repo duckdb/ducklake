@@ -101,6 +101,7 @@
         "test/sql/add_files/add_files_registration_rules.test",
         "test/sql/add_files/add_files_flushed_file.test",
         "test/sql/add_files/add_files_registration_one_transaction.test",
+        "test/sql/add_files/add_files_registration_retry_words.test",
         "test/sql/add_files/add_files_remote_query_keys.test"
       ]
     },
