@@ -1,0 +1,59 @@
+# name: benchmark/micro/maintenance/cleanup_old_files.benchmark
+# description: ducklake_cleanup_old_files of the 1000 files of a dropped table, written again after each run
+# group: [maintenance]
+
+name Cleanup Old Files
+group micro
+subgroup maintenance
+
+require ducklake
+
+require parquet
+
+argument lake cleanup_old
+
+argument work cleanup_old_work
+
+cache_file ${lake}_ready.marker
+
+# The dropped table registered one file per hive partition, so the cleanup block can write the same files again
+load
+COPY (SELECT i, i * 2 AS v FROM range(1000) t(i)) TO '${BENCHMARK_DIR}/${lake}_source'
+(FORMAT PARQUET, PARTITION_BY (i), WRITE_PARTITION_COLUMNS true, OVERWRITE);
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CREATE TABLE lake.dropped (i BIGINT, v BIGINT);
+CALL ducklake_add_data_files('lake', 'dropped', '${BENCHMARK_DIR}/${lake}_source/**/*.parquet');
+DROP TABLE lake.dropped;
+SELECT count(*) FROM ducklake_expire_snapshots('lake', older_than => TIMESTAMPTZ '2999-01-01');
+SELECT CASE WHEN (SELECT count(*) FROM ducklake_cleanup_old_files('lake', cleanup_all => true, dry_run => true))
+<> 1000 THEN error('the files of the dropped table must be scheduled for deletion') END;
+DETACH lake;
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+
+reload
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+COPY (SELECT i, i * 2 AS v FROM range(1000) t(i)) TO '${BENCHMARK_DIR}/${lake}_source'
+(FORMAT PARQUET, PARTITION_BY (i), WRITE_PARTITION_COLUMNS true, OVERWRITE);
+
+run
+SELECT count(*) AS cleaned FROM ducklake_cleanup_old_files('lake', cleanup_all => true);
+
+cleanup
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+COPY (SELECT i, i * 2 AS v FROM range(1000) t(i)) TO '${BENCHMARK_DIR}/${lake}_source'
+(FORMAT PARQUET, PARTITION_BY (i), WRITE_PARTITION_COLUMNS true, OVERWRITE);
+
+# Every scheduled file must be gone after the run
+result_query II
+SELECT cleaned, (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_source/**/*.parquet')) FROM __answer
+----
+1000	0
