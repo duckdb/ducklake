@@ -485,3 +485,20 @@ SELECT (SELECT count(*) FROM dl.snapshots()),
        (SELECT count(*) FROM __ducklake_metadata_dl.ducklake_files_scheduled_for_deletion)
 ----
 1	0
+
+# an option that already has two rows is written to both
+statement ok
+INSERT INTO __ducklake_metadata_dl.ducklake_metadata
+SELECT key, value, scope, scope_id FROM __ducklake_metadata_dl.ducklake_metadata
+WHERE key = 'parquet_row_group_size' AND scope = 'table' AND scope_id = (
+	SELECT table_id FROM __ducklake_metadata_dl.ducklake_table WHERE table_name = 'r2' AND end_snapshot IS NULL
+)
+
+statement ok
+CALL dl.set_option('parquet_row_group_size', 3000, table_name => 'r2')
+
+query II
+SELECT count(*), list(DISTINCT value) FROM dl.options()
+WHERE option_name = 'parquet_row_group_size' AND scope_entry = 'main.r2'
+----
+2	[3000]

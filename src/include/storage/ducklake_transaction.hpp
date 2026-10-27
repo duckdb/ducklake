@@ -369,6 +369,8 @@ private:
 	void UndoConfigOptions();
 	//! The SQL that the commit runs for the options this transaction changed
 	string ConfigOptionLockSql() const;
+	//! Whether other commits wrote rows of the options this transaction changed, which READ COMMITTED shows
+	bool ConfigOptionsWrittenByOthers();
 	//! Writes the options of the transaction again, after a failed commit attempt rolled them back
 	void RewriteConfigOptions();
 	static DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);

@@ -596,8 +596,10 @@ public:
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	//! The tables with data files that are not dropped
 	unordered_set<idx_t> GetTablesWithLiveDataFiles();
-	virtual void SetConfigOption(const DuckLakeConfigOption &option);
+	//! Returns the rows that the option has after it is written
+	virtual idx_t SetConfigOption(const DuckLakeConfigOption &option);
 	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);
+	idx_t ConfigOptionRowCount(const DuckLakeConfigOption &option);
 	virtual void MigrateV01();
 	virtual void MigrateV02(bool allow_failures = false);
 	virtual void MigrateV03(bool allow_failures = false);

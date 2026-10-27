@@ -1,0 +1,73 @@
+# name: test/sql/settings/set_option_concurrent_insert_read_committed.test
+# description: two transactions that set a new option at once on a Postgres catalog at READ COMMITTED store it once
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/set_option_read_committed', META_ISOLATION_LEVEL 'READ COMMITTED')
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+CREATE TABLE dl.u (i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL dl.set_option('parquet_compression', 'gzip', table_name => 't')
+
+statement ok con2
+BEGIN
+
+statement ok con2
+CALL dl.set_option('parquet_compression', 'zstd', table_name => 't')
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query IT
+SELECT count(*), max(value) FROM dl.options()
+WHERE option_name = 'parquet_compression' AND scope_entry = 'main.t'
+----
+1	zstd
+
+# a retry would roll back the expiry of this transaction, so its commit fails instead
+statement ok con3
+BEGIN
+
+statement ok con3
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+statement ok con3
+CALL dl.set_option('parquet_row_group_size', 1000, table_name => 't')
+
+statement ok con1
+CALL dl.set_option('parquet_row_group_size', 2000, table_name => 't')
+
+statement error con3
+COMMIT
+----
+Run the transaction again
+
+query III
+SELECT (SELECT count(*) FROM dl.snapshots() WHERE snapshot_id = 1), count(*), max(value) FROM dl.options()
+WHERE option_name = 'parquet_row_group_size' AND scope_entry = 'main.t'
+----
+1	1	2000

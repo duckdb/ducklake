@@ -1561,8 +1561,12 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 			// the lock is taken last, so that it is only held until the commit
 			auto lock = config_option_lock;
 			result = metadata_manager->Execute(snapshot, lock);
-			// the update of the version row only fails after another commit updated it
-			option_lock_failed = result->HasError();
+			// the update of the version row fails after another commit updated it, or under READ COMMITTED waits
+			// for that commit and then sees its options
+			option_lock_failed = result->HasError() || ConfigOptionsWrittenByOthers();
+			if (option_lock_failed && !result->HasError()) {
+				throw TransactionException("Another transaction wrote options that this transaction changed");
+			}
 		}
 		return result;
 	};
@@ -1738,9 +1742,10 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 
 void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
 	// write the config option to the metadata
-	metadata_manager->SetConfigOption(option);
+	auto metadata_rows = metadata_manager->SetConfigOption(option);
 	// the catalog copy is not transactional - remember the previous value so a rollback can restore it
 	config_option_undo.push_back(ducklake_catalog.SetConfigOption(option));
+	config_option_undo.back().metadata_rows = metadata_rows;
 }
 
 void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) {
@@ -1757,6 +1762,25 @@ string DuckLakeTransaction::ConfigOptionLockSql() const {
 	return metadata_manager->ConfigOptionLockSql();
 }
 
+static bool IsSameConfigOption(const DuckLakeConfigOption &a, const DuckLakeConfigOption &b) {
+	return a.option.key == b.option.key && a.schema_id == b.schema_id && a.table_id == b.table_id;
+}
+
+bool DuckLakeTransaction::ConfigOptionsWrittenByOthers() {
+	for (idx_t i = 0; i < config_option_undo.size(); i++) {
+		auto &change = config_option_undo[i];
+		// the last change of an option decides the rows it has
+		bool changed_again = false;
+		for (idx_t later = i + 1; later < config_option_undo.size(); later++) {
+			changed_again = changed_again || IsSameConfigOption(config_option_undo[later].option, change.option);
+		}
+		if (!changed_again && metadata_manager->ConfigOptionRowCount(change.option) != change.metadata_rows) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void DuckLakeTransaction::RewriteConfigOptions() {
 	if (metadata_manager->CommitsEachStatement()) {
 		// the option writes were committed when they were made, the rollback kept them
@@ -1766,7 +1790,7 @@ void DuckLakeTransaction::RewriteConfigOptions() {
 		if (change.reset) {
 			metadata_manager->ResetConfigOption(change.option);
 		} else {
-			metadata_manager->SetConfigOption(change.option);
+			change.metadata_rows = metadata_manager->SetConfigOption(change.option);
 		}
 		rewrote_config_options = true;
 	}
