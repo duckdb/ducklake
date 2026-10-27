@@ -371,6 +371,9 @@ public:
 	                                                          DuckLakeSnapshot start_snapshot,
 	                                                          DuckLakeSnapshot snapshot,
 	                                                          bool include_local_changes = true);
+	//! The snapshots of the range that rewrote data files of the table without changing its rows
+	set<idx_t> GetTableRewriteSnapshots(TableIndex table_id, DuckLakeSnapshot start_snapshot,
+	                                    DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeFileListExtendedEntry>
 	GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                         const FilterPushdownInfo *filter_info = nullptr);
@@ -592,7 +595,19 @@ public:
 	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
+	//! The live snapshot tags, with the times of their snapshots if requested
+	virtual vector<DuckLakeSnapshotTagInfo> GetSnapshotTags(bool with_snapshot_time = true);
+	//! The snapshot of the live snapshot tag with the name, if any
+	optional_idx GetTaggedSnapshot(const string &name);
+	//! The snapshot id of a VERSION value, a snapshot id or the name of a snapshot tag
+	idx_t ResolveSnapshotVersion(const Value &version);
+	static string WriteSnapshotTagChanges(const case_insensitive_map_t<idx_t> &created,
+	                                      const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped);
+	static string DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots);
+	//! Deletes the snapshots once the caller checked the catalog version
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
+	//! Deletes the metadata that only the deleted snapshots referenced, once the caller checked the catalog version
+	virtual void CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	//! The tables with data files that are not dropped
 	unordered_set<idx_t> GetTablesWithLiveDataFiles();
@@ -605,6 +620,8 @@ public:
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool from_dev1 = false);
+	virtual void MigrateV11();
+	static string GetSnapshotTagTableStatement();
 	//! Whether the catalog already has every metadata table and column of v1.1
 	bool HasV1_1Additions();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
@@ -632,6 +649,8 @@ protected:
 	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
 
 	virtual string GetLatestSnapshotQuery() const;
+	//! The changes of the snapshots from first_snapshot to last_snapshot that recorded a rewrite
+	virtual string GetRewriteSnapshotsQuery(idx_t first_snapshot, idx_t last_snapshot) const;
 
 	virtual string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
 	                                              const string &metadata_table_prefix);

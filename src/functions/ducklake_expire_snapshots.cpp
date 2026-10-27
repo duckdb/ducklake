@@ -10,8 +10,20 @@ struct ExpireSnapshotsBindData : public MetadataBindData {
 	}
 
 	DuckLakeCatalog &catalog;
-	vector<DuckLakeSnapshotInfo> snapshots;
+	//! The criterion of the expiry, empty when nothing is expired
+	string filter;
 	bool dry_run = false;
+};
+
+struct ExpireSnapshotsGlobalState : public GlobalTableFunctionState {
+	bool executed = false;
+	idx_t offset = 0;
+	//! The expired snapshots, or the candidates of a dry run
+	vector<vector<Value>> rows;
+
+	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
+		return make_uniq<ExpireSnapshotsGlobalState>();
+	}
 };
 
 static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &context, TableFunctionBindInput &input,
@@ -74,35 +86,39 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 	} else {
 		filter += StringUtil::Format("snapshot_id IN (%s)", StringUtil::Join(snapshot_ids, ", "));
 	}
-	auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
-	auto &metadata_manager = transaction.GetMetadataManager();
-	result->snapshots = metadata_manager.GetAllSnapshots(filter);
-	for (auto &snapshot : result->snapshots) {
-		result->rows.push_back(DuckLakeSnapshotsFunction::GetSnapshotValues(snapshot));
+	result->filter = filter;
+	if (result->dry_run) {
+		auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
+		for (auto &snapshot : transaction.ExpirableSnapshots(filter)) {
+			result->rows.push_back(DuckLakeSnapshotsFunction::GetSnapshotValues(snapshot));
+		}
 	}
 	return std::move(result);
 }
 
 void DuckLakeExpireSnapshotsExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &data = data_p.bind_data->Cast<ExpireSnapshotsBindData>();
-	auto &state = data_p.global_state->Cast<DuckLakeRunOnceState>();
-	if (state.offset >= data.rows.size()) {
+	auto &state = data_p.global_state->Cast<ExpireSnapshotsGlobalState>();
+	if (!state.executed) {
+		state.executed = true;
+		if (data.dry_run) {
+			state.rows = data.rows;
+		} else {
+			auto &transaction = DuckLakeTransaction::Get(context, data.catalog);
+			for (auto &snapshot : transaction.ExpireSnapshots(data.filter)) {
+				state.rows.push_back(DuckLakeSnapshotsFunction::GetSnapshotValues(snapshot));
+			}
+		}
+	}
+	if (state.offset >= state.rows.size()) {
 		return;
 	}
-	if (!state.executed && !data.dry_run) {
-		auto &transaction = DuckLakeTransaction::Get(context, data.catalog);
-		transaction.DeleteSnapshots(data.snapshots);
-		for (auto &snapshot : data.snapshots) {
-			data.catalog.InvalidateSchemaCache(snapshot.schema_version);
-		}
-		state.executed = true;
-	}
-	DuckLakeBaseMetadataFunction::ScanRows(data.rows, state.offset, output);
+	DuckLakeBaseMetadataFunction::ScanRows(state.rows, state.offset, output);
 }
 
 DuckLakeExpireSnapshotsFunction::DuckLakeExpireSnapshotsFunction()
     : TableFunction("ducklake_expire_snapshots", FunctionSignature().AddPositionalOnly("catalog", LogicalType::VARCHAR),
-                    DuckLakeExpireSnapshotsExecute, DuckLakeExpireSnapshotsBind, DuckLakeRunOnceState::Init) {
+                    DuckLakeExpireSnapshotsExecute, DuckLakeExpireSnapshotsBind, ExpireSnapshotsGlobalState::Init) {
 	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
 		options
 		    .Add("older_than", LogicalType::TIMESTAMP_TZ)

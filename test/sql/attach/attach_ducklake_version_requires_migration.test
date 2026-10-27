@@ -28,7 +28,7 @@ DuckLake catalog version mismatch: catalog version is 1.0, but the extension req
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_version_requires_migration', DUCKLAKE_VERSION '1.1-dev1', AUTOMATIC_MIGRATION TRUE)
 ----
-ducklake_version must be '1.0' or '1.1', got '1.1-dev1'
+ducklake_version must be '1.0', '1.1' or '2.0-dev1', got '1.1-dev1'
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_version_requires_migration', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)

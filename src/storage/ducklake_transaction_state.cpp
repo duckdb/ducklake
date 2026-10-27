@@ -119,14 +119,14 @@ void ConflictCheck(T index, const MAP &conflict_map, const char *action, const c
 	}
 }
 
-void SchemaKeyConflictCheck(const string &schema_key, const case_insensitive_set_t &conflict_set, const char *action,
-                            const char *conflict_action) {
-	if (conflict_set.find(schema_key) == conflict_set.end()) {
+void NameConflictCheck(const string &name, const case_insensitive_set_t &conflict_set, const char *action,
+                       const char *conflict_action) {
+	if (conflict_set.find(name) == conflict_set.end()) {
 		return;
 	}
 	throw TransactionException("Transaction conflict - attempting to %s with name %s"
 	                           " - but another transaction has %s",
-	                           action, schema_key, conflict_action);
+	                           action, name, conflict_action);
 }
 
 optional_ptr<const string> FindDroppedAncestor(const case_insensitive_set_t &dropped_keys, const string &schema_key) {
@@ -262,8 +262,8 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 	}
 	// check if we are creating the same schema as another transaction
 	for (auto &created_schema : changes.created_schemas) {
-		SchemaKeyConflictCheck(created_schema.first, other_changes.created_schemas, "create schema",
-		                       "created a schema with this name already");
+		NameConflictCheck(created_schema.first, other_changes.created_schemas, "create schema",
+		                  "created a schema with this name already");
 		for (auto parent = created_schema.second.get().ParentDuckLakeSchema(); parent;
 		     parent = parent->ParentDuckLakeSchema()) {
 			if (other_changes.dropped_schemas.find(parent->GetSchemaId()) == other_changes.dropped_schemas.end()) {
@@ -358,6 +358,44 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(view_id, other_changes.altered_views, "rename view", "altered it");
 		ConflictCheck(view_id, views_renamed_by_others, "rename view", "renamed it");
 	}
+	for (auto &name : changes.created_snapshot_tags) {
+		NameConflictCheck(name, other_changes.created_snapshot_tags, "create tag",
+		                  "created a tag with this name already");
+		NameConflictCheck(name, other_changes.dropped_snapshot_tags, "create tag", "dropped a tag with this name");
+	}
+	for (auto &name : changes.dropped_snapshot_tags) {
+		NameConflictCheck(name, other_changes.dropped_snapshot_tags, "drop tag", "dropped it already");
+		// only a backend that reads the latest metadata validates a drop against a tag of the window
+		NameConflictCheck(name, other_changes.created_snapshot_tags, "drop tag", "created a tag with this name");
+	}
+}
+
+string DuckLakeTransactionState::TaggedSnapshotIdList(const case_insensitive_map_t<idx_t> &tags) {
+	vector<string> snapshot_ids;
+	for (auto &tag : tags) {
+		snapshot_ids.push_back(to_string(tag.second));
+	}
+	return StringUtil::Join(snapshot_ids, ", ");
+}
+
+void DuckLakeTransactionState::CheckTaggedSnapshotsExist(const DuckLakeCommitContext &context) const {
+	if (new_snapshot_tags.empty()) {
+		return;
+	}
+	auto result = context.conflict_query_executor(
+	    StringUtil::Format("SELECT snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id IN (%s)",
+	                       TaggedSnapshotIdList(new_snapshot_tags)));
+	set<idx_t> existing;
+	for (auto &row : *result) {
+		existing.insert(row.GetValue<idx_t>(0));
+	}
+	for (auto &tag : new_snapshot_tags) {
+		if (existing.find(tag.second) == existing.end()) {
+			throw TransactionException("Transaction conflict - attempting to create tag %s for snapshot %d"
+			                           " - but another transaction has expired the snapshot",
+			                           tag.first, tag.second);
+		}
+	}
 }
 
 namespace {
@@ -424,6 +462,15 @@ string DuckLakeTransactionState::WriteSnapshotChanges(DuckLakeCommitState &commi
 	}
 	AddChangeInfo(commit_state, changes_made, changes.tables_merge_adjacent, "merge_adjacent");
 	AddChangeInfo(commit_state, changes_made, changes.tables_rewrite_delete, "rewrite_delete");
+	for (auto &name : changes.created_snapshot_tags) {
+		changes_made.push_back("created_tag:" + SQLQuotedIdentifier::ToString(name));
+	}
+	for (auto &name : changes.dropped_snapshot_tags) {
+		changes_made.push_back("dropped_tag:" + SQLQuotedIdentifier::ToString(name));
+	}
+	for (auto &snapshot_id : changes.expired_snapshots) {
+		changes_made.push_back("expired_snapshot:" + to_string(snapshot_id));
+	}
 	SnapshotChangeInfo change_info;
 	change_info.changes_made = StringUtil::Join(changes_made, ",");
 	return DuckLakeMetadataManager::WriteSnapshotChangesSql(change_info, commit_info);
@@ -2200,6 +2247,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		}
 		batch_queries += DuckLakeMetadataManager::DropSchemas(dropped_schema_ids);
 	}
+	batch_queries += DuckLakeMetadataManager::WriteSnapshotTagChanges(new_snapshot_tags, dropped_snapshot_tags);
 	auto relative_paths = [&](const auto &entries) {
 		vector<DuckLakePath> result;
 		result.reserve(entries.size());
@@ -2668,6 +2716,7 @@ SnapshotAndStats DuckLakeTransactionState::CheckForConflicts(DuckLakeSnapshot tr
 
 	// now check for conflicts
 	CheckForConflicts(changes, other_changes, transaction_snapshot, context);
+	CheckTaggedSnapshotsExist(context);
 
 	tables_changed_by_others.clear();
 	for (auto tables : {&other_changes.altered_tables, &other_changes.inserted_tables,
@@ -2718,6 +2767,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	auto &commit_snapshot = commit_stats_snapshot.snapshot;
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
 	bool flushed_inlined = false;
+	bool wrote_snapshot = true;
 	ducklake_entry_oids_t new_entry_oids;
 	for (idx_t i = 0;; i++) {
 		bool can_retry;
@@ -2726,9 +2776,8 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		auto attempt_dropped_file_stats = dropped_file_stats;
 		try {
 			can_retry = false;
-			if (i > 0) {
-				// we failed our first commit due to another transaction committing
-				// retry - but first check for conflicts
+			if (i > 0 || attempt_changes.HasRefChanges()) {
+				// a retry, or a commit of catalog-wide names, checks for conflicts first
 				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);
 				stats = &commit_stats_snapshot.stats;
 			} else {
@@ -2744,12 +2793,26 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				// the rollback of the failed attempt also undid what the transaction wrote before its commit
 				context.rewrite_before_retry();
 			}
+			// read after the latest snapshot, so a commit the expiry does not see takes the id of the new snapshot
+			auto expired_snapshots = context.get_expired_snapshots(i, commit_snapshot.snapshot_id - 1);
+			// a commit of options alone, or of an expiry with nothing left to expire, writes no snapshot
+			wrote_snapshot = context.write_snapshot && (!expired_snapshots.empty() || !context.only_expires_snapshots);
+			if (!wrote_snapshot && !context.locks_config_options) {
+				context.commit_connection();
+				break;
+			}
+			for (auto &snapshot : expired_snapshots) {
+				attempt_changes.expired_snapshots.insert(snapshot.id);
+			}
 			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
 			DuckLakeCommitState commit_state(commit_snapshot);
 			string batch_queries;
-			if (context.write_snapshot) {
+			if (wrote_snapshot) {
 				// write the new snapshot
 				batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
+				if (!expired_snapshots.empty()) {
+					batch_queries += DuckLakeMetadataManager::DeleteSnapshotsSql(expired_snapshots);
+				}
 				batch_queries +=
 				    CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
 				batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
@@ -2760,6 +2823,9 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				retryable_metadata_error = context.is_retryable_metadata_error(commit_error.RawMessage());
 				commit_error.Throw("Failed to flush changes into DuckLake: ");
 			}
+			if (!expired_snapshots.empty()) {
+				context.cleanup_expired_snapshots(expired_snapshots);
+			}
 			flushed_inlined = !flushed_inlined_tables.empty();
 			context.flush_cache_if_pending();
 			context.commit_connection();
@@ -2768,11 +2834,13 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
 			RollbackKeepingError(context);
-			retryable_metadata_error = retryable_metadata_error || context.is_retryable_metadata_error(error.Message());
+			retryable_metadata_error =
+			    retryable_metadata_error || context.is_retryable_metadata_error(error.RawMessage());
+			// an internal error is a bug that a retry cannot fix
 			// a retryable metadata error in the conflict check is retried, a conflict that it finds is not
 			bool retry_on_error =
-			    !context.skip_retry() &&
-			    (retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error.Message())));
+			    error.Type() != ExceptionType::INTERNAL && !context.skip_retry() &&
+			    (retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error.RawMessage())));
 			// We perform one initial attempt plus up to max_retry_count retries. Since i is the
 			// zero-based attempt index, we are done retrying once i reaches max_retry_count.
 			bool finished_retrying = i >= retry_config.max_retry_count;
@@ -2810,11 +2878,12 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			context.prepare_retry();
 		}
 	}
+	if (!wrote_snapshot) {
+		return;
+	}
 	// If we got here, this snapshot was successful
 	context.set_entry_oids(new_entry_oids);
-	if (context.write_snapshot) {
-		context.set_committed_snapshot_id(commit_snapshot.snapshot_id);
-	}
+	context.set_committed_snapshot_id(commit_snapshot.snapshot_id);
 	context.set_table_options(committed_table_options);
 	for (auto &entry : dropped_file_stats) {
 		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);

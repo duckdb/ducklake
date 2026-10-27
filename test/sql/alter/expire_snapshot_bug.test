@@ -97,9 +97,12 @@ FROM c;
 statement ok
 DROP TABLE c;
 
-# Expire the rename-to-c snapshot (the DROP created the latest snapshot which cannot be expired)
+# Expire the snapshots before the DROP, which created the latest snapshot that cannot be expired
 statement ok
-CALL ducklake_expire_snapshots('ducklake', versions => [getvariable('s_rename_c')]);
+SET VARIABLE v_before_drop = (SELECT list(snapshot_id ORDER BY snapshot_id)::BIGINT[] FROM ducklake_snapshots('ducklake') WHERE snapshot_id < (SELECT MAX(snapshot_id) FROM ducklake_snapshots('ducklake')));
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => getvariable('v_before_drop'));
 
 # all traces of the table are gone
 foreach tbl ducklake_table ducklake_column ducklake_table_stats ducklake_table_column_stats ducklake_data_file ducklake_delete_file

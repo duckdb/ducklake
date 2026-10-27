@@ -124,4 +124,15 @@ string SQLiteMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequiremen
 	                          select_list, SQLString(native_query));
 }
 
+//! Reads the rewrite snapshots through sqlite_query, so SQLite reads only the new snapshots by their key
+string SQLiteMetadataManager::GetRewriteSnapshotsQuery(idx_t first_snapshot, idx_t last_snapshot) const {
+	auto rewrite_query = DuckLakeMetadataManager::GetRewriteSnapshotsQuery(first_snapshot, last_snapshot);
+	SubstituteCatalogPlaceholders(rewrite_query, "main");
+	auto native_query =
+	    StringUtil::Format("SELECT CAST(snapshot_id AS TEXT) AS snapshot_id, changes_made FROM (%s)", rewrite_query);
+	return StringUtil::Format("SELECT snapshot_id::BIGINT AS snapshot_id, changes_made\n"
+	                          "FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, %s)\n",
+	                          SQLString(native_query));
+}
+
 } // namespace duckdb
