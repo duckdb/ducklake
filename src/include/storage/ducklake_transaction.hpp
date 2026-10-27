@@ -369,6 +369,12 @@ private:
 	void UndoConfigOptions();
 	//! The SQL that the commit runs for the options this transaction changed
 	string ConfigOptionLockSql() const;
+	//! The last change of the option before the change at the index
+	optional_idx EarlierConfigOptionChange(const DuckLakeConfigOption &option, idx_t change_index) const;
+	//! The rows an option is expected to have after a set, which an earlier change of the option decides
+	idx_t ConfigOptionRows(idx_t change_index, idx_t written_rows) const;
+	//! Whether other commits wrote rows of the options this transaction changed, which READ COMMITTED shows
+	bool ConfigOptionsWrittenByOthers();
 	//! Writes the options of the transaction again, after a failed commit attempt rolled them back
 	void RewriteConfigOptions();
 	static DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
@@ -403,6 +409,9 @@ private:
 	vector<DuckLakeSnapshotInfo> expired_snapshots;
 	//! Whether statements wrote to the metadata transaction, which a retried commit rolls back
 	bool metadata_written = false;
+	bool snapshots_expired = false;
+	//! Whether statements removed files after expiring snapshots, which a rollback restores without their files
+	bool removed_files_after_expiry = false;
 	DuckLakeSnapshot GetLatestSnapshot();
 	//! The latest snapshot in DuckLake when the transaction first looked, the snapshot of the transaction unless the
 	//! catalog is opened at a fixed snapshot
