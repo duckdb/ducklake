@@ -28,7 +28,7 @@ public:
 	const vector<Identifier> &GetNames() const;
 
 	//! Find a column by name, returns invalid index if not found
-	optional_idx FindColumn(const string &name) const;
+	optional_idx FindColumn(const Identifier &name) const;
 
 	//! Set filters to push down to the scan
 	void SetFilters(unique_ptr<TableFilterSet> filters);

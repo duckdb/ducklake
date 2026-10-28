@@ -16,7 +16,7 @@ struct DuckLakeAddedFields;
 
 struct DuckLakeColumnSchemaEntry {
 	FieldIndex field_index;
-	string column_name;
+	Identifier column_name;
 	LogicalType column_type;
 	//! False for nested struct, list, map and array leaves, only roots are merged from inlined data
 	//! It has no default initializer so the struct stays a C++11 aggregate, and every producer sets it
@@ -114,8 +114,8 @@ struct DuckLakeCommitContext {
 	};
 	//! Names of the inlined-data tables associated with a table id at the commit snapshot.
 	// LCOV_EXCL_START
-	std::function<vector<string>(TableIndex)> get_inlined_table_names = [](TableIndex) {
-		return vector<string> {};
+	std::function<vector<Identifier>(TableIndex)> get_inlined_table_names = [](TableIndex) {
+		return vector<Identifier> {};
 	};
 	//! Net (delete-adjusted) row count of a table's regular data files.
 	std::function<idx_t(TableIndex)> get_net_data_file_row_count = [](TableIndex) {
@@ -238,7 +238,7 @@ public:
 	//! inlined data cannot be accounted for exactly (e.g. a non-scalar column), in which case the caller must not
 	//! claim the recomputed stats are exact.
 	bool TryMergeInlinedStats(TableIndex table_id, const vector<DuckLakeColumnSchemaEntry> &columns,
-	                          const vector<string> &inlined_table_names, DuckLakeSnapshot snapshot,
+	                          const vector<Identifier> &inlined_table_names, DuckLakeSnapshot snapshot,
 	                          DuckLakeTableStats &target, const DuckLakeCommitContext &context);
 	vector<DuckLakeDeleteFileInfo>
 	GetNewDeleteFiles(const DuckLakeCommitState &commit_state,
@@ -256,7 +256,7 @@ public:
 	void EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const;
 
 	bool SchemaChangesMade() const;
-	bool InlinedTableFlushed(const string &table_name) const;
+	bool InlinedTableFlushed(const Identifier &table_name) const;
 
 public:
 	DatabaseInstance &db;

@@ -66,11 +66,11 @@ string SQLiteMetadataManager::GetColumnTypeInternal(const LogicalType &column_ty
 	}
 }
 
-void SQLiteMetadataManager::RenameInlinedColumns(const map<string, vector<pair<string, string>>> &renames) {
+void SQLiteMetadataManager::RenameInlinedColumns(const map<Identifier, vector<pair<Identifier, Identifier>>> &renames) {
 	// SQLite parses its whole schema for every renamed column, so the tables are copied with the new names instead
 	string query;
 	for (auto &table : renames) {
-		auto table_name = SQLIdentifier(table.first);
+		auto &table_name = table.first;
 		vector<string> renamed_columns;
 		for (auto &column : table.second) {
 			renamed_columns.push_back(StringUtil::Format("%s AS %s", column.first, column.second));

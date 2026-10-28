@@ -371,11 +371,12 @@ bool PostgresMetadataManager::IsRetryableCommitError(const string &message) cons
 	return false;
 }
 
-bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_name) {
+bool PostgresMetadataManager::InlinedDeletionTableExists(const Identifier &table_name) {
 	auto &catalog = transaction.GetCatalog();
-	auto remote_query = StringUtil::Format(
-	    "SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = %s AND tablename = %s LIMIT 1",
-	    SQLString::ToString(catalog.MetadataSchemaName().GetIdentifierName()), SQLString::ToString(table_name));
+	auto remote_query =
+	    StringUtil::Format("SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = %s AND tablename = %s LIMIT 1",
+	                       SQLString::ToString(catalog.MetadataSchemaName().GetIdentifierName()),
+	                       SQLString::ToString(table_name.GetIdentifierName()));
 	auto query =
 	    StringUtil::Format("SELECT 1 FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
 	                       SQLString::ToString(remote_query));
@@ -387,32 +388,31 @@ bool PostgresMetadataManager::InlinedDeletionTableExists(const string &table_nam
 void PostgresMetadataManager::MigrateInlinedDataTypes() {
 	auto columns = DuckLakeMetadataManager::Query(GetInlinedTableColumnsSql());
 	columns->ThrowIfError("Failed to read the columns of inlined-data tables while migrating: ");
-	map<string, case_insensitive_map_t<string>> inlined_tables;
+	map<Identifier, identifier_map_t<string>> inlined_tables;
 	for (auto &row : *columns) {
-		inlined_tables[row.GetValue<string>(0)][row.GetValue<string>(1)] = row.GetValue<string>(2);
+		inlined_tables[row.GetValue<Identifier>(0)][row.GetValue<Identifier>(1)] = row.GetValue<string>(2);
 	}
 	for (auto &inlined_table : inlined_tables) {
 		auto &table_name = inlined_table.first;
 		auto probe = DuckLakeMetadataManager::Query(
-		    StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", SQLIdentifier(table_name)));
+		    StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", table_name));
 		if (probe->HasError() || probe->GetNames().size() < 3) {
 			continue;
 		}
 		// the metadata columns are always the first three columns, user columns follow
 		auto &names = probe->GetNames();
 		DuckLakeInlinedColNames col_names(false);
-		col_names.row_id = names[0].GetIdentifierName();
-		col_names.begin_snapshot = names[1].GetIdentifierName();
-		col_names.end_snapshot = names[2].GetIdentifierName();
+		col_names.row_id = names[0];
+		col_names.begin_snapshot = names[1];
+		col_names.end_snapshot = names[2];
 		vector<string> select_list;
 		for (idx_t i = 0; i < 3; i++) {
-			select_list.push_back(SQLQuotedIdentifier::ToString(names[i].GetIdentifierName()));
+			select_list.push_back(SQLQuotedIdentifier::ToString(names[i]));
 		}
 		string column_defs;
 		bool rewrite = false;
 		for (idx_t i = 3; i < names.size(); i++) {
-			auto name = names[i].GetIdentifierName();
-			auto column_type = inlined_table.second.find(name);
+			auto column_type = inlined_table.second.find(names[i]);
 			if (column_type == inlined_table.second.end()) {
 				rewrite = false;
 				break;
@@ -431,7 +431,7 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 				auto storage_type = UnboundType::TryParseAndDefaultBind(storage_type_name);
 				convert = stored_type != storage_type && stored_type == native_type;
 			}
-			auto column_name = SQLQuotedIdentifier::ToString(name);
+			auto column_name = SQLQuotedIdentifier::ToString(names[i]);
 			column_defs += StringUtil::Format("%s%s %s", column_defs.empty() ? "" : ", ", column_name,
 			                                  convert ? storage_type_name : stored_type.ToString());
 			select_list.push_back(convert ? DuckLakeUtil::InlinedStorageExpression(*this, column_name, type)
@@ -441,17 +441,16 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 		if (!rewrite) {
 			continue;
 		}
-		auto migrated_name = table_name + "_migrated";
+		auto migrated_name = Identifier(table_name + "_migrated");
 		auto migrate_query = InlinedTableDdlSql(migrated_name, column_defs, col_names);
 		migrate_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s SELECT %s FROM {METADATA_CATALOG}.%s;",
-		                                    SQLIdentifier(migrated_name), StringUtil::Join(select_list, ", "),
-		                                    SQLIdentifier(table_name));
-		migrate_query += StringUtil::Format("DROP TABLE {METADATA_CATALOG}.%s;", SQLIdentifier(table_name));
-		migrate_query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME TO %s;",
-		                                    SQLIdentifier(migrated_name), SQLIdentifier(table_name));
+		                                    migrated_name, StringUtil::Join(select_list, ", "), table_name);
+		migrate_query += StringUtil::Format("DROP TABLE {METADATA_CATALOG}.%s;", table_name);
+		migrate_query +=
+		    StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME TO %s;", migrated_name, table_name);
 		auto result = DuckLakeMetadataManager::Execute(migrate_query);
 		result->ThrowIfError(
-		    StringUtil::Format("Failed to migrate the column types of inlined-data table \"%s\": ", table_name));
+		    StringUtil::Format("Failed to migrate the column types of inlined-data table %s: ", table_name));
 	}
 }
 
@@ -463,7 +462,7 @@ unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapsh
 		throw InvalidInputException("A DuckLake catalog on PostgreSQL cannot store text that contains a NUL byte, "
 		                            "such as a partition value, a name or a commit message");
 	}
-	auto catalog_literal = SQLString::ToString(ducklake_catalog.MetadataDatabaseName());
+	auto catalog_literal = SQLString::ToString(ducklake_catalog.MetadataDatabaseName().GetIdentifierName());
 	// casts of float bounds to text keep their exact value
 	query = "SET LOCAL extra_float_digits = 3;" + query;
 	auto result = transaction.GetConnection().Query(

@@ -147,7 +147,7 @@ SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const stri
 			break;
 		}
 		case ChangeType::CREATED_SCHEMA: {
-			auto schema_path = DuckLakeUtil::ParseQuotedList(entry.change_value, '.');
+			auto schema_path = StringsToIdentifiers(DuckLakeUtil::ParseQuotedList(entry.change_value, '.'));
 			result.created_schemas.insert(DuckLakeUtil::ToQuotedList(schema_path, '.'));
 			break;
 		}
