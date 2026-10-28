@@ -505,7 +505,8 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 	}
 	if (data_file_info.data_type == DuckLakeDataType::INLINED_DATA) {
 		// deletes from inlined data are not written to a file but pushed directly into the metadata manager
-		transaction.AddNewInlinedDeletes(table.GetTableId(), data_file_info.file.path, std::move(sorted_deletes));
+		transaction.AddNewInlinedDeletes(table.GetTableId(), Identifier(data_file_info.file.path),
+		                                 std::move(sorted_deletes));
 		return;
 	}
 	DuckLakeDeleteFile delete_file;

@@ -76,10 +76,11 @@ struct TransactionChangeInformation {
 struct SnapshotChangeInformation {
 	case_insensitive_set_t created_schemas;
 	set<SchemaIndex> dropped_schemas;
-	case_insensitive_map_t<case_insensitive_map_t<string>> created_tables;
-	case_insensitive_map_t<case_insensitive_map_t<string>> cloned_tables;
-	case_insensitive_map_t<case_insensitive_map_t<string>> created_scalar_macros;
-	case_insensitive_map_t<case_insensitive_map_t<string>> created_table_macros;
+	//! Keyed by the schema path, then by the name of the created entry, with its type
+	case_insensitive_map_t<identifier_map_t<string>> created_tables;
+	case_insensitive_map_t<identifier_map_t<string>> cloned_tables;
+	case_insensitive_map_t<identifier_map_t<string>> created_scalar_macros;
+	case_insensitive_map_t<identifier_map_t<string>> created_table_macros;
 	set<TableIndex> altered_tables;
 	set<TableIndex> altered_views;
 	set<TableIndex> dropped_tables;

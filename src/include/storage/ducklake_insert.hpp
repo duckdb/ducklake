@@ -47,7 +47,7 @@ public:
 	vector<DuckLakeDataFile> written_files;
 	vector<string> empty_files;
 	idx_t total_insert_count;
-	case_insensitive_set_t not_null_fields;
+	identifier_set_t not_null_fields;
 	//! Total rows flushed (used by flush_inlined_data)
 	idx_t rows_flushed = 0;
 };
@@ -137,7 +137,7 @@ public:
 	                                               const string &encryption_key);
 	static DuckLakeCopyOptions GetCopyOptions(ClientContext &context, DuckLakeCopyInput &copy_input);
 	//! The name under which a file stores an internal column, one that no column of the table has
-	static string InternalColumnName(const DuckLakeFieldData &field_data, const string &name);
+	static Identifier InternalColumnName(const DuckLakeFieldData &field_data, const Identifier &name);
 	static DuckLakeInsertPipeline PlanInsertPipeline(ClientContext &context, PhysicalPlanGenerator &planner,
 	                                                 PhysicalOperator &plan, SchemaCatalogEntry &schema,
 	                                                 const ColumnList &columns, const Identifier &table_name,

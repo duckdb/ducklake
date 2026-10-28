@@ -353,7 +353,7 @@ string DuckLakeStagedCommit::EmitInlinedDeletes(const LocalTableChanges &local_c
 		auto table_id = entry.first;
 		auto &table_changes = entry.second;
 		for (auto &deletes_entry : table_changes.new_inlined_data_deletes) {
-			auto inlined_table_name = SQLString(deletes_entry.first);
+			auto inlined_table_name = SQLString(deletes_entry.first.GetIdentifierName());
 			for (auto &row_id : deletes_entry.second->rows) {
 				staged_deletes.push_back(
 				    StringUtil::Format("(%llu, %s, %llu)", table_id.index, inlined_table_name, row_id));
@@ -471,8 +471,8 @@ string DuckLakeStagedCommit::EmitFlushedInlinedTables(const vector<FlushedInline
 		// LCOV_EXCL_START
 		sql += StringUtil::Format("INSERT INTO %s VALUES (%s, %llu, %llu);",
 		                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::FLUSHED_INLINED),
-		                          SQLString(entry.inlined_table.table_name), entry.inlined_table.schema_version,
-		                          entry.flush_snapshot_id);
+		                          SQLString(entry.inlined_table.table_name.GetIdentifierName()),
+		                          entry.inlined_table.schema_version, entry.flush_snapshot_id);
 		// LCOV_EXCL_STOP
 	}
 	return sql;

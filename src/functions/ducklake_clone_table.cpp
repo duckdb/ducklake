@@ -99,8 +99,7 @@ static void CloneTableExecute(ClientContext &context, TableFunctionInput &data_p
 
 	CatalogTransaction catalog_transaction(catalog, context);
 	auto schema = catalog.GetSchema(catalog_transaction, data.target_schema, OnEntryNotFound::THROW_EXCEPTION);
-	schema->Cast<DuckLakeSchemaEntry>().CloneTable(catalog_transaction, source, snapshot.snapshot_id,
-	                                               data.target_name.GetIdentifierName());
+	schema->Cast<DuckLakeSchemaEntry>().CloneTable(catalog_transaction, source, snapshot.snapshot_id, data.target_name);
 }
 
 DuckLakeCloneTableFunction::DuckLakeCloneTableFunction()

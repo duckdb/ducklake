@@ -5,9 +5,9 @@ namespace duckdb {
 
 //! Binding fails, so the error is raised however the macro uses the parameter
 static unique_ptr<FunctionData> UnreadableMacroDefaultBind(BindScalarFunctionInput &input) {
-	auto macro_name = input.GetNonNullConstant(0).GetValue<string>();
-	auto parameter_name = input.GetNonNullConstant(1).GetValue<string>();
-	throw BinderException("The default of parameter \"%s\" of macro \"%s\" was stored by DuckLake 1.0 in a form that "
+	auto macro_name = input.GetNonNullConstant(0).GetValue<Identifier>();
+	auto parameter_name = input.GetNonNullConstant(1).GetValue<Identifier>();
+	throw BinderException("The default of parameter %s of macro %s was stored by DuckLake 1.0 in a form that "
 	                      "cannot be read back, pass the parameter or create the macro again",
 	                      parameter_name, macro_name);
 }
