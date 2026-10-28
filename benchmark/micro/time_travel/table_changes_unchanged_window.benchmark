@@ -1,0 +1,21 @@
+# name: benchmark/micro/time_travel/table_changes_unchanged_window.benchmark
+# description: table_changes of a table with 4096 delete files over a snapshot that only changes other tables
+# group: [time_travel]
+
+name Table Changes Unchanged Window
+group micro
+subgroup time_travel
+
+require ducklake
+
+require parquet
+
+argument work table_changes_unchanged_window_work
+
+include benchmark/micro/fixtures/delete_files.benchmark.in
+
+run
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+
+result I
+0
