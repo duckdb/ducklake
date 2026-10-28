@@ -29,6 +29,13 @@ SELECT sum(length(query)) < 65536 FROM duckdb_logs_parsed('DuckLakeMetadata')
 ----
 true
 
+# the inlined rows are inserted by one logged statement that describes them without their values
+query I
+SELECT query LIKE 'INSERT INTO %ducklake_inlined_data_% SELECT col9, %, NULL, col1, % FROM inlined_data /* 10000 rows */'
+FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%FROM inlined_data%'
+----
+true
+
 statement ok
 CALL disable_logging()
 

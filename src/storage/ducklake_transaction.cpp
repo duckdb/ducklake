@@ -1549,7 +1549,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 				break;
 			}
 			// Table creation must finish before binding the inlined INSERT.
-			result = connection->Query(std::move(insert));
+			result = ExecuteStatement(std::move(insert));
 		}
 		inlined_inserts.clear();
 		return result;
@@ -1784,18 +1784,30 @@ unique_ptr<QueryResult> DuckLakeTransaction::ExecuteRaw(string query) {
 	auto &connection = GetConnection();
 	auto start = std::chrono::steady_clock::now();
 	auto result = connection.Query(query);
-	auto end = std::chrono::steady_clock::now();
-	auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count();
+	ReportMetadataQuery(query, std::chrono::steady_clock::now() - start);
+	return std::move(result);
+}
+
+unique_ptr<QueryResult> DuckLakeTransaction::ExecuteStatement(unique_ptr<SQLStatement> statement) {
+	auto &connection = GetConnection();
+	auto query = statement->query;
+	auto start = std::chrono::steady_clock::now();
+	auto result = connection.Query(std::move(statement));
+	ReportMetadataQuery(query, std::chrono::steady_clock::now() - start);
+	return std::move(result);
+}
+
+void DuckLakeTransaction::ReportMetadataQuery(const string &query, std::chrono::steady_clock::duration elapsed) {
+	auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count();
 
 	DUCKDB_LOG(db, DuckLakeMetadataLogType, ducklake_catalog.GetName().GetIdentifierName(), query, elapsed_ms);
 
 	auto &cb = ducklake_catalog.GetQueryCallback();
 	if (cb) {
 		// LCOV_EXCL_START
-		cb(query, end - start);
+		cb(query, elapsed);
 		// LCOV_EXCL_STOP
 	}
-	return std::move(result);
 }
 
 Identifier DuckLakeTransaction::GetDefaultSchemaName() {

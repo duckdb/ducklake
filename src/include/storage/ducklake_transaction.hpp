@@ -22,6 +22,8 @@
 #include "storage/ducklake_inlined_data.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 
+#include <chrono>
+
 namespace duckdb {
 struct NewMacroInfo;
 class DuckLakeCatalog;
@@ -205,6 +207,8 @@ public:
 	DuckLakeSnapshotCommit &GetCommitInfo();
 	//! Execute SQL on the metadata connection without placeholder substitution or metadata-manager wrapping.
 	unique_ptr<QueryResult> ExecuteRaw(string query);
+	//! Execute a statement on the metadata connection, logged with its query text like ExecuteRaw.
+	unique_ptr<QueryResult> ExecuteStatement(unique_ptr<SQLStatement> statement);
 	Connection &GetConnection();
 	//! Releases the metadata transaction until the next metadata access
 	void ReleaseMetadataTransaction();
@@ -362,6 +366,7 @@ public:
 private:
 	void FlushChanges();
 	void BeginMetadataTransaction();
+	void ReportMetadataQuery(const string &query, std::chrono::steady_clock::duration elapsed);
 	void FlushNameMapCacheInvalidations();
 	//! Puts back the config options this transaction replaced in the catalog
 	void UndoConfigOptions();
