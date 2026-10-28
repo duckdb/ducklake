@@ -462,9 +462,8 @@ unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapsh
 	auto catalog_literal = SQLString::ToString(ducklake_catalog.MetadataDatabaseName());
 	// casts of float bounds to text keep their exact value
 	query = "SET LOCAL extra_float_digits = 3;" + query;
-	auto result = transaction.GetConnection().Query(
+	return transaction.ExecuteRaw(
 	    StringUtil::Format("CALL postgres_execute(%s, %s, prepare=FALSE)", catalog_literal, SQLString(query)));
-	return std::move(result);
 }
 
 unique_ptr<QueryResult> PostgresMetadataManager::ExecuteDropInTransaction(string &query) {

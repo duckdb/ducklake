@@ -63,7 +63,8 @@
         "test/sql/tags/postgres_tags_read_committed.test",
         "test/sql/general/postgres_nul_byte_text.test",
         "test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test",
-        "test/sql/transaction/postgres_failed_rollback_releases_transaction.test"
+        "test/sql/transaction/postgres_failed_rollback_releases_transaction.test",
+        "test/sql/metadata/postgres_commit_batch_log.test"
       ]
     },
     {
