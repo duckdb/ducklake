@@ -72,9 +72,9 @@ SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_expire_snapshots_files/*')
 ----
 0
 
-# let's delete all remaining snapshots (except for the last one)
+# let's delete all remaining snapshots (except for the last one), with the snapshot of the earlier expiry
 query I
-SELECT snapshot_id FROM ducklake_expire_snapshots('ducklake', older_than => NOW()) ORDER BY ALL
+SELECT snapshot_id FROM ducklake_expire_snapshots('ducklake', older_than => NOW()) WHERE snapshot_id <= 3 ORDER BY ALL
 ----
 0
 1

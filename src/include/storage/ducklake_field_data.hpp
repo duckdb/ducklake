@@ -39,8 +39,8 @@ struct DuckLakeColumnData {
 
 class DuckLakeFieldId {
 public:
-	DuckLakeFieldId(DuckLakeColumnData column_data, string name, LogicalType type);
-	DuckLakeFieldId(DuckLakeColumnData column_data, string name, LogicalType type,
+	DuckLakeFieldId(DuckLakeColumnData column_data, Identifier name, LogicalType type);
+	DuckLakeFieldId(DuckLakeColumnData column_data, Identifier name, LogicalType type,
 	                vector<unique_ptr<DuckLakeFieldId>> children);
 
 	FieldIndex GetFieldIndex() const {
@@ -49,7 +49,7 @@ public:
 	const DuckLakeColumnData &GetColumnData() const {
 		return column_data;
 	}
-	const string &Name() const {
+	const Identifier &Name() const {
 		return name;
 	}
 	const LogicalType &Type() const {
@@ -62,7 +62,7 @@ public:
 		return children;
 	}
 	const DuckLakeFieldId &GetChildByIndex(idx_t index) const;
-	optional_ptr<const DuckLakeFieldId> GetChildByName(const string &name) const;
+	optional_ptr<const DuckLakeFieldId> GetChildByName(const Identifier &name) const;
 	unique_ptr<DuckLakeFieldId> Copy() const;
 	unique_ptr<ParsedExpression> GetDefault() const;
 	//! The value of this field in rows written before it existed
@@ -70,24 +70,24 @@ public:
 
 	static unique_ptr<DuckLakeFieldId> FieldIdFromColumn(const ColumnDefinition &col, idx_t &column_id,
 	                                                     bool add_column = false);
-	static unique_ptr<DuckLakeFieldId> FieldIdFromType(const string &name, const LogicalType &type,
+	static unique_ptr<DuckLakeFieldId> FieldIdFromType(const Identifier &name, const LogicalType &type,
 	                                                   optional_ptr<const ParsedExpression> default_expr,
 	                                                   idx_t &column_id, bool add_column);
-	static unique_ptr<DuckLakeFieldId> Rename(const DuckLakeFieldId &field_id, const string &new_name);
+	static unique_ptr<DuckLakeFieldId> Rename(const DuckLakeFieldId &field_id, const Identifier &new_name);
 	static unique_ptr<DuckLakeFieldId> SetDefault(const DuckLakeFieldId &field_id,
 	                                              optional_ptr<const ParsedExpression> default_expr);
 	unique_ptr<DuckLakeFieldId> AddField(const vector<Identifier> &column_path, unique_ptr<DuckLakeFieldId> new_child,
 	                                     idx_t depth = 1) const;
 	unique_ptr<DuckLakeFieldId> RemoveField(const vector<Identifier> &column_path, idx_t depth = 1) const;
-	unique_ptr<DuckLakeFieldId> RenameField(const vector<Identifier> &column_path, const string &new_name,
+	unique_ptr<DuckLakeFieldId> RenameField(const vector<Identifier> &column_path, const Identifier &new_name,
 	                                        idx_t depth = 1) const;
 
 private:
 	DuckLakeColumnData column_data;
-	string name;
+	Identifier name;
 	LogicalType type;
 	vector<unique_ptr<DuckLakeFieldId>> children;
-	case_insensitive_map_t<idx_t> child_map;
+	identifier_map_t<idx_t> child_map;
 	optional_ptr<DuckLakeFieldId> parent;
 };
 
@@ -120,7 +120,7 @@ public:
 	static shared_ptr<DuckLakeFieldData> FromColumns(const ColumnList &columns);
 	static shared_ptr<DuckLakeFieldData> FromColumns(const ColumnList &columns, idx_t &column_id);
 	static shared_ptr<DuckLakeFieldData> RenameColumn(const DuckLakeFieldData &field_data, FieldIndex rename_index,
-	                                                  const string &new_name);
+	                                                  const Identifier &new_name);
 	static shared_ptr<DuckLakeFieldData> DropColumn(const DuckLakeFieldData &field_data, FieldIndex drop_index);
 	static shared_ptr<DuckLakeFieldData> AddColumn(const DuckLakeFieldData &field_data, const ColumnDefinition &new_col,
 	                                               idx_t &next_column_id);

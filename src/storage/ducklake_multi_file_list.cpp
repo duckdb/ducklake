@@ -40,7 +40,7 @@ DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
 
 static DuckLakeFileListEntry InlinedDataEntry(const DuckLakeInlinedTableInfo &inlined_table) {
 	DuckLakeFileListEntry file_entry;
-	file_entry.file.path = inlined_table.table_name;
+	file_entry.file.path = inlined_table.table_name.GetIdentifierName();
 	file_entry.row_id_start = 0;
 	file_entry.data_type = DuckLakeDataType::INLINED_DATA;
 	return file_entry;
@@ -70,7 +70,7 @@ optional_ptr<const DuckLakeFieldId> DuckLakeMultiFileList::ResolveFilterField(co
 			return nullptr;
 			// LCOV_EXCL_STOP
 		}
-		field_id = field_id->GetChildByName(entry.child_name.GetIdentifierName());
+		field_id = field_id->GetChildByName(entry.child_name);
 		if (!field_id) {
 			// LCOV_EXCL_START
 			return nullptr;
@@ -676,7 +676,7 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction, read_info.snapshot);
 	for (auto &table : inlined_data_tables) {
 		DuckLakeFileListExtendedEntry file_entry;
-		file_entry.file.path = table.table_name;
+		file_entry.file.path = table.table_name.GetIdentifierName();
 		file_entry.row_count = 0;
 		file_entry.row_id_start = 0;
 		file_entry.data_type = DuckLakeDataType::INLINED_DATA;
@@ -726,8 +726,7 @@ void DuckLakeMultiFileList::SetScanColumns(const vector<MultiFileColumnDefinitio
 }
 
 vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
-    DuckLakeTransaction &transaction,
-    unordered_map<string, shared_ptr<DuckLakeCommittedInlinedRows>> &inlined_rows) const {
+    DuckLakeTransaction &transaction, identifier_map_t<shared_ptr<DuckLakeCommittedInlinedRows>> &inlined_rows) const {
 	static constexpr idx_t MAX_ATTEMPTS = 10;
 	auto &metadata_manager = transaction.GetMetadataManager();
 	if (!metadata_manager.CommitsEachStatement() || inlined_data_tables.empty()) {
@@ -771,9 +770,9 @@ vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
 			return result;
 		}
 	}
-	throw TransactionException("Transaction conflict - the inlined data of table \"%s\" kept moving to files while "
+	throw TransactionException("Transaction conflict - the inlined data of table %s kept moving to files while "
 	                           "it was read",
-	                           read_info.table.name.GetIdentifierName());
+	                           read_info.table.name);
 }
 
 void DuckLakeMultiFileList::GetFilesForTable() const {
@@ -781,7 +780,7 @@ void DuckLakeMultiFileList::GetFilesForTable() const {
 	auto &transaction = *transaction_ref;
 	inlined_data_tables =
 	    read_info.table.GetInlinedDataTables(transaction, read_info.snapshot, read_info.include_local_changes);
-	unordered_map<string, shared_ptr<DuckLakeCommittedInlinedRows>> inlined_rows;
+	identifier_map_t<shared_ptr<DuckLakeCommittedInlinedRows>> inlined_rows;
 	if (!IsTransactionLocal(read_info.table_id)) {
 		files = ReadCommittedFiles(transaction, inlined_rows);
 	}

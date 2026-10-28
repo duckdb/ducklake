@@ -45,6 +45,7 @@
       "reason": "Test only for Postgres as catalog",
       "paths": [
         "test/sql/metadata/ducklake_settings_postgres.test",
+        "test/sql/metadata/postgres_long_metadata_schema.test",
         "test/sql/retry/postgres_rollback_connection_loss.test",
         "test/sql/metadata/metadata_schema_scoped_attach.test",
         "test/sql/migration/postgres_concurrent_migration.test",
@@ -59,6 +60,9 @@
         "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test",
         "test/sql/compaction/compaction_idle_metadata_transaction.test",
         "test/sql/compaction/postgres_expire_snapshots_time_zone.test",
+        "test/sql/tags/postgres_tags_read_committed.test",
+        "test/sql/general/postgres_nul_byte_text.test",
+        "test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test"
       ]
     },
@@ -151,6 +155,12 @@
       "reason": "FIXME: Each metadata query runs in its own server-side transaction on quack, so a reader that began before a rewrite reads the narrowed bounds from ducklake_table_column_stats.",
       "paths": [
         "test/sql/compaction/rewrite_narrow_older_transaction.test"
+      ]
+    },
+    {
+      "reason": "FIXME: Each metadata query runs in its own server-side transaction on quack, so an expiry in a transaction that began before a concurrent tag commit already sees the tag.",
+      "paths": [
+        "test/sql/tags/tags_expire_conflict.test"
       ]
     },
     {

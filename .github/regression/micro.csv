@@ -36,11 +36,13 @@ benchmark/micro/write/sorted_ctas.benchmark
 benchmark/micro/write/big_lake_insert_commits.benchmark
 benchmark/micro/write/big_lake_ddl_commits.benchmark
 benchmark/micro/write/big_lake_create_tables.benchmark
+benchmark/micro/write/ddl_commits_inlined.benchmark
 benchmark/ingest/add_files_small_files.benchmark
 benchmark/micro/ingest/add_files_not_null.benchmark
 benchmark/tpch/q09.benchmark
 benchmark/micro/read/added_column_pruning.benchmark
 benchmark/micro/read/tz_pruning_many_files.benchmark
+benchmark/micro/read/postgres_types_pruning_many_files.benchmark
 benchmark/micro/time_travel/at_version_cte_copy.benchmark
 benchmark/micro/read/scan_shared_deletes.benchmark
 benchmark/micro/write/insert_not_null_struct.benchmark
@@ -49,6 +51,7 @@ benchmark/micro/write/alter_float_to_double.benchmark
 benchmark/micro/time_travel/at_version_local_changes.benchmark
 benchmark/micro/time_travel/table_changes_flushed.benchmark
 benchmark/micro/time_travel/table_changes_inlined_deletes.benchmark
+benchmark/micro/time_travel/table_changes_poll_after_commit.benchmark
 benchmark/micro/maintenance/flush_inlined_superseded.benchmark
 benchmark/micro/write/delete_commits_rewrite.benchmark
 benchmark/micro/write/delete_commits_rewrite_retry.benchmark
@@ -77,5 +80,7 @@ benchmark/micro/read/snapshots_listing_changes.benchmark
 benchmark/micro/read/catalog_load_schema_history.benchmark
 benchmark/micro/maintenance/migrate_v10_inlined_tables.benchmark
 benchmark/micro/write/add_column_many_files.benchmark
+benchmark/micro/time_travel/table_changes_unchanged_window.benchmark
+benchmark/micro/read/multi_column_pruning_many_files.benchmark
 benchmark/micro/read/variant_field_reads.benchmark
 benchmark/micro/read/struct_field_reads.benchmark

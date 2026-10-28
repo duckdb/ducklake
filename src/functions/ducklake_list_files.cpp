@@ -66,8 +66,13 @@ static unique_ptr<FunctionData> DuckLakeListFilesBind(ClientContext &context, Ta
 	// generate the AT clause for the given list of parameters
 	unique_ptr<BoundAtClause> at_clause;
 	Value snapshot_version;
-	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "snapshot_version", "integer", snapshot_version)) {
-		at_clause = make_uniq<BoundAtClause>(DuckLakeTableFunctionUtil::AtClauseFromValue(snapshot_version));
+	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "snapshot_version", "snapshot id or tag name",
+	                                                   snapshot_version)) {
+		if (snapshot_version.type().id() == LogicalTypeId::TIMESTAMP_TZ) {
+			throw BinderException("The snapshot_version option must be a snapshot id or a tag name, snapshot_time "
+			                      "takes a timestamp");
+		}
+		at_clause = make_uniq<BoundAtClause>(DuckLakeTableFunctionUtil::VersionAtClauseFromValue(snapshot_version));
 	}
 	Value snapshot_time;
 	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "snapshot_time", "timestamp", snapshot_time)) {
@@ -107,7 +112,7 @@ DuckLakeListFilesFunction::DuckLakeListFilesFunction()
 	    .AddPositionalOnly("table_name", LogicalType::VARCHAR)
 	    .WithTypedKwargs("options", [&](TypedKwargs &options) {
 		    options.Add("schema", LogicalType::VARCHAR)
-		        .Add("snapshot_version", LogicalType::BIGINT)
+		        .Add("snapshot_version", LogicalType::ANY)
 		        .Add("snapshot_time", LogicalType::TIMESTAMP_TZ);
 	    });
 }

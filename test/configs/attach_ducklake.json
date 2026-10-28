@@ -850,12 +850,6 @@
       ]
     },
     {
-      "reason": "FIXME: txid_current() raises an INTERNAL error when a DuckLake catalog is the default database (pdet/ducklake_internal#85)",
-      "paths": [
-        "test/sql/index/art/create_index_session_dependent.test"
-      ]
-    },
-    {
       "reason": "FIXME: fails on DuckDB itself, timestamps in the lowest hours of the int64 range cannot be converted to strings for statistics (pdet/ducklake_internal#202)",
       "paths": [
         "test/sql/optimizer/monotone_preimage_tz.test"

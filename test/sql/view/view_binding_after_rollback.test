@@ -1,0 +1,104 @@
+# name: test/sql/view/view_binding_after_rollback.test
+# description: A view bound in a transaction that changed the schema keeps that binding to the transaction
+# group: [view]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/view_binding_after_rollback.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/view_binding_after_rollback')
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT 1::INTEGER AS i
+
+statement ok
+CREATE VIEW ducklake.v AS SELECT * FROM ducklake.t
+
+statement ok
+CREATE VIEW ducklake.unparsable AS SELECT 42 AS x
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_view SET sql = 'SELECT FROM WHERE' WHERE view_name = 'unparsable'
+
+# a fresh attach leaves the view unbound
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/view_binding_after_rollback')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+ALTER TABLE ducklake.t ADD COLUMN j VARCHAR
+
+# a query of the view binds it too
+query II con1
+SELECT * FROM ducklake.v
+----
+1	NULL
+
+query TT con2
+SELECT column_name, data_type FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'v' ORDER BY column_index
+----
+i	INTEGER
+
+query TT con1
+SELECT column_name, data_type FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'v' ORDER BY column_index
+----
+i	INTEGER
+j	VARCHAR
+
+# another transaction sees the committed binding while con1 is open
+query TT con2
+SELECT column_name, data_type FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'v' ORDER BY column_index
+----
+i	INTEGER
+
+# a later schema change in the same transaction binds the view again
+statement ok con1
+ALTER TABLE ducklake.t ADD COLUMN k BIGINT
+
+query TT con1
+SELECT column_name, data_type FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'v' ORDER BY column_index
+----
+i	INTEGER
+j	VARCHAR
+k	BIGINT
+
+# an identical CREATE OR REPLACE VIEW keeps the view and binds it too
+statement ok con1
+CREATE OR REPLACE VIEW ducklake.v AS SELECT * FROM ducklake.t
+
+query TT con2
+SELECT column_name, data_type FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'v' ORDER BY column_index
+----
+i	INTEGER
+
+# a view that does not parse is still listed and dropped, it is only parsed when it is used
+query I con1
+SELECT count(*) FROM duckdb_views() WHERE database_name = 'ducklake' AND view_name = 'unparsable'
+----
+1
+
+statement ok con1
+DROP VIEW ducklake.unparsable
+
+statement ok con1
+ROLLBACK
+
+query TT con2
+SELECT column_name, data_type FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'v' ORDER BY column_index
+----
+i	INTEGER
+
+query I con2
+SELECT * FROM ducklake.v
+----
+1

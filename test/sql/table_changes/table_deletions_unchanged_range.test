@@ -1,0 +1,158 @@
+# name: test/sql/table_changes/table_deletions_unchanged_range.test
+# description: ducklake_table_deletions opens only the delete files that can hold a delete of the snapshot range
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/table_deletions_unchanged_range', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+CREATE TABLE dl.u (i INTEGER)
+
+statement ok
+SET VARIABLE first = (SELECT max(snapshot_id) + 1 FROM dl.snapshots())
+
+# three data files, each followed by a delete of one of its rows
+statement ok
+INSERT INTO dl.t SELECT range FROM range(0, 10)
+
+statement ok
+DELETE FROM dl.t WHERE i = 0
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range(10, 20)
+
+statement ok
+DELETE FROM dl.t WHERE i = 10
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range(20, 30)
+
+statement ok
+DELETE FROM dl.t WHERE i = 20
+
+# a second delete in the first data file
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+statement ok
+SET VARIABLE last_delete = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+# a snapshot that only changes another table
+statement ok
+INSERT INTO dl.u VALUES (1)
+
+statement ok
+SET VARIABLE other = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+CALL enable_logging('FileSystem', storage => 'memory')
+
+query I
+SELECT count(*) FROM ducklake_table_deletions('dl', 'main', 't', getvariable('other'), getvariable('other'))
+----
+0
+
+query I
+SELECT count(*) FROM ducklake_table_changes('dl', 'main', 't', getvariable('other'), getvariable('other'))
+----
+0
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE message LIKE '%.parquet%' OR message LIKE '%.puffin%'
+----
+0
+
+query I
+SELECT list(i ORDER BY i) FROM ducklake_table_deletions('dl', 'main', 't', getvariable('last_delete'), getvariable('other'))
+----
+[1]
+
+query I
+SELECT list(i ORDER BY i) FROM ducklake_table_deletions('dl', 'main', 't', getvariable('first'), getvariable('other'))
+----
+[0, 1, 10, 20]
+
+# a flush writes the inlined deletes of several snapshots into one delete file
+statement ok
+CREATE TABLE dl.v (i INTEGER)
+
+statement ok
+INSERT INTO dl.v SELECT range FROM range(0, 50)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10, table_name => 'v')
+
+statement ok
+DELETE FROM dl.v WHERE i = 0
+
+statement ok
+DELETE FROM dl.v WHERE i = 1
+
+statement ok
+SET VARIABLE second_inlined_delete = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'v')
+
+query I
+SELECT list(i ORDER BY i) FROM ducklake_table_deletions('dl', 'main', 'v', getvariable('second_inlined_delete'), getvariable('second_inlined_delete'))
+----
+[1]
+
+query I
+SELECT list(i ORDER BY i) FROM ducklake_table_deletions('dl', 'main', 'v', getvariable('second_inlined_delete') + 1, getvariable('second_inlined_delete') + 1)
+----
+NULL
+
+# a later inlined delete of a data file that has an older delete file
+statement ok
+DELETE FROM dl.v WHERE i = 2
+
+statement ok
+SET VARIABLE third_delete = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+query I
+SELECT list(i ORDER BY i) FROM ducklake_table_deletions('dl', 'main', 'v', getvariable('third_delete'), getvariable('third_delete'))
+----
+[2]
+
+# a flush of inlined rows writes the deletes of several snapshots into one delete file
+statement ok
+CREATE TABLE dl.w (i INTEGER)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 100, table_name => 'w')
+
+statement ok
+INSERT INTO dl.w SELECT range FROM range(0, 10)
+
+statement ok
+DELETE FROM dl.w WHERE i = 0
+
+statement ok
+DELETE FROM dl.w WHERE i = 1
+
+statement ok
+SET VARIABLE w_second_delete = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'w')
+
+query I
+SELECT list(i ORDER BY i) FROM ducklake_table_deletions('dl', 'main', 'w', getvariable('w_second_delete'), getvariable('w_second_delete'))
+----
+[1]

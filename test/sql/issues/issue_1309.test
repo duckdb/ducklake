@@ -61,11 +61,12 @@ onlyif threadid=1
 statement ok
 SELECT sleep_ms(3000)
 
+# without inlining the lock is first hit by the appender of the data file rows
 onlyif threadid=0
 statement error
 COMMIT
 ----
-<REGEX>:.*Exceeded the maximum retry count of 0 set by the ducklake_max_retry_count setting\.\nConsider increasing the value with: e\.g\., "SET ducklake_max_retry_count = 10;"\nFailed to flush changes into DuckLake: database is locked.*
+<REGEX>:.*Exceeded the maximum retry count of 0 set by the ducklake_max_retry_count setting\.\nConsider increasing the value with: e\.g\., "SET ducklake_max_retry_count = 10;"\n(Failed to flush changes into DuckLake|Failed to append): database is locked.*
 
 onlyif threadid=1
 statement ok

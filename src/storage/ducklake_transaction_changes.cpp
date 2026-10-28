@@ -25,7 +25,10 @@ enum class ChangeType {
 	CREATED_SCALAR_MACRO,
 	CREATED_TABLE_MACRO,
 	DROPPED_SCALAR_MACRO,
-	DROPPED_TABLE_MACRO
+	DROPPED_TABLE_MACRO,
+	CREATED_SNAPSHOT_TAG,
+	DROPPED_SNAPSHOT_TAG,
+	EXPIRED_SNAPSHOT
 };
 
 constexpr StringUtil::EnumStringLiteral CHANGE_TYPE_NAMES[] = {
@@ -49,7 +52,10 @@ constexpr StringUtil::EnumStringLiteral CHANGE_TYPE_NAMES[] = {
     {static_cast<uint32_t>(ChangeType::INSERTED_INTO_TABLE_INLINED), "inlined_insert"},
     {static_cast<uint32_t>(ChangeType::DELETED_FROM_TABLE_INLINED), "inlined_delete"},
     {static_cast<uint32_t>(ChangeType::FLUSHED_INLINE_DATA_FOR_TABLE), "flushed_inlined"},
-    {static_cast<uint32_t>(ChangeType::FLUSHED_INLINE_DATA_FOR_TABLE), "inline_flush"}};
+    {static_cast<uint32_t>(ChangeType::FLUSHED_INLINE_DATA_FOR_TABLE), "inline_flush"},
+    {static_cast<uint32_t>(ChangeType::CREATED_SNAPSHOT_TAG), "created_tag"},
+    {static_cast<uint32_t>(ChangeType::DROPPED_SNAPSHOT_TAG), "dropped_tag"},
+    {static_cast<uint32_t>(ChangeType::EXPIRED_SNAPSHOT), "expired_snapshot"}};
 
 struct ParsedChange {
 	ChangeType change_type;
@@ -147,7 +153,7 @@ SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const stri
 			break;
 		}
 		case ChangeType::CREATED_SCHEMA: {
-			auto schema_path = DuckLakeUtil::ParseQuotedList(entry.change_value, '.');
+			auto schema_path = StringsToIdentifiers(DuckLakeUtil::ParseQuotedList(entry.change_value, '.'));
 			result.created_schemas.insert(DuckLakeUtil::ToQuotedList(schema_path, '.'));
 			break;
 		}
@@ -195,6 +201,19 @@ SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const stri
 			break;
 		case ChangeType::FLUSHED_INLINE_DATA_FOR_TABLE:
 			result.tables_flushed_inlined.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
+			break;
+		case ChangeType::CREATED_SNAPSHOT_TAG: {
+			idx_t pos = 0;
+			result.created_snapshot_tags.insert(DuckLakeUtil::ParseQuotedValue(entry.change_value, pos));
+			break;
+		}
+		case ChangeType::DROPPED_SNAPSHOT_TAG: {
+			idx_t pos = 0;
+			result.dropped_snapshot_tags.insert(DuckLakeUtil::ParseQuotedValue(entry.change_value, pos));
+			break;
+		}
+		case ChangeType::EXPIRED_SNAPSHOT:
+			result.expired_snapshots.insert(StringUtil::ToUnsigned(entry.change_value));
 			break;
 		default:
 			throw InternalException("Unsupported change type in ParseChangesMade");

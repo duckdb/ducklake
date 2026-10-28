@@ -1,0 +1,79 @@
+# name: test/sql/default/explicit_default_null.test
+# description: an explicit DEFAULT NULL column reports no default and still inserts NULL
+# group: [default]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/explicit_default_null.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/explicit_default_null')
+
+statement ok
+CREATE TABLE dl.t (a INTEGER, b INTEGER DEFAULT NULL, c INTEGER DEFAULT 7, d VARCHAR DEFAULT 'NULL')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/explicit_default_null')
+
+query III
+SELECT column_name, column_default, column_default IS NULL FROM duckdb_columns()
+WHERE database_name = 'dl' AND table_name = 't' ORDER BY column_index
+----
+a	NULL	true
+b	NULL	true
+c	7	false
+d	'NULL'	false
+
+statement ok
+INSERT INTO dl.t (a) VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2, DEFAULT, DEFAULT, DEFAULT)
+
+statement ok
+UPDATE dl.t SET b = DEFAULT WHERE a = 1
+
+query IIII
+SELECT a, b, c, d FROM dl.t ORDER BY a
+----
+1	NULL	7	NULL
+2	NULL	7	NULL
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN e INTEGER DEFAULT NULL
+
+statement ok
+ALTER TABLE dl.t ALTER COLUMN c DROP DEFAULT
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/explicit_default_null')
+
+query III
+SELECT column_name, column_default, column_default IS NULL FROM duckdb_columns()
+WHERE database_name = 'dl' AND table_name = 't' ORDER BY column_index
+----
+a	NULL	true
+b	NULL	true
+c	NULL	true
+d	'NULL'	false
+e	NULL	true
+
+statement ok
+INSERT INTO dl.t (a) VALUES (3)
+
+query IIIII
+SELECT a, b, c, d, e FROM dl.t ORDER BY a
+----
+1	NULL	7	NULL	NULL
+2	NULL	7	NULL	NULL
+3	NULL	NULL	NULL	NULL

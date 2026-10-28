@@ -1,0 +1,96 @@
+# name: test/sql/quack/expire_deferred_recompute.test
+# description: a deferred expiry recomputes its candidates when the transaction commits, so a tag committed meanwhile keeps its snapshot
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
+
+require quack
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/expire_deferred_recompute')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+# the expiry of snapshot 2 is applied when the transaction commits
+statement ok con1
+BEGIN
+
+query I con1
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [2])
+----
+2
+
+statement ok con2
+CALL ducklake_create_tag('dl', 'keep', version => 2)
+
+statement ok con1
+COMMIT
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = 2
+----
+1
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl')
+----
+keep	2
+
+# without the tag the deferred expiry applies
+statement ok
+CALL ducklake_drop_tag('dl', 'keep')
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [2])
+----
+2
+
+statement ok con1
+COMMIT
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = 2
+----
+0
+
+# an expiry that selects nothing at its statement still applies when the tag is gone at the commit
+statement ok
+CALL ducklake_create_tag('dl', 'held', version => 3)
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [3])
+----
+0
+
+statement ok con2
+CALL ducklake_drop_tag('dl', 'held')
+
+statement ok con1
+COMMIT
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = 3
+----
+0
+
+statement ok
+DROP TABLE dl.t

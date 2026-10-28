@@ -36,3 +36,26 @@ query I
 SELECT count(*) FROM dl.t
 ----
 1
+
+# a VARIANT column casts to a date, but not every value does
+statement ok
+CREATE TABLE dl.v(c VARIANT, k INTEGER)
+
+statement error
+ALTER TABLE dl.v SET PARTITIONED BY (epoch_day(c))
+----
+Cannot partition by epoch_day(c) - the transform does not support columns of type VARIANT
+
+statement error
+CREATE TABLE dl.v2(c VARIANT, k INTEGER) PARTITIONED BY (epoch_year(c))
+----
+Cannot partition by epoch_year(c) - the transform does not support columns of type VARIANT
+
+statement ok
+CREATE TABLE dl.d(dt DATE, ts TIMESTAMP_S, k INTEGER) PARTITIONED BY (epoch_month(dt), epoch_hour(ts))
+
+statement ok
+INSERT INTO dl.d VALUES (DATE '2024-01-15', TIMESTAMP_S '2024-01-15 12:00:00', 1)
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')

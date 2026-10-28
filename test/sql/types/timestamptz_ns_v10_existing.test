@@ -1,0 +1,87 @@
+# name: test/sql/types/timestamptz_ns_v10_existing.test
+# description: A catalog kept at 1.0 that already has a TIMESTAMPTZ_NS column still attaches
+# group: [types]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET TimeZone = 'UTC'
+
+# an inlined data table would keep the type that the UPDATE below changes
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake
+    (DATA_PATH '{DATA_PATH}/tz_ns_v10_existing', DUCKLAKE_VERSION '1.0', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.plain (i INTEGER)
+
+statement ok
+INSERT INTO lake.plain VALUES (7)
+
+statement ok
+CREATE TABLE lake.t (i INTEGER, ts TIMESTAMPTZ)
+
+# the column a client without the check created
+statement ok
+UPDATE __ducklake_metadata_lake.ducklake_column SET column_type = 'timestamptz_ns' WHERE column_name = 'ts'
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/tz_ns_v10_existing')
+
+query I
+SELECT i FROM lake.plain
+----
+7
+
+statement ok
+INSERT INTO lake.t VALUES (1, '2024-01-02 03:04:05.123456789+00')
+
+query ITT
+SELECT i, ts, typeof(ts) FROM lake.t
+----
+1	2024-01-02 03:04:05.123456789+00	TIMESTAMPTZ_NS
+
+statement ok
+ALTER TABLE lake.t ADD COLUMN j INTEGER
+
+statement error
+ALTER TABLE lake.t ADD COLUMN ts2 TIMESTAMPTZ_NS
+----
+DuckLake 1.0 does not support the TIMESTAMPTZ_NS type
+
+query T
+SELECT value FROM __ducklake_metadata_lake.ducklake_metadata WHERE key = 'version'
+----
+1.0
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/tz_ns_v10_existing', READ_ONLY)
+
+query I
+SELECT i FROM lake.plain
+----
+7
+
+query IT
+SELECT i, ts FROM lake.t
+----
+1	2024-01-02 03:04:05.123456789+00
+
+query T
+SELECT column_type FROM __ducklake_metadata_lake.ducklake_column WHERE column_name = 'ts' AND end_snapshot IS NULL
+----
+timestamptz_ns

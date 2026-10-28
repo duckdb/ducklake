@@ -121,7 +121,7 @@ SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, 
 	auto files_created = gstate.written_files.size();
 
 	chunk.data[0].Append(Value(table.schema.GetSchemaName()));
-	chunk.data[1].Append(Value(table.name.GetIdentifierName()));
+	chunk.data[1].Append(Value(table.name));
 	chunk.data[2].Append(Value::BIGINT(static_cast<int64_t>(source_files.size())));
 	chunk.data[3].Append(Value::BIGINT(static_cast<int64_t>(files_created)));
 	chunk.SetChildCardinality(1);
@@ -262,7 +262,8 @@ static bool FieldsPreservedInLatest(const vector<unique_ptr<DuckLakeFieldId>> &o
 		if (!latest_field) {
 			return false;
 		}
-		if (older_field->Name() != latest_field->Name()) {
+		// a rename that only changes the case is still a rename, which `Identifier` equality would not see
+		if (older_field->Name().GetIdentifierName() != latest_field->Name().GetIdentifierName()) {
 			return false;
 		}
 		if (older_field->Type() != latest_field->Type()) {
@@ -716,17 +717,18 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 			data_path =
 			    DuckLakePartitionUtils::BuildHivePartitionPath(*partition_table, partition_values, catalog.Separator());
 		} else {
+			// no schema version has the spec, as when it was set and reset in one transaction
 			auto &file_path = source_files[0].file.data.path;
 			auto &table_path = table.DataPath();
-			if (!StringUtil::StartsWith(file_path, table_path)) {
-				throw InternalException("DuckLakeCompactor: failed to resolve partition path");
+			if (StringUtil::StartsWith(file_path, table_path)) {
+				// keep the directory of the source files, which is the table directory without hive_file_pattern
+				auto relative_path = file_path.substr(table_path.size());
+				auto separator_pos = relative_path.rfind(catalog.Separator());
+				if (separator_pos != string::npos) {
+					data_path = relative_path.substr(0, separator_pos + catalog.Separator().size());
+				}
 			}
-			auto relative_path = file_path.substr(table_path.size());
-			auto separator_pos = relative_path.rfind(catalog.Separator());
-			if (separator_pos == string::npos) {
-				throw InternalException("DuckLakeCompactor: failed to resolve partition path");
-			}
-			data_path = relative_path.substr(0, separator_pos + catalog.Separator().size());
+			// files outside the table directory, as added files can be, are written to the table directory
 		}
 	}
 
@@ -770,7 +772,6 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	} else {
 		auto &fs = FileSystem::GetFileSystem(context);
 		copy->file_path = copy->filename_pattern.CreateFilename(fs, copy->file_path, "parquet", 0);
-		copy->batch_size = DEFAULT_ROW_GROUP_SIZE;
 		copy->file_size_bytes = optional_idx();
 		copy->rotate = false;
 		copy->preserve_order = PreserveOrderType::PRESERVE_ORDER;
@@ -848,7 +849,7 @@ static double GetDeleteThreshold(DuckLakeTableEntry &table_entry, const DuckLake
 		// If the user manually sets the parameter, this has priority
 		delete_threshold = DoubleValue::Get(delete_threshold_value);
 	}
-	if (delete_threshold > 1 || delete_threshold < 0) {
+	if (!(delete_threshold >= 0 && delete_threshold <= 1)) {
 		throw BinderException("The delete_threshold option must be between 0 and 1");
 	}
 	return delete_threshold;
@@ -901,8 +902,8 @@ static unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableF
 		throw BinderException("The min_file_size must be less than max_file_size.");
 	}
 
-	DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "newer_than", "timestamp", merge_options.newer_than);
-	DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "older_than", "timestamp", merge_options.older_than);
+	DuckLakeTableFunctionUtil::TryGetTimestampOption(input, "newer_than", merge_options.newer_than);
+	DuckLakeTableFunctionUtil::TryGetTimestampOption(input, "older_than", merge_options.older_than);
 	if (!merge_options.newer_than.IsNull() && !merge_options.older_than.IsNull() &&
 	    merge_options.newer_than >= merge_options.older_than) {
 		throw BinderException("The newer_than option must be less than older_than.");

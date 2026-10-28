@@ -13,13 +13,21 @@
 
 namespace duckdb {
 
-string DuckLakeTableFunctionUtil::FormatTimestampOlderThan(const string &interval_str) {
+//! the maintenance filters only take finite timestamps from the year 1 on
+static bool IsFilterTimestamp(const timestamp_t timestamp) {
+	return Value::IsFinite(timestamp) && Date::ExtractYear(Timestamp::GetDate(timestamp)) >= 1;
+}
+
+string DuckLakeTableFunctionUtil::FormatTimestampOlderThan(const string &option, const string &interval_str) {
 	interval_t interval;
 	if (!Interval::FromString(interval_str, interval)) {
 		throw InvalidInputException("Failed to parse interval: '%s'", interval_str);
 	}
 	auto current_time = Timestamp::GetCurrentTimestamp();
 	auto target_timestamp = SubtractOperator::Operation<timestamp_t, interval_t, timestamp_t>(current_time, interval);
+	if (!IsFilterTimestamp(target_timestamp)) {
+		throw InvalidInputException("The %s option '%s' reaches back before the year 1", option, interval_str);
+	}
 	return FormatTimestampISO8601(target_timestamp);
 }
 
@@ -33,6 +41,18 @@ bool DuckLakeTableFunctionUtil::TryGetNonNullOption(const TableFunctionBindInput
 		throw BinderException("The %s option must be a non-null %s.", name, type_name);
 	}
 	result = entry->second;
+	return true;
+}
+
+bool DuckLakeTableFunctionUtil::TryGetTimestampOption(const TableFunctionBindInput &input, const string &name,
+                                                      Value &result) {
+	if (!TryGetNonNullOption(input, name, "timestamp", result)) {
+		return false;
+	}
+	if (!IsFilterTimestamp(timestamp_t(result.GetValue<timestamp_tz_t>().value))) {
+		throw InvalidInputException("The %s option must be a finite timestamp in the year 1 or later, not '%s'", name,
+		                            result.ToString());
+	}
 	return true;
 }
 
@@ -51,17 +71,34 @@ string DuckLakeTableFunctionUtil::GetTableName(const Value &input) {
 	return input.GetValue<string>();
 }
 
-BoundAtClause DuckLakeTableFunctionUtil::AtClauseFromValue(const Value &input) {
+void DuckLakeTableFunctionUtil::VerifySnapshotIdentifier(const Value &input) {
 	if (input.IsNull()) {
 		throw BinderException("Snapshot identifier cannot be NULL");
 	}
+}
+
+BoundAtClause DuckLakeTableFunctionUtil::AtClauseFromValue(const Value &input) {
+	if (input.type().id() == LogicalTypeId::TIMESTAMP_TZ && !input.IsNull()) {
+		return BoundAtClause("timestamp", input);
+	}
+	// rejects a NULL of any type
+	return VersionAtClauseFromValue(input);
+}
+
+BoundAtClause DuckLakeTableFunctionUtil::VersionAtClauseFromValue(const Value &input) {
+	VerifySnapshotIdentifier(input);
 	switch (input.type().id()) {
 	case LogicalTypeId::BIGINT:
+	case LogicalTypeId::VARCHAR:
 		return BoundAtClause("version", input);
-	case LogicalTypeId::TIMESTAMP_TZ:
-		return BoundAtClause("timestamp", input);
-	default:
-		throw InternalException("Unsupported type for At Clause");
+	default: {
+		auto snapshot_id = input.DefaultTryCastAs(LogicalType::BIGINT);
+		if (!snapshot_id) {
+			throw BinderException("A snapshot is identified by a snapshot id, a tag name or a timestamp, not by a %s",
+			                      input.type().ToString());
+		}
+		return BoundAtClause("version", *snapshot_id);
+	}
 	}
 }
 

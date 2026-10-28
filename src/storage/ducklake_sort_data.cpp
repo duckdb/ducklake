@@ -29,7 +29,7 @@ static void MapToInlinedColumns(unique_ptr<ParsedExpression> &expr, const DuckLa
 	auto &field_id = current_table.GetFieldId(column.Physical());
 	auto inlined_field_id = inlined_table.GetFieldId(field_id.GetFieldIndex());
 	if (inlined_field_id) {
-		expr = make_uniq<ColumnRefExpression>(Identifier(inlined_field_id->Name()), Identifier("inlined_data"));
+		expr = make_uniq<ColumnRefExpression>(inlined_field_id->Name(), Identifier("inlined_data"));
 	} else {
 		// the inlined rows were written before this column existed
 		expr = field_id.GetInitialDefault();

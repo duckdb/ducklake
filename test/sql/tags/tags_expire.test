@@ -1,0 +1,122 @@
+# name: test/sql/tags/tags_expire.test
+# description: tagged snapshots are not expired
+# group: [tags]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_expire_files', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+CALL ducklake_create_tag('dl', 'v3', version => 3)
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+# the tagged snapshot is skipped, by id and by age
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [3], dry_run => true)
+----
+0
+
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', older_than => TIMESTAMPTZ '2100-01-01 00:00:00+00', dry_run => true) ORDER BY snapshot_id
+----
+0
+1
+2
+4
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [1, 2, 3])
+
+query I
+SELECT snapshot_id FROM ducklake_snapshots('dl') ORDER BY snapshot_id
+----
+0
+3
+4
+5
+6
+
+# the expiry commits a snapshot of its own
+query I
+SELECT changes FROM ducklake_snapshots('dl') WHERE snapshot_id = 6
+----
+{snapshots_expired=[1, 2]}
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+query I
+SELECT i FROM dl.t AT (VERSION => 3) ORDER BY i
+----
+1
+2
+
+query I
+SELECT i FROM dl.t AT (VERSION => 'v3') ORDER BY i
+----
+1
+2
+
+# after dropping the tag the snapshot expires like any other
+statement ok
+CALL ducklake_drop_tag('dl', 'v3')
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [3])
+
+query I
+SELECT snapshot_id FROM ducklake_snapshots('dl') ORDER BY snapshot_id
+----
+0
+4
+5
+6
+7
+8
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+statement error
+SELECT i FROM dl.t AT (VERSION => 3)
+----
+No snapshot found at version 3
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+3
+
+# the ended tag row is removed once no snapshot of its lifetime is left
+query I
+SELECT COUNT(*) FROM meta.ducklake_snapshot_tag
+----
+1
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [4, 5, 6])
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_snapshot_tag
+----
+0
