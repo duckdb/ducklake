@@ -47,9 +47,9 @@ string DuckLakeUtil::ParseQuotedValue(const string &input, idx_t &pos) {
 	return result;
 }
 
-string DuckLakeUtil::ToQuotedList(const vector<string> &input, char list_separator) {
+string DuckLakeUtil::ToQuotedList(const vector<Identifier> &input, char list_separator) {
 	return StringUtil::Join(input, input.size(), string(1, list_separator),
-	                        [](const string &value) { return SQLQuotedIdentifier::ToString(value); });
+	                        [](const Identifier &value) { return SQLQuotedIdentifier::ToString(value); });
 }
 
 vector<string> DuckLakeUtil::ParseQuotedList(const string &input, char list_separator) {
@@ -76,7 +76,7 @@ string ParsedCatalogEntry::SchemaKey() const {
 }
 
 ParsedCatalogEntry DuckLakeUtil::ParseCatalogEntry(const string &input) {
-	auto parts = ParseQuotedList(input, '.');
+	auto parts = StringsToIdentifiers(ParseQuotedList(input, '.'));
 	if (parts.size() < 2) {
 		throw InvalidInputException("Failed to parse catalog entry - expected a schema and a name");
 	}
@@ -316,28 +316,27 @@ optional_ptr<const Expression> DuckLakeUtil::GetFilterSubject(const Expression &
 	return conflict ? nullptr : subject;
 }
 
-bool DuckLakeUtil::IsInlinedSystemColumn(const string &name, bool prefixed_inlined_columns) {
+bool DuckLakeUtil::IsInlinedSystemColumn(const Identifier &name, bool prefixed_inlined_columns) {
 	if (prefixed_inlined_columns) {
-		return StringUtil::CIStartsWith(name, DuckLakeInlinedColNames::PREFIX);
+		return name.StartsWith(DuckLakeInlinedColNames::PREFIX);
 	}
 	return DuckLakeInlinedColNames(false).ConflictsWith(name);
 }
 
-static void ThrowReservedInlinedColumn(const string &name, bool prefixed_inlined_columns) {
+static void ThrowReservedInlinedColumn(const Identifier &name, bool prefixed_inlined_columns) {
 	if (prefixed_inlined_columns) {
-		throw BinderException("Column name \"%s\" is reserved by DuckLake for internal use: column names starting "
+		throw BinderException("Column name %s is reserved by DuckLake for internal use: column names starting "
 		                      "with \"%s\" are not allowed.",
 		                      name, DuckLakeInlinedColNames::PREFIX);
 	}
-	throw BinderException(
-	    "Column name \"%s\" is reserved by DuckLake for internal use when data inlining is enabled. If "
-	    "you must use this column name, disable inlining by calling "
-	    "ducklake_set_option('data_inlining_row_limit', 0).",
-	    name);
+	throw BinderException("Column name %s is reserved by DuckLake for internal use when data inlining is enabled. If "
+	                      "you must use this column name, disable inlining by calling "
+	                      "ducklake_set_option('data_inlining_row_limit', 0).",
+	                      name);
 }
 
 void DuckLakeUtil::ValidateInlinedSystemColumn(DuckLakeCatalog &catalog, ClientContext &context, SchemaIndex schema_id,
-                                               TableIndex table_id, const string &name,
+                                               TableIndex table_id, const Identifier &name,
                                                optional_ptr<const map<string, string>> table_options) {
 	bool prefixed_inlined_columns = catalog.SupportsV1_1Metadata();
 	if (!prefixed_inlined_columns && catalog.DataInliningRowLimit(context, schema_id, table_id, table_options) == 0) {
@@ -357,22 +356,22 @@ void DuckLakeUtil::ValidateNoInlinedSystemColumns(DuckLakeCatalog &catalog, Clie
 		return;
 	}
 	for (auto &col : columns.Logical()) {
-		if (IsInlinedSystemColumn(col.Name().GetIdentifierName(), prefixed_inlined_columns)) {
-			ThrowReservedInlinedColumn(col.Name().GetIdentifierName(), prefixed_inlined_columns);
+		if (IsInlinedSystemColumn(col.Name(), prefixed_inlined_columns)) {
+			ThrowReservedInlinedColumn(col.Name(), prefixed_inlined_columns);
 		}
 	}
 }
 
 void DuckLakeUtil::ValidateCanEnableInlining(const ColumnList &columns, bool prefixed_inlined_columns,
-                                             const string &table_name) {
+                                             const Identifier &table_name) {
 	DuckLakeInlinedColNames col_names(prefixed_inlined_columns);
 	for (auto &col : columns.Logical()) {
-		if (col_names.ConflictsWith(col.Name().GetIdentifierName())) {
+		if (col_names.ConflictsWith(col.Name())) {
 			throw BinderException(
-			    "Cannot enable data inlining for table \"%s\". Column \"%s\" conflicts with a reserved DuckLake "
+			    "Cannot enable data inlining for table %s. Column %s conflicts with a reserved DuckLake "
 			    "internal column name used for inlining. To enable inlining for this table, rename or drop column "
-			    "\"%s\".",
-			    table_name, col.Name().GetIdentifierName(), col.Name().GetIdentifierName());
+			    "%s.",
+			    table_name, col.Name(), col.Name());
 		}
 	}
 }

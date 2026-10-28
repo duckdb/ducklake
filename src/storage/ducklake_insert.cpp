@@ -251,8 +251,9 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 			}
 			if (column_stats.null_count > 0 && column_names.size() == 1) {
 				// we wrote NULL values to a base column - verify NOT NULL constraint
-				if (global_state.not_null_fields.count(column_names[0])) {
-					table.ThrowNotNullViolation(column_names[0]);
+				Identifier column_name(column_names[0]);
+				if (global_state.not_null_fields.count(column_name)) {
+					table.ThrowNotNullViolation(column_name);
 				}
 			}
 
@@ -391,8 +392,8 @@ static bool WriteSnapshotId(InsertVirtualColumns virtual_columns) {
 	return virtual_columns == InsertVirtualColumns::WRITE_ROW_ID_AND_SNAPSHOT_ID;
 }
 
-string DuckLakeInsert::InternalColumnName(const DuckLakeFieldData &field_data, const string &name) {
-	vector<string> names;
+Identifier DuckLakeInsert::InternalColumnName(const DuckLakeFieldData &field_data, const Identifier &name) {
+	vector<Identifier> names;
 	for (auto &field_id : field_data.GetFieldIds()) {
 		names.push_back(field_id->Name());
 	}
@@ -585,7 +586,7 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	// Bind Copy Function
 	CopyFunctionBindInput bind_input(*info);
 
-	auto names_to_write = copy_input.columns.GetColumnNames();
+	auto names_to_write = StringsToIdentifiers(copy_input.columns.GetColumnNames());
 	auto types_to_write = copy_input.columns.GetColumnTypes();
 	if (WriteRowId(copy_input.virtual_columns)) {
 		names_to_write.push_back(InternalColumnName(*copy_input.field_data, "_ducklake_internal_row_id"));
@@ -596,8 +597,7 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 		types_to_write.push_back(LogicalType::BIGINT);
 	}
 
-	auto function_data =
-	    copy_fun.function.copy_to_bind(context, bind_input, StringsToIdentifiers(names_to_write), types_to_write);
+	auto function_data = copy_fun.function.copy_to_bind(context, bind_input, names_to_write, types_to_write);
 
 	DuckLakeCopyOptions result;
 	result.copy =
@@ -637,7 +637,7 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	copy.return_type = CopyFunctionReturnType::WRITTEN_FILE_STATISTICS;
 	copy.hive_file_pattern =
 	    catalog.UseHiveFilePattern(copy_input.encryption_key.empty(), schema_id, table_id, &copy_input.table_options);
-	copy.names = StringsToIdentifiers(names_to_write);
+	copy.names = names_to_write;
 	copy.expected_types = types_to_write;
 
 	if (copy_input.partition_data) {
@@ -844,7 +844,7 @@ PhysicalOperator &DuckLakeVerifyNotNull::Plan(PhysicalPlanGenerator &planner, Du
 	auto not_null_fields = table.GetNotNullFields();
 	vector<pair<idx_t, Identifier>> columns;
 	for (auto &col : table.GetColumns().Physical()) {
-		if (!FileStatsShowNulls(col.Type()) && not_null_fields.count(col.Name().GetIdentifierName())) {
+		if (!FileStatsShowNulls(col.Type()) && not_null_fields.count(col.Name())) {
 			columns.emplace_back(col.Physical().index, col.Name());
 		}
 	}
@@ -911,9 +911,8 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 		    DuckLakeTableEntry::BuildPartitionData(duck_transaction, columns, *field_data, create_info.partition_keys);
 	}
 	auto sort_data = DuckLakeTableEntry::BuildSortData(duck_transaction, columns, create_info.sort_keys);
-	auto table_options =
-	    DuckLakeTableEntry::ParseTableOptions(context, *this, create_info.options, columns, *field_data,
-	                                          partition_data.get(), create_info.GetTableName().GetIdentifierName());
+	auto table_options = DuckLakeTableEntry::ParseTableOptions(
+	    context, *this, create_info.options, columns, *field_data, partition_data.get(), create_info.GetTableName());
 
 	// No table id yet, so the WITH options stand in for the table scope
 	auto pipeline = DuckLakeInsert::PlanInsertPipeline(

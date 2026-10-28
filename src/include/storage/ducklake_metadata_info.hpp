@@ -72,14 +72,14 @@ struct DuckLakeSchemaInfo {
 	SchemaIndex id;
 	SchemaIndex parent_id;
 	string uuid;
-	string name;
+	Identifier name;
 	string path;
 	vector<DuckLakeTag> tags;
 };
 
 struct DuckLakeColumnInfo {
 	FieldIndex id;
-	string name;
+	Identifier name;
 	string type;
 	Value initial_default;
 	Value default_value;
@@ -90,7 +90,7 @@ struct DuckLakeColumnInfo {
 };
 
 struct DuckLakeInlinedTableInfo {
-	string table_name;
+	Identifier table_name;
 	idx_t schema_version;
 };
 
@@ -108,7 +108,7 @@ struct DuckLakeTableInfo {
 	TableIndex id;
 	SchemaIndex schema_id;
 	string uuid;
-	string name;
+	Identifier name;
 	string path;
 	vector<DuckLakeColumnInfo> columns;
 	vector<DuckLakeTag> tags;
@@ -117,7 +117,7 @@ struct DuckLakeTableInfo {
 
 //! Stores the information on macro parameters
 struct DuckLakeMacroParameters {
-	string parameter_name;
+	Identifier parameter_name;
 	string parameter_type;
 	Value default_value;
 	string default_value_type;
@@ -135,7 +135,7 @@ struct DuckLakeMacroImplementation {
 struct DuckLakeMacroInfo {
 	SchemaIndex schema_id;
 	MacroIndex macro_id;
-	string macro_name;
+	Identifier macro_name;
 	vector<DuckLakeMacroImplementation> implementations;
 };
 
@@ -192,7 +192,7 @@ struct DuckLakeInlinedDataInfo {
 
 struct DuckLakeDeletedInlinedDataInfo {
 	TableIndex table_id;
-	string table_name;
+	Identifier table_name;
 	vector<idx_t> deleted_row_ids;
 };
 
@@ -328,7 +328,7 @@ struct DuckLakeSnapshotTagInfo {
 };
 
 struct DuckLakeViewColumnTag {
-	string column_name;
+	Identifier column_name;
 	string key;
 	Value value;
 };
@@ -337,9 +337,9 @@ struct DuckLakeViewInfo {
 	TableIndex id;
 	SchemaIndex schema_id;
 	string uuid;
-	string name;
+	Identifier name;
 	string dialect;
-	vector<string> column_aliases;
+	vector<Identifier> column_aliases;
 	string sql;
 	vector<DuckLakeTag> tags;
 	vector<DuckLakeViewColumnTag> column_tags;
@@ -347,7 +347,7 @@ struct DuckLakeViewInfo {
 
 struct DuckLakeViewColumnTagInfo {
 	TableIndex view_id;
-	string column_name;
+	Identifier column_name;
 	string key;
 	Value value;
 };

@@ -327,7 +327,7 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			auto transaction = read_info.GetTransaction();
 			auto inlined_deletes =
 			    read_info.include_local_changes
-			        ? transaction->GetInlinedDeletes(read_info.table.GetTableId(), file_entry.file.path)
+			        ? transaction->GetInlinedDeletes(read_info.table.GetTableId(), Identifier(file_entry.file.path))
 			        : nullptr;
 			// the flush source query already excludes these rows
 			if (inlined_deletes && read_info.scan_type != DuckLakeScanType::SCAN_FOR_FLUSH) {
@@ -484,7 +484,7 @@ shared_ptr<BaseFileReader> DuckLakeMultiFileReader::TryCreateInlinedDataReader(c
 		return nullptr;
 		// LCOV_EXCL_STOP
 	}
-	return make_shared_ptr<DuckLakeInlinedDataReader>(read_info, file, std::move(inlined_table_name),
+	return make_shared_ptr<DuckLakeInlinedDataReader>(read_info, file, Identifier(std::move(inlined_table_name)),
 	                                                  std::move(columns));
 }
 
