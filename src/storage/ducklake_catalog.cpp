@@ -535,9 +535,7 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(const DuckLakeColumnInfo 
 	if (col.children.empty()) {
 		auto col_type = DuckLakeTypes::FromString(col.type);
 		col_data.initial_default = col.initial_default.DefaultCastAs(col_type);
-		if (col.default_value.IsNull()) {
-			col_data.default_value = ConstantExpression::Null();
-		} else {
+		if (!col.default_value.IsNull()) {
 			if (col.default_value_type == "literal") {
 				col_data.default_value = DuckLakeUtil::LiteralDefaultExpression(col.default_value, col_type);
 			} else if (col.default_value_type == "expression") {
