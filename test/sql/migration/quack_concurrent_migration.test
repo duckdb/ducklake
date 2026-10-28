@@ -46,7 +46,7 @@ query I
 SELECT value FROM __ducklake_metadata_check${round}.concurrent_migration_${round}.ducklake_metadata
 WHERE key = 'version' AND scope IS NULL
 ----
-2.0-dev1
+1.1
 
 query I
 SELECT a FROM check${round}.t
