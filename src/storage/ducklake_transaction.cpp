@@ -1859,7 +1859,10 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 	// this is used as a caching key for the snapshot, as a timestamp resolves to another snapshot per bound
 	child_list_t<Value> values;
 	values.push_back(make_pair(Identifier(at_clause->Unit()), at_clause->GetValue()));
-	values.push_back(make_pair(Identifier("bound"), Value::UTINYINT(static_cast<uint8_t>(bound))));
+	if (at_clause->Unit() != "version") {
+		// a version is the same snapshot for both bounds
+		values.push_back(make_pair(Identifier("bound"), Value::UTINYINT(static_cast<uint8_t>(bound))));
+	}
 	auto snapshot_value = Value::STRUCT(std::move(values));
 
 	lock_guard<mutex> guard(snapshot_lock);
