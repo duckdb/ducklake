@@ -309,11 +309,9 @@ COMMIT
 ----
 release
 
-# and writes the row of the tag again without one
-query I
-SELECT MAX(snapshot_id) FROM ducklake_snapshots('dl')
-----
-23
+# and writes the row of the tag again without one, in one snapshot after those that retired failed writes
+statement ok
+SET VARIABLE before_replace = (SELECT MAX(snapshot_id) FROM ducklake_snapshots('dl'))
 
 statement ok con1
 BEGIN
@@ -325,6 +323,6 @@ statement ok con1
 COMMIT
 
 query II
-SELECT snapshot_id, changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+SELECT snapshot_id - getvariable('before_replace'), changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
 ----
-24	{tags_created=[release], tags_dropped=[release]}
+1	{tags_created=[release], tags_dropped=[release]}
