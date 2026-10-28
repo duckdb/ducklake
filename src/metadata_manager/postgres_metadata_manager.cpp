@@ -506,6 +506,11 @@ string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnaps
 	return PostgresQuery(remote_query);
 }
 
+bool PostgresMetadataManager::MaterializeStatsCTEs() const {
+	// Postgres misplans several inlined stats joins and rescans the stats for every surviving file
+	return true;
+}
+
 string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                                                       const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,

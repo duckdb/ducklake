@@ -720,6 +720,23 @@ static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, Phy
 	TableIndex table_index(0);
 	auto orders = DuckLakeCompactor::BindSortOrders(*binder, schema, columns, table_name, table_index,
 	                                                DuckLakeCompactor::ParseSortOrders(sort_data));
+	// the sort keys are bound after the statement, which can neither register their writes nor rebind for them
+	auto &properties = binder->GetStatementProperties();
+	auto &catalog_name = schema.ParentCatalog().GetName();
+	auto verify_database = [&](const Identifier &database) {
+		if (!(database == catalog_name)) {
+			throw BinderException("The sort keys of table %s use database %s, which is not supported when inserting. "
+			                      "Use ALTER TABLE ... RESET SORTED BY to remove them",
+			                      SQLIdentifier(table_name.GetIdentifierName()),
+			                      SQLIdentifier(database.GetIdentifierName()));
+		}
+	};
+	for (auto &entry : properties.modified_databases) {
+		verify_database(entry.first);
+	}
+	for (auto &entry : properties.read_databases) {
+		verify_database(entry.first);
+	}
 	if (orders.empty()) {
 		return nullptr;
 	}

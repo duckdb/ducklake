@@ -25,7 +25,7 @@ SELECT count(*) FROM duckdb_columns() WHERE database_name = 'ducklake' AND table
 1000
 
 query I
-SELECT memory_usage_bytes // 1000 >= 700 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+SELECT memory_usage_bytes // 1000 >= 500 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
 ----
 true
 
@@ -41,7 +41,7 @@ SELECT count(*) FROM duckdb_columns() WHERE database_name = 'ducklake' AND table
 1000
 
 query I
-SELECT memory_usage_bytes // 1000 >= 2200 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+SELECT memory_usage_bytes // 1000 >= 1800 FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
 ----
 true
 

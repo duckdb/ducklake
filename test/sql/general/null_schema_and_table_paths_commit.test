@@ -1,0 +1,106 @@
+# name: test/sql/general/null_schema_and_table_paths_commit.test
+# description: commits and snapshot expiry in a schema and table without a stored path
+# group: [general]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+(DATA_PATH '{DATA_PATH}/null_schema_and_table_paths_commit', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT 1 AS i
+
+statement ok
+CREATE SCHEMA ducklake.s1
+
+statement ok
+CREATE TABLE ducklake.s1.u (i INTEGER)
+
+statement ok
+CREATE SCHEMA ducklake.s2
+
+statement ok
+CREATE TABLE ducklake.s2.v (i INTEGER)
+
+# main has no stored path, s1 keeps its relative path and s2 gets an absolute one
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_schema SET path = NULL, path_is_relative = NULL
+WHERE schema_name = 'main'
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_schema
+SET path = '{DATA_PATH}/null_schema_and_table_paths_commit_abs/', path_is_relative = false
+WHERE schema_name = 's2'
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table SET path = NULL, path_is_relative = NULL
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_data_file SET path = 'main/t/' || path WHERE path_is_relative
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+(DATA_PATH '{DATA_PATH}/null_schema_and_table_paths_commit', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+INSERT INTO ducklake.t VALUES (2)
+
+statement ok
+CREATE TABLE ducklake.t2 AS SELECT 42 AS j
+
+statement ok
+INSERT INTO ducklake.s1.u VALUES (3)
+
+statement ok
+INSERT INTO ducklake.s2.v VALUES (4)
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+(DATA_PATH '{DATA_PATH}/null_schema_and_table_paths_commit', DATA_INLINING_ROW_LIMIT 0)
+
+query IIII
+SELECT (SELECT sum(i) FROM ducklake.t), (SELECT sum(j) FROM ducklake.t2), (SELECT sum(i) FROM ducklake.s1.u),
+       (SELECT sum(i) FROM ducklake.s2.v)
+----
+3	42	3	4
+
+query I
+SELECT count(*) FROM (
+  SELECT data_file, '/null_schema_and_table_paths_commit/t2/' AS dir FROM ducklake_list_files('ducklake', 't2')
+  UNION ALL
+  SELECT data_file, '/null_schema_and_table_paths_commit/s1/' FROM ducklake_list_files('ducklake', 'u', schema => 's1')
+  UNION ALL
+  SELECT data_file, '/null_schema_and_table_paths_commit_abs/' FROM ducklake_list_files('ducklake', 'v', schema => 's2')
+) WHERE starts_with(data_file.replace('\', '/'), '{DATA_PATH}'.replace('\', '/') || dir)
+----
+3
+
+statement ok
+DROP TABLE ducklake.t
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('ducklake', cleanup_all => true)
+----
+2
+
+query II
+SELECT (SELECT count(*) FROM glob('{DATA_PATH}/null_schema_and_table_paths_commit/main/t/*.parquet')),
+       (SELECT count(*) FROM glob('{DATA_PATH}/null_schema_and_table_paths_commit/*.parquet'))
+----
+0	0
