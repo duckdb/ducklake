@@ -64,7 +64,8 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_re
 # one statement batch renames the columns, also on the Postgres server, and SQLite rebuilds the tables instead
 query I
 SELECT CASE WHEN (SELECT type FROM duckdb_databases() WHERE database_name = 'dlmeta') = 'sqlite'
-	THEN count(*) = 0 ELSE count(*) <= 1 END
+	THEN count(*) = 0
+	ELSE count(*) FILTER (WHERE type = 'DuckLakeMetadata') <= 1 AND count(*) FILTER (WHERE type = 'PostgresQueryLog') <= 1 END
 FROM duckdb_logs WHERE type IN ('DuckLakeMetadata', 'PostgresQueryLog') AND contains(message, 'RENAME COLUMN')
 ----
 true
