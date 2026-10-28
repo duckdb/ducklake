@@ -82,4 +82,5 @@ benchmark/micro/maintenance/migrate_v10_inlined_tables.benchmark
 benchmark/micro/write/add_column_many_files.benchmark
 benchmark/micro/maintenance/cleanup_old_files.benchmark
 benchmark/micro/write/insert_commits_retired_paths.benchmark
+benchmark/micro/time_travel/table_changes_unchanged_window.benchmark
 benchmark/micro/read/multi_column_pruning_many_files.benchmark

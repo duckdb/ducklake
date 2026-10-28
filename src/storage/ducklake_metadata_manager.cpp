@@ -2704,11 +2704,18 @@ main_results AS (
 		query = "WITH main_results AS (\n";
 	}
 
+	// the delete files that can hold deletes of the range, including flushes and files with inlined deletes
+	auto delete_file_in_range = StringUtil::Format(
+	    "current_delete.begin_snapshot >= %d OR current_delete.partial_max >= %d OR (current_delete.partial_max IS "
+	    "NULL AND data.partial_max IS NOT NULL)%s",
+	    start_snapshot.snapshot_id, start_snapshot.snapshot_id,
+	    has_inlined_table ? " OR data.data_file_id IN (SELECT file_id FROM inlined_dels)" : "");
+
 	// Main query: partial deletes from delete_file table and full file deletes
-	query +=
-	    StringUtil::Format(R"(
+	query += StringUtil::Format(R"(
 SELECT %s, current_delete.begin_snapshot, false AS file_deleted FROM (
-	SELECT data_file_id, begin_snapshot, path, path_is_relative, file_size_bytes, footer_size, encryption_key, format
+	SELECT data_file_id, begin_snapshot, path, path_is_relative, file_size_bytes, footer_size, encryption_key, format,
+		partial_max
 	FROM {METADATA_CATALOG}.ducklake_delete_file
 	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
 ) AS current_delete
@@ -2732,6 +2739,7 @@ JOIN (
 	WHERE table_id = %d
 ) AS data
 USING (data_file_id)
+WHERE %s
 
 UNION ALL
 
@@ -2762,8 +2770,9 @@ USING (data_file_id), (
 		CAST(NULL AS VARCHAR) format
 ) current_delete
 )",
-	                       select_list, table_id.index, table_id.index, start_snapshot.snapshot_id, table_id.index,
-	                       select_list, table_id.index, start_snapshot.snapshot_id, rewrite_end_filter, table_id.index);
+	                            select_list, table_id.index, table_id.index, start_snapshot.snapshot_id, table_id.index,
+	                            delete_file_in_range, select_list, table_id.index, start_snapshot.snapshot_id,
+	                            rewrite_end_filter, table_id.index);
 
 	if (has_inlined_table) {
 		string null_file_cols = "CAST(NULL AS VARCHAR) AS path, CAST(NULL AS BOOLEAN) AS path_is_relative, CAST(NULL "
@@ -3879,6 +3888,12 @@ static unique_ptr<SQLStatement> InlinedDataInsert(DuckLakeTransaction &transacti
 	                                  Identifier(table_name));
 	statement->node->select_statement = make_uniq<SelectStatement>();
 	statement->node->select_statement->node = std::move(select);
+	// describe the statement for query logs without its rows
+	statement->query =
+	    StringUtil::Format("INSERT INTO %s.%s.%s SELECT %s FROM inlined_data /* %d rows */",
+	                       SQLQuotedIdentifier::ToString(catalog.MetadataDatabaseName()),
+	                       SQLQuotedIdentifier::ToString(catalog.MetadataSchemaName()),
+	                       SQLIdentifier::ToString(table_name), StringUtil::Join(projections, ", "), data.Count());
 	return std::move(statement);
 }
 
