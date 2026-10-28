@@ -14,8 +14,10 @@ struct DuckLakeSnapshotTagData : public TableFunctionData {
 
 	DuckLakeCatalog &catalog;
 	string name;
-	//! The tagged snapshot of ducklake_create_tag
+	//! The tagged snapshot of ducklake_create_tag and ducklake_replace_tag
 	idx_t snapshot_id = DConstants::INVALID_INDEX;
+	//! The snapshot that ducklake_replace_tag expects the tag to name
+	optional_idx expected_snapshot_id;
 };
 
 static DuckLakeCatalog &GetTagCatalog(ClientContext &context, TableFunctionBindInput &input,
@@ -43,6 +45,26 @@ static void TagReturnTypes(vector<LogicalType> &return_types, vector<Identifier>
 	names.push_back("Success");
 }
 
+//! The snapshot of the version or timestamp option, or else the snapshot the transaction reads
+static idx_t TagSnapshotFromInput(ClientContext &context, TableFunctionBindInput &input, DuckLakeCatalog &catalog,
+                                  const string &function_name) {
+	Value version;
+	Value timestamp;
+	bool has_version = DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "version", "integer", version);
+	bool has_timestamp = DuckLakeTableFunctionUtil::TryGetTimestampOption(input, "timestamp", timestamp);
+	if (has_version && has_timestamp) {
+		throw BinderException("%s: specify either version or timestamp, not both", function_name);
+	}
+	unique_ptr<BoundAtClause> at_clause;
+	if (has_version) {
+		at_clause = make_uniq<BoundAtClause>(DuckLakeTableFunctionUtil::AtClauseFromValue(version));
+	} else if (has_timestamp) {
+		at_clause = make_uniq<BoundAtClause>(DuckLakeTableFunctionUtil::AtClauseFromValue(timestamp));
+	}
+	auto &transaction = DuckLakeTransaction::Get(context, catalog);
+	return transaction.GetSnapshot(at_clause.get()).snapshot_id;
+}
+
 static unique_ptr<FunctionData> CreateTagBind(ClientContext &context, TableFunctionBindInput &input,
                                               vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto &catalog = GetTagCatalog(context, input, DatabaseModificationType::CREATE_CATALOG_ENTRY);
@@ -52,21 +74,7 @@ static unique_ptr<FunctionData> CreateTagBind(ClientContext &context, TableFunct
 		throw BinderException("A snapshot tag cannot be named like a snapshot id, got \"%s\"", result->name);
 	}
 	TagReturnTypes(return_types, names);
-	Value version;
-	Value timestamp;
-	bool has_version = DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "version", "integer", version);
-	bool has_timestamp = DuckLakeTableFunctionUtil::TryGetTimestampOption(input, "timestamp", timestamp);
-	if (has_version && has_timestamp) {
-		throw BinderException("ducklake_create_tag: specify either version or timestamp, not both");
-	}
-	unique_ptr<BoundAtClause> at_clause;
-	if (has_version) {
-		at_clause = make_uniq<BoundAtClause>(DuckLakeTableFunctionUtil::AtClauseFromValue(version));
-	} else if (has_timestamp) {
-		at_clause = make_uniq<BoundAtClause>(DuckLakeTableFunctionUtil::AtClauseFromValue(timestamp));
-	}
-	auto &transaction = DuckLakeTransaction::Get(context, catalog);
-	result->snapshot_id = transaction.GetSnapshot(at_clause.get()).snapshot_id;
+	result->snapshot_id = TagSnapshotFromInput(context, input, catalog, "ducklake_create_tag");
 	return std::move(result);
 }
 
@@ -74,6 +82,26 @@ static void CreateTagExecute(ClientContext &context, TableFunctionInput &data_p,
 	auto &data = data_p.bind_data->Cast<DuckLakeSnapshotTagData>();
 	auto &transaction = DuckLakeTransaction::Get(context, data.catalog);
 	transaction.CreateSnapshotTag(data.name, data.snapshot_id);
+}
+
+static unique_ptr<FunctionData> ReplaceTagBind(ClientContext &context, TableFunctionBindInput &input,
+                                               vector<LogicalType> &return_types, vector<Identifier> &names) {
+	auto &catalog = GetTagCatalog(
+	    context, input, DatabaseModificationType::DROP_CATALOG_ENTRY | DatabaseModificationType::CREATE_CATALOG_ENTRY);
+	auto result = make_uniq<DuckLakeSnapshotTagData>(catalog, TagNameFromInput(input.inputs[1]));
+	TagReturnTypes(return_types, names);
+	result->snapshot_id = TagSnapshotFromInput(context, input, catalog, "ducklake_replace_tag");
+	Value expected;
+	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "expected_snapshot", "integer", expected)) {
+		result->expected_snapshot_id = expected.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
+	}
+	return std::move(result);
+}
+
+static void ReplaceTagExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
+	auto &data = data_p.bind_data->Cast<DuckLakeSnapshotTagData>();
+	auto &transaction = DuckLakeTransaction::Get(context, data.catalog);
+	transaction.ReplaceSnapshotTag(data.name, data.snapshot_id, data.expected_snapshot_id);
 }
 
 static unique_ptr<FunctionData> DropTagBind(ClientContext &context, TableFunctionBindInput &input,
@@ -131,6 +159,19 @@ DuckLakeCreateTagFunction::DuckLakeCreateTagFunction()
                     CreateTagExecute, CreateTagBind) {
 	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
 		options.Add("version", LogicalType::BIGINT).Add("timestamp", LogicalType::TIMESTAMP_TZ);
+	});
+}
+
+DuckLakeReplaceTagFunction::DuckLakeReplaceTagFunction()
+    : TableFunction("ducklake_replace_tag",
+                    FunctionSignature()
+                        .AddPositionalOnly("catalog", LogicalType::VARCHAR)
+                        .AddPositionalOnly("tag_name", LogicalType::VARCHAR),
+                    ReplaceTagExecute, ReplaceTagBind) {
+	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("version", LogicalType::BIGINT)
+		    .Add("timestamp", LogicalType::TIMESTAMP_TZ)
+		    .Add("expected_snapshot", LogicalType::BIGINT);
 	});
 }
 

@@ -3741,6 +3741,12 @@ static unique_ptr<SQLStatement> InlinedDataInsert(DuckLakeTransaction &transacti
 	                                  Identifier(table_name));
 	statement->node->select_statement = make_uniq<SelectStatement>();
 	statement->node->select_statement->node = std::move(select);
+	// describe the statement for query logs without its rows
+	statement->query =
+	    StringUtil::Format("INSERT INTO %s.%s.%s SELECT %s FROM inlined_data /* %d rows */",
+	                       SQLQuotedIdentifier::ToString(catalog.MetadataDatabaseName()),
+	                       SQLQuotedIdentifier::ToString(catalog.MetadataSchemaName()),
+	                       SQLIdentifier::ToString(table_name), StringUtil::Join(projections, ", "), data.Count());
 	return std::move(statement);
 }
 
