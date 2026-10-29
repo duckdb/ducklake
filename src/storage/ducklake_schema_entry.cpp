@@ -25,6 +25,7 @@
 #include "duckdb/parser/expression/subquery_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "functions/ducklake_compaction_functions.hpp"
+#include "duckdb/common/identifier.hpp"
 
 namespace duckdb {
 
@@ -526,30 +527,37 @@ void DuckLakeSchemaEntry::Scan(CatalogType type, const std::function<void(Catalo
 	}
 }
 
-//! Matches the name alone, as a default resolves through the table schema and the search path, and x.f() can be f(x)
-static bool CallsFunctionNamed(const ParsedExpression &expr, const Identifier &name) {
-	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION &&
-	    expr.Cast<FunctionExpression>().GetQualifiedName().Name() == name) {
-		return true;
-	}
-	bool calls = false;
-	ParsedExpressionIterator::EnumerateChildren(
-	    expr, [&](const ParsedExpression &child) { calls = calls || CallsFunctionNamed(child, name); });
-	return calls;
-}
-
-static bool SortKeyCallsFunctionNamed(const DuckLakeSort &sort_data, const Identifier &name) {
-	for (auto &order : DuckLakeCompactor::ParseSortOrders(sort_data)) {
-		if (CallsFunctionNamed(*order.expression, name)) {
-			return true;
+//! The first of the names the expression calls, matched by name alone, as a default resolves through the table
+//! schema and the search path, and x.f() can be f(x)
+static Identifier CalledFunctionIn(const ParsedExpression &expr, const identifier_set_t &names) {
+	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+		Identifier name = expr.Cast<FunctionExpression>().GetQualifiedName().Name();
+		if (names.count(name)) {
+			return name;
 		}
 	}
-	return false;
+	Identifier called;
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
+		if (called.empty()) {
+			called = CalledFunctionIn(child, names);
+		}
+	});
+	return called;
+}
+
+static Identifier SortKeyCallsFunctionIn(const DuckLakeSort &sort_data, const identifier_set_t &names) {
+	for (auto &order : DuckLakeCompactor::ParseSortOrders(sort_data)) {
+		auto called = CalledFunctionIn(*order.expression, names);
+		if (!called.empty()) {
+			return called;
+		}
+	}
+	return Identifier();
 }
 
 //! Column defaults and sort keys are bound on every write, so a table cannot be written once a macro they call is
 //! dropped
-static void ThrowIfTableCallsMacro(ClientContext &context, Catalog &catalog, const Identifier &macro_name,
+static void ThrowIfTableCallsMacro(ClientContext &context, Catalog &catalog, const identifier_set_t &macro_names,
                                    const reference_set_t<SchemaCatalogEntry> &dropped_schemas = {}) {
 	catalog.ScanSchemas(context, [&](SchemaCatalogEntry &schema) {
 		if (dropped_schemas.find(schema) != dropped_schemas.end()) {
@@ -561,15 +569,23 @@ static void ThrowIfTableCallsMacro(ClientContext &context, Catalog &catalog, con
 			}
 			auto &table = entry.Cast<DuckLakeTableEntry>();
 			for (auto &column : table.GetColumns().Logical()) {
-				if (column.HasDefaultValue() && CallsFunctionNamed(column.DefaultValue(), macro_name)) {
+				if (!column.HasDefaultValue()) {
+					continue;
+				}
+				auto called = CalledFunctionIn(column.DefaultValue(), macro_names);
+				if (!called.empty()) {
 					throw DependencyException(
-					    "Cannot drop macro %s because the default of column %s of table %s calls it", macro_name,
+					    "Cannot drop macro %s because the default of column %s of table %s calls it", called,
 					    column.Name(), entry.name);
 				}
 			}
 			auto sort_data = table.GetSortData();
-			if (sort_data && SortKeyCallsFunctionNamed(*sort_data, macro_name)) {
-				throw DependencyException("Cannot drop macro %s because the sort key of table %s calls it", macro_name,
+			if (!sort_data) {
+				return;
+			}
+			auto called = SortKeyCallsFunctionIn(*sort_data, macro_names);
+			if (!called.empty()) {
+				throw DependencyException("Cannot drop macro %s because the sort key of table %s calls it", called,
 				                          entry.name);
 			}
 		});
@@ -599,7 +615,7 @@ void DuckLakeSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool
 	}
 	// a replaced macro stays callable
 	if (info.type == CatalogType::MACRO_ENTRY && !replacing) {
-		ThrowIfTableCallsMacro(context, catalog, catalog_entry->name);
+		ThrowIfTableCallsMacro(context, catalog, identifier_set_t {Identifier(catalog_entry->name)});
 	}
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	transaction.DropEntry(*catalog_entry);
@@ -669,12 +685,15 @@ void DuckLakeSchemaEntry::TryDropSchema(CatalogTransaction transaction, bool cas
 		}
 	});
 	reference_set_t<SchemaCatalogEntry> dropped_schemas;
-	ScanSchemaTree(transaction, [&](SchemaCatalogEntry &schema) { dropped_schemas.insert(schema); });
+	identifier_set_t dropped_macros;
 	ScanSchemaTree(transaction, [&](SchemaCatalogEntry &schema) {
-		schema.Scan(transaction.GetContext(), CatalogType::MACRO_ENTRY, [&](CatalogEntry &entry) {
-			ThrowIfTableCallsMacro(transaction.GetContext(), schema.ParentCatalog(), entry.name, dropped_schemas);
-		});
+		dropped_schemas.insert(schema);
+		schema.Scan(transaction.GetContext(), CatalogType::MACRO_ENTRY,
+		            [&](CatalogEntry &entry) { dropped_macros.insert(Identifier(entry.name)); });
 	});
+	if (!dropped_macros.empty()) {
+		ThrowIfTableCallsMacro(transaction.GetContext(), ParentCatalog(), dropped_macros, dropped_schemas);
+	}
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	for (idx_t i = entries.size(); i > 0; i--) {
 		duck_transaction.DropEntry(entries[i - 1].get());

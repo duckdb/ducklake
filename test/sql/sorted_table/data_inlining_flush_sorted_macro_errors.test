@@ -81,9 +81,7 @@ ALTER TABLE macro_sort_test RESET SORTED BY
 statement ok
 DROP MACRO zip_varchar
 
-# We create a macro, set sort, replace the macro
-# (but now invalid for our sorting),
-# then try to flush and error appropriately
+# A replacement of the macro that no longer fits the sort key fails the flush
 statement ok
 CREATE MACRO zip_varchar(i, j, num_chars := 6) AS (
     -- By default using 6 characters from each string so that
