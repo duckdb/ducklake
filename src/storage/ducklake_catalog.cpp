@@ -1574,6 +1574,23 @@ void DuckLakeCatalog::InvalidateTableStatsCache(idx_t next_file_id, TableIndex t
 	GetObjectCacheInstance().Delete(StatsCacheKey(next_file_id, table_id));
 }
 
+void DuckLakeCatalog::InvalidateTableStatsCaches(const unordered_set<idx_t> &next_file_ids) {
+	auto &cache = GetObjectCacheInstance();
+	lock_guard<mutex> guard(cache_entries_lock);
+	// only the entries this DuckLake put in the object cache can be there
+	auto evict = [&](const TrackedStatsEntry &entry) {
+		if (next_file_ids.find(entry.next_file_id) == next_file_ids.end()) {
+			return false;
+		}
+		if (!entry.entry.expired()) {
+			cache.Delete(StatsCacheKey(entry.next_file_id, entry.table_id));
+		}
+		return true;
+	};
+	stats_cache_entries.erase(std::remove_if(stats_cache_entries.begin(), stats_cache_entries.end(), evict),
+	                          stats_cache_entries.end());
+}
+
 void DuckLakeCatalog::InvalidateSchemaCache(idx_t schema_version) {
 	GetObjectCacheInstance().Delete(SchemaCacheKey(schema_version));
 }
