@@ -51,7 +51,7 @@ SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
 1
 
 query I
-SELECT count(*) FROM glob('{DATA_PATH}/unlink_recovery_external.parquet')
+SELECT count(*) FROM glob('{DATA_PATH}/unlink_recovery_ext*.parquet')
 ----
 0
 
