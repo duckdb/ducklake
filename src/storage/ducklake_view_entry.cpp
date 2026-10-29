@@ -68,10 +68,10 @@ unique_ptr<CatalogEntry> DuckLakeViewEntry::Alter(DuckLakeTransaction &transacti
 		throw InternalException("Alter view column comment: missing client context");
 	}
 	BindView(*context);
-	auto column_name = ResolveColumnName(info.column_name).GetIdentifierName();
+	auto column_name = ResolveColumnName(info.column_name);
 	auto create_info = GetInfo();
 	auto &view_info = create_info->Cast<CreateViewInfo>();
-	view_info.column_comments_map[Identifier(column_name)] = info.comment_value;
+	view_info.column_comments_map[column_name] = info.comment_value;
 	return make_uniq<DuckLakeViewEntry>(*this, view_info, LocalChange::SetViewColumnComment(column_name));
 }
 
@@ -104,9 +104,8 @@ string DuckLakeViewEntry::ToSQL() const {
 	result += qualified_name.ToString(QualifiedNameToStringMode::HIDE_DEFAULT_SCHEMA);
 	if (!aliases.empty()) {
 		result += " (";
-		result += StringUtil::Join(aliases, aliases.size(), ", ", [](const Identifier &alias) {
-			return SQLIdentifier::ToString(alias.GetIdentifierName());
-		});
+		result += StringUtil::Join(aliases, aliases.size(), ", ",
+		                           [](const Identifier &alias) { return SQLIdentifier::ToString(alias); });
 		result += ")";
 	}
 	result += " AS ";

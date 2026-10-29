@@ -37,7 +37,7 @@ Cannot drop field "value" from column "m" - it's not a struct
 statement error
 ALTER TABLE ducklake.t DROP COLUMN v.a
 ----
-points to child of variant column v
+points to child of variant column "v"
 
 query III
 SELECT * FROM ducklake.t

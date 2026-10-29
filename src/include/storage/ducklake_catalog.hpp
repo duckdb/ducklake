@@ -151,7 +151,7 @@ public:
 	string GetCatalogType() override {
 		return "ducklake";
 	}
-	const string &MetadataDatabaseName() const {
+	const Identifier &MetadataDatabaseName() const {
 		return options.metadata_database;
 	}
 	const Identifier &MetadataSchemaName() const {

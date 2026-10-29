@@ -92,5 +92,28 @@ SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = 3
 ----
 0
 
+# a deferred expiry takes the latest snapshot at its commit, so a concurrent commit costs it no retry
+statement ok con1
+SET ducklake_max_retry_count = 0
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [1])
+----
+1
+
+statement ok con2
+INSERT INTO dl.t VALUES (3)
+
+statement ok con1
+COMMIT
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = 1
+----
+0
+
 statement ok
 DROP TABLE dl.t
