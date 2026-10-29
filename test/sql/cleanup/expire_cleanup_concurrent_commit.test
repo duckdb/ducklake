@@ -1,0 +1,97 @@
+# name: test/sql/cleanup/expire_cleanup_concurrent_commit.test
+# description: On a 1.1 catalog a retried commit keeps the cleanup, and fails rather than undo an expiry
+# group: [cleanup]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/expire_cleanup_concurrent_commit', DATA_INLINING_ROW_LIMIT 0, DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DELETE FROM dl.t
+
+statement ok
+CREATE TABLE dl.u (i INTEGER)
+
+# the retry would undo the expiry
+statement ok a
+BEGIN
+
+statement ok a
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+statement ok a
+INSERT INTO dl.t VALUES (10)
+
+statement ok b
+INSERT INTO dl.u VALUES (20)
+
+statement error a
+COMMIT
+----
+Transaction conflict
+
+query III
+SELECT (SELECT i FROM dl.t AT (VERSION => 1)), (SELECT count(*) FROM dl.snapshots() WHERE snapshot_id = 1),
+       (SELECT sum(i) FROM dl.u)
+----
+42	1	20
+
+# also without retries, the error is the conflict and not the retry count
+statement ok a
+SET ducklake_max_retry_count = 0
+
+statement ok a
+BEGIN
+
+statement ok a
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+statement ok a
+INSERT INTO dl.t VALUES (10)
+
+statement ok b
+INSERT INTO dl.u VALUES (5)
+
+statement error a
+COMMIT
+----
+<REGEX>:.*Transaction conflict - a concurrent commit preceded the commit of a transaction that expires snapshots.*
+
+statement ok a
+RESET ducklake_max_retry_count
+
+# the retry removes the cleaned up files from the schedule again
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+statement ok a
+BEGIN
+
+statement ok a
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+statement ok a
+INSERT INTO dl.t VALUES (10)
+
+statement ok b
+INSERT INTO dl.u VALUES (30)
+
+statement ok a
+COMMIT
+
+query III
+SELECT (SELECT count(*) FROM __ducklake_metadata_dl.ducklake_files_scheduled_for_deletion),
+       (SELECT sum(i) FROM dl.t), (SELECT sum(i) FROM dl.u)
+----
+0	10	55

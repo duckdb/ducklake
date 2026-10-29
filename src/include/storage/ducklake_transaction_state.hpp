@@ -69,8 +69,15 @@ struct DuckLakeCommitContext {
 	//! Resets per-attempt state before a retry.
 	std::function<void()> prepare_retry = []() {
 	};
+	//! Throws when a failed attempt of the transaction cannot be retried.
+	std::function<void()> verify_retry = []() {
+	};
 	//! Writes again what the transaction wrote to the metadata before its commit, in a retried attempt.
 	std::function<void()> rewrite_before_retry = []() {
+	};
+	//! Whether the failed attempt ends the commit, also when another attempt could succeed.
+	std::function<bool()> skip_retry = []() {
+		return false;
 	};
 	// LCOV_EXCL_STOP
 	//! Runs a metadata-DB query during post-commit cleanup.
@@ -156,6 +163,10 @@ struct DuckLakeCommitContext {
 	std::function<void(const string &)> report_post_commit_error = [](const string &) {
 	};
 	// LCOV_EXCL_STOP
+	//! Whether the commit writes a snapshot, a commit that only changes options writes none.
+	bool write_snapshot = true;
+	//! Whether the commit batch locks the options of the transaction, also when it writes no snapshot.
+	bool locks_config_options = false;
 	//! Author / message / extra info for the snapshot row.
 	DuckLakeSnapshotCommit commit_info;
 	//! When true, Commit() skips the post-commit DropEmptySupersededInlinedTables cleanup.
