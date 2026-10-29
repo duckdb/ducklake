@@ -599,8 +599,10 @@ public:
 	optional_idx GetTaggedSnapshot(const string &name);
 	//! The snapshot id of a VERSION value, a snapshot id or the name of a snapshot tag
 	idx_t ResolveSnapshotVersion(const Value &version);
-	static string WriteSnapshotTagChanges(const case_insensitive_map_t<idx_t> &created,
+	static string WriteSnapshotTagChanges(const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &created,
 	                                      const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped);
+	//! Ends the row of a committed tag at the snapshot of the commit
+	static string EndSnapshotTagSql(const DuckLakeSnapshotTagInfo &tag);
 	static string DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots);
 	//! Deletes the snapshots once the caller checked the catalog version
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);

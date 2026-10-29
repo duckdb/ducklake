@@ -1,0 +1,53 @@
+# name: test/sql/stats/expire_snapshots_stats_cache_eviction.test
+# description: ducklake_expire_snapshots evicts the cached stats of the expired snapshots without listing every table with stats
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/expire_snapshots_stats_cache_eviction', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.a AS SELECT 1 AS v
+
+statement ok
+CREATE TABLE lake.b AS SELECT 2 AS v
+
+statement ok
+INSERT INTO lake.a VALUES (3)
+
+# load the stats of both tables into the cache
+query I
+SELECT (SELECT max(v) FROM lake.a) + (SELECT max(v) FROM lake.b)
+----
+5
+
+statement ok
+INSERT INTO lake.a VALUES (4)
+
+statement ok
+CALL enable_logging('QueryLog', storage => 'memory')
+
+query I
+SELECT count(*) > 0 FROM ducklake_expire_snapshots('lake', older_than => now())
+----
+true
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%SELECT DISTINCT table_id FROM %ducklake_table_stats%'
+----
+0
+
+query II
+SELECT (SELECT list(v ORDER BY v) FROM lake.a), (SELECT list(v) FROM lake.b)
+----
+[1, 3, 4]	[2]
