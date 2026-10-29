@@ -622,7 +622,7 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 		}
 		copy.batch_size_bytes = batch_size_bytes;
 	}
-	if (copy_input.partition_data) {
+	if (copy_input.partition_data && !copy_input.partition_data->fields.empty()) {
 		copy.partition_output = true;
 		copy.write_empty_file = true;
 	} else {
@@ -640,7 +640,7 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 	copy.names = names_to_write;
 	copy.expected_types = types_to_write;
 
-	if (copy_input.partition_data) {
+	if (copy.partition_output) {
 		// we are partitioning - generate partition expressions (if any)
 		GeneratePartitionExpressions(context, copy_input, result);
 		if (copy.hive_file_pattern && !copy.partition_columns.empty()) {
