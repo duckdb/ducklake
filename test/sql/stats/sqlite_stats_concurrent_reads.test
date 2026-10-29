@@ -17,7 +17,7 @@ CREATE TABLE ducklake.t(a INTEGER, b INTEGER, c INTEGER, d INTEGER, e INTEGER, f
 loop i 0 300
 
 statement ok
-INSERT INTO ducklake.t SELECT r, r, r, r, r, r FROM range(${i} * 10, ${i} * 10 + 10) x(r)
+INSERT INTO ducklake.t SELECT r, r, r, r, r, r FROM range({i} * 10, {i} * 10 + 10) x(r)
 
 endloop
 

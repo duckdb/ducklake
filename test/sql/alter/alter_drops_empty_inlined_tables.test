@@ -120,22 +120,10 @@ statement ok
 BEGIN
 
 statement ok
-CALL ducklake_flush_inlined_data('ducklake', table_name => '${tbl}')
+CALL ducklake_flush_inlined_data('ducklake', table_name => '{tbl}')
 
 statement ok
-ALTER TABLE ducklake.${tbl} ADD COLUMN j INTEGER
-
-statement ok
-COMMIT
-
-statement ok
-BEGIN
-
-statement ok
-ALTER TABLE ducklake.${tbl} ADD COLUMN k INTEGER
-
-statement ok
-CALL ducklake_flush_inlined_data('ducklake', table_name => '${tbl}')
+ALTER TABLE ducklake.{tbl} ADD COLUMN j INTEGER
 
 statement ok
 COMMIT
@@ -144,10 +132,22 @@ statement ok
 BEGIN
 
 statement ok
-CALL ducklake_flush_inlined_data('ducklake', table_name => '${tbl}')
+ALTER TABLE ducklake.{tbl} ADD COLUMN k INTEGER
 
 statement ok
-ALTER TABLE ducklake.${tbl} RENAME TO ${tbl}_renamed
+CALL ducklake_flush_inlined_data('ducklake', table_name => '{tbl}')
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => '{tbl}')
+
+statement ok
+ALTER TABLE ducklake.{tbl} RENAME TO {tbl}_renamed
 
 statement ok
 COMMIT
