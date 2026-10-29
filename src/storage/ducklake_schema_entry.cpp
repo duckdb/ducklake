@@ -555,8 +555,7 @@ static Identifier SortKeyCallsFunctionIn(const DuckLakeSort &sort_data, const id
 	return Identifier();
 }
 
-//! Column defaults and sort keys are bound on every write, so a table cannot be written once a macro they call is
-//! dropped
+//! A table can no longer be written or flushed once a macro that its defaults or sort key call is dropped
 static void ThrowIfTableCallsMacro(ClientContext &context, Catalog &catalog, const identifier_set_t &macro_names,
                                    const reference_set_t<SchemaCatalogEntry> &dropped_schemas = {}) {
 	catalog.ScanSchemas(context, [&](SchemaCatalogEntry &schema) {
