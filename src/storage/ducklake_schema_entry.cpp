@@ -24,6 +24,7 @@
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
+#include "functions/ducklake_compaction_functions.hpp"
 
 namespace duckdb {
 
@@ -537,7 +538,17 @@ static bool CallsFunctionNamed(const ParsedExpression &expr, const Identifier &n
 	return calls;
 }
 
-//! Column defaults are bound on every write, so a table cannot be written once a macro its defaults call is dropped
+static bool SortKeyCallsFunctionNamed(const DuckLakeSort &sort_data, const Identifier &name) {
+	for (auto &order : DuckLakeCompactor::ParseSortOrders(sort_data)) {
+		if (CallsFunctionNamed(*order.expression, name)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+//! Column defaults and sort keys are bound on every write, so a table cannot be written once a macro they call is
+//! dropped
 static void ThrowIfTableCallsMacro(ClientContext &context, Catalog &catalog, const Identifier &macro_name,
                                    const reference_set_t<SchemaCatalogEntry> &dropped_schemas = {}) {
 	catalog.ScanSchemas(context, [&](SchemaCatalogEntry &schema) {
@@ -548,12 +559,18 @@ static void ThrowIfTableCallsMacro(ClientContext &context, Catalog &catalog, con
 			if (entry.type != CatalogType::TABLE_ENTRY) {
 				return;
 			}
-			for (auto &column : entry.Cast<DuckLakeTableEntry>().GetColumns().Logical()) {
+			auto &table = entry.Cast<DuckLakeTableEntry>();
+			for (auto &column : table.GetColumns().Logical()) {
 				if (column.HasDefaultValue() && CallsFunctionNamed(column.DefaultValue(), macro_name)) {
 					throw DependencyException(
 					    "Cannot drop macro %s because the default of column %s of table %s calls it", macro_name,
 					    column.Name(), entry.name);
 				}
+			}
+			auto sort_data = table.GetSortData();
+			if (sort_data && SortKeyCallsFunctionNamed(*sort_data, macro_name)) {
+				throw DependencyException("Cannot drop macro %s because the sort key of table %s calls it", macro_name,
+				                          entry.name);
 			}
 		});
 	});

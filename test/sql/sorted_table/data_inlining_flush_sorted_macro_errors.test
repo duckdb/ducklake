@@ -69,21 +69,20 @@ ABC	XYZ	AXBYCZ
 321	000	302010
 123	000	102030
 
-# Dropping the macro should cause the flush_inlined_data to error
-statement ok
-DROP MACRO zip_varchar
-
-# The macro no longer exists, so we should error out with a helpful message
+# The sort key calls the macro, so the macro cannot be dropped
 statement error
-CALL ducklake_flush_inlined_data('ducklake', table_name => 'macro_sort_test');
+DROP MACRO zip_varchar
 ----
-Catalog Error: Scalar Function with name zip_varchar does not exist!
+Cannot drop macro "zip_varchar" because the sort key of table "macro_sort_test" calls it
 
 statement ok
 ALTER TABLE macro_sort_test RESET SORTED BY
 
-# We create a macro, set sort, drop macro, 
-# create macro again (but now invalid for our sorting),
+statement ok
+DROP MACRO zip_varchar
+
+# We create a macro, set sort, replace the macro
+# (but now invalid for our sorting),
 # then try to flush and error appropriately
 statement ok
 CREATE MACRO zip_varchar(i, j, num_chars := 6) AS (
@@ -113,12 +112,9 @@ ABC	XYZ	AXBYCZ
 statement ok
 ALTER TABLE ducklake.macro_sort_test SET SORTED BY (zip_varchar(i, j, num_chars := 3) ASC NULLS LAST);
 
+# Replace the macro with a different set of parameters (invalid for our sort)
 statement ok
-DROP MACRO zip_varchar
-
-# Create a macro with a different set of parameters (invalid for our sort)
-statement ok
-CREATE MACRO zip_varchar(i) AS (
+CREATE OR REPLACE MACRO zip_varchar(i) AS (
     i || '_nope'
 );
 
@@ -129,7 +125,7 @@ select
 ----
 woot	woot_nope
 
-# The macro no longer exists, so we should error out with a helpful message
+# The macro no longer takes the arguments of the sort key, so we should error out with a helpful message
 statement error
 CALL ducklake_flush_inlined_data('ducklake', table_name => 'macro_sort_test');
 ----
