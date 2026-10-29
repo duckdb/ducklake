@@ -482,7 +482,7 @@ unique_ptr<BaseStatistics> DuckLakeColumnStats::ToStats() const {
 	case LogicalTypeId::DOUBLE: {
 		if (!has_contains_nan) {
 			// we only create stats if we know whether there are NaN values
-			auto stats = NumericStats::CreateEmpty(type);
+			auto stats = NumericStats::CreateUnknown(type);
 			SetValidity(stats);
 			return stats.ToUnique();
 		}

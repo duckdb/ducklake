@@ -66,11 +66,11 @@ string SQLiteMetadataManager::GetColumnTypeInternal(const LogicalType &column_ty
 	}
 }
 
-void SQLiteMetadataManager::RenameInlinedColumns(const map<string, vector<pair<string, string>>> &renames) {
+void SQLiteMetadataManager::RenameInlinedColumns(const map<Identifier, vector<pair<Identifier, Identifier>>> &renames) {
 	// SQLite parses its whole schema for every renamed column, so the tables are copied with the new names instead
 	string query;
 	for (auto &table : renames) {
-		auto table_name = SQLIdentifier(table.first);
+		auto &table_name = table.first;
 		vector<string> renamed_columns;
 		for (auto &column : table.second) {
 			renamed_columns.push_back(StringUtil::Format("%s AS %s", column.first, column.second));
@@ -122,6 +122,17 @@ string SQLiteMetadataManager::GenerateFileColumnStatsCTEBody(const CTERequiremen
 	return StringUtil::Format("  SELECT %s\n"
 	                          "  FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, %s)\n",
 	                          select_list, SQLString(native_query));
+}
+
+//! Reads the rewrite snapshots through sqlite_query, so SQLite reads only the new snapshots by their key
+string SQLiteMetadataManager::GetRewriteSnapshotsQuery(idx_t first_snapshot, idx_t last_snapshot) const {
+	auto rewrite_query = DuckLakeMetadataManager::GetRewriteSnapshotsQuery(first_snapshot, last_snapshot);
+	SubstituteCatalogPlaceholders(rewrite_query, "main");
+	auto native_query =
+	    StringUtil::Format("SELECT CAST(snapshot_id AS TEXT) AS snapshot_id, changes_made FROM (%s)", rewrite_query);
+	return StringUtil::Format("SELECT snapshot_id::BIGINT AS snapshot_id, changes_made\n"
+	                          "FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, %s)\n",
+	                          SQLString(native_query));
 }
 
 } // namespace duckdb

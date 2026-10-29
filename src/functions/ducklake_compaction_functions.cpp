@@ -121,7 +121,7 @@ SourceResultType DuckLakeCompaction::GetDataInternal(ExecutionContext &context, 
 	auto files_created = gstate.written_files.size();
 
 	chunk.data[0].Append(Value(table.schema.GetSchemaName()));
-	chunk.data[1].Append(Value(table.name.GetIdentifierName()));
+	chunk.data[1].Append(Value(table.name));
 	chunk.data[2].Append(Value::BIGINT(static_cast<int64_t>(source_files.size())));
 	chunk.data[3].Append(Value::BIGINT(static_cast<int64_t>(files_created)));
 	chunk.SetChildCardinality(1);
@@ -262,7 +262,8 @@ static bool FieldsPreservedInLatest(const vector<unique_ptr<DuckLakeFieldId>> &o
 		if (!latest_field) {
 			return false;
 		}
-		if (older_field->Name() != latest_field->Name()) {
+		// a rename that only changes the case is still a rename, which `Identifier` equality would not see
+		if (older_field->Name().GetIdentifierName() != latest_field->Name().GetIdentifierName()) {
 			return false;
 		}
 		if (older_field->Type() != latest_field->Type()) {
@@ -848,7 +849,7 @@ static double GetDeleteThreshold(DuckLakeTableEntry &table_entry, const DuckLake
 		// If the user manually sets the parameter, this has priority
 		delete_threshold = DoubleValue::Get(delete_threshold_value);
 	}
-	if (delete_threshold > 1 || delete_threshold < 0) {
+	if (!(delete_threshold >= 0 && delete_threshold <= 1)) {
 		throw BinderException("The delete_threshold option must be between 0 and 1");
 	}
 	return delete_threshold;

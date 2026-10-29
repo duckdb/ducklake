@@ -51,6 +51,7 @@ benchmark/micro/write/alter_float_to_double.benchmark
 benchmark/micro/time_travel/at_version_local_changes.benchmark
 benchmark/micro/time_travel/table_changes_flushed.benchmark
 benchmark/micro/time_travel/table_changes_inlined_deletes.benchmark
+benchmark/micro/time_travel/table_changes_poll_after_commit.benchmark
 benchmark/micro/maintenance/flush_inlined_superseded.benchmark
 benchmark/micro/write/delete_commits_rewrite.benchmark
 benchmark/micro/write/delete_commits_rewrite_retry.benchmark
@@ -79,3 +80,5 @@ benchmark/micro/read/snapshots_listing_changes.benchmark
 benchmark/micro/read/catalog_load_schema_history.benchmark
 benchmark/micro/maintenance/migrate_v10_inlined_tables.benchmark
 benchmark/micro/write/add_column_many_files.benchmark
+benchmark/micro/time_travel/table_changes_unchanged_window.benchmark
+benchmark/micro/read/multi_column_pruning_many_files.benchmark

@@ -65,8 +65,8 @@ const vector<Identifier> &ParquetFileScanner::GetNames() const {
 	return return_names;
 }
 
-optional_idx ParquetFileScanner::FindColumn(const string &name) const {
-	auto index = StringUtil::CIFind(return_names, Identifier(name));
+optional_idx ParquetFileScanner::FindColumn(const Identifier &name) const {
+	auto index = StringUtil::CIFind(return_names, name);
 	return index == DConstants::INVALID_INDEX ? optional_idx() : optional_idx(index);
 }
 

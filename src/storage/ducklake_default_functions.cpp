@@ -8,7 +8,7 @@ namespace duckdb {
 // clang-format off
 static const DefaultTableMacro ducklake_table_macros[] = {
 	{DEFAULT_SCHEMA, "merge_adjacent_files", {nullptr}, {{nullptr, nullptr}},  "FROM ducklake_merge_adjacent_files({CATALOG})"},
-	{DEFAULT_SCHEMA, "set_option", {"option", "value", nullptr}, {{"table_name", "NULL"}, {"schema", "NULL"}, {nullptr, nullptr}},  "FROM ducklake_set_option({CATALOG}, option, value, table_name => table_name, schema => schema)"},
+	{DEFAULT_SCHEMA, "set_option", {"option", "value", nullptr}, {{"table_name", "''"}, {"schema", "''"}, {nullptr, nullptr}},  "FROM ducklake_set_option({CATALOG}, option, value, table_name => table_name, schema => schema)"},
 	{DEFAULT_SCHEMA, "set_commit_message", {"author", "commit_message", nullptr}, {{"extra_info", "NULL"},{nullptr, nullptr}},  "FROM ducklake_set_commit_message({CATALOG}, author, commit_message, extra_info => extra_info)"},
 	{DEFAULT_SCHEMA, "options", {nullptr}, {{nullptr, nullptr}}, "FROM ducklake_options({CATALOG})"},
 	{DEFAULT_SCHEMA, "settings", {nullptr}, {{nullptr, nullptr}}, "FROM ducklake_settings({CATALOG})"},
@@ -35,13 +35,13 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::LoadBuiltInFunction(DefaultTable
 	return result;
 }
 
-optional_ptr<CatalogEntry> DuckLakeSchemaEntry::TryLoadBuiltInFunction(const string &entry_name) {
+optional_ptr<CatalogEntry> DuckLakeSchemaEntry::TryLoadBuiltInFunction(const Identifier &entry_name) {
 	lock_guard<mutex> guard(default_function_lock);
 	auto entry = default_function_map.find(entry_name);
 	if (entry != default_function_map.end()) {
 		return entry->second.get();
 	}
-	auto macro = DefaultTableFunctionGenerator::FindTableMacro(ducklake_table_macros, Identifier(entry_name));
+	auto macro = DefaultTableFunctionGenerator::FindTableMacro(ducklake_table_macros, entry_name);
 	return macro ? LoadBuiltInFunction(*macro) : nullptr;
 }
 

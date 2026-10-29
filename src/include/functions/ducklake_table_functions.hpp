@@ -34,6 +34,7 @@ public:
 	static bool TryGetTimestampOption(const TableFunctionBindInput &input, const string &name, Value &result);
 	static string GetStringOption(const TableFunctionBindInput &input, const string &name);
 	static string GetTableName(const Value &input);
+	static void VerifySnapshotIdentifier(const Value &input);
 	static BoundAtClause AtClauseFromValue(const Value &input);
 };
 

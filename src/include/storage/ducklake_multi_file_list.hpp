@@ -69,7 +69,7 @@ private:
 	//! Read the committed files, and the committed inlined rows before them when each metadata query commits
 	vector<DuckLakeFileListEntry>
 	ReadCommittedFiles(DuckLakeTransaction &transaction,
-	                   unordered_map<string, shared_ptr<DuckLakeCommittedInlinedRows>> &inlined_rows) const;
+	                   identifier_map_t<shared_ptr<DuckLakeCommittedInlinedRows>> &inlined_rows) const;
 	void GetTableInsertions() const;
 	void GetTableDeletions() const;
 	void AddInlinedDataTables(DuckLakeTransaction &transaction) const;
