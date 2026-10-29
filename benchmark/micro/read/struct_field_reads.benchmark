@@ -1,0 +1,19 @@
+# name: benchmark/micro/read/struct_field_reads.benchmark
+# description: Filter on and project one field of a wide STRUCT column, which reads only that field
+# group: [read]
+
+name Struct Field Reads
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+include benchmark/micro/fixtures/nested_fields.benchmark.in
+
+run
+SELECT (SELECT count(*) FROM lake.t WHERE s.k = 42) AS matches, (SELECT sum(s.n) FROM lake.t) AS total;
+
+result II
+1000	499999500000

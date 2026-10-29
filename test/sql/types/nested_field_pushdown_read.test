@@ -1,0 +1,196 @@
+# name: test/sql/types/nested_field_pushdown_read.test
+# description: Reading one field of a shredded VARIANT or of a STRUCT reads only that field from the data file
+# group: [types]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/nested_field_pushdown_read', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t AS
+SELECT i AS id,
+       {'k': 'key-' || (i % 100)::VARCHAR, 'pad': repeat(md5(i::VARCHAR), 4), 'n': i}::VARIANT AS v,
+       {'k': i % 100, 'pad': repeat(md5(i::VARCHAR), 4)} AS s
+FROM range(20000) t(i);
+
+statement ok
+SET VARIABLE data_file = (SELECT data_file FROM ducklake_list_files('ducklake', 't'));
+
+statement ok
+SET VARIABLE file_bytes = (SELECT sum(total_compressed_size) FROM parquet_metadata(getvariable('data_file')));
+
+statement ok
+SET enable_external_file_cache = false;
+
+statement ok
+CALL enable_logging('FileSystem', storage := 'memory');
+
+statement ok
+CREATE MACRO parquet_bytes_read() AS (
+    SELECT coalesce(sum(bytes), 0) FROM duckdb_logs_parsed('FileSystem') WHERE op = 'READ' AND path LIKE '%.parquet');
+
+# a filter on a shredded VARIANT field reads that field, not the whole column, as much as read_parquet reads
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM read_parquet(getvariable('data_file')) WHERE v.k::VARCHAR = 'key-42';
+----
+200
+
+statement ok
+SET VARIABLE read_parquet_bytes = parquet_bytes_read();
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM ducklake.t WHERE v.k::VARCHAR = 'key-42';
+----
+200
+
+query I
+SELECT parquet_bytes_read() <= getvariable('read_parquet_bytes') + 65536;
+----
+true
+
+# so does a projection of one
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT sum(v.n::BIGINT) FROM ducklake.t;
+----
+199990000
+
+query I
+SELECT parquet_bytes_read() < getvariable('file_bytes') / 4;
+----
+true
+
+# and a filter on a STRUCT field
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM read_parquet(getvariable('data_file')) WHERE s.k = 42;
+----
+200
+
+statement ok
+SET VARIABLE read_parquet_bytes = parquet_bytes_read();
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
+SELECT count(*) FROM ducklake.t WHERE s.k = 42;
+----
+200
+
+query I
+SELECT parquet_bytes_read() <= getvariable('read_parquet_bytes') + 65536;
+----
+true
+
+# fields are extracted from inlined data too: committed and transaction-local
+statement ok
+CREATE TABLE ducklake.mixed (id INTEGER, v VARIANT, s STRUCT(a INTEGER, b VARCHAR))
+
+statement ok
+INSERT INTO ducklake.mixed SELECT i, {'k': 'key-' || (i % 10), 'n': i}::VARIANT, {'a': i, 'b': 'b' || (i % 10)} FROM range(100) t(i);
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', '10');
+
+statement ok
+INSERT INTO ducklake.mixed SELECT i, {'k': 'key-' || (i % 10), 'n': i}::VARIANT, {'a': i, 'b': 'b' || (i % 10)} FROM range(100, 105) t(i);
+
+statement ok
+ALTER TABLE ducklake.mixed RENAME s.b TO bb
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.mixed SELECT i, {'k': 'key-' || (i % 10), 'n': i}::VARIANT, {'a': i, 'bb': 'b' || (i % 10)} FROM range(105, 108) t(i);
+
+query III
+SELECT count(*), sum(v.n::BIGINT), sum(s.a) FROM ducklake.mixed WHERE v.k::VARCHAR = 'key-3';
+----
+11	583	583
+
+query II
+SELECT count(*), sum(s.a) FROM ducklake.mixed WHERE s.bb = 'b4';
+----
+11	594
+
+query I
+SELECT list(v.k ORDER BY id) FROM ducklake.mixed WHERE id >= 102;
+----
+[key-2, key-3, key-4, key-5, key-6, key-7]
+
+statement ok
+COMMIT
+
+query III
+SELECT count(*), sum(v.n::BIGINT), sum(s.a) FROM ducklake.mixed WHERE v.k::VARCHAR = 'key-3';
+----
+11	583	583
+
+query II
+SELECT count(*), sum(s.a) FROM ducklake.mixed WHERE s.bb = 'b4';
+----
+11	594
+
+# a cast pushed into the extract only sees the rows that pass the filters, for files and inlined data alike
+statement ok
+CREATE TABLE ducklake.casts (id INTEGER, v VARIANT)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', '0');
+
+statement ok
+INSERT INTO ducklake.casts SELECT i, CASE WHEN i < 5 THEN {'k': i}::VARIANT ELSE {'k': 'text'}::VARIANT END FROM range(10) t(i);
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', '100');
+
+statement ok
+INSERT INTO ducklake.casts SELECT i, CASE WHEN i < 15 THEN {'k': i}::VARIANT ELSE {'k': 'text'}::VARIANT END FROM range(10, 20) t(i);
+
+query II
+SELECT max(v.k::INTEGER), count(*) FROM ducklake.casts WHERE id < 5;
+----
+4	5
+
+query II
+SELECT max(v.k::INTEGER), count(*) FROM ducklake.casts WHERE id BETWEEN 10 AND 14;
+----
+14	5
+
+statement ok
+DELETE FROM ducklake.casts WHERE id = 14;
+
+query II
+SELECT max(v.k::INTEGER), count(*) FROM ducklake.casts WHERE id BETWEEN 10 AND 14;
+----
+13	4
+
+# a filter on the cast field itself runs after the other filters, so the cast still only sees the rows they pass
+query II
+SELECT count(*), sum(v.k::INTEGER) FROM ducklake.casts WHERE id < 5 AND v.k::INTEGER > 2;
+----
+2	7
+
+query II
+SELECT count(*), sum(v.k::INTEGER) FROM ducklake.casts WHERE id BETWEEN 10 AND 14 AND v.k::INTEGER > 11;
+----
+2	25
