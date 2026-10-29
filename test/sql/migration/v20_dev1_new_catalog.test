@@ -18,13 +18,15 @@ SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
 2.0-dev1
 
+# SQLite reports the timestamp column as text
 query II
-SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_snapshot_tag') ORDER BY column_index
+SELECT column_name, CASE WHEN column_name = 'expires_at' AND data_type = 'VARCHAR' THEN 'TIMESTAMP WITH TIME ZONE' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_snapshot_tag') ORDER BY column_index
 ----
 tag_name	VARCHAR
 snapshot_id	BIGINT
 begin_snapshot	BIGINT
 end_snapshot	BIGINT
+expires_at	TIMESTAMP WITH TIME ZONE
 
 query I
 SELECT COUNT(*) FROM meta.ducklake_snapshot_tag

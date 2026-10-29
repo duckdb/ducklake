@@ -49,11 +49,15 @@ bool DuckLakeTableFunctionUtil::TryGetTimestampOption(const TableFunctionBindInp
 	if (!TryGetNonNullOption(input, name, "timestamp", result)) {
 		return false;
 	}
-	if (!IsFilterTimestamp(timestamp_t(result.GetValue<timestamp_tz_t>().value))) {
-		throw InvalidInputException("The %s option must be a finite timestamp in the year 1 or later, not '%s'", name,
-		                            result.ToString());
-	}
+	CheckTimestampOption(name, result);
 	return true;
+}
+
+void DuckLakeTableFunctionUtil::CheckTimestampOption(const string &name, const Value &value) {
+	if (!IsFilterTimestamp(timestamp_t(value.GetValue<timestamp_tz_t>().value))) {
+		throw InvalidInputException("The %s option must be a finite timestamp in the year 1 or later, not '%s'", name,
+		                            value.ToString());
+	}
 }
 
 string DuckLakeTableFunctionUtil::GetStringOption(const TableFunctionBindInput &input, const string &name) {

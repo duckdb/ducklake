@@ -63,12 +63,10 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 		    "ducklake_expire_snapshots: cannot specify both 'versions' and 'older_than' parameters at the "
 		    "same time. Please use only one criterion.");
 	}
-	// An explicitly empty version set expires no snapshots.
-	if (has_versions && snapshot_ids.empty()) {
-		return std::move(result);
-	}
-	// No criteria given and no global default: silently no-op.
-	if (!has_versions && !has_timestamp && older_than_default.empty()) {
+	// an empty version set, or no criterion and no global default, expires no snapshots
+	if ((has_versions && snapshot_ids.empty()) || (!has_versions && !has_timestamp && older_than_default.empty())) {
+		// the expiry still drops the tags whose expiry time has passed
+		result->filter = "FALSE";
 		return std::move(result);
 	}
 

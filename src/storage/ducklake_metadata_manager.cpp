@@ -643,7 +643,7 @@ void DuckLakeMetadataManager::MigrateV10(bool from_dev1) {
 
 string DuckLakeMetadataManager::GetSnapshotTagTableStatement() {
 	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_tag(tag_name VARCHAR, snapshot_id BIGINT, "
-	       "begin_snapshot BIGINT, end_snapshot BIGINT);";
+	       "begin_snapshot BIGINT, end_snapshot BIGINT, expires_at TIMESTAMPTZ);";
 }
 
 void DuckLakeMetadataManager::MigrateV11() {
@@ -5678,12 +5678,12 @@ vector<DuckLakeSnapshotTagInfo> DuckLakeMetadataManager::GetSnapshotTags(bool wi
 		return vector<DuckLakeSnapshotTagInfo>();
 	}
 	string query = R"(
-SELECT tag_name, snapshot_id, NULL, begin_snapshot
+SELECT tag_name, snapshot_id, NULL, begin_snapshot, expires_at
 FROM {METADATA_CATALOG}.ducklake_snapshot_tag
 WHERE end_snapshot IS NULL;)";
 	if (with_snapshot_time) {
 		query = R"(
-SELECT tag_name, tag.snapshot_id, snap.snapshot_time, tag.begin_snapshot
+SELECT tag_name, tag.snapshot_id, snap.snapshot_time, tag.begin_snapshot, tag.expires_at
 FROM {METADATA_CATALOG}.ducklake_snapshot_tag tag
 LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot snap ON snap.snapshot_id = tag.snapshot_id
 WHERE tag.end_snapshot IS NULL
@@ -5700,6 +5700,9 @@ ORDER BY tag.begin_snapshot ASC, tag_name ASC;)";
 		tag.snapshot_time = row.IsNull(2) ? Value(LogicalType::TIMESTAMP_TZ)
 		                                  : row.GetBaseValue(2).CastAs(*context, LogicalType::TIMESTAMP_TZ);
 		tag.created_snapshot_id = row.GetValue<idx_t>(3);
+		if (!row.IsNull(4)) {
+			tag.expires_at = row.GetBaseValue(4).CastAs(*context, LogicalType::TIMESTAMP_TZ);
+		}
 		tags.push_back(std::move(tag));
 	}
 	return tags;
@@ -5734,23 +5737,28 @@ idx_t DuckLakeMetadataManager::ResolveSnapshotVersion(const Value &version) {
 	throw InvalidInputException("No snapshot found at version %s", name);
 }
 
+string DuckLakeMetadataManager::EndSnapshotTagSql(const DuckLakeSnapshotTagInfo &tag) {
+	// the collation of the catalog can fold names, so they compare byte for byte
+	return StringUtil::Format(
+	    "UPDATE {METADATA_CATALOG}.ducklake_snapshot_tag SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS "
+	    "NULL AND %s = %s AND snapshot_id = %d AND begin_snapshot = %d;\n",
+	    DuckLakeUtil::WithBinaryCollation("tag_name"), SQLString(tag.name), tag.snapshot_id,
+	    tag.created_snapshot_id.GetIndex());
+}
+
 string
-DuckLakeMetadataManager::WriteSnapshotTagChanges(const case_insensitive_map_t<idx_t> &created,
+DuckLakeMetadataManager::WriteSnapshotTagChanges(const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &created,
                                                  const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped) {
 	string result;
 	for (auto &entry : dropped) {
-		// the collation of the catalog can fold names, so they compare byte for byte
-		auto &tag = entry.second;
-		result += StringUtil::Format(
-		    "UPDATE {METADATA_CATALOG}.ducklake_snapshot_tag SET end_snapshot = {SNAPSHOT_ID} WHERE end_snapshot IS "
-		    "NULL AND %s = %s AND snapshot_id = %d AND begin_snapshot = %d;\n",
-		    DuckLakeUtil::WithBinaryCollation("tag_name"), SQLString(tag.name), tag.snapshot_id,
-		    tag.created_snapshot_id.GetIndex());
+		result += EndSnapshotTagSql(entry.second);
 	}
-	for (auto &tag : created) {
+	for (auto &entry : created) {
+		auto &tag = entry.second;
+		auto expires_at = tag.expires_at.IsNull() ? string("NULL") : tag.expires_at.ToSQLString();
 		result += StringUtil::Format(
-		    "INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_tag VALUES (%s, %d, {SNAPSHOT_ID}, NULL);\n",
-		    SQLString(tag.first), tag.second);
+		    "INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_tag VALUES (%s, %d, {SNAPSHOT_ID}, NULL, %s);\n",
+		    SQLString(entry.first), tag.snapshot_id, expires_at);
 	}
 	return result;
 }

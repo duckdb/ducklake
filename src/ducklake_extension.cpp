@@ -99,6 +99,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	DuckLakeDropTagFunction drop_tag;
 	loader.RegisterFunction(drop_tag);
 
+	DuckLakeSetTagExpiryFunction set_tag_expiry;
+	loader.RegisterFunction(set_tag_expiry);
+
 	DuckLakeTagsFunction tags;
 	loader.RegisterFunction(tags);
 

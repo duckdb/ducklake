@@ -32,6 +32,8 @@ public:
 	static bool TryGetNonNullOption(const TableFunctionBindInput &input, const string &name, const string &type_name,
 	                                Value &result);
 	static bool TryGetTimestampOption(const TableFunctionBindInput &input, const string &name, Value &result);
+	//! Fails unless the timestamp is finite and in the year 1 or later
+	static void CheckTimestampOption(const string &name, const Value &value);
 	static string GetStringOption(const TableFunctionBindInput &input, const string &name);
 	static string GetTableName(const Value &input);
 	static void VerifySnapshotIdentifier(const Value &input);
@@ -146,6 +148,11 @@ public:
 class DuckLakeDropTagFunction : public TableFunction {
 public:
 	DuckLakeDropTagFunction();
+};
+
+class DuckLakeSetTagExpiryFunction : public TableFunction {
+public:
+	DuckLakeSetTagExpiryFunction();
 };
 
 class DuckLakeTagsFunction : public DuckLakeBaseMetadataFunction {

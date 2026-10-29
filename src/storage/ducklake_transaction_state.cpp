@@ -369,10 +369,10 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 	}
 }
 
-string DuckLakeTransactionState::TaggedSnapshotIdList(const case_insensitive_map_t<idx_t> &tags) {
+string DuckLakeTransactionState::TaggedSnapshotIdList(const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &tags) {
 	vector<string> snapshot_ids;
 	for (auto &tag : tags) {
-		snapshot_ids.push_back(to_string(tag.second));
+		snapshot_ids.push_back(to_string(tag.second.snapshot_id));
 	}
 	return StringUtil::Join(snapshot_ids, ", ");
 }
@@ -389,10 +389,10 @@ void DuckLakeTransactionState::CheckTaggedSnapshotsExist(const DuckLakeCommitCon
 		existing.insert(row.GetValue<idx_t>(0));
 	}
 	for (auto &tag : new_snapshot_tags) {
-		if (existing.find(tag.second) == existing.end()) {
+		if (existing.find(tag.second.snapshot_id) == existing.end()) {
 			throw TransactionException("Transaction conflict - attempting to create tag %s for snapshot %d"
 			                           " - but another transaction has expired the snapshot",
-			                           tag.first, tag.second);
+			                           tag.first, tag.second.snapshot_id);
 		}
 	}
 }
@@ -2792,15 +2792,20 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				context.rewrite_before_retry();
 			}
 			// read after the latest snapshot, so a commit the expiry does not see takes the id of the new snapshot
-			auto expired_snapshots = context.get_expired_snapshots(i, commit_snapshot.snapshot_id - 1);
+			auto expiry = context.get_expired_snapshots(i, commit_snapshot.snapshot_id - 1);
+			auto &expired_snapshots = expiry.snapshots;
 			// a commit of options alone, or of an expiry with nothing left to expire, writes no snapshot
-			wrote_snapshot = context.write_snapshot && (!expired_snapshots.empty() || !context.only_expires_snapshots);
+			wrote_snapshot = context.write_snapshot &&
+			                 (!expired_snapshots.empty() || !expiry.tags.empty() || !context.only_expires_snapshots);
 			if (!wrote_snapshot && !context.locks_config_options) {
 				context.commit_connection();
 				break;
 			}
 			for (auto &snapshot : expired_snapshots) {
 				attempt_changes.expired_snapshots.insert(snapshot.id);
+			}
+			for (auto &tag : expiry.tags) {
+				attempt_changes.dropped_snapshot_tags.insert(tag.name);
 			}
 			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
 			DuckLakeCommitState commit_state(commit_snapshot);
@@ -2810,6 +2815,9 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
 				if (!expired_snapshots.empty()) {
 					batch_queries += DuckLakeMetadataManager::DeleteSnapshotsSql(expired_snapshots);
+				}
+				for (auto &tag : expiry.tags) {
+					batch_queries += DuckLakeMetadataManager::EndSnapshotTagSql(tag);
 				}
 				batch_queries +=
 				    CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);

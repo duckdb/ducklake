@@ -32,9 +32,9 @@ struct DuckLakeCommitContext {
 	std::function<bool(TableIndex)> inlined_file_deletion_table_exists;
 	//! Returns the latest snapshot for the first commit attempt.
 	std::function<DuckLakeSnapshot()> get_snapshot;
-	//! The snapshots the expiries of the transaction delete in the commit attempt, after the latest snapshot
-	std::function<vector<DuckLakeSnapshotInfo>(idx_t, idx_t)> get_expired_snapshots = [](idx_t, idx_t) {
-		return vector<DuckLakeSnapshotInfo>();
+	//! What the expiries of the transaction delete in the commit attempt, read after the latest snapshot
+	std::function<DuckLakeExpiry(idx_t, idx_t)> get_expired_snapshots = [](idx_t, idx_t) {
+		return DuckLakeExpiry();
 	};
 	//! Deletes the metadata that only the expired snapshots referenced, after the batch that deleted them
 	std::function<void(const vector<DuckLakeSnapshotInfo> &)> cleanup_expired_snapshots =
@@ -200,7 +200,7 @@ public:
 	//! Fails when a snapshot tagged by this transaction was expired meanwhile
 	void CheckTaggedSnapshotsExist(const DuckLakeCommitContext &context) const;
 	//! The ids of the snapshots the tags point at, as a SQL list
-	static string TaggedSnapshotIdList(const case_insensitive_map_t<idx_t> &tags);
+	static string TaggedSnapshotIdList(const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &tags);
 	void CheckFileConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                        const DuckLakeCommitContext &context) const;
 
@@ -316,10 +316,12 @@ public:
 	set<TableIndex> refreshed_table_sizes;
 	//! The tables other transactions changed after the snapshot of a retried commit
 	set<TableIndex> tables_changed_by_others;
-	//! The snapshot tags this transaction creates, with the tagged snapshot
-	case_insensitive_map_t<idx_t> new_snapshot_tags;
+	//! The snapshot tags this transaction creates, by name
+	case_insensitive_map_t<DuckLakeSnapshotTagInfo> new_snapshot_tags;
 	//! The committed snapshot tags this transaction drops, by their stored name
 	case_insensitive_map_t<DuckLakeSnapshotTagInfo> dropped_snapshot_tags;
+	//! The committed snapshot tags past their expiry time that an expiry in the statements of this transaction drops
+	case_insensitive_map_t<DuckLakeSnapshotTagInfo> expired_snapshot_tags;
 };
 
 } // namespace duckdb
