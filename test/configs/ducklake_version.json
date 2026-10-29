@@ -77,7 +77,10 @@
         "test/sql/retirement/discarded_remote_alias_published.test",
         "test/sql/retirement/redated_delete_retirement.test",
         "test/sql/retirement/retired_path_placeholder_name.test",
-        "test/sql/retirement/null_table_path_reference.test"
+        "test/sql/retirement/null_table_path_reference.test",
+        "test/sql/retirement/unlink_recovery.test",
+        "test/sql/retirement/writer_registration_identity.test",
+        "test/sql/retirement/compaction_registration_identity.test"
       ]
     },
     {
@@ -105,7 +108,9 @@
         "test/sql/add_files/add_files_flushed_file.test",
         "test/sql/add_files/add_files_registration_one_transaction.test",
         "test/sql/add_files/add_files_registration_retry_words.test",
-        "test/sql/add_files/add_files_remote_query_keys.test"
+        "test/sql/add_files/add_files_remote_query_keys.test",
+        "test/sql/add_files/add_files_unicode_name.test",
+        "test/sql/add_files/add_files_placeholder_name.test"
       ]
     },
     {
