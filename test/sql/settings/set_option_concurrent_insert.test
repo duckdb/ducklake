@@ -457,7 +457,7 @@ SELECT count(*), max(value) FROM dl.options() WHERE option_name = 'target_file_s
 ----
 1	2000000
 
-# a failed commit would restore expired snapshots whose files the transaction removed, so it commits without the lock
+# a cleanup after an expiry in the same transaction is refused, a failed commit would restore the snapshots without files
 statement ok
 CREATE TABLE dl.expired_files AS SELECT range AS i FROM range(100)
 
@@ -470,7 +470,18 @@ BEGIN
 statement ok con14
 CALL ducklake_expire_snapshots('dl', older_than => now())
 
+statement error con14
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+cannot delete files in a transaction that expired snapshots
+
 statement ok con14
+ROLLBACK
+
+statement ok
+CALL ducklake_expire_snapshots('dl', older_than => now())
+
+statement ok
 CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
 
 statement ok con14
@@ -478,9 +489,6 @@ CALL dl.set_option('parquet_row_group_size', 1000, table_name => 'r2')
 
 statement ok con1
 CALL dl.set_option('parquet_row_group_size', 2000, table_name => 'r3')
-
-statement ok con14
-COMMIT
 
 query II
 SELECT (SELECT count(*) FROM dl.snapshots()),
