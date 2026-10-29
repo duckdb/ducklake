@@ -35,13 +35,13 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::LoadBuiltInFunction(DefaultTable
 	return result;
 }
 
-optional_ptr<CatalogEntry> DuckLakeSchemaEntry::TryLoadBuiltInFunction(const string &entry_name) {
+optional_ptr<CatalogEntry> DuckLakeSchemaEntry::TryLoadBuiltInFunction(const Identifier &entry_name) {
 	lock_guard<mutex> guard(default_function_lock);
 	auto entry = default_function_map.find(entry_name);
 	if (entry != default_function_map.end()) {
 		return entry->second.get();
 	}
-	auto macro = DefaultTableFunctionGenerator::FindTableMacro(ducklake_table_macros, Identifier(entry_name));
+	auto macro = DefaultTableFunctionGenerator::FindTableMacro(ducklake_table_macros, entry_name);
 	return macro ? LoadBuiltInFunction(*macro) : nullptr;
 }
 

@@ -48,7 +48,7 @@ struct DuckLakeFunctionInfo : public TableFunctionInfo {
 
 	DuckLakeTableEntry &table;
 	weak_ptr<DuckLakeTransaction> transaction;
-	string table_name;
+	Identifier table_name;
 	vector<string> column_names;
 	vector<LogicalType> column_types;
 	DuckLakeSnapshot snapshot;

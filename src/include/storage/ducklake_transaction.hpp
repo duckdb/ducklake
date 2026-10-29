@@ -22,6 +22,8 @@
 #include "storage/ducklake_inlined_data.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 
+#include <chrono>
+
 namespace duckdb {
 struct NewMacroInfo;
 class DuckLakeCatalog;
@@ -69,7 +71,7 @@ struct LocalTableDataChanges {
 	vector<DuckLakeDataFile> new_data_files;
 	unique_ptr<DuckLakeInlinedData> new_inlined_data;
 	unordered_map<string, vector<DuckLakeDeleteFile>> new_delete_files;
-	unordered_map<string, unique_ptr<DuckLakeInlinedDataDeletes>> new_inlined_data_deletes;
+	identifier_map_t<unique_ptr<DuckLakeInlinedDataDeletes>> new_inlined_data_deletes;
 	unique_ptr<DuckLakeInlinedFileDeletes> new_inlined_file_deletes;
 	vector<DuckLakeCompactionEntry> compactions;
 	//! The source files of the compactions
@@ -118,7 +120,7 @@ public:
 	void AppendFiles(TableIndex table_id, vector<DuckLakeDataFile> files);
 	void AppendDeleteFiles(TableIndex table_id, const string &data_file_path, vector<DuckLakeDeleteFile> files);
 	void AppendInlinedData(ClientContext &context, TableIndex table_id, unique_ptr<DuckLakeInlinedData> new_data);
-	void AddNewInlinedDeletes(TableIndex table_id, const string &table_name, set<idx_t> new_deletes);
+	void AddNewInlinedDeletes(TableIndex table_id, const Identifier &table_name, set<idx_t> new_deletes);
 	void DeleteFromLocalInlinedData(ClientContext &context, DuckLakeTableEntry &table, set<idx_t> new_deletes);
 	void SetOutdatedStatsTable(TableIndex table_id, DuckLakeTableEntry &table);
 	//! Recompute the inlined column stats that deletes left outdated
@@ -129,7 +131,7 @@ public:
 	                                      LogicalIndex removed_column_index, const DuckLakeFieldId &field_id);
 	//! Records what the files written before the fields were added read for them
 	void AddFieldsToLocalFiles(TableIndex table_id, const DuckLakeTableEntry &table, const set<FieldIndex> &fields);
-	optional_ptr<DuckLakeInlinedDataDeletes> GetInlinedDeletes(TableIndex table_id, const string &table_name) const;
+	optional_ptr<DuckLakeInlinedDataDeletes> GetInlinedDeletes(TableIndex table_id, const Identifier &table_name) const;
 	void AddNewInlinedFileDeletes(TableIndex table_id, idx_t file_id, set<idx_t> new_deletes);
 	//! Returns false without adding it when one of its source files is already compacted
 	bool AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry);
@@ -205,6 +207,8 @@ public:
 	DuckLakeSnapshotCommit &GetCommitInfo();
 	//! Execute SQL on the metadata connection without placeholder substitution or metadata-manager wrapping.
 	unique_ptr<QueryResult> ExecuteRaw(string query);
+	//! Execute a statement on the metadata connection, logged with its query text like ExecuteRaw.
+	unique_ptr<QueryResult> ExecuteStatement(unique_ptr<SQLStatement> statement);
 	Connection &GetConnection();
 	//! Releases the metadata transaction until the next metadata access
 	void ReleaseMetadataTransaction();
@@ -234,11 +238,11 @@ public:
 	DuckLakeCatalogSet &GetOrCreateTransactionLocalEntries(CatalogEntry &entry);
 	optional_ptr<DuckLakeCatalogSet> GetTransactionLocalSchemas();
 	optional_ptr<CatalogEntry> GetTransactionLocalSchema(optional_ptr<const DuckLakeSchemaEntry> parent,
-	                                                     const string &name);
+	                                                     const Identifier &name);
 	vector<reference<DuckLakeSchemaEntry>> GetTransactionLocalChildSchemas(const DuckLakeSchemaEntry &parent);
 	optional_ptr<DuckLakeCatalogSet> GetTransactionLocalEntries(CatalogType type, SchemaIndex schema_id);
 	optional_ptr<CatalogEntry> GetTransactionLocalEntry(CatalogType catalog_type, SchemaIndex schema_id,
-	                                                    const string &entry_name);
+	                                                    const Identifier &entry_name);
 	void GetWrittenFiles(vector<string> &result) const;
 	vector<DuckLakeDataFile> GetTransactionLocalFiles(TableIndex table_id) const;
 	shared_ptr<DuckLakeInlinedData> GetTransactionLocalInlinedData(TableIndex table_id) const;
@@ -259,13 +263,13 @@ public:
 	void AppendInlinedData(TableIndex table_id, unique_ptr<DuckLakeInlinedData> collection);
 	void SetRequiresNewInlinedTable(bool requires_new);
 	bool GetRequiresNewInlinedTable() const;
-	void AddNewInlinedDeletes(TableIndex table_id, const string &table_name, set<idx_t> new_deletes);
+	void AddNewInlinedDeletes(TableIndex table_id, const Identifier &table_name, set<idx_t> new_deletes);
 	void DeleteFromLocalInlinedData(DuckLakeTableEntry &table, set<idx_t> new_deletes);
 	void AddColumnToLocalInlinedData(TableIndex table_id, const LogicalType &new_column_type,
 	                                 FieldIndex new_field_index, const Value &default_value = Value());
 	void RemoveColumnFromLocalInlinedData(TableIndex table_id, LogicalIndex removed_column_index,
 	                                      const DuckLakeFieldId &field_id);
-	optional_ptr<DuckLakeInlinedDataDeletes> GetInlinedDeletes(TableIndex table_id, const string &table_name) const;
+	optional_ptr<DuckLakeInlinedDataDeletes> GetInlinedDeletes(TableIndex table_id, const Identifier &table_name) const;
 
 	//! Add inlined file deletions (deletions from parquet files stored in metadata)
 	void AddNewInlinedFileDeletes(TableIndex table_id, idx_t file_id, set<idx_t> new_deletes);
@@ -291,7 +295,7 @@ public:
 	bool ExpiredSnapshotsInMetadataTransaction();
 	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files);
-	bool InlinedTableFlushed(const string &table_name);
+	bool InlinedTableFlushed(const Identifier &table_name);
 	//! Marks the inlined file deletions of the table flushed up to the snapshot, the commit deletes them
 	void MarkInlinedFileDeletionsFlushed(TableIndex table_id, idx_t flush_snapshot_id);
 	bool InlinedFileDeletionsFlushed(TableIndex table_id);
@@ -307,8 +311,12 @@ public:
 
 	void SetCommitMessage(const DuckLakeSnapshotCommit &option);
 
-	void CreateSnapshotTag(const string &name, idx_t snapshot_id);
+	void CreateSnapshotTag(const string &name, idx_t snapshot_id, const Value &expires_at);
 	void DropSnapshotTag(const string &name);
+	//! Moves a live tag to the snapshot, when it names the expected snapshot if one is given
+	void ReplaceSnapshotTag(const string &name, idx_t snapshot_id, optional_idx expected_snapshot_id);
+	//! Gives a live tag another expiry time, NULL when it does not expire
+	void SetSnapshotTagExpiry(const string &name, const Value &expires_at);
 	//! The live snapshot tags, with the changes of this transaction
 	vector<DuckLakeSnapshotTagInfo> GetSnapshotTags();
 
@@ -375,6 +383,7 @@ public:
 private:
 	void FlushChanges();
 	void BeginMetadataTransaction();
+	void ReportMetadataQuery(const string &query, std::chrono::steady_clock::duration elapsed);
 	void FlushNameMapCacheInvalidations();
 	//! Puts back the config options this transaction replaced in the catalog
 	void UndoConfigOptions();
@@ -395,11 +404,25 @@ private:
 	optional_ptr<const DuckLakeSnapshotTagInfo> FindCommittedSnapshotTag(const string &name,
 	                                                                     vector<DuckLakeSnapshotTagInfo> &tags);
 	vector<DuckLakeSnapshotTagInfo> GetSnapshotTagsInternal(bool with_snapshot_time = true);
+	//! Fails when the expiry of this transaction removes the snapshot a tag is to name
+	void CheckNotExpiredInTransaction(idx_t snapshot_id);
+	//! Expires what a tag change releases, when an expiry of this transaction ran in its statements
+	void ExpireReleasedSnapshots();
+	//! The live tag of the name with the changes of this transaction, which fails when there is none
+	DuckLakeSnapshotTagInfo LiveSnapshotTag(const string &name);
+	//! Makes the changed tag the one the transaction commits for the live tag
+	void ChangeSnapshotTag(const DuckLakeSnapshotTagInfo &tag, DuckLakeSnapshotTagInfo changed);
 	set<idx_t> TaggedSnapshotsInternal();
 	vector<DuckLakeSnapshotInfo> ExpirableSnapshotsInternal(const string &filter);
 	vector<DuckLakeSnapshotInfo> ExpireSnapshotsNow(const string &filter);
-	//! The snapshots the commit attempt expires, those the statements expired for the first attempt
-	vector<DuckLakeSnapshotInfo> ExpiredSnapshotsForCommit(idx_t attempt, idx_t latest_snapshot_id);
+	//! Whether the expiry time of the tag has passed at the start of the transaction
+	bool SnapshotTagExpired(const DuckLakeSnapshotTagInfo &tag) const;
+	//! Fails when the expiry time has passed at the start of the transaction
+	void CheckSnapshotTagExpiry(const string &name, const Value &expires_at) const;
+	//! The live tags whose expiry time has passed, which an expiry drops
+	vector<DuckLakeSnapshotTagInfo> ExpiredSnapshotTagsInternal();
+	//! What the commit attempt expires, what the statements expired for the first attempt
+	DuckLakeExpiry ExpiredSnapshotsForCommit(idx_t attempt, idx_t latest_snapshot_id);
 	bool ChangesMadeBesidesExpiry() const;
 
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
@@ -428,6 +451,8 @@ private:
 	//! The snapshots the statements of this transaction expired, and the latest snapshot the first expiry saw
 	vector<DuckLakeSnapshotInfo> expired_in_transaction;
 	optional_idx expiry_snapshot_id;
+	//! The start of the transaction, which judges the expiry times of tags as now() does
+	timestamp_tz_t start_time;
 	DuckLakeSnapshot GetLatestSnapshot();
 	//! The latest snapshot in DuckLake when the transaction first looked, the snapshot of the transaction unless the
 	//! catalog is opened at a fixed snapshot

@@ -1,0 +1,62 @@
+# name: test/sql/default/missing_default_is_null.test
+# description: a column without a default has a NULL column_default, not the text NULL
+# group: [default]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/missing_default_is_null.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/missing_default_is_null')
+
+statement ok
+CREATE TABLE dl.t (id INTEGER, name VARCHAR NOT NULL, s STRUCT(a INTEGER))
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN added INTEGER
+
+query II
+SELECT column_name, column_default IS NULL FROM information_schema.columns
+WHERE table_catalog = 'dl' AND table_name = 't' ORDER BY ordinal_position
+----
+id	true
+name	true
+s	true
+added	true
+
+query I
+SELECT contains(sql, 'DEFAULT') FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 't'
+----
+false
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/missing_default_is_null')
+
+query II
+SELECT column_name, column_default IS NULL FROM information_schema.columns
+WHERE table_catalog = 'dl' AND table_name = 't' ORDER BY ordinal_position
+----
+id	true
+name	true
+s	true
+added	true
+
+query I
+SELECT contains(sql, 'DEFAULT') FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 't'
+----
+false
+
+statement ok
+INSERT INTO dl.t (name) VALUES ('x')
+
+query IIII
+SELECT id, name, s, added FROM dl.t
+----
+NULL	x	NULL	NULL

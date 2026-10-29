@@ -43,7 +43,14 @@
         "test/sql/tags/tags_expire_files.test",
         "test/sql/tags/tags_expire_history.test",
         "test/sql/tags/tags_expire_open_conflict.test",
+        "test/sql/tags/tags_expires_at.test",
+        "test/sql/tags/tags_expires_at_conflict.test",
+        "test/sql/tags/tags_expires_at_empty_selection.test",
+        "test/sql/tags/sqlite_wal_tags_expires_at.test",
         "test/sql/tags/tags_parallel.test",
+        "test/sql/tags/tags_replace.test",
+        "test/sql/tags/tags_replace_conflict.test",
+        "test/sql/tags/sqlite_wal_tags_replace.test",
         "test/sql/tags/tags_time_travel.test",
         "test/sql/tags/tags_transaction.test"
       ]
@@ -65,6 +72,18 @@
         "test/sql/macros/test_null_default.test",
         "test/sql/macros/typed_null_default.test",
         "test/sql/geo/null_to_geometry_promotion_stats.test"
+      ]
+    },
+    {
+      "reason": "The TIMESTAMPTZ_NS column type was added in 1.1 and is not available when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/add_files/add_files_type_check_reader_types.test",
+        "test/sql/default/literal_default_rendering.test",
+        "test/sql/partitioning/partition_transform_column_types.test",
+        "test/sql/stats/filter_pushdown_postgres_types.test",
+        "test/sql/stats/timestamptz_retype_stats_time_zone.test",
+        "test/sql/stats/timestamptz_retype_topn_time_zone.test",
+        "test/sql/types/timestamptz_ns_values.test"
       ]
     },
     {

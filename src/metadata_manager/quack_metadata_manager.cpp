@@ -2,6 +2,7 @@
 #include "common/ducklake_row_helpers.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/connection.hpp"
+#include "duckdb/main/settings.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_staged_commit.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -18,7 +19,8 @@ unique_ptr<QueryResult> QuackMetadataManager::Query(string &query) {
 	auto schema_identifier = SQLQuotedIdentifier::ToString(ducklake_catalog.MetadataSchemaName());
 	SubstituteCatalogPlaceholders(query, schema_identifier);
 
-	auto metadata_catalog_name_literal = SQLString::ToString(ducklake_catalog.MetadataDatabaseName());
+	auto metadata_catalog_name_literal =
+	    SQLString::ToString(ducklake_catalog.MetadataDatabaseName().GetIdentifierName());
 	auto wrapper = StringUtil::Format("CALL system.main.quack_query_by_name(%s, %s)", metadata_catalog_name_literal,
 	                                  SQLString(query));
 	auto result = transaction.ExecuteRaw(std::move(wrapper));
@@ -34,6 +36,8 @@ unique_ptr<QueryResult> QuackMetadataManager::AttachMetadata(const string &attac
 	auto query = attach_query;
 	SubstituteCatalogPlaceholders(query);
 	Connection fresh_conn(transaction.GetCatalog().GetDatabase());
+	// the attach error becomes part of the error of the DuckLake attach, which a global SET errors_as_json would nest
+	Settings::Set<ErrorsAsJSONSetting>(*fresh_conn.context, SetScope::SESSION, Value::BOOLEAN(false));
 	auto result = fresh_conn.Query(query);
 
 	for (idx_t attempt = 0; attempt < 5 && result->HasError(); attempt++) {
@@ -66,7 +70,7 @@ string QuackMetadataManager::MetadataExistsQuery() const {
 	       "WHERE table_name = 'ducklake_metadata' AND table_schema = {METADATA_SCHEMA_NAME_LITERAL}";
 }
 
-bool QuackMetadataManager::InlinedDeletionTableExists(const string &table_name) {
+bool QuackMetadataManager::InlinedDeletionTableExists(const Identifier &table_name) {
 	// duckdb_tables() builds a row for every table on the server, so one listing serves every table of the snapshot
 	// keyed by the newest snapshot of the transaction, which a catalog attached at an older snapshot can read too
 	auto tables = transaction.GetCatalog().GetInlinedDeletionTables(transaction.GetNewestVisibleSnapshotId(), [&]() {
@@ -81,7 +85,7 @@ bool QuackMetadataManager::InlinedDeletionTableExists(const string &table_name) 
 		}
 		return listed;
 	});
-	return tables->count(table_name) > 0;
+	return tables->count(table_name.GetIdentifierName()) > 0;
 }
 
 void QuackMetadataManager::ClearCache() {
