@@ -1893,7 +1893,16 @@ bool DuckLakeTransaction::ConfigOptionsWrittenByOthers() {
 		for (idx_t later = i + 1; later < config_option_undo.size(); later++) {
 			changed_again = changed_again || IsSameConfigOption(config_option_undo[later].option, change.option);
 		}
-		if (!changed_again && metadata_manager->ConfigOptionRowCount(change.option) != change.metadata_rows) {
+		if (changed_again) {
+			continue;
+		}
+		auto rows = metadata_manager->ConfigOptionRowCount(change.option);
+		if (rows != change.metadata_rows) {
+			return true;
+		}
+		// under READ COMMITTED a set matches no row when another commit reset the option and set it again
+		if (!change.reset &&
+		    metadata_manager->ConfigOptionRowCount(change.option, &change.option.option.value) != rows) {
 			return true;
 		}
 	}

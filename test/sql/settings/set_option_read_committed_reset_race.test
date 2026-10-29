@@ -1,0 +1,66 @@
+# name: test/sql/settings/set_option_read_committed_reset_race.test
+# description: on a Postgres catalog at READ COMMITTED, a set_option that waits on a reset and set of the same option stores its value
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake
+(DATA_PATH '{DATA_PATH}/set_option_read_committed_reset_race', DUCKLAKE_VERSION '1.1', META_ISOLATION_LEVEL 'READ COMMITTED', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t (i INTEGER)
+
+statement ok
+CALL lake.set_option('parquet_compression', 'zstd', table_name => 't')
+
+# thread 0 resets the option and sets it again, thread 1 sets it in between and commits last
+concurrentloop threadid 0 2
+
+statement ok
+BEGIN
+
+onlyif threadid=0
+statement ok
+ALTER TABLE lake.t RESET (parquet_compression)
+
+onlyif threadid=0
+statement ok
+SELECT sleep_ms(1500)
+
+onlyif threadid=0
+statement ok
+CALL lake.set_option('parquet_compression', 'snappy', table_name => 't')
+
+onlyif threadid=1
+statement ok
+SELECT sleep_ms(500)
+
+onlyif threadid=1
+statement ok
+CALL lake.set_option('parquet_compression', 'gzip', table_name => 't')
+
+statement ok
+COMMIT
+
+endloop
+
+statement ok
+INSERT INTO lake.t VALUES (1)
+
+# the stored option is the one the session writes with, whichever thread committed last
+query I
+SELECT upper((SELECT value FROM lake.options() WHERE option_name = 'parquet_compression' AND scope_entry = 'main.t')) =
+(SELECT min(compression) FROM parquet_metadata('{DATA_PATH}/set_option_read_committed_reset_race/main/t/**'))
+----
+true

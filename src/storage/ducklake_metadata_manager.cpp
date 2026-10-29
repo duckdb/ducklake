@@ -6128,11 +6128,15 @@ DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s
 	return result->Fetch()->GetValue(0, 0).GetValue<idx_t>() > 0;
 }
 
-idx_t DuckLakeMetadataManager::ConfigOptionRowCount(const DuckLakeConfigOption &option) {
+idx_t DuckLakeMetadataManager::ConfigOptionRowCount(const DuckLakeConfigOption &option,
+                                                    optional_ptr<const string> value) {
 	string scope;
 	string scope_id;
 	string scope_filter;
 	ConfigOptionScope(option, scope, scope_id, scope_filter);
+	if (value) {
+		scope_filter += StringUtil::Format(" AND value = %s", SQLString(*value));
+	}
 	auto result = Query(StringUtil::Format(R"(
 SELECT COUNT(*)
 FROM {METADATA_CATALOG}.ducklake_metadata
