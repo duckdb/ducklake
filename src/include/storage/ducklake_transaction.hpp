@@ -53,6 +53,13 @@ class DuckLakeTransactionState;
 class DuckLakeInternalConnectionState : public ClientContextState {
 public:
 	static constexpr const char *KEY = "ducklake_internal_connection";
+	explicit DuckLakeInternalConnectionState(shared_ptr<ClientContext> base_context);
+	void QueryBegin(ClientContext &context) override;
+	void QueryEnd(ClientContext &context) override;
+
+private:
+	//! The owning transaction must not keep its caller alive between metadata queries.
+	weak_ptr<ClientContext> base_context;
 };
 
 struct FlushedInlinedTableInfo {

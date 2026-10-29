@@ -1,0 +1,51 @@
+# name: test/sql/metadata/query_deadline.test
+# description: metadata queries inherit their caller's deadline and release it afterward
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+statement ok
+SET threads = 1
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_query_deadline.db' AS lake (DATA_PATH '{TEST_DIR}/metadata_query_deadline_files')
+
+statement ok
+CREATE TABLE lake.items AS SELECT 42 AS i
+
+statement ok
+ALTER TABLE __ducklake_metadata_lake.ducklake_snapshot RENAME TO original_snapshot
+
+# Fail with a distinct error if the metadata query runs to completion instead of observing the deadline.
+statement ok
+CREATE VIEW __ducklake_metadata_lake.ducklake_snapshot AS
+SELECT * FROM __ducklake_metadata_lake.original_snapshot
+WHERE CASE WHEN (SELECT sum(sin(i)) FROM range(100000000) t(i)) IS NOT NULL
+           THEN error('metadata query ignored caller deadline') ELSE true END
+
+statement ok
+SET max_execution_time = 100
+
+statement error
+SELECT * FROM lake.items
+----
+Query exceeded maximum execution time
+
+statement ok
+RESET max_execution_time
+
+statement ok
+DROP VIEW __ducklake_metadata_lake.ducklake_snapshot
+
+statement ok
+ALTER TABLE __ducklake_metadata_lake.original_snapshot RENAME TO ducklake_snapshot
+
+query I
+SELECT * FROM lake.items
+----
+42
+
+statement ok
+DETACH lake

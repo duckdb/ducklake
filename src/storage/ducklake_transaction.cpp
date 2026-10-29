@@ -40,6 +40,18 @@
 
 namespace duckdb {
 
+DuckLakeInternalConnectionState::DuckLakeInternalConnectionState(shared_ptr<ClientContext> base_context_p)
+    : base_context(std::move(base_context_p)) {
+}
+
+void DuckLakeInternalConnectionState::QueryBegin(ClientContext &context) {
+	context.base_context = base_context.lock();
+}
+
+void DuckLakeInternalConnectionState::QueryEnd(ClientContext &context) {
+	context.base_context.reset();
+}
+
 bool LocalTableDataChanges::IsEmpty() const {
 	if (!new_data_files.empty()) {
 		return false;
@@ -917,10 +929,13 @@ void DuckLakeTransaction::Rollback() {
 Connection &DuckLakeTransaction::GetConnection() {
 	lock_guard<mutex> lock(connection_lock);
 	if (!connection) {
-		connection = make_uniq<Connection>(db);
-		connection->context->registered_state->GetOrCreate<DuckLakeInternalConnectionState>(
-		    DuckLakeInternalConnectionState::KEY);
 		auto caller_context = context.lock();
+		connection = make_uniq<Connection>(caller_context ? Connection::CreateInternal(*caller_context)
+		                                                  : Connection::CreateInternal(db));
+		// Follow the transaction owner so an internal caller's finalization suppression is preserved.
+		connection->context->base_context.reset();
+		connection->context->registered_state->GetOrCreate<DuckLakeInternalConnectionState>(
+		    DuckLakeInternalConnectionState::KEY, caller_context);
 		if (caller_context) {
 			DuckLakeUtil::CopyExtensionSettings(*caller_context, *connection->context);
 		}
