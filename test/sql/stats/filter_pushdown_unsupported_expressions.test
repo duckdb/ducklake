@@ -34,16 +34,29 @@ EXPLAIN ANALYZE SELECT i FROM dl.t WHERE b = '\x01'::BLOB
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 2.*
 
-# a comparison other than (in)equality and ordering
+# NULL keeps the optimizer from rewriting IS DISTINCT FROM to !=.
+statement ok
+CREATE TABLE dl.n (i INTEGER)
+
+statement ok
+INSERT INTO dl.n VALUES (1)
+
+statement ok
+INSERT INTO dl.n VALUES (2)
+
+statement ok
+INSERT INTO dl.n VALUES (NULL)
+
 query I
-SELECT i FROM dl.t WHERE i IS DISTINCT FROM 1
+SELECT i FROM dl.n WHERE i IS DISTINCT FROM 1 ORDER BY i NULLS LAST
 ----
 2
+NULL
 
 query II
-EXPLAIN ANALYZE SELECT i FROM dl.t WHERE i IS DISTINCT FROM 1
+EXPLAIN ANALYZE SELECT i FROM dl.n WHERE i IS DISTINCT FROM 1
 ----
-analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+analyzed_plan	<REGEX>:.*Total Files Read: 3.*
 
 # a constant that cannot be written into the stats query
 query I
