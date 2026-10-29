@@ -35,6 +35,7 @@
       "reason": "Snapshot tags need DuckLake 2.0 and are not available when ducklake_default_version is pinned to 1.0",
       "paths": [
         "test/sql/cleanup/expire_retry_keeps_tagged_files.test",
+        "test/sql/settings/set_option_concurrent_insert_expiry.test",
         "test/sql/tags/tags_basic.test",
         "test/sql/tags/tags_conflict.test",
         "test/sql/tags/tags_expire.test",

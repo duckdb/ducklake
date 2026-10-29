@@ -2794,9 +2794,11 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			// read after the latest snapshot, so a commit the expiry does not see takes the id of the new snapshot
 			auto expiry = context.get_expired_snapshots(i, commit_snapshot.snapshot_id - 1);
 			auto &expired_snapshots = expiry.snapshots;
-			if (expired_snapshots.empty() && expiry.tags.empty() && context.only_expires_snapshots) {
+			// a commit of options alone, or of an expiry with nothing left to expire, writes no snapshot
+			wrote_snapshot = context.write_snapshot &&
+			                 (!expired_snapshots.empty() || !expiry.tags.empty() || !context.only_expires_snapshots);
+			if (!wrote_snapshot && !context.locks_config_options) {
 				context.commit_connection();
-				wrote_snapshot = false;
 				break;
 			}
 			for (auto &snapshot : expired_snapshots) {
@@ -2807,16 +2809,20 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			}
 			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
 			DuckLakeCommitState commit_state(commit_snapshot);
-			// write the new snapshot
-			string batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
-			if (!expired_snapshots.empty()) {
-				batch_queries += DuckLakeMetadataManager::DeleteSnapshotsSql(expired_snapshots);
+			string batch_queries;
+			if (wrote_snapshot) {
+				// write the new snapshot
+				batch_queries = DuckLakeMetadataManager::InsertSnapshotSql();
+				if (!expired_snapshots.empty()) {
+					batch_queries += DuckLakeMetadataManager::DeleteSnapshotsSql(expired_snapshots);
+				}
+				for (auto &tag : expiry.tags) {
+					batch_queries += DuckLakeMetadataManager::EndSnapshotTagSql(tag);
+				}
+				batch_queries +=
+				    CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
+				batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
 			}
-			for (auto &tag : expiry.tags) {
-				batch_queries += DuckLakeMetadataManager::EndSnapshotTagSql(tag);
-			}
-			batch_queries += CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
-			batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context.commit_info);
 			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				auto &commit_error = res->GetErrorObject();
@@ -2839,7 +2845,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			// an internal error is a bug that a retry cannot fix
 			// a retryable metadata error in the conflict check is retried, a conflict that it finds is not
 			bool retry_on_error =
-			    error.Type() != ExceptionType::INTERNAL &&
+			    error.Type() != ExceptionType::INTERNAL && !context.skip_retry() &&
 			    (retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error.RawMessage())));
 			if (retry_on_error) {
 				try {

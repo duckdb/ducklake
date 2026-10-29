@@ -6134,10 +6134,7 @@ DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s
 	return result->Fetch()->GetValue(0, 0).GetValue<idx_t>() > 0;
 }
 
-void DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option) {
-	// check if the option already exists
-	auto &option_key = option.option.key;
-	auto &option_value = option.option.value;
+idx_t DuckLakeMetadataManager::ConfigOptionRowCount(const DuckLakeConfigOption &option) {
 	string scope;
 	string scope_id;
 	string scope_filter;
@@ -6147,9 +6144,20 @@ SELECT COUNT(*)
 FROM {METADATA_CATALOG}.ducklake_metadata
 WHERE key = %s AND %s
 )",
-	                                       SQLString(option_key), scope_filter));
+	                                       SQLString(option.option.key), scope_filter));
+	return result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
+}
 
-	auto count = result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
+idx_t DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option) {
+	auto &option_key = option.option.key;
+	auto &option_value = option.option.value;
+	string scope;
+	string scope_id;
+	string scope_filter;
+	ConfigOptionScope(option, scope, scope_id, scope_filter);
+	// check if the option already exists
+	auto count = ConfigOptionRowCount(option);
+	unique_ptr<QueryResult> result;
 	if (count == 0) {
 		// option does not yet exist - insert the value
 		result = Execute(StringUtil::Format(R"(
@@ -6157,13 +6165,18 @@ INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES (%s, %s, %s, %s)
 )",
 		                                    SQLString(option_key), SQLString(option_value), scope, scope_id));
 	} else {
-		// option already exists - update it
+		// update the option, or insert it when another commit removed it under READ COMMITTED
 		result = Execute(StringUtil::Format(R"(
-UPDATE {METADATA_CATALOG}.ducklake_metadata SET value=%s WHERE key=%s AND %s
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value=%s WHERE key=%s AND %s;
+INSERT INTO {METADATA_CATALOG}.ducklake_metadata SELECT %s, %s, %s, %s
+WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_metadata WHERE key=%s AND %s);
 )",
-		                                    SQLString(option_value), SQLString(option_key), scope_filter));
+		                                    SQLString(option_value), SQLString(option_key), scope_filter,
+		                                    SQLString(option_key), SQLString(option_value), scope, scope_id,
+		                                    SQLString(option_key), scope_filter));
 	}
 	result->ThrowIfError("Failed to insert config option in DuckLake: ");
+	return count == 0 ? 1 : count;
 }
 
 bool DuckLakeMetadataManager::IsEncrypted() const {

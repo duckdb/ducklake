@@ -1,0 +1,506 @@
+# name: test/sql/settings/set_option_concurrent_insert.test
+# description: a new option that two transactions set at once on a Postgres catalog is stored once
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+# a retried commit on 1.1 does not expire again
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/set_option_concurrent_insert', DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+CREATE TABLE dl.u (i INTEGER)
+
+statement ok
+CREATE TABLE dl.w (i INTEGER)
+
+statement ok
+CREATE TABLE dl.x (i INTEGER)
+
+# con2 reads the catalog before con1 sets the option
+statement ok con2
+BEGIN
+
+statement ok con2
+SELECT count(*) FROM dl.t
+
+statement ok con1
+CALL dl.set_option('data_inlining_row_limit', 100, table_name => 't')
+
+statement ok con2
+CALL dl.set_option('data_inlining_row_limit', 200, table_name => 't')
+
+statement ok con2
+COMMIT
+
+query II
+SELECT count(*), max(value) FROM dl.options() WHERE option_name = 'data_inlining_row_limit'
+----
+1	200
+
+# an option that exists is updated while another transaction inserts a new one
+statement ok con3
+BEGIN
+
+statement ok con3
+SELECT count(*) FROM dl.t
+
+statement ok con1
+CALL dl.set_option('target_file_size', '1MB', table_name => 't')
+
+statement ok con3
+CALL dl.set_option('data_inlining_row_limit', 300, table_name => 't')
+
+statement ok con3
+COMMIT
+
+query II
+SELECT option_name, value FROM dl.options() WHERE scope = 'TABLE' ORDER BY ALL
+----
+data_inlining_row_limit	300
+target_file_size	1000000
+
+# a new option of another table is set at the same time
+statement ok con4
+BEGIN
+
+statement ok con4
+SELECT count(*) FROM dl.u
+
+statement ok con1
+CALL dl.set_option('parquet_row_group_size', 1000, table_name => 't')
+
+statement ok con4
+CALL dl.set_option('parquet_row_group_size', 2000, table_name => 'u')
+
+statement ok con4
+COMMIT
+
+query II
+SELECT count(*), sum(value::INTEGER) FROM dl.options() WHERE option_name = 'parquet_row_group_size'
+----
+2	3000
+
+# the same for an option of a schema and a global option
+statement ok con5
+BEGIN
+
+statement ok con5
+SELECT count(*) FROM dl.t
+
+statement ok con1
+CALL dl.set_option('target_file_size', '3MB', schema => 'main')
+
+statement ok con5
+CALL dl.set_option('target_file_size', '4MB', schema => 'main')
+
+statement ok con5
+COMMIT
+
+statement ok con5
+BEGIN
+
+statement ok con5
+SELECT count(*) FROM dl.t
+
+statement ok con1
+CALL dl.set_option('target_file_size', '3MB')
+
+statement ok con5
+CALL dl.set_option('target_file_size', '4MB')
+
+statement ok con5
+COMMIT
+
+query II
+SELECT scope, value FROM dl.options() WHERE option_name = 'target_file_size' ORDER BY ALL
+----
+GLOBAL	4000000
+SCHEMA	4000000
+TABLE	1000000
+
+# two new options of the same table, schema or global scope are set at the same time
+statement ok
+CREATE TABLE dl.y (i INTEGER)
+
+statement ok con6
+BEGIN
+
+statement ok con6
+SELECT count(*) FROM dl.t
+
+statement ok con1
+CALL dl.set_option('parquet_compression', 'gzip', table_name => 'y')
+
+statement ok con6
+CALL dl.set_option('parquet_row_group_size', 5000, table_name => 'y')
+
+statement ok con6
+COMMIT
+
+statement ok con6
+BEGIN
+
+statement ok con6
+SELECT count(*) FROM dl.t
+
+statement ok con1
+CALL dl.set_option('parquet_compression', 'gzip', schema => 'main')
+
+statement ok con6
+CALL dl.set_option('parquet_row_group_size', 5000, schema => 'main')
+
+statement ok con6
+COMMIT
+
+statement ok con6
+BEGIN
+
+statement ok con6
+SELECT count(*) FROM dl.t
+
+statement ok con1
+CALL dl.set_option('parquet_compression', 'gzip')
+
+statement ok con6
+CALL dl.set_option('parquet_row_group_size', 5000)
+
+statement ok con6
+COMMIT
+
+query III
+SELECT scope, option_name, value FROM dl.options()
+WHERE option_name IN ('parquet_compression', 'parquet_row_group_size') AND (scope <> 'TABLE' OR scope_entry = 'main.y')
+ORDER BY ALL
+----
+GLOBAL	parquet_compression	gzip
+GLOBAL	parquet_row_group_size	5000
+SCHEMA	parquet_compression	gzip
+SCHEMA	parquet_row_group_size	5000
+TABLE	parquet_compression	gzip
+TABLE	parquet_row_group_size	5000
+
+# writers set options while an open transaction sets one of them, and its rollback leaves their values
+concurrentloop threadid 0 3
+
+onlyif threadid=0
+statement ok
+BEGIN
+
+onlyif threadid=0
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10, table_name => 'w')
+
+onlyif threadid=0
+statement ok
+SELECT sleep_ms(1500)
+
+onlyif threadid=0
+statement ok
+ROLLBACK
+
+skipif threadid=0
+statement ok
+SELECT sleep_ms(500)
+
+onlyif threadid=1
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 20, table_name => 'w')
+
+onlyif threadid=2
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 30, table_name => 'x')
+
+endloop
+
+query I
+SELECT list(value ORDER BY value) FROM dl.options()
+WHERE option_name = 'data_inlining_row_limit' AND value IN ('10', '20', '30')
+----
+[20, 30]
+
+# two transactions set new options of two tables in opposite orders
+statement ok
+CREATE TABLE dl.z1 (i INTEGER)
+
+statement ok
+CREATE TABLE dl.z2 (i INTEGER)
+
+concurrentloop threadid 0 2
+
+statement ok
+BEGIN
+
+statement ok
+CALL dl.set_option('target_file_size', '1MB', table_name => CASE WHEN {threadid} = 0 THEN 'z1' ELSE 'z2' END)
+
+statement ok
+SELECT sleep_ms(1000)
+
+statement ok
+CALL dl.set_option('parquet_row_group_size', 1000, table_name => CASE WHEN {threadid} = 0 THEN 'z2' ELSE 'z1' END)
+
+statement ok
+COMMIT
+
+endloop
+
+query II
+SELECT option_name, count(*) FROM dl.options() WHERE scope_entry IN ('main.z1', 'main.z2') GROUP BY ALL ORDER BY ALL
+----
+parquet_row_group_size	2
+target_file_size	2
+
+# a transaction renames a table that another set an option of, and keeps the option it set itself
+statement ok
+CREATE TABLE dl.r1 (i INTEGER)
+
+statement ok
+CREATE TABLE dl.r2 (i INTEGER)
+
+statement ok con7
+BEGIN
+
+statement ok con7
+SELECT count(*) FROM dl.r1
+
+statement ok con7
+CALL dl.set_option('parquet_compression', 'zstd', table_name => 'r2')
+
+statement ok con1
+CALL dl.set_option('target_file_size', '1MB', table_name => 'r1')
+
+statement ok con7
+ALTER TABLE dl.r1 RENAME TO r3
+
+statement ok con7
+COMMIT
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+
+query II
+SELECT scope_entry, value FROM dl.options()
+WHERE option_name IN ('parquet_compression', 'target_file_size') AND scope_entry IN ('main.r2', 'main.r3')
+ORDER BY ALL
+----
+main.r2	zstd
+main.r3	1000000
+
+# a retry would roll back the expiry of this transaction, so its commit fails instead
+statement ok con8
+BEGIN
+
+statement ok con8
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+statement ok con8
+CALL dl.set_option('parquet_version', 2, table_name => 'r2')
+
+statement ok con1
+CALL dl.set_option('parquet_version', 1, table_name => 'r2')
+
+statement error con8
+COMMIT
+----
+Run the transaction again
+
+query II
+SELECT (SELECT count(*) FROM dl.snapshots() WHERE snapshot_id = 1),
+       (SELECT list(value) FROM dl.options() WHERE option_name = 'parquet_version')
+----
+1	[V1]
+
+statement ok con8
+BEGIN
+
+statement ok con8
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+statement ok con8
+CALL dl.set_option('parquet_version', 2, table_name => 'r2')
+
+statement ok con8
+COMMIT
+
+query II
+SELECT (SELECT count(*) FROM dl.snapshots() WHERE snapshot_id = 1),
+       (SELECT list(value) FROM dl.options() WHERE option_name = 'parquet_version')
+----
+0	[V2]
+
+# two transactions insert the same option before either commits
+statement ok
+CREATE TABLE dl.dup (i INTEGER)
+
+statement ok con9
+BEGIN
+
+statement ok con9
+CALL dl.set_option('parquet_compression', 'lz4', table_name => 'dup')
+
+statement ok con10
+BEGIN
+
+statement ok con10
+CALL dl.set_option('parquet_compression', 'zstd', table_name => 'dup')
+
+statement ok con9
+COMMIT
+
+statement ok con10
+COMMIT
+
+query II
+SELECT count(*), max(value) FROM dl.options() WHERE option_name = 'parquet_compression' AND scope_entry = 'main.dup'
+----
+1	zstd
+
+# the same for a commit that also writes a snapshot
+statement ok con11
+BEGIN
+
+statement ok con11
+CALL ducklake_expire_snapshots('dl', versions => [2])
+
+statement ok con11
+CALL dl.set_option('parquet_version', 2, table_name => 'dup')
+
+statement ok con11
+INSERT INTO dl.dup VALUES (1)
+
+statement ok con1
+CALL dl.set_option('parquet_version', 1, table_name => 'dup')
+
+statement error con11
+COMMIT
+----
+Run the transaction again
+
+query III
+SELECT (SELECT count(*) FROM dl.snapshots() WHERE snapshot_id = 2), (SELECT count(*) FROM dl.dup),
+       (SELECT list(value) FROM dl.options() WHERE option_name = 'parquet_version' AND scope_entry = 'main.dup')
+----
+1	0	[V1]
+
+# the same for a transaction that removed old files
+statement ok
+CREATE TABLE dl.old_files AS SELECT range AS i FROM range(100)
+
+statement ok
+DROP TABLE dl.old_files
+
+statement ok
+CALL ducklake_expire_snapshots('dl', older_than => now())
+
+statement ok con12
+BEGIN
+
+query I con12
+SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+1
+
+statement ok con12
+CALL dl.set_option('target_file_size', '1MB', table_name => 'r2')
+
+statement ok con1
+CALL dl.set_option('target_file_size', '2MB', table_name => 'r2')
+
+statement error con12
+COMMIT
+----
+Run the transaction again
+
+query II
+SELECT count(*), max(value) FROM dl.options() WHERE option_name = 'target_file_size' AND scope_entry = 'main.r2'
+----
+1	2000000
+
+# and for the transaction that attached the catalog
+statement ok con13
+BEGIN
+
+statement ok con13
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl_attach
+
+statement ok con13
+CALL dl_attach.set_option('target_file_size', '1MB', table_name => 'dup')
+
+statement ok con1
+CALL dl.set_option('target_file_size', '2MB', table_name => 'dup')
+
+statement error con13
+COMMIT
+----
+Run the transaction again
+
+query II
+SELECT count(*), max(value) FROM dl.options() WHERE option_name = 'target_file_size' AND scope_entry = 'main.dup'
+----
+1	2000000
+
+# a failed commit would restore expired snapshots whose files the transaction removed, so it commits without the lock
+statement ok
+CREATE TABLE dl.expired_files AS SELECT range AS i FROM range(100)
+
+statement ok
+DROP TABLE dl.expired_files
+
+statement ok con14
+BEGIN
+
+statement ok con14
+CALL ducklake_expire_snapshots('dl', older_than => now())
+
+statement ok con14
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+statement ok con14
+CALL dl.set_option('parquet_row_group_size', 1000, table_name => 'r2')
+
+statement ok con1
+CALL dl.set_option('parquet_row_group_size', 2000, table_name => 'r3')
+
+statement ok con14
+COMMIT
+
+query II
+SELECT (SELECT count(*) FROM dl.snapshots()),
+       (SELECT count(*) FROM __ducklake_metadata_dl.ducklake_files_scheduled_for_deletion)
+----
+1	0
+
+# an option that already has two rows is written to both
+statement ok
+INSERT INTO __ducklake_metadata_dl.ducklake_metadata
+SELECT key, value, scope, scope_id FROM __ducklake_metadata_dl.ducklake_metadata
+WHERE key = 'parquet_row_group_size' AND scope = 'table' AND scope_id = (
+	SELECT table_id FROM __ducklake_metadata_dl.ducklake_table WHERE table_name = 'r2' AND end_snapshot IS NULL
+)
+
+statement ok
+CALL dl.set_option('parquet_row_group_size', 3000, table_name => 'r2')
+
+query II
+SELECT count(*), list(DISTINCT value) FROM dl.options()
+WHERE option_name = 'parquet_row_group_size' AND scope_entry = 'main.r2'
+----
+2	[3000]
