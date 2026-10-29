@@ -1688,7 +1688,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		if (ExpiredSnapshotsInMetadataTransaction() && !ExpiresSnapshotsOnCommit()) {
 			// the rollback of the failed attempt undid the expiry, which only a catalog with snapshot tags repeats
 			throw TransactionException("Transaction conflict - a concurrent commit preceded the commit of a "
-			                           "transaction that expires snapshots");
+			                           "transaction that expires snapshots, run the transaction again");
 		}
 	};
 	context.rewrite_before_retry = [&]() {
