@@ -660,9 +660,9 @@ public:
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool from_dev1 = false);
 	virtual void MigrateV11();
-	virtual void MigrateV20Dev1();
+	virtual void MigrateV20Dev1(const string &data_path);
 	//! The updates that give the files of one physical path one identity
-	string SharedIdentityBackfillSql();
+	string SharedIdentityBackfillSql(const string &data_path);
 	static string GetSnapshotTagTableStatement();
 	static string GetRetiredPathTableStatement();
 	//! The CREATE TABLE statement of a data or delete file table with the file identity columns appended

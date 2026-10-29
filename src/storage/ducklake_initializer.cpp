@@ -239,12 +239,21 @@ void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction
 	}
 }
 
+//! The data path the catalog stores, against which its relative paths were written
+static string StoredDataPath(DuckLakeMetadataManager &metadata_manager, const vector<DuckLakeTag> &tags) {
+	for (auto &tag : tags) {
+		if (tag.key == "data_path") {
+			return metadata_manager.LoadPath(tag.value);
+		}
+	}
+	return string();
+}
+
 void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction) {
 	// load the data path from the existing duck lake
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto metadata = metadata_manager.LoadDuckLake();
 	DuckLakeVersion resolved_version = DuckLakeVersion::UNSET;
-	bool data_path_loaded = false;
 	for (auto &tag : metadata.tags) {
 		if (tag.key == "version") {
 			auto catalog_version = DuckLakeVersionFromString(tag.value);
@@ -264,16 +273,6 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			}
 			if (catalog_version < target_version) {
 				catalog.VerifyWritable();
-			}
-			if (catalog_version < target_version && options.data_path.empty()) {
-				// a migration composes file paths with the data path, which the tags list after the version
-				for (auto &path_tag : metadata.tags) {
-					if (path_tag.key == "data_path") {
-						options.data_path = metadata_manager.LoadPath(path_tag.value);
-						InitializeDataPath();
-						data_path_loaded = true;
-					}
-				}
 			}
 			if (catalog_version == DuckLakeVersion::V0_1) {
 				metadata_manager.MigrateV01();
@@ -312,7 +311,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				catalog_version = DuckLakeVersion::V2_0_DEV1;
 			}
 			if (catalog_version == DuckLakeVersion::V2_0_DEV1 && catalog_version < target_version) {
-				metadata_manager.MigrateV20Dev1();
+				metadata_manager.MigrateV20Dev1(StoredDataPath(metadata_manager, metadata.tags));
 				catalog_version = DuckLakeVersion::V2_0_DEV2;
 			}
 			if (catalog_version != target_version) {
@@ -323,7 +322,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			}
 			resolved_version = catalog_version;
 		}
-		if (tag.key == "data_path" && !data_path_loaded) {
+		if (tag.key == "data_path") {
 			if (options.data_path.empty()) {
 				options.data_path = metadata_manager.LoadPath(tag.value);
 				InitializeDataPath();

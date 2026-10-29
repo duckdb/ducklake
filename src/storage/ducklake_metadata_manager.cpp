@@ -733,12 +733,14 @@ string DuckLakeMetadataManager::OriginBoundarySql(const string &snapshot_id) {
 	                          snapshot_id);
 }
 
-string DuckLakeMetadataManager::SharedIdentityBackfillSql() {
-	auto paths = Query(FullFilePathsQuery(R"(
+string DuckLakeMetadataManager::SharedIdentityBackfillSql(const string &data_path) {
+	// the relative paths were written against the data path the catalog stores, whatever the attach gives
+	auto paths = Query(DuckLakeUtil::ReplacePlaceholders(FullFilePathsQuery(R"(
     SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id, data_file_id
     FROM {METADATA_CATALOG}.ducklake_data_file f
   )",
-	                                      ", data_file_id", ", f.data_file_id"));
+	                                                                        ", data_file_id", ", f.data_file_id"),
+	                                                     {{"{DATA_PATH}", SQLString::ToString(data_path)}}));
 	paths->ThrowIfError("Failed to read the data files of DuckLake: ");
 	DuckLakePathKeys path_keys(transaction.GetCatalog().GetDatabase());
 	map<string, set<idx_t>> files_by_key;
@@ -762,14 +764,14 @@ string DuckLakeMetadataManager::SharedIdentityBackfillSql() {
 	return result;
 }
 
-void DuckLakeMetadataManager::MigrateV20Dev1() {
+void DuckLakeMetadataManager::MigrateV20Dev1(const string &data_path) {
 	string migrate_query;
 	for (auto &added : V2_0_DEV2_ADDED_COLUMNS) {
 		migrate_query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s ADD COLUMN %s %s;\n", added.table,
 		                                    added.column, added.type);
 	}
 	// a 1.1 catalog can register one physical file in several tables, which share one identity from now on
-	migrate_query += SharedIdentityBackfillSql();
+	migrate_query += SharedIdentityBackfillSql(data_path);
 	migrate_query += GetRetiredPathTableStatement() + "\n";
 	// the migration commits a snapshot, which orders it with the commits of attachments at the older version
 	migrate_query += R"(

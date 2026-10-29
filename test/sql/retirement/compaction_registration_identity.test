@@ -1,0 +1,71 @@
+# name: test/sql/retirement/compaction_registration_identity.test
+# description: a compaction output that another transaction registered first is published with the same identity
+# group: [retirement]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/compaction_registration_identity', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.a(i INTEGER)
+
+statement ok
+CREATE TABLE dl.b(i INTEGER)
+
+statement ok
+INSERT INTO dl.a VALUES (1)
+
+statement ok
+INSERT INTO dl.a VALUES (2)
+
+statement ok
+SET VARIABLE sources = (SELECT list(file) FROM glob('{DATA_PATH}/compaction_registration_identity/main/a/*.parquet'))
+
+statement ok compactor
+BEGIN
+
+statement ok compactor
+CALL ducklake_merge_adjacent_files('dl')
+
+statement ok
+SET VARIABLE merged = (SELECT file FROM glob('{DATA_PATH}/compaction_registration_identity/main/a/*.parquet') WHERE NOT list_contains(getvariable('sources'), file))
+
+statement ok
+CALL ducklake_add_data_files('dl', 'b', getvariable('merged'))
+
+statement ok compactor
+COMMIT
+
+query II
+SELECT count(*), count(DISTINCT coalesce(origin_file_id, data_file_id)) FROM meta.ducklake_data_file WHERE end_snapshot IS NULL
+----
+2	1
+
+statement ok
+DROP TABLE dl.a
+
+statement ok
+CALL ducklake_expire_snapshots('dl', older_than => now())
+
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+2
+
+query I
+SELECT * FROM dl.b ORDER BY i
+----
+1
+2
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/compaction_registration_identity/main/a/*.parquet')
+----
+1

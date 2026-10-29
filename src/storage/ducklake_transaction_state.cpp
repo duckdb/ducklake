@@ -873,6 +873,10 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 					file_row_id_start = compaction.row_id_start.GetIndex() + output_row_count;
 				}
 				auto new_file = GetNewDataFile(written_file, commit_state, table_id, file_row_id_start);
+				auto identity = registration_identities.find(written_file.file_name);
+				if (identity != registration_identities.end()) {
+					new_file.origin_file_id = identity->second;
+				}
 				new_file.begin_snapshot = output_begin_snapshot;
 				if (output_max_partial_snapshot.IsValid()) {
 					new_file.max_partial_file_snapshot = output_max_partial_snapshot;
@@ -2838,6 +2842,15 @@ void DuckLakeTransactionState::CheckRegistrations(TransactionChangeInformation &
 				continue;
 			}
 			registered_files.emplace_back(entry.first, file.file_name);
+		}
+		if (!resolve_written_files) {
+			continue;
+		}
+		for (auto &compaction : entry.second.compactions) {
+			for (auto &file : compaction.written_files) {
+				written_paths.push_back(file.file_name);
+				registered_files.emplace_back(entry.first, file.file_name);
+			}
 		}
 	}
 	if (registered_files.empty()) {
