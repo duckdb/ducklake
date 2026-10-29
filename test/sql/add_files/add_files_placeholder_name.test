@@ -1,0 +1,31 @@
+# name: test/sql/add_files/add_files_placeholder_name.test
+# description: a file whose name looks like a placeholder of the metadata queries is registered as it is
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+statement ok
+COPY (SELECT 42 AS i) TO '{TEST_DIR}/part_{DATA_PATH}.parquet'
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{TEST_DIR}/add_files_placeholder_name', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE dl.a(i INTEGER)
+
+statement ok
+CALL ducklake_add_data_files('dl', 'a', '{TEST_DIR}/part_{DATA_PATH}.parquet')
+
+statement error
+CALL ducklake_add_data_files('dl', 'a', '{TEST_DIR}/part_{DATA_PATH}.parquet')
+----
+already registered in this table
+
+query I
+SELECT * FROM dl.a
+----
+42

@@ -2799,6 +2799,10 @@ static string FileNameFilter(const vector<string> &paths) {
 	map<idx_t, set<string>> names_by_length;
 	for (auto &path : paths) {
 		auto name = path.substr(path.find_last_of("/\\") + 1);
+		if (name.empty()) {
+			// a path that ends in a separator has no name to select by
+			return "TRUE";
+		}
 		idx_t characters = 0;
 		for (auto c : name) {
 			characters += (c & 0xC0) != 0x80;
@@ -2853,9 +2857,10 @@ void DuckLakeTransactionState::CheckRegistrations(TransactionChangeInformation &
 		auto later_rows = StringUtil::Format("f.data_file_id >= %llu", first_file_id);
 		filters.push_back(filter_names ? "(" + later_rows + " AND " + FileNameFilter(written_paths) + ")" : later_rows);
 	}
-	auto query =
-	    StringUtil::Replace(DuckLakeMetadataManager::DataFileIdentitiesQuery(StringUtil::Join(filters, " OR ")),
-	                        "{DATA_PATH}", SQLString::ToString(data_path));
+	// a placeholder in a file name must stay as it is
+	auto query = DuckLakeUtil::ReplacePlaceholders(
+	    DuckLakeMetadataManager::DataFileIdentitiesQuery(StringUtil::Join(filters, " OR ")),
+	    {{"{DATA_PATH}", SQLString::ToString(data_path)}});
 	auto result = context.query_metadata(std::move(query));
 	result->ThrowIfError("Failed to read the files registered in DuckLake: ");
 	// the physical identity of every path, and the tables that reference it with a live row
