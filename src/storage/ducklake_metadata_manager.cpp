@@ -5779,12 +5779,6 @@ void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo>
 
 void DuckLakeMetadataManager::CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
 	unique_ptr<QueryResult> result;
-	vector<TableIndex> stats_table_ids;
-	result = Query("SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_table_stats;");
-	result->ThrowIfError("Failed to list table stats for cache invalidation in DuckLake: ");
-	for (auto &row : *result) {
-		stats_table_ids.push_back(TableIndex(row.GetValue<idx_t>(0)));
-	}
 
 	// get a list of tables that are no longer required after these deletions
 	result = Query(R"(
@@ -6016,11 +6010,11 @@ WHERE NOT EXISTS (
 		result->ThrowIfError("Failed to delete from ducklake_name_mapping in DuckLake: ");
 	}
 
+	unordered_set<idx_t> expired_next_file_ids;
 	for (auto &snapshot : snapshots) {
-		for (auto &table_id : stats_table_ids) {
-			catalog.InvalidateTableStatsCache(snapshot.next_file_id, table_id);
-		}
+		expired_next_file_ids.insert(snapshot.next_file_id);
 	}
+	catalog.InvalidateTableStatsCaches(expired_next_file_ids);
 	ClearCache();
 }
 
