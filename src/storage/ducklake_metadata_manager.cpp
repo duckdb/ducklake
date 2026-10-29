@@ -1,5 +1,7 @@
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/operator/add.hpp"
+#include "duckdb/common/operator/subtract.hpp"
 #include "duckdb/common/path.hpp"
 #include "duckdb/common/exception/conversion_exception.hpp"
 #include "functions/ducklake_table_functions.hpp"
@@ -34,6 +36,7 @@
 #include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/planner/filter/expression_filter.hpp"
 #include "duckdb/planner/filter/table_filter_functions.hpp"
+#include "duckdb/planner/expression/bound_between_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -1776,6 +1779,227 @@ string DuckLakeMetadataManager::GenerateConstantFilterDouble(ExpressionType comp
 	return GenerateConstantFilter(comparison_type, constant, type, referenced_stats, stats_alias);
 }
 
+struct TimeZoneComparison {
+	optional_ptr<const BoundFunctionExpression> timezone_function;
+	optional_ptr<const BoundConstantExpression> constant;
+	ExpressionType comparison_type = ExpressionType::INVALID;
+};
+
+static optional_ptr<const BoundFunctionExpression> GetTimeZoneFunction(const Expression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return nullptr;
+	}
+	auto &function = expr.Cast<BoundFunctionExpression>();
+	if (function.Function().GetName() != "timezone" || function.GetChildren().size() != 2 ||
+	    function.GetChildren()[0]->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT ||
+	    function.GetChildren()[0]->GetReturnType().id() != LogicalTypeId::VARCHAR ||
+	    !ExpressionFilter::IsSimpleFilterColumnRef(*function.GetChildren()[1])) {
+		return nullptr;
+	}
+	auto source_id = function.GetChildren()[1]->GetReturnType().id();
+	auto target_id = function.GetReturnType().id();
+	bool supported_type = (source_id == LogicalTypeId::TIMESTAMP_TZ && target_id == LogicalTypeId::TIMESTAMP) ||
+	                      (source_id == LogicalTypeId::TIMESTAMP_TZ_NS && target_id == LogicalTypeId::TIMESTAMP_NS);
+	if (!supported_type) {
+		return nullptr;
+	}
+	return function;
+}
+
+static bool TryGetTimeZoneComparison(const Expression &expr, TimeZoneComparison &result) {
+	if (!BoundComparisonExpression::IsComparison(expr)) {
+		return false;
+	}
+	auto &comparison = expr.Cast<BoundFunctionExpression>();
+	auto &left = BoundComparisonExpression::Left(comparison);
+	auto &right = BoundComparisonExpression::Right(comparison);
+	result.comparison_type = comparison.GetExpressionType();
+	if (right.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+		result.timezone_function = GetTimeZoneFunction(left);
+		result.constant = right.Cast<BoundConstantExpression>();
+	} else if (left.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+		result.timezone_function = GetTimeZoneFunction(right);
+		result.constant = left.Cast<BoundConstantExpression>();
+		result.comparison_type = FlipComparisonExpression(result.comparison_type);
+	}
+	return result.timezone_function &&
+	       result.timezone_function->GetReturnType().id() == result.constant->GetValue().type().id();
+}
+
+static optional<Value> EvaluateTimeZoneFunction(ClientContext &context, const Value &zone, const Value &timestamp) {
+	vector<unique_ptr<Expression>> arguments;
+	arguments.push_back(make_uniq<BoundConstantExpression>(zone));
+	arguments.push_back(make_uniq<BoundConstantExpression>(timestamp));
+	auto function = DuckLakeUtil::BindScalarFunction(context, "timezone", std::move(arguments));
+	Value result;
+	if (!ExpressionExecutor::TryEvaluateScalar(context, *function, result) || result.IsNull()) {
+		return nullopt;
+	}
+	return result;
+}
+
+struct TimeZoneFilterBounds {
+	Value lower;
+	Value upper;
+};
+
+template <class LOCAL_TYPE, class INSTANT_TYPE>
+static optional<TimeZoneFilterBounds> TryGetTimeZoneFilterBounds(ClientContext &context,
+                                                                 const BoundFunctionExpression &timezone_function,
+                                                                 const Value &local_value) {
+	if (local_value.IsNull()) {
+		return nullopt;
+	}
+	auto local = local_value.GetValue<LOCAL_TYPE>();
+	if (!local.IsFinite()) {
+		return nullopt;
+	}
+	auto &zone = timezone_function.GetChildren()[0]->Cast<BoundConstantExpression>().GetValue();
+	auto instant = EvaluateTimeZoneFunction(context, zone, local_value);
+	if (!instant) {
+		return nullopt;
+	}
+	D_ASSERT(instant->type() == Value::CreateValue(INSTANT_TYPE()).type());
+
+	constexpr int64_t DAY = Interval::SECS_PER_DAY * LOCAL_TYPE::PRECISION;
+	// Daily samples see every nearby offset, as long as no offset lasts less than a day.
+	constexpr int64_t SAMPLE_OFFSETS[] = {-2 * DAY, -DAY, 0, DAY, 2 * DAY};
+	auto instant_value = instant->GetValue<INSTANT_TYPE>().value;
+	// Offsets use the same physical unit as their timestamp: microseconds or nanoseconds.
+	int64_t min_offset = NumericLimits<int64_t>::Maximum();
+	int64_t max_offset = NumericLimits<int64_t>::Minimum();
+	for (auto sample_offset : SAMPLE_OFFSETS) {
+		int64_t sample_instant;
+		if (!TryAddOperator::Operation(instant_value, sample_offset, sample_instant)) {
+			return nullopt;
+		}
+		auto sample_local = EvaluateTimeZoneFunction(context, zone, Value::CreateValue(INSTANT_TYPE(sample_instant)));
+		if (!sample_local) {
+			return nullopt;
+		}
+		D_ASSERT(sample_local->type() == local_value.type());
+		int64_t offset;
+		auto sample_local_value = sample_local->template GetValue<LOCAL_TYPE>().value;
+		if (!TrySubtractOperator::Operation(sample_local_value, sample_instant, offset)) {
+			return nullopt;
+		}
+		min_offset = MinValue(min_offset, offset);
+		max_offset = MaxValue(max_offset, offset);
+	}
+
+	int64_t lower;
+	int64_t upper;
+	if (!TrySubtractOperator::Operation(local.value, max_offset, lower) ||
+	    !TrySubtractOperator::Operation(local.value, min_offset, upper)) {
+		return nullopt;
+	}
+	return TimeZoneFilterBounds {Value::CreateValue(INSTANT_TYPE(lower)), Value::CreateValue(INSTANT_TYPE(upper))};
+}
+
+static optional<TimeZoneFilterBounds> TryGetTimeZoneFilterBounds(ClientContext &context,
+                                                                 const BoundFunctionExpression &timezone_function,
+                                                                 const BoundConstantExpression &constant) {
+	auto local_value = constant.GetValue();
+	switch (local_value.type().id()) {
+	case LogicalTypeId::TIMESTAMP:
+		return TryGetTimeZoneFilterBounds<timestamp_t, timestamp_tz_t>(context, timezone_function, local_value);
+	case LogicalTypeId::TIMESTAMP_NS:
+		return TryGetTimeZoneFilterBounds<timestamp_ns_t, timestamp_tz_ns_t>(context, timezone_function, local_value);
+	default:
+		return nullopt;
+	}
+}
+
+//! The local timestamps a filter on timezone(zone, column) allows, an end without a constant is unbounded
+struct TimeZoneRange {
+	optional_ptr<const BoundFunctionExpression> timezone_function;
+	optional_ptr<const BoundConstantExpression> lower;
+	optional_ptr<const BoundConstantExpression> upper;
+	ExpressionType lower_type = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
+	ExpressionType upper_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+};
+
+static bool TryGetTimeZoneRange(const Expression &expr, TimeZoneRange &result) {
+	if (expr.GetExpressionType() == ExpressionType::COMPARE_BETWEEN) {
+		auto &between = expr.Cast<BoundFunctionExpression>();
+		auto &lower_bound = BoundBetweenExpression::LowerBound(between);
+		auto &upper_bound = BoundBetweenExpression::UpperBound(between);
+		result.timezone_function = GetTimeZoneFunction(BoundBetweenExpression::Input(between));
+		if (!result.timezone_function || lower_bound.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT ||
+		    upper_bound.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
+			return false;
+		}
+		result.lower = lower_bound.Cast<BoundConstantExpression>();
+		result.upper = upper_bound.Cast<BoundConstantExpression>();
+		result.lower_type = BoundBetweenExpression::LowerComparisonType(between);
+		result.upper_type = BoundBetweenExpression::UpperComparisonType(between);
+		return true;
+	}
+	TimeZoneComparison comparison;
+	if (!TryGetTimeZoneComparison(expr, comparison)) {
+		return false;
+	}
+	result.timezone_function = comparison.timezone_function;
+	switch (comparison.comparison_type) {
+	case ExpressionType::COMPARE_EQUAL:
+		result.lower = comparison.constant;
+		result.upper = comparison.constant;
+		return true;
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+	case ExpressionType::COMPARE_GREATERTHAN:
+		result.lower = comparison.constant;
+		result.lower_type = comparison.comparison_type;
+		return true;
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+	case ExpressionType::COMPARE_LESSTHAN:
+		result.upper = comparison.constant;
+		result.upper_type = comparison.comparison_type;
+		return true;
+	default:
+		return false;
+	}
+}
+
+string DuckLakeMetadataManager::GenerateTimeZoneFilterFromExpression(const Expression &expr,
+                                                                     unordered_set<string> &referenced_stats,
+                                                                     const string &stats_alias) {
+	TimeZoneRange range;
+	if (!TryGetTimeZoneRange(expr, range)) {
+		return string();
+	}
+	auto context_ptr = transaction.context.lock();
+	if (!context_ptr) {
+		// LCOV_EXCL_START
+		return string();
+		// LCOV_EXCL_STOP
+	}
+	optional<TimeZoneFilterBounds> lower_bounds;
+	optional<TimeZoneFilterBounds> upper_bounds;
+	if (range.lower) {
+		lower_bounds = TryGetTimeZoneFilterBounds(*context_ptr, *range.timezone_function, *range.lower);
+	}
+	if (range.upper) {
+		upper_bounds = range.upper == range.lower
+		                   ? lower_bounds
+		                   : TryGetTimeZoneFilterBounds(*context_ptr, *range.timezone_function, *range.upper);
+	}
+	string lower_filter;
+	if (lower_bounds) {
+		lower_filter = GenerateConstantFilter(range.lower_type, lower_bounds->lower, lower_bounds->lower.type(),
+		                                      referenced_stats, stats_alias);
+	}
+	string upper_filter;
+	if (upper_bounds) {
+		upper_filter = GenerateConstantFilter(range.upper_type, upper_bounds->upper, upper_bounds->upper.type(),
+		                                      referenced_stats, stats_alias);
+	}
+	// an end that cannot be expressed leaves the range open on that side
+	if (lower_filter.empty() || upper_filter.empty()) {
+		return lower_filter.empty() ? upper_filter : lower_filter;
+	}
+	return "(" + lower_filter + " AND " + upper_filter + ")";
+}
+
 string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
                                                              unordered_set<string> &referenced_stats,
                                                              const string &stats_alias) {
@@ -1796,7 +2020,7 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 		ExpressionType comparison_type;
 		auto constant_expr = ExpressionFilter::TryGetColumnConstantComparison(comparison, comparison_type);
 		if (!constant_expr) {
-			return string();
+			return GenerateTimeZoneFilterFromExpression(expr, referenced_stats, stats_alias);
 		}
 		return constant_filter(comparison_type, constant_expr->GetValue());
 	}
@@ -1875,6 +2099,9 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 		return result;
 	}
 	case ExpressionClass::BOUND_FUNCTION: {
+		if (expr.GetExpressionType() == ExpressionType::COMPARE_BETWEEN) {
+			return GenerateTimeZoneFilterFromExpression(expr, referenced_stats, stats_alias);
+		}
 		auto optional_child = ExpressionFilter::GetOptionalFilterChild(expr);
 		return optional_child ? GenerateFilterFromExpression(*optional_child, type, referenced_stats, stats_alias)
 		                      : string();

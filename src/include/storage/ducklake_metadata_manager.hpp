@@ -750,6 +750,8 @@ protected:
 	static string BoundOrInfinity(const string &bound, const string &type_name, StatsCastType cast_type);
 
 private:
+	string GenerateTimeZoneFilterFromExpression(const Expression &expr, unordered_set<string> &referenced_stats,
+	                                            const string &stats_alias);
 	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
 	                                            unordered_set<string> &referenced_stats, const string &stats_alias);
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
