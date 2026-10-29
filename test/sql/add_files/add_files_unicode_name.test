@@ -1,0 +1,39 @@
+# name: test/sql/add_files/add_files_unicode_name.test
+# description: a file whose name holds multi byte characters is found among the registered files
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+COPY (SELECT 42 AS i) TO '{DATA_PATH}/añadido_ü.parquet'
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/add_files_unicode_name', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE dl.a(i INTEGER)
+
+statement ok
+CREATE TABLE dl.b(i INTEGER)
+
+statement ok
+CALL ducklake_add_data_files('dl', 'a', '{DATA_PATH}/añadido_ü.parquet')
+
+statement error
+CALL ducklake_add_data_files('dl', 'a', '{DATA_PATH}/añadido_ü.parquet')
+----
+already registered in this table
+
+statement ok
+CALL ducklake_add_data_files('dl', 'b', '{DATA_PATH}/añadido_ü.parquet')
+
+query II
+SELECT count(*), count(DISTINCT coalesce(origin_file_id, data_file_id)) FROM meta.ducklake_data_file
+----
+2	1

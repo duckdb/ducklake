@@ -5705,9 +5705,9 @@ string DuckLakeMetadataManager::DataFileIdentitiesQuery(const string &path_filte
     SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id,
            COALESCE(origin_file_id, data_file_id) AS identity, end_snapshot, data_file_id
     FROM {METADATA_CATALOG}.ducklake_data_file f
-    WHERE %s
+    %s
   )",
-	                                             path_filter),
+	                                             path_filter.empty() ? "" : "WHERE " + path_filter),
 	                          ", file_table_id, identity, end_snapshot, data_file_id",
 	                          ", f.table_id AS file_table_id, f.identity, f.end_snapshot, f.data_file_id");
 }

@@ -1085,13 +1085,24 @@ DuckLakeRetirement DuckLakeTransaction::CommitRetirement(optional_ptr<ClientCont
 
 void DuckLakeTransaction::UnscheduleFiles(optional_ptr<ClientContext> caller_context, DuckLakeCatalog &catalog,
                                           const vector<DataFileIndex> &file_ids) {
-	Connection connection(catalog.GetDatabase());
-	if (caller_context) {
-		DuckLakeUtil::CopyExtensionSettings(*caller_context, *connection.context);
+	// another cleaner can remove the same rows meanwhile, which conflicts on a DuckDB catalog
+	for (idx_t attempt = 0;; attempt++) {
+		Connection connection(catalog.GetDatabase());
+		if (caller_context) {
+			DuckLakeUtil::CopyExtensionSettings(*caller_context, *connection.context);
+		}
+		connection.BeginTransaction();
+		try {
+			DuckLakeTransaction::Get(*connection.context, catalog).GetMetadataManager().UnscheduleFiles(file_ids);
+			connection.Commit();
+			return;
+		} catch (std::exception &ex) {
+			ErrorData error(ex);
+			if (error.Type() != ExceptionType::TRANSACTION || attempt >= 5) {
+				throw;
+			}
+		}
 	}
-	connection.BeginTransaction();
-	DuckLakeTransaction::Get(*connection.context, catalog).GetMetadataManager().UnscheduleFiles(file_ids);
-	connection.Commit();
 }
 
 void DuckLakeTransaction::RemoveDiscardedFiles() {

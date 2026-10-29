@@ -218,7 +218,8 @@ public:
 	void CheckTaggedSnapshotsExist(const DuckLakeCommitContext &context) const;
 	//! Fails when a file this transaction registers is registered in its table already, and finds the physical
 	//! identities of the registered files that other rows reference, read after the latest snapshot
-	void CheckRegistrations(TransactionChangeInformation &changes, const DuckLakeCommitContext &context);
+	void CheckRegistrations(TransactionChangeInformation &changes, const DuckLakeCommitContext &context,
+	                        const DuckLakeSnapshot &transaction_snapshot);
 	//! The ids of the snapshots the tags point at, as a SQL list
 	static string TaggedSnapshotIdList(const case_insensitive_map_t<idx_t> &tags);
 	void CheckFileConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,

@@ -1,0 +1,55 @@
+# name: test/sql/migration/migration_shared_identity_reattach.test
+# description: the migration finds the data path of a reattached catalog, so a file written by one table and registered in another gets one identity
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS old (DATA_PATH '{DATA_PATH}/migration_shared_identity_reattach', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE old.a AS SELECT 42 AS i
+
+statement ok
+CREATE TABLE old.b(i INTEGER)
+
+# the file of a is registered in b by its absolute path, while a holds it by a relative one
+statement ok
+SET VARIABLE written = (SELECT file FROM glob('{DATA_PATH}/migration_shared_identity_reattach/main/a/*.parquet'))
+
+statement ok
+CALL ducklake_add_data_files('old', 'b', getvariable('written'))
+
+statement ok
+DETACH old
+
+# the reattach reads the data path from the catalog
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION true)
+
+query II
+SELECT count(*), count(DISTINCT coalesce(origin_file_id, data_file_id)) FROM meta.ducklake_data_file
+----
+2	1
+
+statement ok
+DROP TABLE dl.a
+
+statement ok
+CALL ducklake_expire_snapshots('dl', older_than => now())
+
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+0
+
+query I
+SELECT * FROM dl.b
+----
+42

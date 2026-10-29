@@ -2794,12 +2794,16 @@ WHERE idt.schema_version < (
 }
 
 //! Selects the rows whose path ends with the name of one of the files, as every path of a physical file does
-static string FileNameFilter(const vector<pair<TableIndex, string>> &files) {
+static string FileNameFilter(const vector<string> &paths) {
+	// SQL counts characters, so the names are grouped by their character count
 	map<idx_t, set<string>> names_by_length;
-	for (auto &file : files) {
-		auto &path = file.second;
+	for (auto &path : paths) {
 		auto name = path.substr(path.find_last_of("/\\") + 1);
-		names_by_length[name.size()].insert(SQLString::ToString(name));
+		idx_t characters = 0;
+		for (auto c : name) {
+			characters += (c & 0xC0) != 0x80;
+		}
+		names_by_length[characters].insert(SQLString::ToString(name));
 	}
 	vector<string> predicates;
 	for (auto &entry : names_by_length) {
@@ -2807,31 +2811,53 @@ static string FileNameFilter(const vector<pair<TableIndex, string>> &files) {
 		predicates.push_back(StringUtil::Format("SUBSTR(f.path, LENGTH(f.path) - %llu) IN (%s)", entry.first - 1,
 		                                        StringUtil::Join(names, ", ")));
 	}
-	return StringUtil::Join(predicates, " OR ");
+	return "(" + StringUtil::Join(predicates, " OR ") + ")";
 }
 
 void DuckLakeTransactionState::CheckRegistrations(TransactionChangeInformation &changes,
-                                                  const DuckLakeCommitContext &context) {
+                                                  const DuckLakeCommitContext &context,
+                                                  const DuckLakeSnapshot &transaction_snapshot) {
 	registration_identities.clear();
 	registers_new_paths = false;
 	// another transaction can register a file this one wrote, after this one took its snapshot
 	bool resolve_written_files = !tables_changed_by_others.empty();
 	vector<pair<TableIndex, string>> registered_files;
+	vector<string> registered_paths;
+	vector<string> written_paths;
 	for (auto &entry : local_changes.Changes()) {
 		for (auto &file : entry.second.new_data_files) {
-			if (!file.created_by_ducklake || resolve_written_files) {
-				registered_files.emplace_back(entry.first, file.file_name);
+			if (!file.created_by_ducklake) {
+				registered_paths.push_back(file.file_name);
+			} else if (resolve_written_files) {
+				written_paths.push_back(file.file_name);
+			} else {
+				continue;
 			}
+			registered_files.emplace_back(entry.first, file.file_name);
 		}
 	}
 	if (registered_files.empty()) {
 		return;
 	}
-	auto query = StringUtil::Replace(DuckLakeMetadataManager::DataFileIdentitiesQuery(FileNameFilter(registered_files)),
-	                                 "{DATA_PATH}", SQLString::ToString(data_path));
+	DuckLakePathKeys path_keys(db);
+	// paths that differ in their query string can share a key, which the names of the rows do not show
+	bool filter_names = !path_keys.HasUrlParameters();
+	vector<string> filters;
+	if (!registered_paths.empty()) {
+		filters.push_back(filter_names ? FileNameFilter(registered_paths) : "TRUE");
+	}
+	if (!written_paths.empty()) {
+		// a registration of a written file committed after the snapshot, so its row has a later file id
+		auto first_file_id =
+		    transaction_snapshot.next_file_id == DConstants::INVALID_INDEX ? 0 : transaction_snapshot.next_file_id;
+		auto later_rows = StringUtil::Format("f.data_file_id >= %llu", first_file_id);
+		filters.push_back(filter_names ? "(" + later_rows + " AND " + FileNameFilter(written_paths) + ")" : later_rows);
+	}
+	auto query =
+	    StringUtil::Replace(DuckLakeMetadataManager::DataFileIdentitiesQuery(StringUtil::Join(filters, " OR ")),
+	                        "{DATA_PATH}", SQLString::ToString(data_path));
 	auto result = context.query_metadata(std::move(query));
 	result->ThrowIfError("Failed to read the files registered in DuckLake: ");
-	DuckLakePathKeys path_keys(db);
 	// the physical identity of every path, and the tables that reference it with a live row
 	unordered_map<string, idx_t> identities;
 	unordered_map<string, unordered_set<idx_t>> live_tables;
@@ -2975,7 +3001,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				break;
 			}
 			if (context.supports_file_identity) {
-				CheckRegistrations(attempt_changes, context);
+				CheckRegistrations(attempt_changes, context, transaction_snapshot);
 			}
 			for (auto &snapshot : expired_snapshots) {
 				attempt_changes.expired_snapshots.insert(snapshot.id);
