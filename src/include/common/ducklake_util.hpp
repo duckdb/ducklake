@@ -43,10 +43,6 @@ public:
 	explicit DuckLakePathKeys(DatabaseInstance &db);
 
 	string Get(const string &path) const;
-	//! Whether paths with different query strings can have one key
-	bool HasUrlParameters() const {
-		return url_parameters;
-	}
 
 private:
 	FileSystem &fs;

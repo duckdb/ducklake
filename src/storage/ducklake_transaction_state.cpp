@@ -2793,24 +2793,17 @@ WHERE idt.schema_version < (
 	}
 }
 
-//! Selects the rows whose path ends with the name of one of the files, as every path of a physical file does
+//! Selects the rows whose path holds the name of one of the files, as every path of a physical file does
 static string FileNameFilter(const vector<string> &paths) {
-	// SQL counts characters, so the names are grouped by their character count
-	map<idx_t, set<string>> names_by_length;
+	set<string> patterns;
 	for (auto &path : paths) {
 		auto name = path.substr(path.find_last_of("/\\") + 1);
-		idx_t characters = 0;
-		for (auto c : name) {
-			characters += (c & 0xC0) != 0x80;
+		for (auto wildcard : {"#", "%", "_"}) {
+			name = StringUtil::Replace(name, wildcard, string("#") + wildcard);
 		}
-		names_by_length[characters].insert(SQLString::ToString(name));
+		patterns.insert(StringUtil::Format("f.path LIKE %s ESCAPE '#'", SQLString::ToString("%" + name + "%")));
 	}
-	vector<string> predicates;
-	for (auto &entry : names_by_length) {
-		vector<string> names(entry.second.begin(), entry.second.end());
-		predicates.push_back(StringUtil::Format("SUBSTR(f.path, LENGTH(f.path) - %llu) IN (%s)", entry.first - 1,
-		                                        StringUtil::Join(names, ", ")));
-	}
+	vector<string> predicates(patterns.begin(), patterns.end());
 	return "(" + StringUtil::Join(predicates, " OR ") + ")";
 }
 
@@ -2839,25 +2832,23 @@ void DuckLakeTransactionState::CheckRegistrations(TransactionChangeInformation &
 	if (registered_files.empty()) {
 		return;
 	}
-	DuckLakePathKeys path_keys(db);
-	// paths that differ in their query string can share a key, which the names of the rows do not show
-	bool filter_names = !path_keys.HasUrlParameters();
 	vector<string> filters;
 	if (!registered_paths.empty()) {
-		filters.push_back(filter_names ? FileNameFilter(registered_paths) : "TRUE");
+		filters.push_back(FileNameFilter(registered_paths));
 	}
 	if (!written_paths.empty()) {
 		// a registration of a written file committed after the snapshot, so its row has a later file id
 		auto first_file_id =
 		    transaction_snapshot.next_file_id == DConstants::INVALID_INDEX ? 0 : transaction_snapshot.next_file_id;
-		auto later_rows = StringUtil::Format("f.data_file_id >= %llu", first_file_id);
-		filters.push_back(filter_names ? "(" + later_rows + " AND " + FileNameFilter(written_paths) + ")" : later_rows);
+		filters.push_back(
+		    StringUtil::Format("(f.data_file_id >= %llu AND %s)", first_file_id, FileNameFilter(written_paths)));
 	}
 	auto query =
 	    StringUtil::Replace(DuckLakeMetadataManager::DataFileIdentitiesQuery(StringUtil::Join(filters, " OR ")),
 	                        "{DATA_PATH}", SQLString::ToString(data_path));
 	auto result = context.query_metadata(std::move(query));
 	result->ThrowIfError("Failed to read the files registered in DuckLake: ");
+	DuckLakePathKeys path_keys(db);
 	// the physical identity of every path, and the tables that reference it with a live row
 	unordered_map<string, idx_t> identities;
 	unordered_map<string, unordered_set<idx_t>> live_tables;
