@@ -27,6 +27,7 @@ SQLITE_UNSUPPORTED = {
     "benchmark/micro/write/delete_commits_retry.benchmark",
     "benchmark/micro/write/delete_commits_inlined_retry.benchmark",
     "benchmark/micro/write/delete_commits_rewrite_retry.benchmark",
+    "benchmark/micro/write/delete_commit_retry_many_delete_files.benchmark",
 }
 
 sys.path.append(str(RUNNER.parent))
