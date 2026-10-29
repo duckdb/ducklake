@@ -1,0 +1,39 @@
+# name: test/sql/metadata/postgres_commit_batch_log.test
+# description: the commit batch of a Postgres catalog shows up in the DuckLakeMetadata log
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/postgres_commit_batch_log', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE lake.t (i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (0)
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+INSERT INTO lake.t VALUES (1)
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%ducklake_snapshot%' AND query ILIKE '%insert%'
+----
+true
