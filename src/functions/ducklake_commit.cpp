@@ -6,7 +6,7 @@
 namespace duckdb {
 
 struct DuckLakeCommitBindData : public TableFunctionData {
-	string metadata_schema_name;
+	Identifier metadata_schema_name;
 	int64_t schema_version = 0;
 	DuckLakeRetryConfig retry_config;
 };
@@ -19,7 +19,7 @@ static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctio
 		}
 	}
 	auto result = make_uniq<DuckLakeCommitBindData>();
-	result->metadata_schema_name = StringValue::Get(input.inputs[0]);
+	result->metadata_schema_name = input.inputs[0].GetValue<Identifier>();
 	result->schema_version = input.inputs[1].GetValue<int64_t>();
 	for (auto &entry : input.named_parameters) {
 		if (entry.second.IsNull()) {

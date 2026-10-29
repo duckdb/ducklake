@@ -19,7 +19,7 @@ CREATE TABLE dl.t (s STRUCT(j INTEGER, n STRUCT(a INTEGER)))
 statement error
 ALTER TABLE dl.t DROP COLUMN s.n.a
 ----
-Catalog Error: Cannot drop field a from column s - it is the last field of the struct
+Catalog Error: Cannot drop field "a" from column "s" - it is the last field of the struct
 
 statement ok
 ALTER TABLE dl.t DROP COLUMN s.n
@@ -27,7 +27,7 @@ ALTER TABLE dl.t DROP COLUMN s.n
 statement error
 ALTER TABLE dl.t DROP COLUMN s.j
 ----
-Catalog Error: Cannot drop field j from column s - it is the last field of the struct
+Catalog Error: Cannot drop field "j" from column "s" - it is the last field of the struct
 
 statement error
 ALTER TABLE dl.t DROP COLUMN s.j.a
@@ -54,4 +54,4 @@ CREATE TABLE dl.c (S STRUCT(J INTEGER))
 statement error
 ALTER TABLE dl.c DROP COLUMN s.j
 ----
-Catalog Error: Cannot drop field j from column s - it is the last field of the struct
+Catalog Error: Cannot drop field "j" from column "s" - it is the last field of the struct
