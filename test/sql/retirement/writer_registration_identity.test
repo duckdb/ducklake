@@ -1,0 +1,66 @@
+# name: test/sql/retirement/writer_registration_identity.test
+# description: a writer whose file another transaction registered first publishes the same identity, and the file survives the drop of one table
+# group: [retirement]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/writer_registration_identity', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.a(i INTEGER)
+
+statement ok
+CREATE TABLE dl.b(i INTEGER)
+
+statement ok writer
+BEGIN
+
+statement ok writer
+INSERT INTO dl.a VALUES (42)
+
+statement ok
+SET VARIABLE written = (SELECT file FROM glob('{DATA_PATH}/writer_registration_identity/main/a/*.parquet'))
+
+statement ok
+CALL ducklake_add_data_files('dl', 'b', getvariable('written'))
+
+statement ok writer
+COMMIT
+
+query II
+SELECT count(*), count(DISTINCT coalesce(origin_file_id, data_file_id)) FROM meta.ducklake_data_file
+----
+2	1
+
+query I
+SELECT changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+{tables_inserted_into=[1], files_registered=[1]}
+
+statement ok
+DROP TABLE dl.a
+
+statement ok
+CALL ducklake_expire_snapshots('dl', older_than => now())
+
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+0
+
+query I
+SELECT * FROM dl.b
+----
+42
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/writer_registration_identity/main/a/*.parquet')
+----
+1

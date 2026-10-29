@@ -310,14 +310,16 @@ public:
 	//! Whether the commit writes a snapshot for the expiry of the transaction
 	bool ExpiresSnapshotsOnCommit() const;
 	//! Retires the paths of the cleanup candidates when the transaction commits, and reports the files to unlink
-	void RetireFilesOnCommit(vector<DuckLakeFileForCleanup> files, CleanupType type,
-	                         vector<DuckLakeFileForCleanup> &unlinked_files, idx_t first_file_id = 0);
+	void RetireFilesOnCommit(vector<DuckLakeFileForCleanup> files, CleanupType type, DuckLakeRetirement &retirement,
+	                         idx_t first_file_id = 0);
 	bool RetiresFilesOnCommit() const;
 	//! Commits the retirement of the files in a DuckLake transaction of its own and returns the files to unlink
-	static vector<DuckLakeFileForCleanup> CommitRetirement(optional_ptr<ClientContext> caller_context,
-	                                                       DuckLakeCatalog &catalog,
-	                                                       vector<DuckLakeFileForCleanup> files, CleanupType type,
-	                                                       const string &commit_message, idx_t first_file_id = 0);
+	static DuckLakeRetirement CommitRetirement(optional_ptr<ClientContext> caller_context, DuckLakeCatalog &catalog,
+	                                           vector<DuckLakeFileForCleanup> files, CleanupType type,
+	                                           const string &commit_message, idx_t first_file_id = 0);
+	//! Removes the schedule entries of unlinked files in a DuckLake transaction of its own
+	static void UnscheduleFiles(optional_ptr<ClientContext> caller_context, DuckLakeCatalog &catalog,
+	                            const vector<DataFileIndex> &file_ids);
 	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files);
 	bool InlinedTableFlushed(const Identifier &table_name);
@@ -467,7 +469,7 @@ private:
 	vector<DuckLakeFileForCleanup> files_to_retire;
 	CleanupType retirement_type = CleanupType::OLD_FILES;
 	idx_t first_file_id = 0;
-	optional_ptr<vector<DuckLakeFileForCleanup>> unlinked_files;
+	optional_ptr<DuckLakeRetirement> reported_retirement;
 	//! Whether the commit retired the discarded files, and those it unlinks
 	bool discarded_files_retired = false;
 	vector<DuckLakeFileForCleanup> retired_discarded_files;

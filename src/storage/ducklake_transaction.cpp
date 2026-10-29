@@ -980,10 +980,10 @@ bool DuckLakeTransaction::ExpiresSnapshotsOnCommit() const {
 }
 
 void DuckLakeTransaction::RetireFilesOnCommit(vector<DuckLakeFileForCleanup> files, CleanupType type,
-                                              vector<DuckLakeFileForCleanup> &unlinked_files_p, idx_t first_file_id_p) {
+                                              DuckLakeRetirement &retirement, idx_t first_file_id_p) {
 	files_to_retire = std::move(files);
 	retirement_type = type;
-	unlinked_files = unlinked_files_p;
+	reported_retirement = retirement;
 	first_file_id = first_file_id_p;
 }
 
@@ -1053,7 +1053,8 @@ void DuckLakeTransaction::RemoveWrittenFiles(vector<string> files) {
 		// a registration that read one of the files fails at its commit
 		auto caller_context = context.lock();
 		unlinked = CommitRetirement(caller_context.get(), ducklake_catalog, std::move(candidates),
-		                            CleanupType::WRITTEN_FILES, "rollback", FirstNewFileId());
+		                            CleanupType::WRITTEN_FILES, "rollback", FirstNewFileId())
+		               .unlinked_files;
 	} catch (std::exception &) {
 		// without a committed retirement the files are left to the orphan cleanup
 		return;
@@ -1063,24 +1064,34 @@ void DuckLakeTransaction::RemoveWrittenFiles(vector<string> files) {
 	}
 }
 
-vector<DuckLakeFileForCleanup> DuckLakeTransaction::CommitRetirement(optional_ptr<ClientContext> caller_context,
-                                                                     DuckLakeCatalog &catalog,
-                                                                     vector<DuckLakeFileForCleanup> files,
-                                                                     CleanupType type, const string &commit_message,
-                                                                     idx_t first_file_id) {
+DuckLakeRetirement DuckLakeTransaction::CommitRetirement(optional_ptr<ClientContext> caller_context,
+                                                         DuckLakeCatalog &catalog, vector<DuckLakeFileForCleanup> files,
+                                                         CleanupType type, const string &commit_message,
+                                                         idx_t first_file_id) {
 	Connection connection(catalog.GetDatabase());
 	if (caller_context) {
 		DuckLakeUtil::CopyExtensionSettings(*caller_context, *connection.context);
 	}
 	connection.BeginTransaction();
-	vector<DuckLakeFileForCleanup> unlinked_files;
+	DuckLakeRetirement retirement;
 	auto &transaction = DuckLakeTransaction::Get(*connection.context, catalog);
 	auto &commit_info = transaction.GetCommitInfo();
 	commit_info.commit_message = Value(commit_message);
 	commit_info.is_commit_info_set = true;
-	transaction.RetireFilesOnCommit(std::move(files), type, unlinked_files, first_file_id);
+	transaction.RetireFilesOnCommit(std::move(files), type, retirement, first_file_id);
 	connection.Commit();
-	return unlinked_files;
+	return retirement;
+}
+
+void DuckLakeTransaction::UnscheduleFiles(optional_ptr<ClientContext> caller_context, DuckLakeCatalog &catalog,
+                                          const vector<DataFileIndex> &file_ids) {
+	Connection connection(catalog.GetDatabase());
+	if (caller_context) {
+		DuckLakeUtil::CopyExtensionSettings(*caller_context, *connection.context);
+	}
+	connection.BeginTransaction();
+	DuckLakeTransaction::Get(*connection.context, catalog).GetMetadataManager().UnscheduleFiles(file_ids);
+	connection.Commit();
 }
 
 void DuckLakeTransaction::RemoveDiscardedFiles() {
@@ -1724,8 +1735,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		context.only_expires_snapshots = !ChangesMadeBesidesExpiry();
 	}
 	if (RetiresFilesOnCommit() || RetiresDiscardedFiles()) {
-		// a retirement is ordered with the commits that publish files by its snapshot id, the files that a commit
-		// attempt discards are retired too
+		// a retirement orders by snapshot id with the commits that publish files, discarded files included
 		context.get_retirement = [&]() {
 			DuckLakeRetirement retirement;
 			if (!files_to_retire.empty()) {
@@ -1739,8 +1749,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 			return retirement;
 		};
 		context.report_retirement = [&](DuckLakeRetirement &retirement) {
-			if (unlinked_files) {
-				*unlinked_files = std::move(retirement.unlinked_files);
+			if (reported_retirement) {
+				*reported_retirement = std::move(retirement);
 			} else {
 				retired_discarded_files = std::move(retirement.unlinked_files);
 				discarded_files_retired = true;

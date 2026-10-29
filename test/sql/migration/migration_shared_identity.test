@@ -1,0 +1,62 @@
+# name: test/sql/migration/migration_shared_identity.test
+# description: a file registered in two tables of a 1.1 catalog keeps one identity after the migration, and survives the drop of one table
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+COPY (SELECT 42 AS i) TO '{DATA_PATH}/migration_shared_identity.parquet'
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS old (DATA_PATH '{DATA_PATH}/migration_shared_identity', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE TABLE old.a(i INTEGER)
+
+statement ok
+CREATE TABLE old.b(i INTEGER)
+
+statement ok
+CALL ducklake_add_data_files('old', 'a', '{DATA_PATH}/migration_shared_identity.parquet')
+
+statement ok
+CALL ducklake_add_data_files('old', 'b', '{DATA_PATH}/migration_shared_identity.parquet')
+
+statement ok
+DETACH old
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION true)
+
+# the later row takes the identity of the first
+query II
+SELECT count(*), count(DISTINCT coalesce(origin_file_id, data_file_id)) FROM meta.ducklake_data_file
+----
+2	1
+
+statement ok
+DROP TABLE dl.a
+
+statement ok
+CALL ducklake_expire_snapshots('dl', older_than => now())
+
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+0
+
+query I
+SELECT * FROM dl.b
+----
+42
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/migration_shared_identity.parquet')
+----
+1

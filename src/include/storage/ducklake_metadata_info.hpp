@@ -509,12 +509,12 @@ struct DuckLakeRetirement {
 	vector<DuckLakeFileForCleanup> unlinked_files;
 	//! The canonical paths that become retired
 	vector<string> retired_paths;
-	//! The schedule entries that the retirement removes
+	//! The schedule entries that the cleanup removes once it has unlinked the files
 	vector<DataFileIndex> unscheduled_files;
 
-	//! Whether the retirement writes no metadata, the files it unlinks are retired already
+	//! Whether the retirement writes no metadata, the paths of the files it unlinks are retired already
 	bool WritesNothing() const {
-		return retired_paths.empty() && unscheduled_files.empty();
+		return retired_paths.empty();
 	}
 	void Append(DuckLakeRetirement other) {
 		for (auto &file : other.unlinked_files) {

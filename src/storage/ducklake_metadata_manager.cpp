@@ -234,6 +234,8 @@ static string GenerateIDList(const C &entries) {
 	return StringUtil::Join(ids, ", ");
 }
 
+static string FullFilePathsQuery(const string &files, const string &extra_columns, const string &extra_file_columns);
+
 static DuckLakePath ReadPath(const QueryResultRow &row, idx_t col) {
 	DuckLakePath path;
 	path.path = row.GetValue<string>(col);
@@ -731,12 +733,43 @@ string DuckLakeMetadataManager::OriginBoundarySql(const string &snapshot_id) {
 	                          snapshot_id);
 }
 
+string DuckLakeMetadataManager::SharedIdentityBackfillSql() {
+	auto paths = Query(FullFilePathsQuery(R"(
+    SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id, data_file_id
+    FROM {METADATA_CATALOG}.ducklake_data_file f
+  )",
+	                                      ", data_file_id", ", f.data_file_id"));
+	paths->ThrowIfError("Failed to read the data files of DuckLake: ");
+	DuckLakePathKeys path_keys(transaction.GetCatalog().GetDatabase());
+	map<string, set<idx_t>> files_by_key;
+	for (auto &row : *paths) {
+		files_by_key[path_keys.Get(row.GetValue<string>(0))].insert(row.GetValue<idx_t>(1));
+	}
+	string result;
+	for (auto &entry : files_by_key) {
+		auto &file_ids = entry.second;
+		if (file_ids.size() < 2) {
+			continue;
+		}
+		vector<string> copies;
+		for (auto file_id = std::next(file_ids.begin()); file_id != file_ids.end(); file_id++) {
+			copies.push_back(to_string(*file_id));
+		}
+		result += StringUtil::Format(
+		    "UPDATE {METADATA_CATALOG}.ducklake_data_file SET origin_file_id = %llu WHERE data_file_id IN (%s);\n",
+		    *file_ids.begin(), StringUtil::Join(copies, ", "));
+	}
+	return result;
+}
+
 void DuckLakeMetadataManager::MigrateV20Dev1() {
 	string migrate_query;
 	for (auto &added : V2_0_DEV2_ADDED_COLUMNS) {
 		migrate_query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s ADD COLUMN %s %s;\n", added.table,
 		                                    added.column, added.type);
 	}
+	// a 1.1 catalog can register one physical file in several tables, which share one identity from now on
+	migrate_query += SharedIdentityBackfillSql();
 	migrate_query += GetRetiredPathTableStatement() + "\n";
 	// the migration commits a snapshot, which orders it with the commits of attachments at the older version
 	migrate_query += R"(
@@ -5667,12 +5700,14 @@ string DuckLakeMetadataManager::GetReferencedFilesQuery() const {
 	                          "", "");
 }
 
-string DuckLakeMetadataManager::DataFileIdentitiesQuery() {
-	return FullFilePathsQuery(R"(
+string DuckLakeMetadataManager::DataFileIdentitiesQuery(const string &path_filter) {
+	return FullFilePathsQuery(StringUtil::Format(R"(
     SELECT f.path AS file_path, f.path_is_relative AS file_relative, table_id,
            COALESCE(origin_file_id, data_file_id) AS identity, end_snapshot, data_file_id
     FROM {METADATA_CATALOG}.ducklake_data_file f
+    WHERE %s
   )",
+	                                             path_filter),
 	                          ", file_table_id, identity, end_snapshot, data_file_id",
 	                          ", f.table_id AS file_table_id, f.identity, f.end_snapshot, f.data_file_id");
 }
@@ -5749,12 +5784,19 @@ static string CleanupFileIdList(const vector<DuckLakeFileForCleanup> &files) {
 }
 
 void DuckLakeMetadataManager::RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files) {
-	auto deleted_file_ids = CleanupFileIdList(cleaned_up_files);
+	UnscheduleFiles(CleanupFileIdList(cleaned_up_files));
+}
+
+void DuckLakeMetadataManager::UnscheduleFiles(const vector<DataFileIndex> &file_ids) {
+	UnscheduleFiles(GenerateIDList(file_ids));
+}
+
+void DuckLakeMetadataManager::UnscheduleFiles(const string &file_id_list) {
 	auto result = Execute(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion
 WHERE data_file_id IN (%s);
 )",
-	                                         deleted_file_ids));
+	                                         file_id_list));
 	result->ThrowIfError("Failed to delete scheduled cleanup files in DuckLake: ");
 }
 
@@ -5873,13 +5915,7 @@ string DuckLakeMetadataManager::RetireFilesSql(const DuckLakeRetirement &retirem
 	for (auto &path : retirement.retired_paths) {
 		retired_rows.push_back(StringUtil::Format("(%s, NOW())", SQLString(path)));
 	}
-	auto result = InsertValuesSql("ducklake_retired_path", retired_rows);
-	if (!retirement.unscheduled_files.empty()) {
-		result += StringUtil::Format(
-		    "DELETE FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion WHERE data_file_id IN (%s);\n",
-		    GenerateIDList(retirement.unscheduled_files));
-	}
-	return result;
+	return InsertValuesSql("ducklake_retired_path", retired_rows);
 }
 
 idx_t DuckLakeMetadataManager::GetNextColumnId(TableIndex table_id) {

@@ -1626,7 +1626,7 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 			    file.flush_row_id_start.IsValid() ? file.flush_row_id_start.GetIndex() : new_stats.next_row_id;
 			auto data_file = GetNewDataFile(file, commit_state, table_id, row_id_start);
 			auto identity = registration_identities.find(file.file_name);
-			if (!file.created_by_ducklake && identity != registration_identities.end()) {
+			if (identity != registration_identities.end()) {
 				data_file.origin_file_id = identity->second;
 			} else if (registers_new_paths) {
 				auto first = new_identities.emplace(path_keys.Get(file.file_name), data_file.id.index);
@@ -2793,14 +2793,33 @@ WHERE idt.schema_version < (
 	}
 }
 
+//! Selects the rows whose path ends with the name of one of the files, as every path of a physical file does
+static string FileNameFilter(const vector<pair<TableIndex, string>> &files) {
+	map<idx_t, set<string>> names_by_length;
+	for (auto &file : files) {
+		auto &path = file.second;
+		auto name = path.substr(path.find_last_of("/\\") + 1);
+		names_by_length[name.size()].insert(SQLString::ToString(name));
+	}
+	vector<string> predicates;
+	for (auto &entry : names_by_length) {
+		vector<string> names(entry.second.begin(), entry.second.end());
+		predicates.push_back(StringUtil::Format("SUBSTR(f.path, LENGTH(f.path) - %llu) IN (%s)", entry.first - 1,
+		                                        StringUtil::Join(names, ", ")));
+	}
+	return StringUtil::Join(predicates, " OR ");
+}
+
 void DuckLakeTransactionState::CheckRegistrations(TransactionChangeInformation &changes,
                                                   const DuckLakeCommitContext &context) {
 	registration_identities.clear();
 	registers_new_paths = false;
+	// another transaction can register a file this one wrote, after this one took its snapshot
+	bool resolve_written_files = !tables_changed_by_others.empty();
 	vector<pair<TableIndex, string>> registered_files;
 	for (auto &entry : local_changes.Changes()) {
 		for (auto &file : entry.second.new_data_files) {
-			if (!file.created_by_ducklake) {
+			if (!file.created_by_ducklake || resolve_written_files) {
 				registered_files.emplace_back(entry.first, file.file_name);
 			}
 		}
@@ -2808,8 +2827,8 @@ void DuckLakeTransactionState::CheckRegistrations(TransactionChangeInformation &
 	if (registered_files.empty()) {
 		return;
 	}
-	auto query = StringUtil::Replace(DuckLakeMetadataManager::DataFileIdentitiesQuery(), "{DATA_PATH}",
-	                                 SQLString::ToString(data_path));
+	auto query = StringUtil::Replace(DuckLakeMetadataManager::DataFileIdentitiesQuery(FileNameFilter(registered_files)),
+	                                 "{DATA_PATH}", SQLString::ToString(data_path));
 	auto result = context.query_metadata(std::move(query));
 	result->ThrowIfError("Failed to read the files registered in DuckLake: ");
 	DuckLakePathKeys path_keys(db);

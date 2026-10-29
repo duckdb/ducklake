@@ -1,0 +1,67 @@
+# name: test/sql/retirement/unlink_recovery.test
+# description: a cleanup that stopped between its retirement commit and the unlink leaves the schedule row, so the next cleanup unlinks the file
+# group: [retirement]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+COPY (SELECT 42 AS i) TO '{DATA_PATH}/unlink_recovery_external.parquet'
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/unlink_recovery', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{DATA_PATH}/unlink_recovery_external.parquet')
+
+statement ok
+DROP TABLE dl.t
+
+statement ok
+CALL ducklake_expire_snapshots('dl', older_than => now())
+
+# the state after the retirement commit of a cleanup that did not unlink, the file outside the data path stays scheduled
+statement ok
+INSERT INTO meta.ducklake_retired_path SELECT path, now() FROM meta.ducklake_files_scheduled_for_deletion
+
+query I
+SELECT count(*) FROM meta.ducklake_files_scheduled_for_deletion
+----
+1
+
+statement ok
+SET VARIABLE before = (SELECT MAX(snapshot_id) FROM ducklake_snapshots('dl'))
+
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true, dry_run => true)
+----
+1
+
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+1
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/unlink_recovery_external.parquet')
+----
+0
+
+query II
+SELECT (SELECT count(*) FROM meta.ducklake_files_scheduled_for_deletion), (SELECT count(*) FROM meta.ducklake_retired_path)
+----
+0	1
+
+# the path was retired already, so the cleanup writes no snapshot
+query I
+SELECT MAX(snapshot_id) = getvariable('before') FROM ducklake_snapshots('dl')
+----
+true

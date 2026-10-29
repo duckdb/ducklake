@@ -428,6 +428,8 @@ public:
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type);
 
 	virtual void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files);
+	void UnscheduleFiles(const vector<DataFileIndex> &file_ids);
+	void UnscheduleFiles(const string &file_id_list);
 	//! Fails when the state of the table at the snapshot cannot be copied
 	void CheckTableFork(TableIndex source_table_id, idx_t snapshot_id);
 	//! The snapshot that created the table when it is a copy of another table, whose history predates it
@@ -440,7 +442,8 @@ public:
 	                                 idx_t first_file_id = 0);
 	static string RetireFilesSql(const DuckLakeRetirement &retirement);
 	//! The full path, table, physical identity, end snapshot and id of every data file, ended files included
-	static string DataFileIdentitiesQuery();
+	//! The identities and live tables of the data files whose path passes the filter
+	static string DataFileIdentitiesQuery(const string &path_filter);
 	static string DropSchemas(const set<SchemaIndex> &ids);
 	static string DropTables(const set<TableIndex> &ids, bool renamed);
 	static string DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags = false);
@@ -658,6 +661,8 @@ public:
 	virtual void MigrateV10(bool from_dev1 = false);
 	virtual void MigrateV11();
 	virtual void MigrateV20Dev1();
+	//! The updates that give the files of one physical path one identity
+	string SharedIdentityBackfillSql();
 	static string GetSnapshotTagTableStatement();
 	static string GetRetiredPathTableStatement();
 	//! The CREATE TABLE statement of a data or delete file table with the file identity columns appended

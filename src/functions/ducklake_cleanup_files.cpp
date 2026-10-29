@@ -157,13 +157,17 @@ static vector<vector<Value>> RemoveFiles(ClientContext &context, const CleanupBi
 		                                     data.files.begin() + NumericCast<int64_t>(end));
 		vector<string> paths;
 		// the retirement commits in a transaction of its own, so that it holds before any of the files is unlinked
-		auto unlinked_files = DuckLakeTransaction::CommitRetirement(context, data.catalog, std::move(batch), data.type,
-		                                                            data.GetFunctionName());
-		for (auto &file : unlinked_files) {
+		auto retirement = DuckLakeTransaction::CommitRetirement(context, data.catalog, std::move(batch), data.type,
+		                                                        data.GetFunctionName());
+		for (auto &file : retirement.unlinked_files) {
 			rows.push_back({Value(file.path)});
 			paths.push_back(std::move(file.path));
 		}
 		fs.RemoveFiles(paths);
+		if (!retirement.unscheduled_files.empty()) {
+			// the schedule entries go once the files are unlinked, so that an interrupted cleanup is retried
+			DuckLakeTransaction::UnscheduleFiles(context, data.catalog, retirement.unscheduled_files);
+		}
 	}
 	return rows;
 }
