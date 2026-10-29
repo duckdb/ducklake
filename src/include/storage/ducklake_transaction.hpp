@@ -290,6 +290,10 @@ public:
 	vector<DuckLakeSnapshotInfo> ExpireSnapshots(const string &filter);
 	//! Whether the commit writes a snapshot for the expiry of the transaction
 	bool ExpiresSnapshotsOnCommit() const;
+	void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &files);
+	//! Whether the metadata transaction expired snapshots, which a rollback restores
+	bool ExpiredSnapshotsInMetadataTransaction();
+	void MarkMetadataWritten();
 	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files);
 	bool InlinedTableFlushed(const Identifier &table_name);
@@ -384,8 +388,17 @@ private:
 	void FlushNameMapCacheInvalidations();
 	//! Puts back the config options this transaction replaced in the catalog
 	void UndoConfigOptions();
+	//! The SQL that the commit runs for the options this transaction changed
+	string ConfigOptionLockSql() const;
+	//! The last change of the option before the change at the index
+	optional_idx EarlierConfigOptionChange(const DuckLakeConfigOption &option, idx_t change_index) const;
+	//! The rows an option is expected to have after a set, which an earlier change of the option decides
+	idx_t ConfigOptionRows(idx_t change_index, idx_t written_rows) const;
+	//! Whether other commits wrote rows of the options this transaction changed, which READ COMMITTED shows
+	bool ConfigOptionsWrittenByOthers();
 	//! Writes the options of the transaction again, after a failed commit attempt rolled them back
 	void RewriteConfigOptions();
+	void ClearMaintenanceChanges();
 	static DuckLakePartitionInfo GetNewPartitionKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeSortInfo GetNewSortKey(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
 	static DuckLakeTableInfo GetNewTable(DuckLakeCommitState &commit_state, DuckLakeTableEntry &table);
@@ -447,6 +460,11 @@ private:
 	//! The snapshots the statements of this transaction expired, and the latest snapshot the first expiry saw
 	vector<DuckLakeSnapshotInfo> expired_in_transaction;
 	optional_idx expiry_snapshot_id;
+	//! Whether statements wrote to the metadata transaction, which a retried commit rolls back
+	bool metadata_written = false;
+	bool snapshots_expired = false;
+	//! Whether statements removed files after expiring snapshots, which a rollback restores without their files
+	bool removed_files_after_expiry = false;
 	//! The start of the transaction, which judges the expiry times of tags as now() does
 	timestamp_tz_t start_time;
 	DuckLakeSnapshot GetLatestSnapshot();
@@ -473,6 +491,12 @@ private:
 	vector<DuckLakeConfigOptionUndo> config_option_undo;
 	//! Whether a retried commit attempt wrote the options again
 	bool rewrote_config_options = false;
+	//! Expiries and cleanups of the transaction can run in parallel statements
+	mutex maintenance_lock;
+	//! Whether the metadata transaction expired snapshots
+	bool expired_in_metadata_transaction = false;
+	//! The files the metadata transaction removed from the deletion schedule
+	vector<DuckLakeFileForCleanup> cleaned_up_files;
 
 	atomic<idx_t> catalog_version;
 	mutex transaction_views_lock;
