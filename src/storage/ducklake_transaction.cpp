@@ -40,6 +40,31 @@
 
 namespace duckdb {
 
+DuckLakeInternalConnectionState::DuckLakeInternalConnectionState(const shared_ptr<ClientContext> &base_context_p)
+    : base_context(base_context_p) {
+}
+
+unique_ptr<Connection>
+DuckLakeInternalConnectionState::CreateConnection(DatabaseInstance &db, const shared_ptr<ClientContext> &base_context) {
+	auto connection = make_uniq<Connection>(base_context ? Connection::CreateInternal(*base_context)
+	                                                     : Connection::CreateInternal(db));
+	// Follow the immediate caller so its transaction-finalization suppression applies.
+	connection->context->base_context.reset();
+	connection->context->registered_state->GetOrCreate<DuckLakeInternalConnectionState>(KEY, base_context);
+	if (base_context) {
+		DuckLakeUtil::CopyExtensionSettings(*base_context, *connection->context);
+	}
+	return connection;
+}
+
+void DuckLakeInternalConnectionState::QueryBegin(ClientContext &context) {
+	context.base_context = base_context.lock();
+}
+
+void DuckLakeInternalConnectionState::QueryEnd(ClientContext &context) {
+	context.base_context.reset();
+}
+
 bool LocalTableDataChanges::IsEmpty() const {
 	if (!new_data_files.empty()) {
 		return false;
@@ -917,13 +942,7 @@ void DuckLakeTransaction::Rollback() {
 Connection &DuckLakeTransaction::GetConnection() {
 	lock_guard<mutex> lock(connection_lock);
 	if (!connection) {
-		connection = make_uniq<Connection>(db);
-		connection->context->registered_state->GetOrCreate<DuckLakeInternalConnectionState>(
-		    DuckLakeInternalConnectionState::KEY);
-		auto caller_context = context.lock();
-		if (caller_context) {
-			DuckLakeUtil::CopyExtensionSettings(*caller_context, *connection->context);
-		}
+		connection = DuckLakeInternalConnectionState::CreateConnection(db, context.lock());
 		// set the search path to the metadata catalog
 		auto &client_data = ClientData::Get(*connection->context);
 		// ensure we are only looking in the ducklake catalog schema during querying

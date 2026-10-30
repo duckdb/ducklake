@@ -1,0 +1,115 @@
+# name: test/sql/partitioning/calendar_timestamptz_ns.test
+# description: Nanosecond timestamp calendar partitions use UTC and floor finite boundaries
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/calendar_timestamptz_ns')
+
+# nanosecond timestamps use the same UTC calendar fields, including when inlined rows are flushed later
+statement ok
+CREATE TABLE lake.t_ns (id INTEGER, ts TIMESTAMPTZ_NS)
+
+statement ok
+ALTER TABLE lake.t_ns SET PARTITIONED BY (year(ts), month(ts), day(ts), hour(ts))
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0, table_name => 't_ns')
+
+statement ok
+SET TimeZone = 'UTC'
+
+statement ok
+INSERT INTO lake.t_ns VALUES (1, TIMESTAMPTZ_NS '2021-01-01 05:00:00.000000001+00')
+
+statement ok
+SET TimeZone = 'Pacific/Kiritimati'
+
+statement ok
+INSERT INTO lake.t_ns VALUES (2, TIMESTAMPTZ_NS '2021-01-01 05:00:00.000000001+00')
+
+statement ok
+SET TimeZone = 'Etc/GMT+12'
+
+statement ok
+INSERT INTO lake.t_ns VALUES (3, TIMESTAMPTZ_NS '2021-01-01 05:00:00.000000001+00')
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10, table_name => 't_ns')
+
+statement ok
+INSERT INTO lake.t_ns VALUES (4, TIMESTAMPTZ_NS '2021-01-01 05:00:00.000000001+00')
+
+statement ok
+SET TimeZone = 'America/Los_Angeles'
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+query II
+SELECT count(*), list_distinct(list(partition_values))
+FROM (
+	SELECT string_agg(partition_value, ', ' ORDER BY partition_key_index) AS partition_values
+	FROM __ducklake_metadata_lake.ducklake_file_partition_value p
+	JOIN __ducklake_metadata_lake.ducklake_data_file f USING (data_file_id)
+	JOIN __ducklake_metadata_lake.ducklake_table t ON f.table_id = t.table_id
+	WHERE t.table_name = 't_ns'
+	GROUP BY data_file_id
+)
+----
+4	['2021, 1, 1, 5']
+
+query I
+SELECT DISTINCT regexp_extract(f.path, '^(.*)/[^/]*$', 1)
+FROM __ducklake_metadata_lake.ducklake_data_file f
+JOIN __ducklake_metadata_lake.ducklake_table t ON f.table_id = t.table_id
+WHERE t.table_name = 't_ns'
+----
+year=2021/month=1/day=1/hour=5
+
+statement ok
+SET TimeZone = 'UTC'
+
+query II
+SELECT id, ts FROM lake.t_ns ORDER BY id
+----
+1	2021-01-01 05:00:00.000000001+00
+2	2021-01-01 05:00:00.000000001+00
+3	2021-01-01 05:00:00.000000001+00
+4	2021-01-01 05:00:00.000000001+00
+
+# flooring preserves calendar and epoch fields just before the epoch and at the finite nanosecond limits
+statement ok
+CREATE TABLE lake.t_ns_edge (ts TIMESTAMPTZ_NS)
+PARTITIONED BY (year(ts), month(ts), day(ts), hour(ts), epoch_year(ts))
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0, table_name => 't_ns_edge')
+
+statement ok
+INSERT INTO lake.t_ns_edge VALUES
+    (TIMESTAMPTZ_NS '1969-12-31 23:59:59.999999999+00'),
+    (TIMESTAMPTZ_NS '1677-09-21 00:12:43.145224194+00'),
+    (TIMESTAMPTZ_NS '2262-04-11 23:47:16.854775806+00')
+
+query I rowsort
+SELECT string_agg(partition_value, ', ' ORDER BY partition_key_index)
+FROM __ducklake_metadata_lake.ducklake_file_partition_value p
+JOIN __ducklake_metadata_lake.ducklake_data_file f USING (data_file_id)
+JOIN __ducklake_metadata_lake.ducklake_table t ON f.table_id = t.table_id
+WHERE t.table_name = 't_ns_edge'
+GROUP BY data_file_id
+----
+1677, 9, 21, 0, -293
+1969, 12, 31, 23, -1
+2262, 4, 11, 23, 292
+
