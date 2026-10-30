@@ -172,3 +172,42 @@ query IT
 SELECT i, typeof(i) FROM dl.t
 ----
 43	INTEGER
+
+statement ok
+DETACH dl
+
+# a VARIANT column is stored as BLOB, so an override of BLOB applies to it
+statement ok
+CALL ducklake_register_metadata_profile('duckdb', '{"types": {"natively_unsupported": ["VARIANT"], "column_type_overrides": {"BLOB": "VARCHAR"}}}')
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/register_metadata_profile_variant.db' AS dl (DATA_PATH '{TEST_DIR}/register_metadata_profile_variant', DATA_INLINING_ROW_LIMIT 10, DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE TABLE dl.t (v VARIANT)
+
+statement ok
+INSERT INTO dl.t VALUES (42::VARIANT)
+
+query T
+SELECT typeof(v) FROM __ducklake_metadata_dl.ducklake_inlined_data_1_1
+----
+VARCHAR
+
+query IT
+SELECT v::INTEGER, typeof(v) FROM dl.t
+----
+42	VARIANT
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query II
+SELECT table_name, file_count FROM ducklake_table_info('dl')
+----
+t	1
+
+query IT
+SELECT v::INTEGER, typeof(v) FROM dl.t
+----
+42	VARIANT

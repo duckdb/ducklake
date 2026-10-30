@@ -70,7 +70,7 @@ void DuckLakeMetadataManager::Register(const string &name, DuckLakeMetadataManag
 bool DuckLakeMetadataManager::HasBuiltInManager(const string &name) {
 	lock_guard<mutex> lock(metadata_managers_lock);
 	// profiles are looked up case-insensitively, so a profile must not shadow a manager in another case
-	for (auto &entry : metadata_managers) {
+	for (const auto &entry : metadata_managers) {
 		if (StringUtil::CIEquals(entry.first, name)) {
 			return true;
 		}
@@ -3380,7 +3380,8 @@ string DuckLakeMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const LogicalType &type) {
 	auto &metadata_type = transaction.GetCatalog().MetadataType();
 	// a column created with an overridden type is cast back like on any other database
-	bool type_overridden = GetMetadataProfile().column_type_overrides.count(type.id());
+	auto storage_type = DuckLakeUtil::GetInlinedStorageType(*this, type);
+	bool type_overridden = GetMetadataProfile().column_type_overrides.count(storage_type.id());
 	if (!type_overridden && (metadata_type.empty() || metadata_type == "duckdb" || metadata_type == "quack" ||
 	                         metadata_type == "quack_scanner")) {
 		// older versions stored struct fields in the order of an ALTER, which a cast by field name restores
@@ -3391,7 +3392,6 @@ string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const L
 		// Postgres stores VARCHAR and JSON as BYTEA.
 		expression = "decode(" + expression + ")";
 	}
-	auto storage_type = DuckLakeUtil::GetInlinedStorageType(*this, type);
 	expression = "CAST(" + expression + " AS " + storage_type.ToString() + ")";
 	if (storage_type != type) {
 		expression = DuckLakeUtil::InlinedVariantExpression(expression, type, false);
