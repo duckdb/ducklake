@@ -1,0 +1,69 @@
+# name: test/sql/catalog/nested_schema/drop_macro_used_by_table.test
+# description: DROP MACRO of a nested schema is refused while a column default calls the macro by its full path
+# group: [nested_schema]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/nested_drop_macro_used_by_table', DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE SCHEMA lake.a
+
+statement ok
+CREATE SCHEMA lake.a.b
+
+statement ok
+CREATE SCHEMA lake.c
+
+statement ok
+CREATE SCHEMA lake.c.b
+
+statement ok
+CREATE MACRO lake.a.b.f() AS 1
+
+statement ok
+CREATE MACRO lake.c.b.f() AS 2
+
+statement ok
+CREATE TABLE lake.y (c INTEGER DEFAULT lake.a.b.f())
+
+# a macro of the same name in another schema is held too
+statement error
+DROP MACRO lake.c.b.f
+----
+Cannot drop macro "f" because the default of column "c" of table "y" calls it
+
+statement error
+DROP MACRO lake.a.b.f
+----
+Cannot drop macro "f" because the default of column "c" of table "y" calls it
+
+# catalog.name in a table of a nested schema resolves through the name of its schema
+statement ok
+CREATE SCHEMA lake.b
+
+statement ok
+CREATE MACRO lake.b.k() AS 9
+
+statement ok
+CREATE TABLE lake.a.b.t (c INTEGER DEFAULT lake.k())
+
+statement ok
+INSERT INTO lake.a.b.t DEFAULT VALUES
+
+query I
+SELECT c FROM lake.a.b.t
+----
+9
+
+statement error
+DROP MACRO lake.b.k
+----
+Cannot drop macro "k" because the default of column "c" of table "t" calls it
