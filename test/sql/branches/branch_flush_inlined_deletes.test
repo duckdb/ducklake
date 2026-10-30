@@ -1,0 +1,144 @@
+# name: test/sql/branches/branch_flush_inlined_deletes.test
+# description: flushing inlined deletes on main keeps the deletes a branch saw at its fork
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_flush_inlined_deletes_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3), (4)
+
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+statement ok
+DETACH dl
+
+# the next delete is inlined into the metadata
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_flush_inlined_deletes_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 4, 4, NULL)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 4
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, begin_snapshot, NULL FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND end_snapshot IS NULL
+
+statement ok
+INSERT INTO meta.ducklake_delete_file_visibility SELECT 1, table_id, delete_file_id, begin_snapshot, NULL FROM meta.ducklake_delete_file_visibility WHERE branch_id = 0 AND end_snapshot IS NULL
+
+# the flush replaces the delete file with one that also holds the inlined delete
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+3
+4
+
+statement ok
+DETACH dl
+
+# the branch keeps both deletes it saw at the fork
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_flush_inlined_deletes_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+3
+4
+
+statement ok
+DETACH dl
+
+# a flush that absorbs a pre fork inlined delete reaches a branch that had no delete file at its fork
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS m (DATA_PATH '{DATA_PATH}/branch_flush_inlined_deletes_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE m.u (i INTEGER)
+
+statement ok
+INSERT INTO m.u VALUES (1), (2), (3), (4)
+
+statement ok
+DETACH m
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS m (DATA_PATH '{DATA_PATH}/branch_flush_inlined_deletes_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+# this delete is inlined, the branch forks right after it
+statement ok
+DELETE FROM m.u WHERE i = 1
+
+statement ok
+SET VARIABLE fork = (SELECT MAX(snapshot_id) FROM meta.ducklake_snapshot WHERE branch_id = 0)
+
+statement ok
+INSERT INTO meta.ducklake_branch SELECT 2, 'feature', 0, getvariable('fork'), getvariable('fork'), NULL
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 200, NOW(), schema_version, next_catalog_id, next_file_id, 2 FROM meta.ducklake_snapshot WHERE snapshot_id = getvariable('fork')
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 2, table_id, data_file_id, begin_snapshot, NULL FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND end_snapshot IS NULL AND begin_snapshot <= getvariable('fork')
+
+statement ok
+DETACH m
+
+# main deletes another row physically after the fork, then the flush absorbs the inlined delete
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS m (DATA_PATH '{DATA_PATH}/branch_flush_inlined_deletes_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+DELETE FROM m.u WHERE i = 2
+
+statement ok
+CALL ducklake_flush_inlined_data('m')
+
+query I
+SELECT i FROM m.u ORDER BY i
+----
+3
+4
+
+# the flush itself mapped the replacement into the branch
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility v JOIN meta.ducklake_table t ON v.table_id = t.table_id AND t.table_name = 'u' WHERE v.branch_id = 2
+----
+1
+
+statement ok
+DETACH m
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_flush_inlined_deletes_files', METADATA_CATALOG 'meta', BRANCH 'feature')
+
+query I
+SELECT i FROM dl.u ORDER BY i
+----
+2
+3
+4
+
+statement ok
+DETACH dl

@@ -62,11 +62,11 @@ CREATE TABLE lake.v AS SELECT COLUMNS(*)::VARIANT FROM (VALUES (10::VARIANT), (2
 
 # every column of the four file tables stores the SQLite types the DuckDB-parsed INSERT stored
 # ducklake_data_file
-query IIIIIIIIIIIIIIIII rowsort
-FROM sqlite_query('__ducklake_metadata_lake', 'SELECT DISTINCT typeof(data_file_id), typeof(table_id), typeof(begin_snapshot), typeof(end_snapshot), typeof(file_order), typeof(path), typeof(path_is_relative), typeof(file_format), typeof(record_count), typeof(file_size_bytes), typeof(footer_size), typeof(row_id_start), typeof(partition_id), typeof(encryption_key), typeof(mapping_id), typeof(partial_max), typeof(row_group_count) FROM ducklake_data_file')
+query IIIIIIIIIIIIIII rowsort
+FROM sqlite_query('__ducklake_metadata_lake', 'SELECT DISTINCT typeof(data_file_id), typeof(table_id), typeof(file_order), typeof(path), typeof(path_is_relative), typeof(file_format), typeof(record_count), typeof(file_size_bytes), typeof(footer_size), typeof(row_id_start), typeof(partition_id), typeof(encryption_key), typeof(mapping_id), typeof(partial_max), typeof(row_group_count) FROM ducklake_data_file')
 ----
-integer	integer	integer	null	null	text	integer	text	integer	integer	integer	integer	integer	null	null	null	integer
-integer	integer	integer	null	null	text	integer	text	integer	integer	integer	integer	null	null	null	null	integer
+integer	integer	null	text	integer	text	integer	integer	integer	integer	integer	null	null	null	integer
+integer	integer	null	text	integer	text	integer	integer	integer	integer	null	null	null	null	integer
 
 # ducklake_file_column_stats
 query IIIIIIIIIIII rowsort

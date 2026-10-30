@@ -55,7 +55,7 @@ SELECT SUM(id), SUM(rowid) FROM t
 
 # every rewritten file respects the target (a single un-rotated file would be ~2.6MB)
 query I
-SELECT MAX(file_size_bytes) < 1000000 FROM ducklake_metadata.ducklake_data_file WHERE end_snapshot IS NULL
+SELECT MAX(file_size_bytes) < 1000000 FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_metadata.ducklake_data_file f JOIN ducklake_metadata.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) WHERE end_snapshot IS NULL
 ----
 true
 
@@ -91,7 +91,7 @@ SELECT SUM(files_processed), SUM(files_created) FROM ducklake_rewrite_data_files
 # exactly 3 files per partition, no partition mixing
 query II
 SELECT pv.partition_value, COUNT(*)
-FROM ducklake_metadata.ducklake_data_file df
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_metadata.ducklake_data_file f JOIN ducklake_metadata.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) df
 JOIN ducklake_metadata.ducklake_file_partition_value pv ON df.data_file_id = pv.data_file_id
 WHERE df.end_snapshot IS NULL
 GROUP BY pv.partition_value ORDER BY pv.partition_value

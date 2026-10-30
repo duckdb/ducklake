@@ -27,7 +27,7 @@ statement ok
 SET VARIABLE small_dropped_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'small_dropped')
 
 query I
-SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('small_dropped_id') AND end_snapshot IS NULL
+SELECT COUNT(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM __ducklake_metadata_ducklake.ducklake_data_file f JOIN __ducklake_metadata_ducklake.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) WHERE table_id = getvariable('small_dropped_id') AND end_snapshot IS NULL
 ----
 1
 
@@ -42,7 +42,7 @@ SELECT COUNT(*) FROM ducklake.small_dropped
 0
 
 query I
-SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('small_dropped_id') AND end_snapshot IS NULL
+SELECT COUNT(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM __ducklake_metadata_ducklake.ducklake_data_file f JOIN __ducklake_metadata_ducklake.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) WHERE table_id = getvariable('small_dropped_id') AND end_snapshot IS NULL
 ----
 0
 
@@ -60,7 +60,7 @@ statement ok
 SET VARIABLE dropped_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'dropped')
 
 query I
-SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('dropped_id') AND end_snapshot IS NULL
+SELECT COUNT(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM __ducklake_metadata_ducklake.ducklake_data_file f JOIN __ducklake_metadata_ducklake.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) WHERE table_id = getvariable('dropped_id') AND end_snapshot IS NULL
 ----
 1
 
@@ -75,7 +75,7 @@ SELECT COUNT(*) FROM ducklake.dropped
 0
 
 query I
-SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('dropped_id') AND end_snapshot IS NULL
+SELECT COUNT(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM __ducklake_metadata_ducklake.ducklake_data_file f JOIN __ducklake_metadata_ducklake.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) WHERE table_id = getvariable('dropped_id') AND end_snapshot IS NULL
 ----
 0
 
@@ -103,7 +103,7 @@ SELECT COUNT(*) FROM ducklake.inlined
 95
 
 query I
-SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('inlined_id') AND end_snapshot IS NULL
+SELECT COUNT(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM __ducklake_metadata_ducklake.ducklake_data_file f JOIN __ducklake_metadata_ducklake.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) WHERE table_id = getvariable('inlined_id') AND end_snapshot IS NULL
 ----
 1
 

@@ -28,7 +28,7 @@ SELECT count(*) FROM t
 49
 
 query I
-SELECT count(*) FROM ducklake_meta.ducklake_delete_file WHERE end_snapshot IS NULL
+SELECT count(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_meta.ducklake_delete_file f JOIN ducklake_meta.ducklake_delete_file_visibility v ON v.delete_file_id = f.delete_file_id AND v.branch_id = 0) WHERE end_snapshot IS NULL
 ----
 0
 
@@ -48,12 +48,12 @@ SELECT count(*) FROM t
 49
 
 query I
-SELECT count(*) FROM ducklake_meta.ducklake_delete_file WHERE end_snapshot IS NULL
+SELECT count(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_meta.ducklake_delete_file f JOIN ducklake_meta.ducklake_delete_file_visibility v ON v.delete_file_id = f.delete_file_id AND v.branch_id = 0) WHERE end_snapshot IS NULL
 ----
 0
 
 query I
-SELECT count(*) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL
+SELECT count(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_meta.ducklake_data_file f JOIN ducklake_meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) WHERE end_snapshot IS NULL
 ----
 1
 
@@ -61,6 +61,6 @@ statement ok
 SET VARIABLE rewrite_snap = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake'))
 
 query I
-SELECT count(*) FROM ducklake_meta.ducklake_data_file WHERE begin_snapshot = getvariable('rewrite_snap') AND end_snapshot IS NULL
+SELECT count(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_meta.ducklake_data_file f JOIN ducklake_meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) WHERE begin_snapshot = getvariable('rewrite_snap') AND end_snapshot IS NULL
 ----
 1

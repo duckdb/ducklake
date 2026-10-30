@@ -115,6 +115,20 @@ void DuckLakeInitializer::Initialize() {
 	// probe the metadata server for optional capabilities (e.g. server-side commit retries) once per attach
 	current_metadata_manager.ProbeServerCapabilities();
 	current_metadata_manager.ClearCache();
+	if (!options.branch_name.empty() && !catalog.SupportsBranching()) {
+		ThrowUnsupportedByVersion(catalog.GetDuckLakeVersion(), "branches");
+	}
+	if (!options.branch_name.empty() && !StringUtil::CIEquals(options.branch_name, "main")) {
+		auto branch = current_metadata_manager.FindBranch(options.branch_name);
+		if (!branch.IsValid()) {
+			throw InvalidInputException("No branch with the name \"%s\" exists", options.branch_name);
+		}
+		if (!branch.fork_branch_id.IsValid() || branch.fork_branch_id.GetIndex() != 0 ||
+		    !branch.fork_snapshot_id.IsValid()) {
+			throw NotImplementedException("Only branches that fork from main can be attached");
+		}
+		catalog.SetAttachedBranch(branch.branch_id, branch.fork_snapshot_id);
+	}
 	if (options.at_clause) {
 		// if the user specified a snapshot try to load it to trigger an error if it does not exist
 		transaction.GetSnapshot();
@@ -342,6 +356,25 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	// set correct version metadata manager
 	if (resolved_version != DuckLakeVersion::UNSET) {
 		SetVersionedMetadataManager(transaction, resolved_version);
+	}
+	if (resolved_version == DuckLakeVersion::V2_0_DEV1 && !transaction.GetMetadataManager().HasV2_0Dev1Additions()) {
+		if (catalog.GetAttached().IsReadOnly()) {
+			// once the inline range columns are gone the visibility rows are the only readable ranges
+			if (transaction.GetMetadataManager().HasAllFileRangeColumns()) {
+				catalog.SetBranchMetadataMissing();
+			}
+		} else {
+			try {
+				transaction.GetMetadataManager().AddV2_0Dev1Additions();
+				// commit now so a concurrent heal surfaces inside the attach retry scope
+				transaction.ReleaseMetadataTransaction();
+			} catch (std::exception &ex) {
+				// a concurrent attach may have added them first
+				if (!transaction.GetMetadataManager().HasV2_0Dev1Additions()) {
+					throw;
+				}
+			}
+		}
 	}
 }
 

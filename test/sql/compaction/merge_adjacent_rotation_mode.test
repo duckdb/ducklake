@@ -42,7 +42,7 @@ SELECT SUM(files_processed), SUM(files_created) FROM ducklake_merge_adjacent_fil
 # rotation invalid: the merged file keeps a positional row_id_start (NOT NULL)
 query I
 SELECT COUNT(*) FILTER (WHERE row_id_start IS NOT NULL) = COUNT(*)
-FROM ducklake_metadata.ducklake_data_file WHERE end_snapshot IS NULL
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_metadata.ducklake_data_file f JOIN ducklake_metadata.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) WHERE end_snapshot IS NULL
 ----
 true
 
@@ -79,7 +79,7 @@ SELECT SUM(files_processed), SUM(files_created) FROM ducklake_merge_adjacent_fil
 
 query I
 SELECT COUNT(*) FILTER (WHERE df.row_id_start IS NULL) = COUNT(*)
-FROM ducklake_metadata.ducklake_data_file df
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_metadata.ducklake_data_file f JOIN ducklake_metadata.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) df
 JOIN ducklake_metadata.ducklake_file_partition_value pv ON df.data_file_id = pv.data_file_id
 WHERE df.end_snapshot IS NULL
 ----

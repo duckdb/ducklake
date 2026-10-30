@@ -359,7 +359,13 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			} else if (!has_local_delete) {
 				// We only set snapshot filter if this file is not a current running transaction
 				// OW, we are guaranteed to be on the latest valid snapshot
-				delete_filter->SetSnapshotFilter(read_info.snapshot.snapshot_id);
+				auto filter_snapshot = read_info.snapshot.snapshot_id;
+				auto &delete_bound = file_entry.delete_snapshot_filter_max;
+				if (delete_bound.IsValid() && delete_bound.GetIndex() < filter_snapshot) {
+					// deletes main dated after the fork never apply on a branch
+					filter_snapshot = delete_bound.GetIndex();
+				}
+				delete_filter->SetSnapshotFilter(filter_snapshot);
 			}
 			reader.deletion_filter = std::move(delete_filter);
 		}

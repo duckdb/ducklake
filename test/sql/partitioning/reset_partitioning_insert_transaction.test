@@ -45,7 +45,7 @@ SELECT * FROM ducklake.t
 3
 
 query II
-SELECT count(*) FILTER (WHERE partition_id IS NOT NULL), count(*) FILTER (WHERE partition_id IS NULL) FROM meta.ducklake_data_file WHERE end_snapshot IS NULL
+SELECT count(*) FILTER (WHERE partition_id IS NOT NULL), count(*) FILTER (WHERE partition_id IS NULL) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM meta.ducklake_data_file f JOIN meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) WHERE end_snapshot IS NULL
 ----
 2	1
 
@@ -77,6 +77,6 @@ SELECT * FROM ducklake.t
 4
 
 query II
-SELECT count(*) FILTER (WHERE partition_id IS NOT NULL), count(*) FILTER (WHERE partition_id IS NULL) FROM meta.ducklake_data_file WHERE end_snapshot IS NULL
+SELECT count(*) FILTER (WHERE partition_id IS NOT NULL), count(*) FILTER (WHERE partition_id IS NULL) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM meta.ducklake_data_file f JOIN meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) WHERE end_snapshot IS NULL
 ----
 2	2

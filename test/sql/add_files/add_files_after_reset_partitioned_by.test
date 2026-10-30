@@ -70,7 +70,7 @@ SELECT * FROM lake.t ORDER BY id
 # the inserted files keep their partitions, the added files have none
 query II
 SELECT count(*) FILTER (WHERE partition_id IS NOT NULL), count(*) FILTER (WHERE partition_id IS NULL)
-FROM meta.ducklake_data_file
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM meta.ducklake_data_file f JOIN meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0)
 WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't') AND end_snapshot IS NULL
 ----
 2	2
@@ -129,7 +129,7 @@ INSERT INTO lake.t VALUES (3, 30)
 
 query II
 SELECT count(*), count(*) FILTER (WHERE partition_id IS NOT NULL)
-FROM meta.ducklake_data_file
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM meta.ducklake_data_file f JOIN meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0)
 WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't') AND end_snapshot IS NULL
 ----
 5	3

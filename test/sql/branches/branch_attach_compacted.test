@@ -1,0 +1,75 @@
+# name: test/sql/branches/branch_attach_compacted.test
+# description: rows of a compacted file read as the parent at the fork on a branch
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_attach_compacted_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2, 2, NULL)
+
+# compact the two inserts into one file on main
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND end_snapshot IS NULL
+----
+1
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_attach_compacted_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+# only the rows of the fork snapshot are visible inside the compacted file
+query I
+SELECT * FROM dl.t
+----
+1
+
+statement ok
+DETACH dl
+
+# a file a branch visibility row references is skipped by compaction
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS m (DATA_PATH '{DATA_PATH}/branch_attach_compacted_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+INSERT INTO m.t VALUES (3)
+
+statement ok
+INSERT INTO m.t VALUES (4)
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 1, v.table_id, v.data_file_id, v.begin_snapshot, NULL FROM meta.ducklake_file_visibility v JOIN meta.ducklake_data_file f ON v.data_file_id = f.data_file_id WHERE v.branch_id = 0 AND v.end_snapshot IS NULL AND f.record_count = 1 LIMIT 1
+
+statement ok
+CALL ducklake_merge_adjacent_files('m')
+
+# the referenced file keeps its identity and the branch inherits the merged file that starts before its fork
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND end_snapshot IS NULL AND data_file_id IN (SELECT data_file_id FROM meta.ducklake_file_visibility WHERE branch_id = 1)
+----
+2
+
+statement ok
+DETACH m

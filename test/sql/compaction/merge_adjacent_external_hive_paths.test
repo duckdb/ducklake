@@ -45,7 +45,7 @@ t	2	1
 
 query I
 SELECT path
-FROM metadata.ducklake_data_file
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM metadata.ducklake_data_file f JOIN metadata.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0)
 WHERE end_snapshot IS NULL AND path_is_relative
 ORDER BY ALL
 ----
@@ -89,7 +89,7 @@ t	2	1
 
 query I
 SELECT path
-FROM metadata.ducklake_data_file
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM metadata.ducklake_data_file f JOIN metadata.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0)
 WHERE end_snapshot IS NULL AND path_is_relative AND path LIKE '%__HIVE_DEFAULT_PARTITION__%'
 ORDER BY ALL
 ----
@@ -146,7 +146,7 @@ transformed_t	2	1
 
 query I
 SELECT path
-FROM metadata.ducklake_data_file
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM metadata.ducklake_data_file f JOIN metadata.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0)
 WHERE end_snapshot IS NULL AND path_is_relative AND path LIKE '%year=2024/month=5/%'
 ORDER BY ALL
 ----
@@ -194,7 +194,7 @@ FROM (
 	FROM glob('{DATA_PATH}/external_weird/weird=*/*.parquet')
 	INTERSECT
 	SELECT regexp_extract(path, '(weird=[^/\\]*)[/\\]', 1) AS partition_segment
-	FROM metadata.ducklake_data_file
+	FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM metadata.ducklake_data_file f JOIN metadata.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0)
 	WHERE end_snapshot IS NULL AND path_is_relative AND path LIKE '%weird=%'
 )
 ----

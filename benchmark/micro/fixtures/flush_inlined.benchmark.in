@@ -44,9 +44,9 @@ COMMIT;
 SET VARIABLE flush_delete_tables = (SELECT list('__ducklake_metadata_lake.ducklake_inlined_delete_' || table_id)
 FROM __ducklake_metadata_lake.ducklake_table WHERE table_name LIKE 'f%');
 SELECT CASE WHEN (SELECT count(*) <> 4 OR max(snapshot_id) <> 3 FROM lake.snapshots())
-OR (SELECT count(*) <> 10 FROM __ducklake_metadata_lake.ducklake_data_file WHERE end_snapshot IS NULL)
+OR (SELECT count(*) <> 10 FROM __ducklake_metadata_lake.ducklake_data_file)
 OR (SELECT count(*) <> 10 OR sum(delete_count) <> 1545
-FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL)
+FROM __ducklake_metadata_lake.ducklake_delete_file)
 OR (SELECT count(*) <> 95 FROM query_table(getvariable('flush_delete_tables')))
 OR (SELECT NOT bool_and(valid IS TRUE) FROM query(getvariable('flush_checks')))
 THEN error('unexpected inlined flush fixture') END;

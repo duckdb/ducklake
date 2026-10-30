@@ -25,8 +25,9 @@ DELETE FROM ducklake.test WHERE i < 10
 
 query T
 SELECT DISTINCT format
-FROM "__ducklake_metadata_ducklake".ducklake_delete_file
-WHERE end_snapshot IS NULL
+FROM "__ducklake_metadata_ducklake".ducklake_delete_file f
+JOIN "__ducklake_metadata_ducklake".ducklake_delete_file_visibility v ON v.delete_file_id = f.delete_file_id
+WHERE v.branch_id = 0 AND v.end_snapshot IS NULL
 ----
 puffin
 

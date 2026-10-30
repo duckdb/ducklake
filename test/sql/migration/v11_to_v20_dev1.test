@@ -11,13 +11,13 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_to_v20_dev1_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_to_v20_dev1_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
 
 statement error
-SELECT * FROM meta.ducklake_snapshot_tag
+SELECT * FROM meta.ducklake_branch
 ----
 does not exist
 
@@ -36,7 +36,7 @@ SELECT value FROM dl.options() WHERE option_name = 'version'
 statement ok
 DETACH dl
 
-# the migration creates the tag table
+# the migration creates the tag and branch tables and backfills the main branch
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_to_v20_dev1_files', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
 
@@ -44,6 +44,18 @@ query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
 2.0-dev1
+
+query IIIIII
+SELECT branch_id, branch_name, fork_branch_id, fork_snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_branch
+----
+0	main	NULL	NULL	0	NULL
+
+# existing snapshots are backfilled to main
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
+----
+0	0
+1	0
 
 # SQLite reports the timestamp column as text
 query II
@@ -61,6 +73,16 @@ SELECT COUNT(*) FROM meta.ducklake_snapshot_tag
 0
 
 query I
+SELECT COUNT(*) FROM meta.ducklake_file_visibility
+----
+1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility
+----
+0
+
+query I
 SELECT * FROM dl.t
 ----
 42
@@ -68,7 +90,7 @@ SELECT * FROM dl.t
 statement ok
 DETACH dl
 
-# the dev version is attached as it is, also when it is requested explicitly
+# the dev version is attached as it is
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_to_v20_dev1_files', METADATA_CATALOG 'meta')
 

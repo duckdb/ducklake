@@ -852,7 +852,9 @@ void DuckLakeTransaction::Commit() {
 			FlushChanges();
 		} else if (connection) {
 			try {
-				connection->Commit();
+				if (connection->HasActiveTransaction()) {
+					connection->Commit();
+				}
 			} catch (std::exception &ex) {
 				ErrorData error(ex);
 				error.Throw(GetMetadataManager().CommitErrorHint(error.Message()));
@@ -1462,6 +1464,7 @@ DuckLakeDeleteFileInfo DuckLakeTransaction::GetNewDeleteFile(TableIndex table_id
 	delete_file.encryption_key = file.encryption_key;
 	delete_file.begin_snapshot = file.begin_snapshot;
 	delete_file.max_snapshot = file.max_snapshot;
+	delete_file.overwritten_delete_file_id = file.overwritten_delete_file.delete_file_id;
 	return delete_file;
 }
 
@@ -1780,6 +1783,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
+	context.supports_branching = ducklake_catalog.SupportsBranching();
 	context.snapshot_and_stats_query =
 	    metadata_manager->GetSnapshotAndStatsAndChangesQuery(transaction_snapshot, context.supports_v1_1_metadata);
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
@@ -1999,10 +2003,12 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshots(const strin
 }
 
 vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshotsInternal(const string &filter) {
-	auto tagged_snapshots = TaggedSnapshotsInternal();
+	auto protected_snapshots = TaggedSnapshotsInternal();
+	auto branch_protected = GetMetadataManager().GetBranchProtectedSnapshots();
+	protected_snapshots.insert(branch_protected.begin(), branch_protected.end());
 	vector<DuckLakeSnapshotInfo> result;
 	for (auto &snapshot : GetMetadataManager().GetAllSnapshots(filter)) {
-		if (tagged_snapshots.find(snapshot.id) == tagged_snapshots.end()) {
+		if (protected_snapshots.find(snapshot.id) == protected_snapshots.end()) {
 			result.push_back(std::move(snapshot));
 		}
 	}
@@ -2085,7 +2091,7 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpireSnapshotsNow(const strin
 	optional_idx latest_snapshot_id;
 	if (ExpiresSnapshotsOnCommit()) {
 		// read before the snapshots, so a commit they miss is newer than the snapshot the commit checks for
-		latest_snapshot_id = metadata_manager.GetSnapshot()->snapshot_id;
+		latest_snapshot_id = metadata_manager.GetSnapshot()->global_watermark;
 	}
 	auto expired = ExpirableSnapshotsInternal(filter);
 	vector<DuckLakeSnapshotTagInfo> expired_tags;

@@ -63,8 +63,7 @@ private:
 
 	//! Query the metadata catalog for the latest snapshot.
 	DuckLakeSnapshot ReadLatestSnapshot();
-	//! Whether the metadata schema has the >= 1.1 additions.
-	bool ReadSupportsV1_1Metadata();
+	DuckLakeVersion ReadCatalogVersion();
 	//! Build a DuckLakeTableStats from parsed global stats.
 	unique_ptr<DuckLakeTableStats> BuildTableStats(const DuckLakeGlobalStatsInfo &gs);
 	//! Build a full DuckLakeStats map from global stats.
@@ -102,6 +101,7 @@ private:
 	//! The tables the commit writes, whose stats are read together
 	vector<TableIndex> commit_tables;
 	bool supports_v1_1_metadata = false;
+	bool supports_branching = false;
 	bool staged_dropped_files_read = false;
 	vector<pair<string, idx_t>> staged_dropped_files;
 	map<TableIndex, DroppedDataFileStats> staged_dropped_file_stats;

@@ -36,9 +36,19 @@ WHERE data.table_id = (
     WHERE table_name = 'many_files' AND end_snapshot IS NULL
 )
 
+statement ok
+INSERT INTO ducklake_meta.ducklake_file_visibility
+SELECT v.branch_id, v.table_id, 1000000 + i, v.begin_snapshot, v.end_snapshot
+FROM ducklake_meta.ducklake_file_visibility v, range(1, 500000) files(i)
+WHERE v.branch_id = 0 AND v.table_id = (
+    SELECT table_id
+    FROM ducklake_meta.ducklake_table
+    WHERE table_name = 'many_files' AND end_snapshot IS NULL
+)
+
 query I
 SELECT count(*)
-FROM ducklake_meta.ducklake_data_file data
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_meta.ducklake_data_file f JOIN ducklake_meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) data
 JOIN ducklake_meta.ducklake_table tables USING (table_id)
 WHERE tables.table_name = 'many_files' AND data.end_snapshot IS NULL
 ----
@@ -64,7 +74,7 @@ SELECT count(*) FROM rewrite_me
 
 query I
 SELECT count(*)
-FROM ducklake_meta.ducklake_data_file data
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_meta.ducklake_data_file f JOIN ducklake_meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) data
 JOIN ducklake_meta.ducklake_table tables USING (table_id)
 WHERE tables.table_name = 'many_files' AND data.end_snapshot IS NULL
 ----

@@ -41,7 +41,10 @@ statement ok
 COMMIT
 
 statement ok
-SET VARIABLE live_size = (SELECT sum(file_size_bytes) FROM meta.ducklake_data_file WHERE end_snapshot IS NULL)
+SET VARIABLE live_file_ids = (SELECT LIST(data_file_id) FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND end_snapshot IS NULL)
+
+statement ok
+SET VARIABLE live_size = (SELECT sum(file_size_bytes) FROM meta.ducklake_data_file WHERE data_file_id IN (SELECT UNNEST(getvariable('live_file_ids'))))
 
 query II
 SELECT record_count, file_size_bytes = getvariable('live_size') FROM meta.ducklake_table_stats

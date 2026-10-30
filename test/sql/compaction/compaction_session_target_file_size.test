@@ -42,7 +42,7 @@ statement ok
 INSERT INTO example SELECT i + 30000, concat('thisisalongstring', i) FROM range(10000) t(i);
 
 query I
-SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+SELECT COUNT(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM __ducklake_metadata_ducklake.ducklake_data_file f JOIN __ducklake_metadata_ducklake.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) WHERE end_snapshot IS NULL
 ----
 4
 

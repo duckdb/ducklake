@@ -69,12 +69,12 @@ FROM test
 
 # verify we have exactly 2 data files: one old (ended) and one new (active)
 query I
-SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE end_snapshot IS NOT NULL
+SELECT count(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_metadata.ducklake_data_file f JOIN ducklake_metadata.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) WHERE end_snapshot IS NOT NULL
 ----
 1
 
 query I
-SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE end_snapshot IS NULL
+SELECT count(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_metadata.ducklake_data_file f JOIN ducklake_metadata.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) WHERE end_snapshot IS NULL
 ----
 1
 
@@ -140,6 +140,6 @@ true
 
 # verify delete files have been ended (end_snapshot IS NOT NULL) after rewrite
 query I
-SELECT COUNT(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NOT NULL
+SELECT COUNT(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_metadata.ducklake_delete_file f JOIN ducklake_metadata.ducklake_delete_file_visibility v ON v.delete_file_id = f.delete_file_id AND v.branch_id = 0) WHERE end_snapshot IS NOT NULL
 ----
 1

@@ -29,9 +29,9 @@ COMMIT;
 RESET ducklake_target_file_size;
 SET VARIABLE delete_targets = (SELECT list('lake.t_' || k) FROM range(20) t(k));
 SELECT CASE WHEN (SELECT count(*) <> 4136 OR min(record_count) <> 2048 OR max(record_count) <> 2048
-FROM __ducklake_metadata_lake.ducklake_data_file WHERE end_snapshot IS NULL)
+FROM __ducklake_metadata_lake.ducklake_data_file)
 OR (SELECT count(*) <> 4096 OR sum(delete_count) <> 4096
-FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL)
+FROM __ducklake_metadata_lake.ducklake_delete_file)
 OR (SELECT count(*) <> 20 * 4095 FROM query_table(getvariable('delete_targets')))
 OR (SELECT count(*) <> 5 FROM lake.snapshots())
 THEN error('unexpected delete files fixture') END;

@@ -31,7 +31,7 @@ SELECT count(*) FROM t
 11
 
 query IIIII
-SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM ducklake_meta.ducklake_delete_file ORDER BY begin_snapshot
+SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_meta.ducklake_delete_file f JOIN ducklake_meta.ducklake_delete_file_visibility v ON v.delete_file_id = f.delete_file_id AND v.branch_id = 0) ORDER BY begin_snapshot
 ----
 
 query IIII
@@ -50,7 +50,7 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 query IIIII
-SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM ducklake_meta.ducklake_delete_file ORDER BY ALL
+SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_meta.ducklake_delete_file f JOIN ducklake_meta.ducklake_delete_file_visibility v ON v.delete_file_id = f.delete_file_id AND v.branch_id = 0) ORDER BY ALL
 ----
 1	3	NULL	1	3
 1	3	NULL	1	NULL

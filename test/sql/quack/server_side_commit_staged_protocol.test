@@ -63,7 +63,7 @@ TRUNCATE ducklake_staged_name_map_entry;
 # a staged commit without a transaction snapshot starts from the latest snapshot
 query III
 CALL quack_query_by_name('__ducklake_metadata_lake', '
-INSERT INTO ducklake_staged_commit VALUES (NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+INSERT INTO ducklake_staged_commit VALUES (NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
 SELECT * FROM ducklake_commit(''main'', -1)')
 ----
 3	1	false
@@ -72,7 +72,7 @@ SELECT * FROM ducklake_commit(''main'', -1)')
 query III
 CALL quack_query_by_name('__ducklake_metadata_lake', '
 TRUNCATE ducklake_staged_commit;
-INSERT INTO ducklake_staged_commit SELECT NULL, NULL, NULL, snapshot_id, NULL, NULL, next_catalog_id, next_file_id
+INSERT INTO ducklake_staged_commit SELECT NULL, NULL, NULL, snapshot_id, NULL, NULL, next_catalog_id, next_file_id, NULL
 FROM main.ducklake_snapshot ORDER BY snapshot_id DESC LIMIT 1;
 INSERT INTO ducklake_staged_flushed_inlined VALUES (''ducklake_inlined_data_1_1'', 1, 0);
 SELECT * FROM ducklake_commit(''main'', 1)')
@@ -87,7 +87,7 @@ query III
 CALL quack_query_by_name('__ducklake_metadata_lake', '
 TRUNCATE ducklake_staged_commit;
 TRUNCATE ducklake_staged_flushed_inlined;
-INSERT INTO ducklake_staged_commit SELECT NULL, NULL, NULL, snapshot_id, NULL, NULL, next_catalog_id, next_file_id
+INSERT INTO ducklake_staged_commit SELECT NULL, NULL, NULL, snapshot_id, NULL, NULL, next_catalog_id, next_file_id, NULL
 FROM main.ducklake_snapshot ORDER BY snapshot_id DESC LIMIT 1;
 INSERT INTO ducklake_staged_inlined_data VALUES (1, false);
 INSERT INTO ducklake_staged_inlined_row VALUES (2, 0, NULL, ''(42)'');
@@ -159,14 +159,15 @@ TRUNCATE ducklake_staged_compaction;
 TRUNCATE ducklake_staged_compaction_source;
 TRUNCATE ducklake_staged_name_map;
 TRUNCATE ducklake_staged_name_map_entry;
-INSERT INTO ducklake_staged_commit SELECT NULL, NULL, NULL, snapshot_id, NULL, NULL, next_catalog_id, next_file_id
+INSERT INTO ducklake_staged_commit SELECT NULL, NULL, NULL, snapshot_id, NULL, NULL, next_catalog_id, next_file_id, NULL
 FROM main.ducklake_snapshot ORDER BY snapshot_id DESC LIMIT 1;
 INSERT INTO ducklake_staged_delete_file
 SELECT del.table_id, data.path, del.data_file_id, del.path, del.format, del.delete_count, del.file_size_bytes,
        del.footer_size, del.encryption_key, NULL, NULL, ''REGULAR'', true, del.delete_file_id, del.path, NULL, NULL
 FROM main.ducklake_delete_file del JOIN main.ducklake_data_file data USING (data_file_id)
+JOIN main.ducklake_delete_file_visibility v ON v.delete_file_id = del.delete_file_id AND v.branch_id = 0
 JOIN main.ducklake_table tbl ON tbl.table_id = del.table_id AND tbl.end_snapshot IS NULL
-WHERE del.end_snapshot IS NULL AND tbl.table_name = ''d'';
+WHERE v.end_snapshot IS NULL AND tbl.table_name = ''d'';
 SELECT count(*) FROM ducklake_staged_delete_file')
 ----
 1
@@ -175,9 +176,11 @@ statement ok
 CALL quack_query_by_name('__ducklake_metadata_lake', 'SELECT * FROM ducklake_commit(''main'', 3)')
 
 query II
-SELECT count(*) FILTER (delete_file_id = getvariable('replaced_delete_file')),
-       count(*) FILTER (delete_file_id > getvariable('replaced_delete_file'))
-FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL
+SELECT count(*) FILTER (f.delete_file_id = getvariable('replaced_delete_file')),
+       count(*) FILTER (f.delete_file_id > getvariable('replaced_delete_file'))
+FROM __ducklake_metadata_lake.ducklake_delete_file f
+JOIN __ducklake_metadata_lake.ducklake_delete_file_visibility v ON v.delete_file_id = f.delete_file_id
+WHERE v.branch_id = 0 AND v.end_snapshot IS NULL
 ----
 0	1
 

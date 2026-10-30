@@ -66,11 +66,11 @@ statement ok
 SET VARIABLE spec_ids = (SELECT list(partition_id) FROM meta.ducklake_partition_info WHERE table_id = getvariable('t_id'))
 
 statement ok
-SET VARIABLE t_files = (SELECT list(data_file_id) FROM meta.ducklake_data_file WHERE end_snapshot IS NULL AND table_id = getvariable('t_id'))
+SET VARIABLE t_files = (SELECT list(data_file_id) FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND end_snapshot IS NULL AND table_id = getvariable('t_id'))
 
 query II
 SELECT count(DISTINCT partition_id), bool_and(list_contains(getvariable('spec_ids'), partition_id))
-FROM meta.ducklake_data_file
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM meta.ducklake_data_file f JOIN meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0)
 WHERE end_snapshot IS NULL AND table_id = getvariable('t_id')
 ----
 1	true

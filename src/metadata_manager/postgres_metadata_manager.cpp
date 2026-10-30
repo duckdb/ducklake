@@ -484,7 +484,7 @@ static string PostgresQuery(const string &remote_query) {
 }
 
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
-	auto remote_query = LatestSnapshotQuery();
+	auto remote_query = BranchAwareLatestSnapshotQuery();
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	return PostgresQuery(remote_query);
@@ -493,7 +493,8 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot,
                                                                    bool include_exactness) const {
 	// one statement reads the latest snapshot and the table stats from the same state at any isolation level
-	auto remote_query = SnapshotAndStatsAndChangesQuery(include_exactness);
+	auto remote_query =
+	    SnapshotAndStatsAndChangesQuery(include_exactness, transaction.GetCatalog().SupportsBranching());
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	SubstituteSnapshotPlaceholders(snapshot, remote_query);

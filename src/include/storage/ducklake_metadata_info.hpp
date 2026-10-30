@@ -207,6 +207,8 @@ struct DuckLakeDeleteFileInfo {
 	DataFileIndex id;
 	TableIndex table_id;
 	DataFileIndex data_file_id;
+	//! The delete file this one replaces, so branch mappings move to the replacement
+	DataFileIndex overwritten_delete_file_id;
 	string path;
 	DeleteFileFormat format = DeleteFileFormat::PARQUET;
 	idx_t delete_count;
@@ -316,6 +318,18 @@ struct DuckLakeSnapshotInfo {
 	Value author;
 	Value commit_message;
 	Value commit_extra_info;
+};
+
+struct DuckLakeBranchInfo {
+	idx_t branch_id = DConstants::INVALID_INDEX;
+	string name;
+	//! The parent branch and the snapshot the branch forked at, unset on main
+	optional_idx fork_branch_id;
+	optional_idx fork_snapshot_id;
+
+	bool IsValid() const {
+		return branch_id != DConstants::INVALID_INDEX;
+	}
 };
 
 struct DuckLakeSnapshotTagInfo {
@@ -429,6 +443,8 @@ struct DuckLakeFileListEntry {
 	optional_idx snapshot_filter_min;
 	//! We skip the rows whose _ducklake_internal_snapshot_id is one of these rewrite snapshots
 	vector<idx_t> snapshot_filter_excluded;
+	//! Upper bound for the dated deletes of an inherited delete file on a branch
+	optional_idx delete_snapshot_filter_max;
 	MappingIndex mapping_id;
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
 	//! The data file id

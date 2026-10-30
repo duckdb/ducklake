@@ -1,5 +1,5 @@
 # name: test/sql/migration/v20_dev1_new_catalog.test
-# description: a new catalog is created at 2.0-dev1 with the snapshot tag table and the catalog mutex row
+# description: a new catalog is created at 2.0-dev1 with the branch tables and the main branch row
 # group: [migration]
 
 require ducklake
@@ -28,10 +28,51 @@ begin_snapshot	BIGINT
 end_snapshot	BIGINT
 expires_at	TIMESTAMP WITH TIME ZONE
 
-query I
-SELECT COUNT(*) FROM meta.ducklake_snapshot_tag
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_branch') ORDER BY column_index
 ----
-0
+branch_id	BIGINT
+branch_name	VARCHAR
+fork_branch_id	BIGINT
+fork_snapshot_id	BIGINT
+begin_snapshot	BIGINT
+end_snapshot	BIGINT
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_snapshot_remap') ORDER BY column_index
+----
+merge_snapshot_id	BIGINT
+old_snapshot_id	BIGINT
+new_snapshot_id	BIGINT
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_file_visibility') ORDER BY column_index
+----
+branch_id	BIGINT
+table_id	BIGINT
+data_file_id	BIGINT
+begin_snapshot	BIGINT
+end_snapshot	BIGINT
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_delete_file_visibility') ORDER BY column_index
+----
+branch_id	BIGINT
+table_id	BIGINT
+delete_file_id	BIGINT
+begin_snapshot	BIGINT
+end_snapshot	BIGINT
+
+# the initial snapshot belongs to main
+query IIIIII
+SELECT branch_id, branch_name, fork_branch_id, fork_snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_branch
+----
+0	main	NULL	NULL	0	NULL
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot
+----
+0	0
 
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
@@ -40,6 +81,13 @@ query I
 SELECT * FROM dl.t
 ----
 42
+
+# commits keep landing on main
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
+----
+0	0
+1	0
 
 statement ok
 DETACH dl
@@ -57,3 +105,16 @@ query I
 SELECT * FROM dl.t
 ----
 42
+
+statement ok
+INSERT INTO dl.t VALUES (43)
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
+----
+0	0
+1	0
+2	0
+
+statement ok
+DETACH dl

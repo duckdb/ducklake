@@ -326,6 +326,35 @@ public:
 	bool SupportsSnapshotTags() const {
 		return ducklake_version >= DuckLakeVersion::V2_0_DEV1;
 	}
+	bool SupportsBranching() const {
+		return ducklake_version >= DuckLakeVersion::V2_0_DEV1 && branch_metadata_present;
+	}
+	//! Marks a dev catalog from an older build whose branch tables a read-only attach cannot add
+	void SetBranchMetadataMissing() {
+		branch_metadata_present = false;
+	}
+	//! The branch the catalog is attached at, 0 for main
+	idx_t AttachedBranchId() const {
+		return attached_branch_id;
+	}
+	//! The parent snapshot the attached branch forked at, unset on main
+	optional_idx AttachedBranchFork() const {
+		return attached_branch_fork;
+	}
+	bool OnBranch() const {
+		return attached_branch_id != 0;
+	}
+	void SetAttachedBranch(idx_t branch_id, optional_idx fork_snapshot) {
+		attached_branch_id = branch_id;
+		attached_branch_fork = fork_snapshot;
+	}
+	//! Clips a read snapshot to the fork when attached at a branch
+	idx_t ClipToBranchFork(idx_t snapshot_id) const {
+		if (!OnBranch() || snapshot_id < attached_branch_fork.GetIndex()) {
+			return snapshot_id;
+		}
+		return attached_branch_fork.GetIndex();
+	}
 
 	void OnDetach(ClientContext &context) override;
 
@@ -474,6 +503,10 @@ private:
 	string metadata_type;
 	//! The resolved DuckLake spec version of the attached catalog
 	DuckLakeVersion ducklake_version = DuckLakeVersion::V1_0;
+	//! The branch the catalog is attached at and its fork snapshot, main by default
+	idx_t attached_branch_id = 0;
+	optional_idx attached_branch_fork;
+	bool branch_metadata_present = true;
 	//! A per-instance identifier used to scope ObjectCache keys.
 	string instance_id;
 	mutex cache_entries_lock;

@@ -1,0 +1,131 @@
+# name: test/sql/branches/branch_protection.test
+# description: expiry and cleanup preserve what live branches reference, and main keeps its own head
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_protection_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2, 2, NULL)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, begin_snapshot, NULL FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND begin_snapshot = 2
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_protection_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+# the head of main stays in its own lineage
+query I
+SELECT id FROM dl.current_snapshot()
+----
+3
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+# the new commit of main takes a global id after the branch snapshot
+query I
+SELECT id FROM dl.current_snapshot()
+----
+101
+
+# the head is readable and the listing stays in the lineage
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 101)
+----
+3
+
+query I
+SELECT COUNT(*) FROM dl.snapshots() WHERE snapshot_id = 100
+----
+0
+
+query I
+SELECT COUNT(*) FROM ducklake_table_insertions('dl', 'main', 't', NOW(), NOW())
+----
+0
+
+# the fork point and the branch snapshot cannot be expired
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [2, 100], dry_run => true)
+----
+0
+
+# a file a branch visibility row references survives the cleanup of main
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [1], dry_run => false)
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_data_file WHERE data_file_id IN (SELECT data_file_id FROM meta.ducklake_file_visibility WHERE branch_id = 1)
+----
+1
+
+statement ok
+DETACH dl
+
+# the branch still reads its file
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_protection_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT COUNT(*) FROM dl.t
+----
+1
+
+statement ok
+DETACH dl
+
+# an ended branch no longer protects its snapshots or files
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_protection_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+UPDATE meta.ducklake_branch SET end_snapshot = 101 WHERE branch_id = 1
+
+query I
+SELECT COUNT(*) > 0 FROM ducklake_expire_snapshots('dl', versions => [2, 100], dry_run => true)
+----
+true
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [2, 3, 100, 101], dry_run => false)
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_data_file WHERE data_file_id IN (SELECT data_file_id FROM meta.ducklake_file_visibility WHERE branch_id = 1)
+----
+0
+
+statement ok
+DETACH dl

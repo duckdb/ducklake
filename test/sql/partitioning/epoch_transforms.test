@@ -89,13 +89,13 @@ SELECT date_diff('year', DATE '1970-01-01', ts), COUNT(*) FROM partitioned_tbl G
 
 # one active file per partition after compaction
 query I
-SELECT COUNT(*) FROM ducklake_metadata.ducklake_data_file WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'partitioned_tbl' AND end_snapshot IS NULL) AND end_snapshot IS NULL
+SELECT COUNT(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_metadata.ducklake_data_file f JOIN ducklake_metadata.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'partitioned_tbl' AND end_snapshot IS NULL) AND end_snapshot IS NULL
 ----
 14
 
 query II
 SELECT DISTINCT regexp_extract(path, '.*epoch_year=(-?[0-9]+)[/\\].*', 1)::INT AS epoch_year_part, regexp_extract(path, '.*epoch_month=(-?[0-9]+)[/\\].*', 1)::INT AS epoch_month_part
-FROM ducklake_metadata.ducklake_data_file WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'partitioned_tbl' AND end_snapshot IS NULL) AND end_snapshot IS NULL ORDER BY ALL
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_metadata.ducklake_data_file f JOIN ducklake_metadata.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'partitioned_tbl' AND end_snapshot IS NULL) AND end_snapshot IS NULL ORDER BY ALL
 ----
 50	600
 50	601

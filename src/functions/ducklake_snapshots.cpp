@@ -185,8 +185,8 @@ static unique_ptr<FunctionData> DuckLakeSnapshotsBind(ClientContext &context, Ta
 
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto result = make_uniq<DuckLakeSnapshotsBindData>();
-	result->snapshots = metadata_manager.GetAllSnapshots(
-	    StringUtil::Format("snapshot_id <= %llu", transaction.GetNewestVisibleSnapshotId()));
+	result->snapshots = metadata_manager.GetAllSnapshots(StringUtil::Format(
+	    "snapshot_id <= %llu%s", transaction.GetNewestVisibleSnapshotId(), metadata_manager.BranchLineageFilter()));
 	DuckLakeSnapshotsFunction::GetSnapshotTypes(return_types, names);
 	return std::move(result);
 }

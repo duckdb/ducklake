@@ -1,0 +1,67 @@
+# name: test/sql/branches/branch_heal_inheritance.test
+# description: healing maps the files of a bare branch and the fork bounds an inherited cumulative delete file
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_heal_inheritance_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+# the second delete replaces the first delete file with one that spans both snapshots
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+# a branch forked between the two deletes, without any visibility rows of its own
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 3, 3, NULL)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 3
+
+statement ok
+DETACH dl
+
+# the writable attach materializes the branch's inherited visibility
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_heal_inheritance_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_visibility WHERE branch_id = 1
+----
+1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility WHERE branch_id = 1
+----
+1
+
+statement ok
+DETACH dl
+
+# deletes dated after the fork inside the inherited delete file do not apply on the branch
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_heal_inheritance_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+2
+3
+
+statement ok
+DETACH dl

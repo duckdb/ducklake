@@ -27,8 +27,8 @@ SET VARIABLE delete_targets = (SELECT list('lake.t' || k) FROM range(20) t(k));
 SET VARIABLE inlined_delete_tables = (SELECT list('__ducklake_metadata_lake.ducklake_inlined_delete_' || table_id)
 FROM __ducklake_metadata_lake.ducklake_table);
 SELECT CASE WHEN (SELECT count(*) <> 40 OR min(record_count) <> 2048 OR max(record_count) <> 2048
-FROM __ducklake_metadata_lake.ducklake_data_file WHERE end_snapshot IS NULL)
-OR (SELECT count(*) <> 0 FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL)
+FROM __ducklake_metadata_lake.ducklake_data_file)
+OR (SELECT count(*) <> 0 FROM __ducklake_metadata_lake.ducklake_delete_file)
 OR (SELECT count(*) <> 20 OR count(DISTINCT file_id) <> 20 OR max(row_id) <> 0
 FROM query_table(getvariable('inlined_delete_tables')))
 OR (SELECT count(*) <> 20 * 4095 FROM query_table(getvariable('delete_targets')))

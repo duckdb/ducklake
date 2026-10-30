@@ -33,7 +33,7 @@ statement ok
 SET VARIABLE merged_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'merged')
 
 statement ok
-SET VARIABLE live_size = (SELECT SUM(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('merged_id') AND end_snapshot IS NULL)
+SET VARIABLE live_size = (SELECT file_size_bytes FROM ducklake_table_info('ducklake') WHERE table_id = getvariable('merged_id'))
 
 query II
 SELECT record_count, file_size_bytes = getvariable('live_size') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('merged_id')
@@ -52,7 +52,7 @@ SELECT COUNT(*), SUM(id) FROM ducklake.merged
 100	25050
 
 statement ok
-SET VARIABLE live_size = (SELECT SUM(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('merged_id') AND end_snapshot IS NULL)
+SET VARIABLE live_size = (SELECT file_size_bytes FROM ducklake_table_info('ducklake') WHERE table_id = getvariable('merged_id'))
 
 query II
 SELECT record_count, file_size_bytes = getvariable('live_size') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('merged_id')
@@ -81,7 +81,7 @@ statement ok
 SET VARIABLE rewritten_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'rewritten')
 
 statement ok
-SET VARIABLE live_size = (SELECT SUM(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('rewritten_id') AND end_snapshot IS NULL)
+SET VARIABLE live_size = (SELECT file_size_bytes FROM ducklake_table_info('ducklake') WHERE table_id = getvariable('rewritten_id'))
 
 query I
 SELECT file_size_bytes = getvariable('live_size') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('rewritten_id')
@@ -100,7 +100,7 @@ SELECT COUNT(*), SUM(id) FROM ducklake.rewritten
 99	14800
 
 statement ok
-SET VARIABLE live_size = (SELECT SUM(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('rewritten_id') AND end_snapshot IS NULL)
+SET VARIABLE live_size = (SELECT file_size_bytes FROM ducklake_table_info('ducklake') WHERE table_id = getvariable('rewritten_id'))
 
 query I
 SELECT file_size_bytes = getvariable('live_size') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('rewritten_id')
@@ -143,7 +143,7 @@ statement ok
 SET VARIABLE emptied_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'emptied')
 
 statement ok
-SET VARIABLE live_size = (SELECT SUM(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('emptied_id') AND end_snapshot IS NULL)
+SET VARIABLE live_size = (SELECT file_size_bytes FROM ducklake_table_info('ducklake') WHERE table_id = getvariable('emptied_id'))
 
 query I
 SELECT file_size_bytes = getvariable('live_size') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('emptied_id')
@@ -155,7 +155,7 @@ statement ok
 INSERT INTO ducklake.emptied VALUES (1000)
 
 statement ok
-SET VARIABLE live_size = (SELECT SUM(file_size_bytes) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('emptied_id') AND end_snapshot IS NULL)
+SET VARIABLE live_size = (SELECT file_size_bytes FROM ducklake_table_info('ducklake') WHERE table_id = getvariable('emptied_id'))
 
 query I
 SELECT file_size_bytes = getvariable('live_size') FROM __ducklake_metadata_ducklake.ducklake_table_stats WHERE table_id = getvariable('emptied_id')

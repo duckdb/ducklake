@@ -79,8 +79,8 @@ CALL ducklake.merge_adjacent_files();
 query IIII
 SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN
 FROM dl.ducklake_file_column_stats stats
-JOIN dl.ducklake_data_file f USING (data_file_id)
-WHERE f.end_snapshot IS NULL
+JOIN dl.ducklake_file_visibility f USING (data_file_id)
+WHERE f.branch_id = 0 AND f.end_snapshot IS NULL
 ORDER BY column_id
 ----
 0	5	true	true

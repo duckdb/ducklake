@@ -162,6 +162,8 @@ struct DuckLakeCommitContext {
 	bool skip_drop_empty_inlined = false;
 	//! Whether the metadata schema has the >= 1.1 additions.
 	bool supports_v1_1_metadata = false;
+	//! Whether the metadata schema has the branching tables and columns.
+	bool supports_branching = false;
 	//! Column names of the inlined data tables under this catalog version.
 	DuckLakeInlinedColNames InlinedColNames() const {
 		return DuckLakeInlinedColNames(supports_v1_1_metadata);
@@ -197,7 +199,8 @@ public:
 	                        const DuckLakeCommitContext &context) const;
 
 	static SnapshotDeletedFromFiles
-	GetFilesDeletedOrDroppedAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor);
+	GetFilesDeletedOrDroppedAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                                      bool branch_aware);
 
 	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes,
 	                            const DuckLakeSnapshotCommit &commit_info) const;

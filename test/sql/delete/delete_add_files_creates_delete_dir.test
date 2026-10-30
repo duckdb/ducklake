@@ -39,6 +39,6 @@ SELECT count(*) FROM t
 69
 
 query I
-SELECT count(*) FROM ducklake_meta.ducklake_delete_file WHERE end_snapshot IS NULL
+SELECT count(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_meta.ducklake_delete_file f JOIN ducklake_meta.ducklake_delete_file_visibility v ON v.delete_file_id = f.delete_file_id AND v.branch_id = 0) WHERE end_snapshot IS NULL
 ----
 1

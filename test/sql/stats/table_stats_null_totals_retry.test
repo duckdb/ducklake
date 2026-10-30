@@ -47,7 +47,7 @@ SELECT count(DISTINCT rowid), count(*) FROM ducklake.t
 
 query IIII
 SELECT count(*), max(record_count), max(next_row_id), max(file_size_bytes) = (
-	SELECT sum(file_size_bytes) FROM ducklake_meta.ducklake_data_file WHERE end_snapshot IS NULL AND table_id = 1)
+	SELECT sum(file_size_bytes) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_meta.ducklake_data_file f JOIN ducklake_meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) WHERE end_snapshot IS NULL AND table_id = 1)
 FROM ducklake_meta.ducklake_table_stats
 WHERE table_id = 1
 ----

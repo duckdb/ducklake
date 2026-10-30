@@ -33,7 +33,7 @@ statement ok
 SET VARIABLE v1 = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'));
 
 query III
-SELECT format, delete_count, footer_size FROM __ducklake_metadata_dl.ducklake_delete_file WHERE end_snapshot IS NULL
+SELECT format, delete_count, footer_size FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM __ducklake_metadata_dl.ducklake_delete_file f JOIN __ducklake_metadata_dl.ducklake_delete_file_visibility v ON v.delete_file_id = f.delete_file_id AND v.branch_id = 0) WHERE end_snapshot IS NULL
 ----
 puffin	10	0
 
@@ -48,7 +48,7 @@ statement ok
 SET VARIABLE v2 = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'));
 
 query II
-SELECT format, delete_count FROM __ducklake_metadata_dl.ducklake_delete_file WHERE end_snapshot IS NULL
+SELECT format, delete_count FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM __ducklake_metadata_dl.ducklake_delete_file f JOIN __ducklake_metadata_dl.ducklake_delete_file_visibility v ON v.delete_file_id = f.delete_file_id AND v.branch_id = 0) WHERE end_snapshot IS NULL
 ----
 parquet	20
 
@@ -63,7 +63,7 @@ statement ok
 SET VARIABLE v3 = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'));
 
 query III
-SELECT format, delete_count, footer_size > 0 FROM __ducklake_metadata_dl.ducklake_delete_file WHERE end_snapshot IS NULL
+SELECT format, delete_count, footer_size > 0 FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM __ducklake_metadata_dl.ducklake_delete_file f JOIN __ducklake_metadata_dl.ducklake_delete_file_visibility v ON v.delete_file_id = f.delete_file_id AND v.branch_id = 0) WHERE end_snapshot IS NULL
 ----
 puffin	30	true
 

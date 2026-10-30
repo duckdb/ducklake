@@ -43,7 +43,7 @@ COMMIT
 # every file refers to a written spec, the committed one
 query II
 SELECT count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_info p WHERE p.table_id = f.table_id AND p.partition_id = f.partition_id)), count(DISTINCT partition_id)
-FROM meta.ducklake_data_file f
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM meta.ducklake_data_file f JOIN meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) f
 WHERE end_snapshot IS NULL
 ----
 0	1
@@ -53,7 +53,7 @@ INSERT INTO lake.t VALUES (2, 22)
 
 query II
 SELECT count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_info p WHERE p.table_id = f.table_id AND p.partition_id = f.partition_id)), count(DISTINCT partition_id)
-FROM meta.ducklake_data_file f
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM meta.ducklake_data_file f JOIN meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) f
 WHERE end_snapshot IS NULL
 ----
 0	1
@@ -101,7 +101,7 @@ COMMIT
 
 query II
 SELECT count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_info p WHERE p.table_id = f.table_id AND p.partition_id = f.partition_id)), count(DISTINCT partition_id)
-FROM meta.ducklake_data_file f
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM meta.ducklake_data_file f JOIN meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) f
 WHERE end_snapshot IS NULL
 ----
 0	2
@@ -150,7 +150,7 @@ CALL ducklake_flush_inlined_data('lake', table_name => 'b')
 
 query II
 SELECT count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_info p WHERE p.table_id = f.table_id AND p.partition_id = f.partition_id)), count(DISTINCT partition_id)
-FROM meta.ducklake_data_file f
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM meta.ducklake_data_file f JOIN meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) f
 WHERE end_snapshot IS NULL AND table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'b')
 ----
 0	1
@@ -187,7 +187,7 @@ COMMIT
 
 query II
 SELECT count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_info p WHERE p.table_id = f.table_id AND p.partition_id = f.partition_id)), count(DISTINCT partition_id)
-FROM meta.ducklake_data_file f
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM meta.ducklake_data_file f JOIN meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) f
 WHERE end_snapshot IS NULL AND table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't')
 ----
 0	2

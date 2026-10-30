@@ -126,7 +126,7 @@ FROM sort_on_compaction
 # We write a new file for the table (should be exactly 1 after merge)
 query I
 SELECT count(*)
-FROM __ducklake_metadata_ducklake.ducklake_data_file df
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM __ducklake_metadata_ducklake.ducklake_data_file f JOIN __ducklake_metadata_ducklake.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) df
 JOIN __ducklake_metadata_ducklake.ducklake_table t
 ON df.table_id = t.table_id
 WHERE

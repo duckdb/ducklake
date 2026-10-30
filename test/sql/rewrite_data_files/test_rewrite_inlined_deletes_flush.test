@@ -66,8 +66,8 @@ SELECT min(id), max(id) FROM t AT (VERSION => getvariable('middle'))
 
 # the retired data file has one delete file at the middle snapshot
 query I
-SELECT count(*) FROM ducklake_meta.ducklake_delete_file del
-JOIN ducklake_meta.ducklake_data_file data USING (data_file_id)
+SELECT count(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_meta.ducklake_delete_file f JOIN ducklake_meta.ducklake_delete_file_visibility v ON v.delete_file_id = f.delete_file_id AND v.branch_id = 0) del
+JOIN (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_meta.ducklake_data_file f JOIN ducklake_meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) data USING (data_file_id)
 WHERE data.end_snapshot IS NOT NULL
   AND del.begin_snapshot <= getvariable('middle')
   AND (del.end_snapshot IS NULL OR del.end_snapshot > getvariable('middle'))

@@ -1,0 +1,126 @@
+# name: test/sql/branches/branch_delete_replacement.test
+# description: replacing a delete file on main moves branch mappings onto the cumulative replacement
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_delete_replacement_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 3, 3, NULL)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 3
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, begin_snapshot, NULL FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND end_snapshot IS NULL
+
+statement ok
+INSERT INTO meta.ducklake_delete_file_visibility SELECT 1, table_id, delete_file_id, begin_snapshot, NULL FROM meta.ducklake_delete_file_visibility WHERE branch_id = 0 AND end_snapshot IS NULL
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_delete_replacement_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+# the second delete replaces the delete file of the first
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+query I
+SELECT i FROM dl.t
+----
+3
+
+# the old file is gone and the branch mapping moved to the replacement
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file
+----
+1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_files_scheduled_for_deletion
+----
+1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility WHERE branch_id = 1
+----
+1
+
+# the change feed reports each deletion once
+query I
+SELECT COUNT(*) FROM ducklake_table_changes('dl', 'main', 't', 101, 101)
+----
+1
+
+query I
+SELECT COUNT(*) FROM ducklake_table_changes('dl', 'main', 't', 3, 101)
+----
+2
+
+statement ok
+DETACH dl
+
+# the branch applies only the deletes dated up to its fork
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_delete_replacement_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+2
+3
+
+statement ok
+DETACH dl
+
+# a later repair leaves the branch's delete file choice alone
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_delete_replacement_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_remap
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_delete_replacement_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility WHERE branch_id = 1
+----
+1
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_delete_replacement_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+2
+3
+
+statement ok
+DETACH dl

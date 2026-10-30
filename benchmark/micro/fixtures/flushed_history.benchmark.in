@@ -22,8 +22,8 @@ DELETE FROM lake.t WHERE id % 100 = @{r}; COMMIT; BEGIN;
 COMMIT;
 CALL ducklake_flush_inlined_data('lake');
 SELECT CASE WHEN (SELECT count(*) <> 43 FROM lake.snapshots())
-OR (SELECT count(*) <> 1 FROM __ducklake_metadata_lake.ducklake_data_file WHERE end_snapshot IS NULL)
-OR (SELECT count(*) <> 1 FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL)
+OR (SELECT count(*) <> 1 FROM __ducklake_metadata_lake.ducklake_data_file)
+OR (SELECT count(*) <> 1 FROM __ducklake_metadata_lake.ducklake_delete_file)
 THEN error('flushed_history: expected 43 snapshots and one flushed data file with one delete file') END;
 CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
 DETACH lake;

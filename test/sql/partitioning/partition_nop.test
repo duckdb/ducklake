@@ -68,7 +68,7 @@ SET VARIABLE expected_partition_id = (
 
 query I
 SELECT COUNT(*)
-FROM ducklake_metadata.ducklake_data_file
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_metadata.ducklake_data_file f JOIN ducklake_metadata.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0)
 WHERE table_id = 1
   AND end_snapshot IS NULL
   AND partition_id IS DISTINCT FROM getvariable('expected_partition_id');
@@ -77,7 +77,7 @@ WHERE table_id = 1
 
 query I
 SELECT COUNT(DISTINCT partition_id)
-FROM ducklake_metadata.ducklake_data_file
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_metadata.ducklake_data_file f JOIN ducklake_metadata.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0)
 WHERE table_id = 1
   AND end_snapshot IS NULL;
 ----

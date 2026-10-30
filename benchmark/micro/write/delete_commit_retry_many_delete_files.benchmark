@@ -29,6 +29,6 @@ DETACH lake2;
 # A missed reset leaves the rows deleted already, so the counts would differ
 result_query III
 SELECT (SELECT count(*) FROM lake.snapshots()), (SELECT count(*) FROM lake.bg),
-(SELECT count(*) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL AND delete_count = 12)
+(SELECT count(*) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE delete_count = 12)
 ----
 7	8339456	4096

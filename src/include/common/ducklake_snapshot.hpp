@@ -18,18 +18,21 @@ class Deserializer;
 struct DuckLakeSnapshot {
 	DuckLakeSnapshot(idx_t snapshot_id, idx_t schema_version, idx_t next_catalog_id, idx_t next_file_id)
 	    : snapshot_id(snapshot_id), schema_version(schema_version), next_catalog_id(next_catalog_id),
-	      next_file_id(next_file_id) {
+	      next_file_id(next_file_id), global_watermark(snapshot_id) {
 	}
 
 	DuckLakeSnapshot()
 	    : snapshot_id(DConstants::INVALID_INDEX), schema_version(DConstants::INVALID_INDEX),
-	      next_catalog_id(DConstants::INVALID_INDEX), next_file_id(DConstants::INVALID_INDEX) {
+	      next_catalog_id(DConstants::INVALID_INDEX), next_file_id(DConstants::INVALID_INDEX),
+	      global_watermark(DConstants::INVALID_INDEX) {
 	}
 
 	idx_t snapshot_id;
 	idx_t schema_version;
 	idx_t next_catalog_id;
 	idx_t next_file_id;
+	//! The newest snapshot of any branch when this snapshot was read, commits allocate past it
+	idx_t global_watermark;
 
 	void Serialize(Serializer &serializer) const;
 	static DuckLakeSnapshot Deserialize(Deserializer &deserializer);

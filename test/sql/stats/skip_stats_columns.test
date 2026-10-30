@@ -84,7 +84,7 @@ statement ok
 CALL ducklake_merge_adjacent_files('ducklake')
 
 query I
-SELECT count(*) FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+SELECT count(*) FROM ducklake_meta.ducklake_file_column_stats f JOIN (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_meta.ducklake_data_file f JOIN ducklake_meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) d USING (data_file_id)
 WHERE f.column_id=2 AND d.end_snapshot IS NULL AND f.min_value IS NOT NULL
 ----
 0
@@ -103,9 +103,9 @@ INSERT INTO ducklake.t VALUES (7, 'after rename', 7.5)
 
 query II
 SELECT f.min_value IS NULL, f.max_value IS NULL
-FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
+FROM ducklake_meta.ducklake_file_column_stats f JOIN (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_meta.ducklake_data_file f JOIN ducklake_meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0) d USING (data_file_id)
 WHERE f.column_id=2 AND d.end_snapshot IS NULL
-  AND d.data_file_id=(SELECT max(data_file_id) FROM ducklake_meta.ducklake_data_file)
+  AND d.data_file_id=(SELECT max(data_file_id) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_meta.ducklake_data_file f JOIN ducklake_meta.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0))
 ----
 true	true
 

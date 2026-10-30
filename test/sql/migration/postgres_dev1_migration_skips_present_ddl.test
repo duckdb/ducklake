@@ -48,9 +48,24 @@ SELECT count(*) FROM postgres_query('pg', 'SELECT 1 FROM information_schema.colu
 ----
 1
 
-# a dev catalog has no table of the versions after 1.1
+# a dev catalog has no table or column of the versions after 1.1
 statement ok
 CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_snapshot_tag')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_branch')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_snapshot_remap')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_file_visibility')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_delete_file_visibility')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_snapshot DROP COLUMN branch_id')
 
 statement ok
 CALL postgres_execute('pg', 'UPDATE dev1_skips_present_ddl.ducklake_metadata SET value = ''1.1-dev1'' WHERE key = ''version''')

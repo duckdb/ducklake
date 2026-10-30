@@ -294,7 +294,7 @@ bool DuckLakeFunctionInfo::CanUseGlobalStats() {
 	}
 	auto active_transaction = GetTransaction();
 	return snapshot.snapshot_id == active_transaction->GetSnapshot().snapshot_id &&
-	       !active_transaction->GetCatalog().CatalogSnapshot();
+	       !active_transaction->GetCatalog().CatalogSnapshot() && !active_transaction->GetCatalog().OnBranch();
 }
 
 void DuckLakeScanSerialize(Serializer &serializer, const optional_ptr<FunctionData> bind_data,

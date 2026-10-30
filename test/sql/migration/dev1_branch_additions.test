@@ -1,0 +1,204 @@
+# name: test/sql/migration/dev1_branch_additions.test
+# description: a 2.0-dev1 catalog from an older dev build gets the branch tables on a writable attach
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+# simulate a catalog created by a dev build without the branch tables and with inline ranges
+statement ok
+DROP TABLE meta.ducklake_branch
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_remap
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_data_file ADD COLUMN begin_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_data_file ADD COLUMN end_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_delete_file ADD COLUMN begin_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_delete_file ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_data_file SET begin_snapshot = v.begin_snapshot, end_snapshot = v.end_snapshot FROM meta.ducklake_file_visibility v WHERE v.branch_id = 0 AND v.data_file_id = ducklake_data_file.data_file_id
+
+statement ok
+DROP TABLE meta.ducklake_file_visibility
+
+statement ok
+DROP TABLE meta.ducklake_delete_file_visibility
+
+statement ok
+DETACH dl
+
+# a read only attach leaves the catalog as it is
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', READ_ONLY)
+
+query I
+SELECT * FROM dl.t
+----
+42
+
+statement error
+SELECT * FROM meta.ducklake_branch
+----
+does not exist
+
+statement ok
+DETACH dl
+
+# a snapshot pinned attach is read only and leaves the catalog as it is
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', SNAPSHOT_VERSION 1)
+
+query I
+SELECT * FROM dl.t
+----
+42
+
+statement error
+SELECT * FROM meta.ducklake_branch
+----
+does not exist
+
+statement ok
+DETACH dl
+
+# a writable attach adds the missing tables and backfills the snapshots
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query IIIIII
+SELECT branch_id, branch_name, fork_branch_id, fork_snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_branch
+----
+0	main	NULL	NULL	0	NULL
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
+----
+0	0
+1	0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_snapshot_remap
+----
+0
+
+query I
+SELECT * FROM dl.t
+----
+42
+
+# commits keep landing on main
+statement ok
+INSERT INTO dl.t VALUES (43)
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
+----
+0	0
+1	0
+2	0
+
+# a missing main row alone is restored on the next attach
+statement ok
+DELETE FROM meta.ducklake_branch
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query II
+SELECT branch_id, branch_name FROM meta.ducklake_branch
+----
+0	main
+
+# a partially healed catalog is completed on the next attach
+statement ok
+DROP TABLE meta.ducklake_snapshot_remap
+
+statement ok
+DELETE FROM meta.ducklake_branch
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query II
+SELECT branch_id, branch_name FROM meta.ducklake_branch
+----
+0	main
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_snapshot_remap
+----
+0
+
+query I
+SELECT COUNT(*) FROM dl.t
+----
+2
+
+# an existing branch of an older dev catalog gets its inherited visibility materialized
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 1, 1, NULL)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 1
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+# the branch holds a row for every file visible at its fork
+query I
+SELECT COUNT(*) = (SELECT COUNT(*) FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND begin_snapshot <= 1 AND (end_snapshot IS NULL OR end_snapshot > 1)) FROM meta.ducklake_file_visibility WHERE branch_id = 1
+----
+true
+
+# a second mapping for the same file on the same branch is rejected
+statement error
+INSERT INTO meta.ducklake_file_visibility SELECT * FROM meta.ducklake_file_visibility LIMIT 1
+----
+constraint
+
+statement ok
+DETACH dl
+
+# the branch reads the rows of its fork
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT * FROM dl.t
+----
+42
+
+statement ok
+DETACH dl

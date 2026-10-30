@@ -120,7 +120,7 @@ SET VARIABLE compacted_rg_count = (SELECT num_row_groups FROM parquet_file_metad
 
 query II
 SELECT record_count, row_group_count = getvariable('compacted_rg_count')
-FROM dl.ducklake_data_file
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM dl.ducklake_data_file f JOIN dl.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0)
 WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'compact_me')
   AND end_snapshot IS NULL
 ----

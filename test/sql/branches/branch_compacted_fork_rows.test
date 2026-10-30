@@ -1,0 +1,50 @@
+# name: test/sql/branches/branch_compacted_fork_rows.test
+# description: a branch snapshot after the fork keeps the fork bound inside an inherited compacted file
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_compacted_fork_rows_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (10)
+
+statement ok
+INSERT INTO dl.t VALUES (20)
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2, 2, NULL)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, begin_snapshot, NULL FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND end_snapshot IS NULL
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_compacted_fork_rows_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+# the branch head is past the fork but rows main compacted in after the fork stay invisible
+query I
+SELECT * FROM dl.t
+----
+10
+
+statement ok
+DETACH dl

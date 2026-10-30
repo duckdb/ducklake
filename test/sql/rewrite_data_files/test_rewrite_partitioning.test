@@ -51,7 +51,7 @@ WHEN NOT MATCHED THEN INSERT *;
 
 # Verify delete files were created by MERGE
 query I
-SELECT COUNT(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NULL
+SELECT COUNT(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_metadata.ducklake_delete_file f JOIN ducklake_metadata.ducklake_delete_file_visibility v ON v.delete_file_id = f.delete_file_id AND v.branch_id = 0) WHERE end_snapshot IS NULL
 ----
 2
 
@@ -76,7 +76,7 @@ partitioned	1	1
 
 # After rewrite, delete files should be gone (applied to new data files)
 query I
-SELECT COUNT(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NULL
+SELECT COUNT(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_metadata.ducklake_delete_file f JOIN ducklake_metadata.ducklake_delete_file_visibility v ON v.delete_file_id = f.delete_file_id AND v.branch_id = 0) WHERE end_snapshot IS NULL
 ----
 0
 
@@ -105,7 +105,7 @@ CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true);
 # Verify partition info is preserved correctly - should have 2 files (one per partition)
 query II
 SELECT partition_id, partition_value
-FROM ducklake_metadata.ducklake_data_file
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_metadata.ducklake_data_file f JOIN ducklake_metadata.ducklake_file_visibility v ON v.data_file_id = f.data_file_id AND v.branch_id = 0)
 JOIN ducklake_metadata.ducklake_file_partition_value USING (data_file_id)
 WHERE end_snapshot IS NULL
 ORDER BY partition_value

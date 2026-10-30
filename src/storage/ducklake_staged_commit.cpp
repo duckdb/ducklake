@@ -69,7 +69,8 @@ string DuckLakeStagedTable::Columns(DuckLakeStagedTableType type) {
 	case DuckLakeStagedTableType::COMMIT_HEADER:
 		return "commit_author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR, "
 		       "transaction_snapshot_id BIGINT, data_path VARCHAR, path_separator VARCHAR, "
-		       "transaction_next_catalog_id UBIGINT, transaction_next_file_id UBIGINT";
+		       "transaction_next_catalog_id UBIGINT, transaction_next_file_id UBIGINT, "
+		       "transaction_watermark UBIGINT";
 	case DuckLakeStagedTableType::DATA_FILE:
 		return "data_file_id BIGINT, table_id BIGINT, file_order BIGINT, "
 		       "path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, "
@@ -270,12 +271,14 @@ string DuckLakeStagedCommit::EmitCommitHeader(const DuckLakeSnapshotCommit &h, c
 	string snap_id = has_snapshot ? std::to_string(snap.snapshot_id) : "NULL";
 	string next_cat = has_snapshot ? std::to_string(snap.next_catalog_id) : "NULL";
 	string next_file = has_snapshot ? std::to_string(snap.next_file_id) : "NULL";
-	return StringUtil::Format("INSERT INTO %s VALUES (%s, %s, %s, %s, %s, %s, %s, %s);",
-	                          DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::COMMIT_HEADER),
-	                          DuckLakeUtil::TextLiteralOrNull(h.author),
-	                          DuckLakeUtil::TextLiteralOrNull(h.commit_message),
-	                          DuckLakeUtil::TextLiteralOrNull(h.commit_extra_info), snap_id,
-	                          SQLString::ToString(data_path), SQLString::ToString(separator), next_cat, next_file);
+	bool has_watermark = has_snapshot && snap.global_watermark != DConstants::INVALID_INDEX;
+	string watermark = has_watermark ? std::to_string(snap.global_watermark) : "NULL";
+	return StringUtil::Format(
+	    "INSERT INTO %s VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s);",
+	    DuckLakeStagedTable::BaseName(DuckLakeStagedTableType::COMMIT_HEADER),
+	    DuckLakeUtil::TextLiteralOrNull(h.author), DuckLakeUtil::TextLiteralOrNull(h.commit_message),
+	    DuckLakeUtil::TextLiteralOrNull(h.commit_extra_info), snap_id, SQLString::ToString(data_path),
+	    SQLString::ToString(separator), next_cat, next_file, watermark);
 }
 
 string DuckLakeStagedCommit::EmitDataFiles(const LocalTableChanges &local_changes, idx_t &local_file_id) const {
