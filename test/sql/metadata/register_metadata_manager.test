@@ -99,7 +99,7 @@ statement ok
 CALL ducklake_register_metadata_manager('duckdb', '{}')
 
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/register_metadata_manager.db' AS dl (DATA_PATH '{TEST_DIR}/register_metadata_manager')
+ATTACH 'ducklake:{TEST_DIR}/register_metadata_manager.db' AS dl (DATA_PATH '{TEST_DIR}/register_metadata_manager', DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 INSERT INTO dl.t VALUES (2)
