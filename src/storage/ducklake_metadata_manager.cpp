@@ -69,7 +69,13 @@ void DuckLakeMetadataManager::Register(const string &name, DuckLakeMetadataManag
 
 bool DuckLakeMetadataManager::HasBuiltInManager(const string &name) {
 	lock_guard<mutex> lock(metadata_managers_lock);
-	return metadata_managers.find(name) != metadata_managers.end();
+	// profiles are looked up case-insensitively, so a profile must not shadow a manager in another case
+	for (auto &entry : metadata_managers) {
+		if (StringUtil::CIEquals(entry.first, name)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 unique_ptr<DuckLakeMetadataManager> DuckLakeMetadataManager::Create(DuckLakeTransaction &transaction) {
@@ -3373,8 +3379,10 @@ string DuckLakeMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 
 string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const LogicalType &type) {
 	auto &metadata_type = transaction.GetCatalog().MetadataType();
-	if (metadata_type.empty() || metadata_type == "duckdb" || metadata_type == "quack" ||
-	    metadata_type == "quack_scanner") {
+	// a column created with an overridden type is cast back like on any other database
+	bool type_overridden = GetMetadataProfile().column_type_overrides.count(type.id());
+	if (!type_overridden && (metadata_type.empty() || metadata_type == "duckdb" || metadata_type == "quack" ||
+	                         metadata_type == "quack_scanner")) {
 		// older versions stored struct fields in the order of an ALTER, which a cast by field name restores
 		return DuckLakeTypes::IsNested(type) ? "CAST(" + column + " AS " + type.ToString() + ")" : column;
 	}

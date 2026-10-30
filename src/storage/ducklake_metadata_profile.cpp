@@ -170,7 +170,8 @@ private:
 };
 
 //! The profile of SQLite metadata databases, until the sqlite extension registers its own
-const char *const SQLITE_PROFILE = R"({
+const char *const SQLITE_PROFILE =
+    R"({
 	"types": {
 		"natively_unsupported": ["STRUCT", "MAP", "LIST", "FLOAT", "DOUBLE", "TIMESTAMP WITH TIME ZONE",
 		                         "TIMESTAMPTZ_NS", "VARIANT"],
@@ -183,7 +184,9 @@ const char *const SQLITE_PROFILE = R"({
 	"commit_errors": [
 		{
 			"pattern": "failed to execute query \"commit\": database is locked",
-			"hint": "In its rollback journal mode, a SQLite catalog cannot commit while another transaction is open on it. Attach the catalog with META_JOURNAL_MODE 'WAL' to let open transactions and a commit run at the same time.\n",
+			"hint": "In its rollback journal mode, a SQLite catalog cannot commit while another transaction is )"
+    R"(open on it. Attach the catalog with META_JOURNAL_MODE 'WAL' to let open transactions and a )"
+    R"(commit run at the same time.\n",
 			"hint_unless_parameter": {"journal_mode": "wal"}
 		},
 		{"pattern": "database is locked\\s*$", "retryable": true}
@@ -228,7 +231,7 @@ void DuckLakeMetadataProfiles::Register(const string &name, const string &json) 
 			}
 			auto base_profile = Find(base.GetString());
 			if (!base_profile) {
-				throw InvalidInputException("base \"%s\" is not a registered metadata manager", base.GetString());
+				throw InvalidInputException("base \"%s\" is not a registered metadata profile", base.GetString());
 			}
 			*profile = *base_profile;
 		}
@@ -240,7 +243,7 @@ void DuckLakeMetadataProfiles::Register(const string &name, const string &json) 
 		if (error.Type() != ExceptionType::INVALID_INPUT) {
 			throw;
 		}
-		throw InvalidInputException("Failed to register DuckLake metadata manager \"%s\": %s", name,
+		throw InvalidInputException("Failed to register DuckLake metadata profile \"%s\": %s", name,
 		                            error.RawMessage());
 	}
 }
