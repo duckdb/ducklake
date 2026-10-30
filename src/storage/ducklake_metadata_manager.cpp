@@ -1,4 +1,5 @@
 #include "storage/ducklake_metadata_manager.hpp"
+#include "storage/ducklake_metadata_profile.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/path.hpp"
 #include "duckdb/common/exception/conversion_exception.hpp"
@@ -20,7 +21,6 @@
 #include "duckdb/main/appender.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "metadata_manager/quack_metadata_manager.hpp"
-#include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/planner/expression.hpp"
@@ -50,9 +50,10 @@ DuckLakeMetadataManager::~DuckLakeMetadataManager() {
 }
 
 unordered_map<string /* name */, DuckLakeMetadataManager::create_t> DuckLakeMetadataManager::metadata_managers = {
-    {"postgres", PostgresMetadataManager::Create}, {"postgres_scanner", PostgresMetadataManager::Create},
-    {"quack", QuackMetadataManager::Create},       {"quack_scanner", QuackMetadataManager::Create},
-    {"sqlite", SQLiteMetadataManager::Create},     {"sqlite_scanner", SQLiteMetadataManager::Create}};
+    {"postgres", PostgresMetadataManager::Create},
+    {"postgres_scanner", PostgresMetadataManager::Create},
+    {"quack", QuackMetadataManager::Create},
+    {"quack_scanner", QuackMetadataManager::Create}};
 
 mutex DuckLakeMetadataManager::metadata_managers_lock;
 
@@ -66,6 +67,17 @@ void DuckLakeMetadataManager::Register(const string &name, DuckLakeMetadataManag
 }
 // LCOV_EXCL_STOP
 
+bool DuckLakeMetadataManager::HasBuiltInManager(const string &name) {
+	lock_guard<mutex> lock(metadata_managers_lock);
+	// profiles are looked up case-insensitively, so a profile must not shadow a manager in another case
+	for (const auto &entry : metadata_managers) {
+		if (StringUtil::CIEquals(entry.first, name)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 unique_ptr<DuckLakeMetadataManager> DuckLakeMetadataManager::Create(DuckLakeTransaction &transaction) {
 	lock_guard<mutex> lock(metadata_managers_lock);
 	auto &catalog = transaction.GetCatalog();
@@ -76,6 +88,42 @@ unique_ptr<DuckLakeMetadataManager> DuckLakeMetadataManager::Create(DuckLakeTran
 		return create(transaction);
 	}
 	return make_uniq<DuckLakeMetadataManager>(transaction);
+}
+
+const DuckLakeMetadataProfile &DuckLakeMetadataManager::GetMetadataProfile() const {
+	return transaction.GetCatalog().MetadataProfile();
+}
+
+bool DuckLakeMetadataManager::DroppedTablesStayReadable() const {
+	return GetMetadataProfile().dropped_tables_stay_readable;
+}
+
+idx_t DuckLakeMetadataManager::MaxColumnCount() const {
+	return GetMetadataProfile().max_column_count;
+}
+
+vector<string> DuckLakeMetadataManager::SystemColumnNames() const {
+	return GetMetadataProfile().system_column_names;
+}
+
+bool DuckLakeMetadataManager::IsRetryableCommitError(const string &message) const {
+	auto rule = GetMetadataProfile().FindCommitErrorRule(message);
+	return rule && rule->retryable;
+}
+
+string DuckLakeMetadataManager::CommitErrorHint(const string &message) const {
+	auto rule = GetMetadataProfile().FindCommitErrorRule(message);
+	if (!rule) {
+		return string();
+	}
+	auto &parameters = transaction.GetCatalog().MetadataParameters();
+	for (auto &entry : rule->hint_unless_parameters) {
+		auto parameter = parameters.find(entry.first);
+		if (parameter != parameters.end() && StringUtil::CIEquals(parameter->second.ToString(), entry.second)) {
+			return string();
+		}
+	}
+	return rule->hint;
 }
 
 bool DuckLakeMetadataManager::ExecuteRetrialsServerSide() const {
@@ -95,7 +143,7 @@ void DuckLakeMetadataManager::FlushChangesServerSide(DuckLakeTransaction &, Duck
 }
 
 bool DuckLakeMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
-	return true;
+	return !GetMetadataProfile().natively_unsupported_types.count(type.id());
 }
 
 bool DuckLakeMetadataManager::SupportsInlining(const LogicalType &type) {
@@ -734,6 +782,10 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 
 void DuckLakeMetadataManager::RenameInlinedColumns(
     const map<Identifier, vector<pair<Identifier, Identifier>>> &renames) {
+	if (GetMetadataProfile().rename_inlined_columns_by_copy) {
+		RenameInlinedColumnsByCopy(renames);
+		return;
+	}
 	// one batch for all tables, as every metadata DDL statement can reload the catalog
 	string query;
 	for (auto &table : renames) {
@@ -746,6 +798,27 @@ void DuckLakeMetadataManager::RenameInlinedColumns(
 	auto result = Execute(DuckLakeSnapshot(), query);
 	result->ThrowIfError("Failed to rename inlined-data metadata columns while migrating to v1.1: ");
 	ClearCache();
+}
+
+void DuckLakeMetadataManager::RenameInlinedColumnsByCopy(
+    const map<Identifier, vector<pair<Identifier, Identifier>>> &renames) {
+	string query;
+	for (auto &table : renames) {
+		auto &table_name = table.first;
+		vector<string> renamed_columns;
+		for (auto &column : table.second) {
+			renamed_columns.push_back(StringUtil::Format("%s AS %s", column.first, column.second));
+		}
+		query += StringUtil::Format(
+		    "CREATE TEMP TABLE ducklake_renamed_inlined AS SELECT * FROM {METADATA_CATALOG}.%s;", table_name);
+		query += StringUtil::Format("DROP TABLE {METADATA_CATALOG}.%s;", table_name);
+		query += StringUtil::Format(
+		    "CREATE TABLE {METADATA_CATALOG}.%s AS SELECT * RENAME (%s) FROM temp.ducklake_renamed_inlined;",
+		    table_name, StringUtil::Join(renamed_columns, ", "));
+		query += "DROP TABLE temp.ducklake_renamed_inlined;";
+	}
+	auto result = Execute(query);
+	result->ThrowIfError("Failed to rename inlined-data metadata columns while migrating to v1.1: ");
 }
 
 DuckLakeMetadata DuckLakeMetadataManager::LoadDuckLake() {
@@ -3296,13 +3369,21 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 }
 
 string DuckLakeMetadataManager::GetColumnTypeInternal(const LogicalType &column_type) {
+	auto &overrides = GetMetadataProfile().column_type_overrides;
+	auto entry = overrides.find(column_type.id());
+	if (entry != overrides.end()) {
+		return entry->second;
+	}
 	return column_type.ToString();
 }
 
 string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const LogicalType &type) {
 	auto &metadata_type = transaction.GetCatalog().MetadataType();
-	if (metadata_type.empty() || metadata_type == "duckdb" || metadata_type == "quack" ||
-	    metadata_type == "quack_scanner") {
+	// a column created with an overridden type is cast back like on any other database
+	auto storage_type = DuckLakeUtil::GetInlinedStorageType(*this, type);
+	bool type_overridden = GetMetadataProfile().column_type_overrides.count(storage_type.id());
+	if (!type_overridden && (metadata_type.empty() || metadata_type == "duckdb" || metadata_type == "quack" ||
+	                         metadata_type == "quack_scanner")) {
 		// older versions stored struct fields in the order of an ALTER, which a cast by field name restores
 		return DuckLakeTypes::IsNested(type) ? "CAST(" + column + " AS " + type.ToString() + ")" : column;
 	}
@@ -3311,7 +3392,6 @@ string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const L
 		// Postgres stores VARCHAR and JSON as BYTEA.
 		expression = "decode(" + expression + ")";
 	}
-	auto storage_type = DuckLakeUtil::GetInlinedStorageType(*this, type);
 	expression = "CAST(" + expression + " AS " + storage_type.ToString() + ")";
 	if (storage_type != type) {
 		expression = DuckLakeUtil::InlinedVariantExpression(expression, type, false);

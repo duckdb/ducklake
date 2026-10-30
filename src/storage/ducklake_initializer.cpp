@@ -12,13 +12,13 @@
 #include "duckdb/storage/storage_manager.hpp"
 
 #include "storage/ducklake_initializer.hpp"
+#include "storage/ducklake_metadata_profile.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "common/ducklake_version.hpp"
 #include "metadata_manager/ducklake_metadata_manager_v1_1.hpp"
 #include "metadata_manager/ducklake_metadata_manager_v2_0.hpp"
-#include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "metadata_manager/quack_metadata_manager.hpp"
 
@@ -175,6 +175,9 @@ void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction) {
 	auto result = transaction.GetMetadataManager().AttachMetadata(attach_query);
 	result->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
 	                     catalog.MetadataPath() + "\"");
+	// the extension of the metadata database registers its profile when the ATTACH loads it
+	auto catalog_type = transaction.GetMetadataCatalog().GetCatalogType();
+	catalog.SetMetadataProfile(DuckLakeMetadataProfiles::Get(*context.db).Find(catalog_type));
 }
 
 bool DuckLakeInitializer::DuckLakeIsInitialized(DuckLakeTransaction &transaction) {
@@ -374,9 +377,6 @@ static unique_ptr<DuckLakeMetadataManager> MakeVersionedManager(DuckLakeTransact
 	}
 	if (dynamic_cast<PostgresMetadataManager *>(&current)) {
 		return make_uniq<MANAGER<PostgresMetadataManager>>(transaction);
-	}
-	if (dynamic_cast<SQLiteMetadataManager *>(&current)) {
-		return make_uniq<MANAGER<SQLiteMetadataManager>>(transaction);
 	}
 	return make_uniq<MANAGER<DuckLakeMetadataManager>>(transaction);
 }

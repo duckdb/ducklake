@@ -2179,11 +2179,15 @@ void DuckLakeTransaction::ReportMetadataQuery(const string &query, std::chrono::
 	}
 }
 
-Identifier DuckLakeTransaction::GetDefaultSchemaName() {
+Catalog &DuckLakeTransaction::GetMetadataCatalog() {
 	auto &metadata_context = *GetConnection().context;
 	auto &db_manager = DatabaseManager::Get(metadata_context);
 	auto metadb = db_manager.GetDatabase(metadata_context, ducklake_catalog.MetadataDatabaseName());
-	auto default_schema = metadb->GetCatalog().GetDefaultSchema();
+	return metadb->GetCatalog();
+}
+
+Identifier DuckLakeTransaction::GetDefaultSchemaName() {
+	auto default_schema = GetMetadataCatalog().GetDefaultSchema();
 	if (!default_schema) {
 		// LCOV_EXCL_START
 		throw InvalidInputException("DuckLake metadata catalog %s has no default schema, set METADATA_SCHEMA "

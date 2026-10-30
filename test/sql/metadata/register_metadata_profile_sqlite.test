@@ -1,0 +1,45 @@
+# name: test/sql/metadata/register_metadata_profile_sqlite.test
+# description: A profile registered for SQLite replaces the built-in one, and keeps the fields of its base
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+statement ok
+CALL ducklake_register_metadata_profile('sqlite', '{"base": "sqlite", "system_column_names": ["rowid", "oid", "_rowid_", "reserved"]}')
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/register_metadata_profile_sqlite.db' AS dl (DATA_PATH '{TEST_DIR}/register_metadata_profile_sqlite', DATA_INLINING_ROW_LIMIT 10, DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE TABLE dl.t (reserved INTEGER)
+
+statement ok
+CREATE TABLE dl.d (x DOUBLE)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.d VALUES ('NaN'::DOUBLE), (1.5)
+
+query II
+SELECT table_name, file_count FROM ducklake_table_info('dl') ORDER BY table_name
+----
+d	0
+t	1
+
+# the inlined doubles are stored as text, which keeps NaN
+query II
+SELECT x, isnan(x) FROM dl.d ORDER BY x
+----
+1.5	false
+nan	true
+
+query I
+SELECT sql FROM sqlite_query('__ducklake_metadata_dl', 'SELECT sql FROM sqlite_master WHERE name = ''ducklake_inlined_data_2_2''')
+----
+CREATE TABLE ducklake_inlined_data_2_2(_ducklake_row_id BIGINT, _ducklake_begin_snapshot BIGINT, _ducklake_end_snapshot BIGINT, x VARCHAR)
