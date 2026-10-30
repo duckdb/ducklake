@@ -126,6 +126,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	DuckLakeCommitFunction commit;
 	loader.RegisterFunction(commit);
 
+	DuckLakeRegisterMetadataManagerFunction register_metadata_manager;
+	loader.RegisterFunction(register_metadata_manager);
+
 	// Register ducklake_scan so it can be found during deserialization
 	auto ducklake_scan = DuckLakeFunctions::GetDuckLakeScanFunction(loader.GetDatabaseInstance());
 	loader.RegisterFunction(ducklake_scan);

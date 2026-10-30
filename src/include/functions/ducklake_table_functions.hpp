@@ -135,6 +135,11 @@ public:
 	DuckLakeSetCommitMessage();
 };
 
+class DuckLakeRegisterMetadataManagerFunction : public TableFunction {
+public:
+	DuckLakeRegisterMetadataManagerFunction();
+};
+
 class DuckLakeCreateTagFunction : public TableFunction {
 public:
 	DuckLakeCreateTagFunction();
