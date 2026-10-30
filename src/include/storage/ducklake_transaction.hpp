@@ -59,7 +59,7 @@ public:
 	void QueryEnd(ClientContext &context) override;
 
 private:
-	//! The owning transaction must not keep its caller alive between metadata queries.
+	//! Internal connections must not keep their caller alive between metadata queries.
 	weak_ptr<ClientContext> base_context;
 };
 

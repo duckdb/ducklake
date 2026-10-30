@@ -1,5 +1,5 @@
 # name: test/sql/metadata/finalization_deadline.test
-# description: Commit and rollback finish metadata work despite a short caller deadline
+# description: Commit retries survive the caller deadline and disconnected transactions clean up their files
 # group: [metadata]
 
 require ducklake
@@ -13,72 +13,73 @@ ATTACH 'ducklake:{TEST_DIR}/metadata_finalization_deadline.db' AS lake
 statement ok
 CREATE TABLE lake.items AS SELECT 42 AS i
 
-statement ok
+statement ok con1
+SET ducklake_retry_wait_ms = 500
+
+statement ok con1
 BEGIN
 
-statement ok
+statement ok con1
 INSERT INTO lake.items VALUES (43)
 
-query I
-SELECT count(*) FROM glob('{TEST_DIR}/metadata_finalization_deadline_files/**/*.parquet')
-----
-2
+# con2 takes the next snapshot ID, forcing con1 to retry after a 250-500 ms wait
+statement ok con2
+INSERT INTO lake.items VALUES (44)
 
-statement ok
-SET max_execution_time = 1
+statement ok con1
+SET max_execution_time = 100
 
-statement ok
+# No more statements use con1: even RESET would run under its short deadline.
+statement ok con1
 COMMIT
-
-statement ok
-RESET max_execution_time
 
 query I
 SELECT record_count FROM __ducklake_metadata_lake.ducklake_table_stats
 ----
-2
+3
 
 query I rowsort
 SELECT * FROM lake.items
 ----
 42
 43
-
-statement ok
-BEGIN
-
-statement ok
-INSERT INTO lake.items VALUES (44)
+44
 
 query I
 SELECT count(*) FROM glob('{TEST_DIR}/metadata_finalization_deadline_files/**/*.parquet')
 ----
 3
 
+# The internal metadata connection must not keep its caller alive after the query.
 statement ok
-SET max_execution_time = 1
+BEGIN
 
 statement ok
-ROLLBACK
+INSERT INTO lake.items VALUES (45)
 
-statement ok
-RESET max_execution_time
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/metadata_finalization_deadline_files/**/*.parquet')
+----
+4
+
+reconnect
 
 query I rowsort
 SELECT * FROM lake.items
 ----
 42
 43
+44
 
 query I
 SELECT record_count FROM __ducklake_metadata_lake.ducklake_table_stats
 ----
-2
+3
 
 query I
 SELECT count(*) FROM glob('{TEST_DIR}/metadata_finalization_deadline_files/**/*.parquet')
 ----
-2
+3
 
 statement ok
 DETACH lake

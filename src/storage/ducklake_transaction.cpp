@@ -48,8 +48,7 @@ unique_ptr<Connection>
 DuckLakeInternalConnectionState::CreateConnection(DatabaseInstance &db, const shared_ptr<ClientContext> &base_context) {
 	auto connection = make_uniq<Connection>(base_context ? Connection::CreateInternal(*base_context)
 	                                                     : Connection::CreateInternal(db));
-	// Follow the immediate caller during queries without retaining it between
-	// queries.
+	// Follow the immediate caller so its transaction-finalization suppression applies.
 	connection->context->base_context.reset();
 	connection->context->registered_state->GetOrCreate<DuckLakeInternalConnectionState>(KEY, base_context);
 	if (base_context) {
