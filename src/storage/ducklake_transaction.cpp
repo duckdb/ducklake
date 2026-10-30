@@ -40,8 +40,22 @@
 
 namespace duckdb {
 
-DuckLakeInternalConnectionState::DuckLakeInternalConnectionState(shared_ptr<ClientContext> base_context_p)
-    : base_context(std::move(base_context_p)) {
+DuckLakeInternalConnectionState::DuckLakeInternalConnectionState(const shared_ptr<ClientContext> &base_context_p)
+    : base_context(base_context_p) {
+}
+
+unique_ptr<Connection>
+DuckLakeInternalConnectionState::CreateConnection(DatabaseInstance &db, const shared_ptr<ClientContext> &base_context) {
+	auto connection = make_uniq<Connection>(base_context ? Connection::CreateInternal(*base_context)
+	                                                     : Connection::CreateInternal(db));
+	// Follow the immediate caller during queries without retaining it between
+	// queries.
+	connection->context->base_context.reset();
+	connection->context->registered_state->GetOrCreate<DuckLakeInternalConnectionState>(KEY, base_context);
+	if (base_context) {
+		DuckLakeUtil::CopyExtensionSettings(*base_context, *connection->context);
+	}
+	return connection;
 }
 
 void DuckLakeInternalConnectionState::QueryBegin(ClientContext &context) {
@@ -929,16 +943,7 @@ void DuckLakeTransaction::Rollback() {
 Connection &DuckLakeTransaction::GetConnection() {
 	lock_guard<mutex> lock(connection_lock);
 	if (!connection) {
-		auto caller_context = context.lock();
-		connection = make_uniq<Connection>(caller_context ? Connection::CreateInternal(*caller_context)
-		                                                  : Connection::CreateInternal(db));
-		// Follow the transaction owner so an internal caller's finalization suppression is preserved.
-		connection->context->base_context.reset();
-		connection->context->registered_state->GetOrCreate<DuckLakeInternalConnectionState>(
-		    DuckLakeInternalConnectionState::KEY, caller_context);
-		if (caller_context) {
-			DuckLakeUtil::CopyExtensionSettings(*caller_context, *connection->context);
-		}
+		connection = DuckLakeInternalConnectionState::CreateConnection(db, context.lock());
 		// set the search path to the metadata catalog
 		auto &client_data = ClientData::Get(*connection->context);
 		// ensure we are only looking in the ducklake catalog schema during querying

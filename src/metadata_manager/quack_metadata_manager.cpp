@@ -35,10 +35,11 @@ unique_ptr<QueryResult> QuackMetadataManager::Query(string &query) {
 unique_ptr<QueryResult> QuackMetadataManager::AttachMetadata(const string &attach_query) {
 	auto query = attach_query;
 	SubstituteCatalogPlaceholders(query);
-	Connection fresh_conn(transaction.GetCatalog().GetDatabase());
+	auto fresh_conn = DuckLakeInternalConnectionState::CreateConnection(transaction.GetCatalog().GetDatabase(),
+	                                                                    transaction.context.lock());
 	// the attach error becomes part of the error of the DuckLake attach, which a global SET errors_as_json would nest
-	Settings::Set<ErrorsAsJSONSetting>(*fresh_conn.context, SetScope::SESSION, Value::BOOLEAN(false));
-	auto result = fresh_conn.Query(query);
+	Settings::Set<ErrorsAsJSONSetting>(*fresh_conn->context, SetScope::SESSION, Value::BOOLEAN(false));
+	auto result = fresh_conn->Query(query);
 
 	for (idx_t attempt = 0; attempt < 5 && result->HasError(); attempt++) {
 		auto raw_message = result->GetErrorObject().RawMessage();
@@ -48,7 +49,7 @@ unique_ptr<QueryResult> QuackMetadataManager::AttachMetadata(const string &attac
 		if (!retryable) {
 			break;
 		}
-		result = fresh_conn.Query(query);
+		result = fresh_conn->Query(query);
 	}
 	return std::move(result);
 }

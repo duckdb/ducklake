@@ -33,6 +33,11 @@ SELECT * FROM lake.items
 ----
 Query exceeded maximum execution time
 
+statement error
+CHECKPOINT lake
+----
+Query exceeded maximum execution time
+
 statement ok
 RESET max_execution_time
 

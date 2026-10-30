@@ -53,7 +53,8 @@ class DuckLakeTransactionState;
 class DuckLakeInternalConnectionState : public ClientContextState {
 public:
 	static constexpr const char *KEY = "ducklake_internal_connection";
-	explicit DuckLakeInternalConnectionState(shared_ptr<ClientContext> base_context);
+	explicit DuckLakeInternalConnectionState(const shared_ptr<ClientContext> &base_context);
+	static unique_ptr<Connection> CreateConnection(DatabaseInstance &db, const shared_ptr<ClientContext> &base_context);
 	void QueryBegin(ClientContext &context) override;
 	void QueryEnd(ClientContext &context) override;
 
