@@ -217,6 +217,8 @@ public:
 	virtual bool CommitsEachStatement() const {
 		return false;
 	}
+	//! The type of a metadata column that a migration adds for a timestamp with time zone
+	string TimestampTzColumnType() const;
 	//! Whether transactions that started before a metadata table was dropped still read it
 	virtual bool DroppedTablesStayReadable() const;
 	//! Whether a commit inserts inlined rows after its batch instead of sending them as VALUES text in it

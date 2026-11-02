@@ -106,6 +106,12 @@ vector<string> DuckLakeMetadataManager::SystemColumnNames() const {
 	return GetMetadataProfile().system_column_names;
 }
 
+string DuckLakeMetadataManager::TimestampTzColumnType() const {
+	auto &overrides = GetMetadataProfile().column_type_overrides;
+	auto entry = overrides.find(LogicalTypeId::TIMESTAMP_TZ);
+	return entry == overrides.end() ? "TIMESTAMPTZ" : entry->second;
+}
+
 bool DuckLakeMetadataManager::IsRetryableCommitError(const string &message) const {
 	auto rule = GetMetadataProfile().FindCommitErrorRule(message);
 	return rule && rule->retryable;
@@ -712,9 +718,8 @@ bool DuckLakeMetadataManager::HasSnapshotTagExpiry() {
 }
 
 void DuckLakeMetadataManager::AddSnapshotTagExpiry() {
-	auto result =
-	    Execute(StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_tag ADD COLUMN expires_at %s;",
-	                               GetColumnTypeInternal(LogicalType::TIMESTAMP_TZ)));
+	auto result = Execute(StringUtil::Format(
+	    "ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_tag ADD COLUMN expires_at %s;", TimestampTzColumnType()));
 	result->ThrowIfError("Failed to add the expiry time of snapshot tags to the DuckLake catalog: ");
 }
 
