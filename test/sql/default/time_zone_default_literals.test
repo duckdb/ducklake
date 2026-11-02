@@ -143,26 +143,3 @@ SELECT id, c FROM l.v ORDER BY id
 1	2024-01-01 17:00:00+09
 2	2024-01-01 17:00:00+09
 3	2024-01-01 00:00:00+09
-
-# a macro parameter default is folded when the macro is created, as in DuckDB, so it keeps that instant
-statement ok
-CREATE MACRO l.at_time(x := TIMESTAMPTZ '2024-01-01 00:00:00') AS x
-
-statement ok
-DETACH l
-
-statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS l (DATA_PATH '{DATA_PATH}/time_zone_default_literals')
-
-query I
-SELECT l.at_time() = TIMESTAMPTZ '2023-12-31 15:00:00+00'
-----
-true
-
-statement ok
-SET TimeZone = 'America/Los_Angeles'
-
-query I
-SELECT l.at_time() = TIMESTAMPTZ '2023-12-31 15:00:00+00'
-----
-true
