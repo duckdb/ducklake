@@ -93,8 +93,14 @@ static void LoadInternal(ExtensionLoader &loader) {
 	DuckLakeCreateTagFunction create_tag;
 	loader.RegisterFunction(create_tag);
 
+	DuckLakeReplaceTagFunction replace_tag;
+	loader.RegisterFunction(replace_tag);
+
 	DuckLakeDropTagFunction drop_tag;
 	loader.RegisterFunction(drop_tag);
+
+	DuckLakeSetTagExpiryFunction set_tag_expiry;
+	loader.RegisterFunction(set_tag_expiry);
 
 	DuckLakeTagsFunction tags;
 	loader.RegisterFunction(tags);
@@ -119,6 +125,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	DuckLakeCommitFunction commit;
 	loader.RegisterFunction(commit);
+
+	DuckLakeRegisterMetadataProfileFunction register_metadata_profile;
+	loader.RegisterFunction(register_metadata_profile);
 
 	// Register ducklake_scan so it can be found during deserialization
 	auto ducklake_scan = DuckLakeFunctions::GetDuckLakeScanFunction(loader.GetDatabaseInstance());

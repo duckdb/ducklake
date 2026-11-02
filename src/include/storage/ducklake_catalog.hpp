@@ -30,6 +30,7 @@
 
 namespace duckdb {
 struct DuckLakeCopyInput;
+struct DuckLakeMetadataProfile;
 struct DuckLakeGlobalStatsInfo;
 class DuckLakeCatalog;
 class ColumnList;
@@ -151,7 +152,7 @@ public:
 	string GetCatalogType() override {
 		return "ducklake";
 	}
-	const string &MetadataDatabaseName() const {
+	const Identifier &MetadataDatabaseName() const {
 		return options.metadata_database;
 	}
 	const Identifier &MetadataSchemaName() const {
@@ -169,6 +170,9 @@ public:
 	const string &MetadataType() const {
 		return metadata_type;
 	}
+	const DuckLakeMetadataProfile &MetadataProfile() const;
+	//! Set once the metadata database is attached, when its extension has had the chance to register the profile
+	void SetMetadataProfile(shared_ptr<const DuckLakeMetadataProfile> profile);
 	bool IsInitialized() const {
 		return initialized;
 	}
@@ -415,6 +419,8 @@ public:
 
 	//! Invalidate the cached table stats entry for a given stats cache key.
 	void InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id);
+	//! Invalidate the cached table stats entries of this DuckLake for the given next file ids.
+	void InvalidateTableStatsCaches(const unordered_set<idx_t> &next_file_ids);
 	//! Invalidate the cached schema entry for a given schema_version.
 	void InvalidateSchemaCache(idx_t schema_version);
 	//! Invalidate a cached name map for a deleted mapping ID.
@@ -470,6 +476,8 @@ private:
 	atomic<idx_t> last_uncommitted_catalog_version;
 	//! The metadata server type
 	string metadata_type;
+	//! The profile of the metadata database, nullptr if it has none
+	shared_ptr<const DuckLakeMetadataProfile> metadata_profile;
 	//! The resolved DuckLake spec version of the attached catalog
 	DuckLakeVersion ducklake_version = DuckLakeVersion::V1_0;
 	//! A per-instance identifier used to scope ObjectCache keys.

@@ -1,0 +1,360 @@
+# name: test/sql/tags/tags_replace.test
+# description: ducklake_replace_tag moves a snapshot tag to another snapshot
+# group: [tags]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_replace_files', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+CALL ducklake_create_tag('dl', 'release', version => 2)
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+# the tag moves to the snapshot of the third insert
+statement ok
+CALL ducklake_replace_tag('dl', 'release', version => 5)
+
+query III
+SELECT tag_name, snapshot_id, created_snapshot_id FROM ducklake_tags('dl')
+----
+release	5	6
+
+query II
+SELECT snapshot_id, changes FROM ducklake_snapshots('dl') WHERE snapshot_id IN (4, 6) ORDER BY snapshot_id
+----
+4	{tags_created=[release]}
+6	{tags_created=[release], tags_dropped=[release]}
+
+# the old row ends where the new one begins
+query IIII
+SELECT tag_name, snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_snapshot_tag ORDER BY begin_snapshot
+----
+release	2	4	6
+release	5	6	NULL
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'release')
+----
+3
+
+# the old target is still readable by its id
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 2)
+----
+1
+
+# without a version or a timestamp the tag moves to the snapshot of the transaction, names compare case insensitive
+statement ok
+CALL ducklake_replace_tag('dl', 'RELEASE')
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl')
+----
+release	6
+
+# a timestamp selects the latest snapshot at that time
+statement ok
+SET VARIABLE create_time = (SELECT snapshot_time FROM ducklake_snapshots('dl') WHERE snapshot_id = 1)
+
+statement ok
+CALL ducklake_replace_tag('dl', 'release', timestamp => getvariable('create_time'))
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl')
+----
+release	1
+
+# the expected snapshot guards the move
+statement error
+CALL ducklake_replace_tag('dl', 'release', version => 5, expected_snapshot => 2)
+----
+The snapshot tag "release" names snapshot 1, not the expected snapshot 2
+
+statement ok
+CALL ducklake_replace_tag('dl', 'release', version => 5, expected_snapshot => 1)
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl')
+----
+release	5
+
+statement error
+CALL ducklake_replace_tag('dl', 'missing', version => 5)
+----
+A snapshot tag with the name "missing" does not exist
+
+statement error
+CALL ducklake_replace_tag('dl', NULL)
+----
+Tag name cannot be NULL or empty
+
+statement error
+CALL ducklake_replace_tag('dl', 'release', version => 5, timestamp => NOW())
+----
+specify either version or timestamp, not both
+
+statement error
+CALL ducklake_replace_tag('dl', 'release', version => 1000)
+----
+No snapshot found at version 1000
+
+# the old targets lose the protection from expiry, the new one gains it
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [1, 2, 5, 6], dry_run => true) ORDER BY snapshot_id
+----
+1
+2
+6
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [1, 2, 5, 6])
+
+query I
+SELECT snapshot_id FROM ducklake_snapshots('dl') WHERE snapshot_id <= 6 ORDER BY snapshot_id
+----
+0
+3
+4
+5
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'release')
+----
+3
+
+# in a transaction a moved tag resolves to its new target at once, and a created tag moves before it commits
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_replace_tag('dl', 'release', version => 3)
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'release')
+----
+2
+
+statement ok
+CALL ducklake_create_tag('dl', 'local', version => 3)
+
+statement ok
+CALL ducklake_replace_tag('dl', 'local', version => 5, expected_snapshot => 3)
+
+statement ok
+COMMIT
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') ORDER BY tag_name
+----
+local	5
+release	3
+
+query I
+SELECT changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+{tags_created=[local, release], tags_dropped=[release]}
+
+# in one transaction a move frees the old target for an expiry and protects the new one
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_replace_tag('dl', 'release', version => 7)
+
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [3, 7])
+----
+3
+
+statement ok
+COMMIT
+
+query I
+SELECT changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+{tags_created=[release], tags_dropped=[release], snapshots_expired=[3]}
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'release')
+----
+3
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_replace_tag('dl', 'release', version => 4)
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [7])
+
+# Quack keeps the snapshot until the commit expires it
+statement error
+CALL ducklake_replace_tag('dl', 'release', version => 7)
+----
+<REGEX>:.*(No snapshot found at version 7|Cannot tag snapshot 7, it is expired by this transaction).*
+
+statement ok
+ROLLBACK
+
+# a tag dropped in the transaction cannot move
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_drop_tag('dl', 'local')
+
+statement error
+CALL ducklake_replace_tag('dl', 'local', version => 4)
+----
+A snapshot tag with the name "local" does not exist
+
+statement ok
+ROLLBACK
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') ORDER BY tag_name
+----
+local	5
+release	7
+
+# a move back that binds before an expiry of its target runs in the same statement fails
+statement ok
+SET threads = 1
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_replace_tag('dl', 'release', version => 4)
+
+statement error
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [7])
+UNION ALL
+SELECT NULL::BIGINT FROM ducklake_replace_tag('dl', 'release', version => 7, expected_snapshot => 4)
+----
+Cannot tag snapshot 7, it is expired by this transaction
+
+statement ok
+ROLLBACK
+
+statement ok
+RESET threads
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') ORDER BY tag_name
+----
+local	5
+release	7
+
+# an expiry of the transaction expires the old target once the tag moves away from it
+statement ok
+BEGIN
+
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [7])
+----
+0
+
+statement ok
+CALL ducklake_replace_tag('dl', 'release', version => 4)
+
+statement ok
+COMMIT
+
+query I
+SELECT changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+{tags_created=[release], tags_dropped=[release], snapshots_expired=[7]}
+
+# and the snapshot of a tag it drops
+statement ok
+BEGIN
+
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [5])
+----
+0
+
+statement ok
+CALL ducklake_drop_tag('dl', 'local')
+
+statement ok
+COMMIT
+
+query I
+SELECT changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+{tags_dropped=[local], snapshots_expired=[5]}
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl')
+----
+release	4
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'release')
+----
+2
+
+# a move to the snapshot the tag names already writes its row again, so that it conflicts with concurrent changes
+statement ok
+CALL ducklake_replace_tag('dl', 'release', version => 4)
+
+query III
+SELECT snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_snapshot_tag WHERE tag_name = 'release' AND begin_snapshot >= 13 ORDER BY begin_snapshot
+----
+4	13	15
+4	15	NULL
+
+query I
+SELECT changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+{tags_created=[release], tags_dropped=[release]}
+
+# and so does a move away and back in one transaction, which protects only the committed target
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_replace_tag('dl', 'release', version => 8)
+
+statement ok
+CALL ducklake_replace_tag('dl', 'Release', version => 4, expected_snapshot => 8)
+
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [4, 8], dry_run => true)
+----
+8
+
+statement ok
+COMMIT
+
+query III
+SELECT snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_snapshot_tag WHERE tag_name = 'release' AND begin_snapshot >= 15 ORDER BY begin_snapshot
+----
+4	15	16
+4	16	NULL
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'release')
+----
+2

@@ -129,6 +129,34 @@ four	4
 pending	6
 two	2
 
+# the name of a tag that an expiry drops stays taken until the commit, so no concurrent change of it is missed
+statement ok
+CALL ducklake_create_tag('dl', 'renewed', version => 6, expires_at => now()::TIMESTAMP + INTERVAL 1 SECOND)
+
+sleep 1100 milliseconds
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_expire_snapshots('dl', versions => [999999])
+
+statement ok con2
+CALL ducklake_set_tag_expiry('dl', 'renewed', TIMESTAMPTZ '2100-01-01 00:00:00+00')
+
+statement error con1
+CALL ducklake_create_tag('dl', 'renewed', version => 6)
+----
+A snapshot tag with the name "renewed" already exists
+
+statement ok con1
+ROLLBACK
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl') WHERE tag_name = 'renewed'
+----
+1
+
 statement ok
 DETACH dl
 

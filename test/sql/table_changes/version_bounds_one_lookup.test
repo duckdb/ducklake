@@ -1,0 +1,39 @@
+# name: test/sql/table_changes/version_bounds_one_lookup.test
+# description: A version used as both bounds of a change feed is looked up once
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/version_bounds_one_lookup')
+
+statement ok
+CREATE TABLE lake.t (id INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1)
+
+statement ok
+INSERT INTO lake.t VALUES (2)
+
+statement ok
+CALL enable_logging('QueryLog', storage => 'memory')
+
+query I
+SELECT list(id) FROM lake.table_changes('t', 3, 3)
+----
+[2]
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%FROM %ducklake_snapshot%WHERE snapshot_id = 3%'
+----
+1

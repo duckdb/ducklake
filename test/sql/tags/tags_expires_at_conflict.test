@@ -1,0 +1,208 @@
+# name: test/sql/tags/tags_expires_at_conflict.test
+# description: a change of the expiry time of a tag conflicts with every concurrent change of the tag, and with an expiry that drops it
+# group: [tags]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_expires_at_conflict_files')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+statement ok
+CALL ducklake_create_tag('dl', 'release', version => 2, expires_at => TIMESTAMPTZ '2100-01-01 00:00:00+00')
+
+statement ok
+SET immediate_transaction_mode=true
+
+# two concurrent changes of the expiry time, the second fails instead of overwriting the first
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_set_tag_expiry('dl', 'release', TIMESTAMPTZ '2200-01-01 00:00:00+00')
+
+statement ok con2
+CALL ducklake_set_tag_expiry('dl', 'release', TIMESTAMPTZ '2300-01-01 00:00:00+00')
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+another transaction has created a tag with this name already
+
+query I
+SELECT expires_at = TIMESTAMPTZ '2200-01-01 00:00:00+00' FROM ducklake_tags('dl')
+----
+true
+
+# a change of the expiry time conflicts with a concurrent drop
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_drop_tag('dl', 'release')
+
+statement ok con2
+CALL ducklake_set_tag_expiry('dl', 'release', TIMESTAMPTZ '2300-01-01 00:00:00+00')
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+another transaction has dropped a tag with this name
+
+statement ok
+CALL ducklake_create_tag('dl', 'release', version => 2, expires_at => TIMESTAMPTZ '2100-01-01 00:00:00+00')
+
+# a drop conflicts with a concurrent change of the expiry time
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_set_tag_expiry('dl', 'release', NULL)
+
+statement ok con2
+CALL ducklake_drop_tag('dl', 'release')
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+another transaction has dropped it already
+
+query II
+SELECT tag_name, expires_at IS NULL FROM ducklake_tags('dl')
+----
+release	true
+
+# an expiry that drops a tag whose time has passed fails a concurrent change of that time
+statement ok
+CALL ducklake_create_tag('dl', 'passing', version => 3, expires_at => now()::TIMESTAMP + INTERVAL 1 SECOND)
+
+sleep 1100 milliseconds
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_set_tag_expiry('dl', 'passing', TIMESTAMPTZ '2100-01-01 00:00:00+00')
+
+statement ok con2
+CALL ducklake_expire_snapshots('dl', versions => [3])
+
+statement error con1
+COMMIT
+----
+another transaction has dropped a tag with this name
+
+query II
+SELECT snapshot_id, changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+11	{tags_dropped=[passing], snapshots_expired=[3]}
+
+# a change of the time that commits before an open expiry keeps the tag and its snapshot
+statement ok
+CALL ducklake_create_tag('dl', 'passing', version => 4, expires_at => now()::TIMESTAMP + INTERVAL 1 SECOND)
+
+sleep 1100 milliseconds
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [4])
+----
+4
+
+statement ok con2
+CALL ducklake_set_tag_expiry('dl', 'passing', TIMESTAMPTZ '2100-01-01 00:00:00+00')
+
+statement ok con1
+COMMIT
+
+query I
+SELECT MAX(snapshot_id) FROM ducklake_snapshots('dl')
+----
+13
+
+query II
+SELECT tag_name, expires_at = TIMESTAMPTZ '2100-01-01 00:00:00+00' FROM ducklake_tags('dl') ORDER BY tag_name
+----
+passing	true
+release	NULL
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'passing')
+----
+3
+
+# a time travel read of a tag races the expiry that drops the tag and its snapshot
+statement ok
+INSERT INTO dl.t VALUES (4)
+
+statement ok
+CALL ducklake_create_tag('dl', 'gone', version => 14, expires_at => now()::TIMESTAMP + INTERVAL 1 SECOND)
+
+sleep 1100 milliseconds
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'gone')
+----
+4
+
+statement ok con2
+CALL ducklake_expire_snapshots('dl', versions => [14])
+
+# the open transaction still reads the tag
+query I con1
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'gone')
+----
+4
+
+statement ok con1
+COMMIT
+
+statement error
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'gone')
+----
+No snapshot tag with the name "gone" exists
+
+query I
+SELECT changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+{tags_dropped=[gone], snapshots_expired=[14]}

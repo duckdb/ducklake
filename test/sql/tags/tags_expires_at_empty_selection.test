@@ -1,0 +1,99 @@
+# name: test/sql/tags/tags_expires_at_empty_selection.test
+# description: an expiry that selects no snapshots still drops the tags whose expiry time has passed
+# group: [tags]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_expires_at_empty_selection_files')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+# a selection of a snapshot that does not exist
+statement ok
+CALL ducklake_create_tag('dl', 'unknown', version => 1, expires_at => now()::TIMESTAMP + INTERVAL 1 SECOND)
+
+sleep 1100 milliseconds
+
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [999999])
+----
+0
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl')
+----
+0
+
+# an empty selection
+statement ok
+CALL ducklake_create_tag('dl', 'empty', version => 1, expires_at => now()::TIMESTAMP + INTERVAL 1 SECOND)
+
+sleep 1100 milliseconds
+
+# a dry run keeps the tag
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [], dry_run => true)
+----
+0
+
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => NULL, dry_run => true)
+----
+0
+
+query I
+SELECT tag_name FROM ducklake_tags('dl')
+----
+empty
+
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [])
+----
+0
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl')
+----
+0
+
+query I
+SELECT changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+{tags_dropped=[empty]}
+
+# no criterion and no default
+statement ok
+CALL ducklake_create_tag('dl', 'none', version => 1, expires_at => now()::TIMESTAMP + INTERVAL 1 SECOND)
+
+sleep 1100 milliseconds
+
+statement ok
+CALL ducklake_expire_snapshots('dl')
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl')
+----
+0
+
+# an expiry that selects nothing and finds no passed tag writes no snapshot
+statement ok
+SET VARIABLE before = (SELECT MAX(snapshot_id) FROM ducklake_snapshots('dl'))
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [])
+
+statement ok
+CALL ducklake_expire_snapshots('dl')
+
+query I
+SELECT MAX(snapshot_id) = getvariable('before') FROM ducklake_snapshots('dl')
+----
+true

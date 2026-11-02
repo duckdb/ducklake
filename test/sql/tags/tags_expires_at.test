@@ -1,0 +1,316 @@
+# name: test/sql/tags/tags_expires_at.test
+# description: a snapshot tag with an expiry time stops protecting its snapshot once the time has passed
+# group: [tags]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_expires_at_files', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+# a tag without an expiry time never expires
+statement ok
+CALL ducklake_create_tag('dl', 'forever', version => 2)
+
+statement ok
+CALL ducklake_create_tag('dl', 'soon', version => 3, expires_at => now()::TIMESTAMP + INTERVAL 2 SECOND)
+
+# until its expiry time the tag protects its snapshot
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [3], dry_run => true)
+----
+0
+
+statement ok
+CALL ducklake_create_tag('dl', 'later', version => 4, expires_at => TIMESTAMPTZ '2100-01-01 00:00:00+00')
+
+query IIIII
+SELECT tag_name, snapshot_id, created_snapshot_id, expires_at IS NULL, expires_at = TIMESTAMPTZ '2100-01-01 00:00:00+00' FROM ducklake_tags('dl') ORDER BY tag_name
+----
+forever	2	5	true	NULL
+later	4	7	false	true
+soon	3	6	false	false
+
+sleep 2100 milliseconds
+
+# once its expiry time has passed the tag still names its snapshot but no longer protects it
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'soon')
+----
+2
+
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [2, 3, 4], dry_run => true)
+----
+3
+
+# an expiry drops every tag whose time has passed, also when it keeps the snapshot of the tag
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [2])
+----
+0
+
+query II
+SELECT snapshot_id, changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+8	{tags_dropped=[soon]}
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') ORDER BY tag_name
+----
+forever	2
+later	4
+
+statement error
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'soon')
+----
+No snapshot tag with the name "soon" exists
+
+query IIII
+SELECT snapshot_id, begin_snapshot, end_snapshot, expires_at IS NULL FROM meta.ducklake_snapshot_tag WHERE tag_name = 'soon'
+----
+3	6	8	false
+
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [3])
+----
+3
+
+statement error
+SELECT COUNT(*) FROM dl.t AT (VERSION => 3)
+----
+No snapshot found at version 3
+
+# a new expiry time ends the row of the tag and begins one with the new time
+statement ok
+CALL ducklake_set_tag_expiry('dl', 'later', TIMESTAMPTZ '2200-01-01 00:00:00+00')
+
+query II
+SELECT snapshot_id, changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+10	{tags_created=[later], tags_dropped=[later]}
+
+query IIII
+SELECT snapshot_id, begin_snapshot, end_snapshot, expires_at = TIMESTAMPTZ '2100-01-01 00:00:00+00' FROM meta.ducklake_snapshot_tag WHERE tag_name = 'later' ORDER BY begin_snapshot
+----
+4	7	10	true
+4	10	NULL	false
+
+query III
+SELECT snapshot_id, created_snapshot_id, expires_at = TIMESTAMPTZ '2200-01-01 00:00:00+00' FROM ducklake_tags('dl') WHERE tag_name = 'later'
+----
+4	10	true
+
+# NULL removes the expiry time and names compare case insensitive
+statement ok
+CALL ducklake_set_tag_expiry('dl', 'LATER', NULL)
+
+query I
+SELECT MAX(snapshot_id) FROM ducklake_snapshots('dl')
+----
+11
+
+query II
+SELECT tag_name, expires_at IS NULL FROM ducklake_tags('dl') ORDER BY tag_name
+----
+forever	true
+later	true
+
+statement error
+CALL ducklake_create_tag('dl', 'past', version => 4, expires_at => TIMESTAMPTZ '2000-01-01 00:00:00+00')
+----
+The expiry time of snapshot tag "past" has passed
+
+statement error
+CALL ducklake_set_tag_expiry('dl', 'later', now())
+----
+The expiry time of snapshot tag "later" has passed
+
+statement error
+CALL ducklake_set_tag_expiry('dl', 'missing', TIMESTAMPTZ '2100-01-01 00:00:00+00')
+----
+A snapshot tag with the name "missing" does not exist
+
+statement error
+CALL ducklake_set_tag_expiry('dl', NULL, NULL)
+----
+Tag name cannot be NULL or empty
+
+statement error
+CALL ducklake_create_tag('dl', 'never', version => 4, expires_at => 'infinity'::TIMESTAMPTZ)
+----
+finite
+
+statement error
+CALL ducklake_set_tag_expiry('dl', 'later', 'infinity'::TIMESTAMPTZ)
+----
+finite
+
+# in a transaction the new time shows at once, and the committed time set back still writes the row again
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_set_tag_expiry('dl', 'later', TIMESTAMPTZ '2100-01-01 00:00:00+00')
+
+query I
+SELECT expires_at = TIMESTAMPTZ '2100-01-01 00:00:00+00' FROM ducklake_tags('dl') WHERE tag_name = 'later'
+----
+true
+
+statement ok
+CALL ducklake_set_tag_expiry('dl', 'later', NULL)
+
+statement ok
+CALL ducklake_create_tag('dl', 'local', version => 4, expires_at => TIMESTAMPTZ '2100-01-01 00:00:00+00')
+
+statement ok
+CALL ducklake_set_tag_expiry('dl', 'local', TIMESTAMPTZ '2300-01-01 00:00:00+00')
+
+statement ok
+COMMIT
+
+query II
+SELECT snapshot_id, changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+12	{tags_created=[later, local], tags_dropped=[later]}
+
+query III
+SELECT tag_name, expires_at IS NULL, expires_at = TIMESTAMPTZ '2300-01-01 00:00:00+00' FROM ducklake_tags('dl') ORDER BY tag_name
+----
+forever	true	NULL
+later	true	NULL
+local	false	true
+
+# an altered tag that the transaction drops is dropped
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_set_tag_expiry('dl', 'local', TIMESTAMPTZ '2100-01-01 00:00:00+00')
+
+statement ok
+CALL ducklake_drop_tag('dl', 'local')
+
+statement ok
+COMMIT
+
+query I
+SELECT changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+{tags_dropped=[local]}
+
+# a transaction compares the expiry times with its start, as now() does
+statement ok
+INSERT INTO dl.t VALUES (4)
+
+statement ok
+CALL ducklake_create_tag('dl', 'brief', version => 14, expires_at => now()::TIMESTAMP + INTERVAL 2 SECOND)
+
+statement ok
+BEGIN
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'brief')
+----
+4
+
+sleep 2100 milliseconds
+
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [14])
+----
+0
+
+statement ok
+COMMIT
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') WHERE tag_name = 'brief'
+----
+brief	14
+
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [14])
+----
+14
+
+query I
+SELECT changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+{tags_dropped=[brief], snapshots_expired=[14]}
+
+# the same time again writes the row of the tag again, so that the commit conflicts with concurrent changes
+statement ok
+CALL ducklake_set_tag_expiry('dl', 'later', NULL)
+
+query I
+SELECT changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id DESC LIMIT 1
+----
+{tags_created=[later], tags_dropped=[later]}
+
+# a move keeps the expiry time of the tag
+statement ok
+CALL ducklake_set_tag_expiry('dl', 'later', TIMESTAMPTZ '2100-01-01 00:00:00+00')
+
+statement ok
+CALL ducklake_replace_tag('dl', 'later', version => 15)
+
+query II
+SELECT snapshot_id, expires_at = TIMESTAMPTZ '2100-01-01 00:00:00+00' FROM ducklake_tags('dl') WHERE tag_name = 'later'
+----
+15	true
+
+# a tag past its time cannot move, since the move keeps the time, until it gets a new one
+statement ok
+CALL ducklake_create_tag('dl', 'stale', version => 15, expires_at => now()::TIMESTAMP + INTERVAL 1 SECOND)
+
+sleep 1100 milliseconds
+
+statement error
+CALL ducklake_replace_tag('dl', 'stale', version => 15)
+----
+The expiry time of snapshot tag "stale" has passed
+
+statement ok
+CALL ducklake_set_tag_expiry('dl', 'stale', TIMESTAMPTZ '2100-01-01 00:00:00+00')
+
+statement ok
+CALL ducklake_replace_tag('dl', 'stale', version => 15)
+
+# the name of a tag that an expiry of the transaction drops stays taken until the commit
+statement ok
+CALL ducklake_create_tag('dl', 'gone', version => 15, expires_at => now()::TIMESTAMP + INTERVAL 1 SECOND)
+
+sleep 1100 milliseconds
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [999999])
+
+statement error
+CALL ducklake_create_tag('dl', 'gone', version => 15)
+----
+A snapshot tag with the name "gone" already exists
+
+statement ok
+ROLLBACK
