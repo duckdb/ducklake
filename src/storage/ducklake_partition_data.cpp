@@ -73,7 +73,7 @@ vector<string> DuckLakePartitionUtils::GetPartitionKeyNames(const DuckLakePartit
 		if (!field_id) {
 			throw InternalException("DuckLake partition field id not found");
 		}
-		result.push_back(GetPartitionKeyName(field.transform.type, field_id->Name(), used_names));
+		result.push_back(GetPartitionKeyName(field.transform.type, field_id->Name().GetIdentifierName(), used_names));
 		used_names.insert(result.back());
 	}
 	return result;
@@ -200,7 +200,7 @@ unique_ptr<Expression> DuckLakePartitionUtils::CreatePartitionPathExpression(Cli
 	for (idx_t i = 0; i < copy.partition_columns.size(); i++) {
 		auto col_idx = copy.partition_columns[i];
 		vector<unique_ptr<Expression>> children;
-		children.push_back(make_uniq<BoundConstantExpression>(Value(copy.names[col_idx].GetIdentifierName())));
+		children.push_back(make_uniq<BoundConstantExpression>(Value(copy.names[col_idx])));
 		children.push_back(make_uniq<BoundReferenceExpression>(copy.expected_types[col_idx], i));
 		auto component = binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier("hive_partition_component"),
 		                                           std::move(children));
@@ -327,7 +327,7 @@ static bool EpochTransformSupportsType(const LogicalType &type) {
 }
 
 void DuckLakePartitionUtils::VerifyTransformSupportsType(ClientContext &context, const DuckLakePartitionField &field,
-                                                         const string &column_name, const LogicalType &type) {
+                                                         const Identifier &column_name, const LogicalType &type) {
 	bool supported = !IsEpochTransform(field.transform.type) || EpochTransformSupportsType(type);
 	if (supported) {
 		try {
@@ -342,7 +342,7 @@ void DuckLakePartitionUtils::VerifyTransformSupportsType(ClientContext &context,
 	}
 	if (!supported) {
 		throw InvalidInputException("Cannot partition by %s(%s) - the transform does not support columns of type %s",
-		                            GetTransformName(field.transform.type), column_name, type);
+		                            GetTransformName(field.transform.type), SQLIdentifier(column_name), type);
 	}
 }
 

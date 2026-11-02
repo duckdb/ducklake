@@ -52,8 +52,8 @@ void DuckLakeCatalogSet::CreateEntry(const string &key, unique_ptr<CatalogEntry>
 	catalog_entries[key] = std::move(catalog_entry);
 }
 
-unique_ptr<CatalogEntry> DuckLakeCatalogSet::DropEntry(const string &name) {
-	auto entry = catalog_entries.find(name);
+unique_ptr<CatalogEntry> DuckLakeCatalogSet::DropEntry(const string &key) {
+	auto entry = catalog_entries.find(key);
 	auto catalog_entry = std::move(entry->second);
 	catalog_entries.erase(entry);
 	if (catalog_entry->type == CatalogType::SCHEMA_ENTRY) {
@@ -62,8 +62,8 @@ unique_ptr<CatalogEntry> DuckLakeCatalogSet::DropEntry(const string &name) {
 	return catalog_entry;
 }
 
-optional_ptr<CatalogEntry> DuckLakeCatalogSet::GetEntry(const string &name) {
-	auto entry = catalog_entries.find(name);
+optional_ptr<CatalogEntry> DuckLakeCatalogSet::GetEntry(const string &key) {
+	auto entry = catalog_entries.find(key);
 	if (entry == catalog_entries.end()) {
 		return nullptr;
 	}

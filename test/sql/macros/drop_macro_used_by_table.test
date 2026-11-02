@@ -1,0 +1,187 @@
+# name: test/sql/macros/drop_macro_used_by_table.test
+# description: DROP MACRO is refused while a column default of a table calls the macro
+# group: [macros]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/drop_macro_used_by_table')
+
+statement ok
+CREATE MACRO lake.two() AS 2
+
+statement ok
+CREATE TABLE lake.t (id INTEGER, c INTEGER DEFAULT lake.two())
+
+statement error
+DROP MACRO lake.two
+----
+Cannot drop macro "two" because the default of column "c" of table "t" calls it
+
+statement ok
+INSERT INTO lake.t (id) VALUES (1)
+
+statement ok
+ALTER TABLE lake.t ALTER c DROP DEFAULT
+
+statement ok
+DROP MACRO lake.two
+
+statement ok
+INSERT INTO lake.t VALUES (2, 3)
+
+query II
+SELECT id, c FROM lake.t ORDER BY id
+----
+1	2
+2	3
+
+# a replaced macro stays callable, and the default uses its new definition
+statement ok
+CREATE MACRO lake.five() AS 5
+
+statement ok
+CREATE TABLE lake.w (id INTEGER, c INTEGER DEFAULT lake.five())
+
+statement ok
+CREATE OR REPLACE MACRO lake.five() AS 50
+
+statement ok
+INSERT INTO lake.w (id) VALUES (1)
+
+query II
+SELECT id, c FROM lake.w
+----
+1	50
+
+# a table created in the same transaction
+statement ok
+CREATE MACRO lake.four() AS 4
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE lake.v (c INTEGER DEFAULT lake.four())
+
+statement error
+DROP MACRO lake.four
+----
+Cannot drop macro "four" because the default of column "c" of table "v" calls it
+
+statement ok
+ROLLBACK
+
+statement ok
+DROP MACRO lake.four
+
+# a macro of another schema, next to a macro of the same name in the default schema
+statement ok
+CREATE SCHEMA lake.s2
+
+statement ok
+CREATE MACRO lake.s2.three() AS 3
+
+statement ok
+CREATE MACRO lake.three() AS 30
+
+statement ok
+CREATE TABLE lake.u (c INTEGER DEFAULT lake.s2.three())
+
+statement error
+DROP MACRO lake.s2.three
+----
+Cannot drop macro "three" because the default of column "c" of table "u" calls it
+
+# a macro of the same name in another schema is held too, as the name alone can resolve to it
+statement error
+DROP MACRO lake.three
+----
+Cannot drop macro "three" because the default of column "c" of table "u" calls it
+
+statement ok
+INSERT INTO lake.u DEFAULT VALUES
+
+query I
+SELECT c FROM lake.u
+----
+3
+
+# a dropped table no longer holds the macro
+statement ok
+DROP TABLE lake.u
+
+statement ok
+DROP MACRO lake.s2.three
+
+statement ok
+DROP MACRO lake.three
+
+# a call nested in another function
+statement ok
+CREATE MACRO lake.six() AS 6
+
+statement ok
+CREATE TABLE lake.x (c INTEGER DEFAULT abs(lake.six()) + 1)
+
+statement error
+DROP MACRO lake.six
+----
+Cannot drop macro "six" because the default of column "c" of table "x" calls it
+
+# x.f() can be the call f(x)
+statement ok
+CREATE MACRO lake.m7(x) AS 7
+
+statement ok
+CREATE TABLE lake.dc (c INTEGER DEFAULT x.m7())
+
+statement error
+DROP MACRO lake.m7
+----
+Cannot drop macro "m7" because the default of column "c" of table "dc" calls it
+
+# catalog.name in a table of another schema resolves in that schema first
+statement ok
+CREATE SCHEMA lake.s4
+
+statement ok
+CREATE MACRO lake.s4.h() AS 8
+
+statement ok
+CREATE TABLE lake.s4.r (c INTEGER DEFAULT lake.h())
+
+statement error
+DROP MACRO lake.s4.h
+----
+Cannot drop macro "h" because the default of column "c" of table "r" calls it
+
+# a schema dropped with its macros
+statement ok
+CREATE SCHEMA lake.s3
+
+statement ok
+CREATE MACRO lake.s3.g() AS 7
+
+statement ok
+CREATE TABLE lake.s3.inside (c INTEGER DEFAULT lake.s3.g())
+
+statement ok
+CREATE TABLE lake.z (c INTEGER DEFAULT lake.s3.g())
+
+statement error
+DROP SCHEMA lake.s3 CASCADE
+----
+Cannot drop macro "g" because the default of column "c" of table "z" calls it
+
+statement ok
+DROP TABLE lake.z
+
+statement ok
+DROP SCHEMA lake.s3 CASCADE

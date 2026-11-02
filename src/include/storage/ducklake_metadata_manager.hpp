@@ -36,6 +36,7 @@ class DuckLakeSchemaEntry;
 class DuckLakeTableEntry;
 class DuckLakeTransaction;
 struct DuckLakeRetryConfig;
+struct DuckLakeMetadataProfile;
 struct TransactionChangeInformation;
 class BoundAtClause;
 class SQLStatement;
@@ -48,12 +49,12 @@ enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND };
 
 //! A check whether the live rows of an inlined data table hold a value of a column
 struct DuckLakeInlinedValueCheck {
-	string table_name;
+	Identifier table_name;
 	//! The rows up to this snapshot are flushed by the commit
 	idx_t flushed_up_to;
 	FieldIndex column_id;
 	//! The name of the column in the inlined data table, empty when any live row counts as a value
-	string column_name;
+	Identifier column_name;
 };
 
 //! Metadata column names inside ducklake_inlined_data_<table_id>_<schema_version> tables.
@@ -65,18 +66,18 @@ struct DuckLakeInlinedColNames {
 
 	explicit DuckLakeInlinedColNames(bool prefixed_inlined_columns) {
 		if (prefixed_inlined_columns) {
-			row_id = PREFIX + row_id;
-			begin_snapshot = PREFIX + begin_snapshot;
-			end_snapshot = PREFIX + end_snapshot;
+			row_id = Identifier(PREFIX + row_id);
+			begin_snapshot = Identifier(PREFIX + begin_snapshot);
+			end_snapshot = Identifier(PREFIX + end_snapshot);
 		}
 	}
 
 	//! Whether a user column name collides with the metadata columns written for inlining
-	bool ConflictsWith(const string &name) const;
+	bool ConflictsWith(const Identifier &name) const;
 
-	string row_id = "row_id";
-	string begin_snapshot = "begin_snapshot";
-	string end_snapshot = "end_snapshot";
+	Identifier row_id = "row_id";
+	Identifier begin_snapshot = "begin_snapshot";
+	Identifier end_snapshot = "end_snapshot";
 };
 
 struct CTERequirement {
@@ -194,8 +195,12 @@ public:
 
 	typedef unique_ptr<DuckLakeMetadataManager> (*create_t)(DuckLakeTransaction &transaction);
 	static void Register(const string &name, create_t);
+	//! Whether a metadata manager of the given name is built in, so that no profile can be registered for it
+	static bool HasBuiltInManager(const string &name);
 
 	static unique_ptr<DuckLakeMetadataManager> Create(DuckLakeTransaction &transaction);
+	//! The profile of the metadata database, which the defaults of the metadata manager follow
+	const DuckLakeMetadataProfile &GetMetadataProfile() const;
 
 	virtual bool TypeIsNativelySupported(const LogicalType &type);
 	//! Check if a type supports data inlining on this metadata backend
@@ -213,9 +218,7 @@ public:
 		return false;
 	}
 	//! Whether transactions that started before a metadata table was dropped still read it
-	virtual bool DroppedTablesStayReadable() const {
-		return true;
-	}
+	virtual bool DroppedTablesStayReadable() const;
 	//! Whether a commit inserts inlined rows after its batch instead of sending them as VALUES text in it
 	virtual bool InsertsInlinedRowsAfterBatch(idx_t row_count) const {
 		return !CommitsEachStatement();
@@ -227,13 +230,9 @@ public:
 	bool ExecuteRetrialsServerSide() const;
 	//! Whether the client can skip the snapshot fetch and let the server read it.
 	virtual bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const;
-	virtual bool IsRetryableCommitError(const string &) const {
-		return false;
-	}
+	virtual bool IsRetryableCommitError(const string &message) const;
 	//! Advice added to the error of a commit that failed for good
-	virtual string CommitErrorHint(const string &) const {
-		return string();
-	}
+	virtual string CommitErrorHint(const string &message) const;
 
 	//! Run the commit retry loop with the metadata server handling retries.
 	virtual void FlushChangesServerSide(DuckLakeTransaction &transaction, DuckLakeSnapshot transaction_snapshot,
@@ -262,13 +261,9 @@ public:
 		return NumericLimits<idx_t>::Maximum();
 	}
 	//! Maximum number of columns of a table supported by this backend
-	virtual idx_t MaxColumnCount() const {
-		return NumericLimits<idx_t>::Maximum();
-	}
+	virtual idx_t MaxColumnCount() const;
 	//! Names of the system columns that the tables of this backend have
-	virtual vector<string> SystemColumnNames() const {
-		return {};
-	}
+	virtual vector<string> SystemColumnNames() const;
 
 	//! Why the rows of a table with the given columns cannot be inlined, empty when they can
 	string GetInliningObstacle(const ColumnList &columns);
@@ -279,7 +274,7 @@ public:
 	virtual string GetColumnTypeInternal(const LogicalType &column_type);
 	string CastColumnToTarget(const string &column, const LogicalType &type);
 	//! The inlined rows to flush with typed columns, without those this transaction deleted
-	string InlinedFlushSource(const string &inlined_table_name, const DuckLakeTableEntry &table);
+	string InlinedFlushSource(const Identifier &inlined_table_name, const DuckLakeTableEntry &table);
 	//! The order of the rows in a flushed file
 	string InlinedFlushOrder(const string &sort_order_sql) const;
 
@@ -387,15 +382,17 @@ public:
 	//! The net row count of the data files that were committed before the snapshot's next file id
 	virtual idx_t GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot);
 	optional_idx GetNetDataFileRowCountForStats(TableIndex table_id, DuckLakeSnapshot snapshot);
-	virtual idx_t GetNetInlinedRowCount(const string &inlined_table_name, DuckLakeSnapshot snapshot);
+	virtual idx_t GetNetInlinedRowCount(const Identifier &inlined_table_name, DuckLakeSnapshot snapshot);
 	//! SQL builders for stats-refresh metadata lookups; caller substitutes placeholders + executes.
 	//! With require_exact, the count is NULL if any visible file is only partially visible to the snapshot.
 	//! With exclude_new_files, the files of the commit, which can already be in the catalog, are not counted.
-	static string GetNetDataFileRowCountSql(TableIndex table_id, const string &inlined_deletion_table,
+	static string GetNetDataFileRowCountSql(TableIndex table_id, const Identifier &inlined_deletion_table,
 	                                        bool require_exact = false, bool exclude_new_files = false);
-	static string GetNetInlinedRowCountSql(const string &inlined_table_name, const DuckLakeInlinedColNames &col_names);
+	static string GetNetInlinedRowCountSql(const Identifier &inlined_table_name,
+	                                       const DuckLakeInlinedColNames &col_names);
 	//! The rows that are stored, deleted ones included, and the rows that are live
-	static string GetInlinedRowCountsSql(const string &inlined_table_name, const DuckLakeInlinedColNames &col_names);
+	static string GetInlinedRowCountsSql(const Identifier &inlined_table_name,
+	                                     const DuckLakeInlinedColNames &col_names);
 	static string GetTableColumnSchemaSql(TableIndex table_id);
 	static string GetInlinedTableNamesSql(TableIndex table_id);
 	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id);
@@ -405,7 +402,7 @@ public:
 	static string InsertValuesSql(const string &table_name, const vector<string> &values);
 	//! The inserts of the given rows into the given table, in batches
 	static string InsertValuesIntoSql(const string &qualified_table_name, const vector<string> &values);
-	unordered_set<string> GetInlinedTableNames(TableIndex table_id);
+	identifier_set_t GetInlinedTableNames(TableIndex table_id);
 	virtual vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &filter);
 	virtual vector<DuckLakeFileForCleanup> GetOrphanFilesForCleanup(const string &filter);
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type);
@@ -471,11 +468,11 @@ public:
 	static string WriteNewInlinedDeletes(const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes,
 	                                     const DuckLakeInlinedColNames &col_names);
 	//! Creates the INSERT INTO {METADATA_CATALOG}.<inlined_table_name> VALUES (...) batch.
-	static string FormatInlinedDataInsert(const string &inlined_table_name, idx_t row_id_start,
+	static string FormatInlinedDataInsert(const Identifier &inlined_table_name, idx_t row_id_start,
 	                                      bool has_preserved_row_ids, const vector<int64_t> *row_ids,
 	                                      const vector<string> &cells_per_row);
 	//! Static deterministic name of the per-table inlined deletion table.
-	static string InlinedFileDeletionTableName(TableIndex table_id);
+	static Identifier InlinedFileDeletionTableName(TableIndex table_id);
 	//! Pure SQL builder for inlined file deletions (CREATE TABLE IF NOT EXISTS + INSERT). Sets
 	//! created_new_table when a new ducklake_inlined_delete_<id> table was emitted.
 	static string WriteNewInlinedFileDeletesSql(const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes,
@@ -484,25 +481,25 @@ public:
 	//! metadata-manager cache for clearing when a new per-table deletion table is created.
 	string WriteNewInlinedFileDeletesSqlBatch(const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes);
 	//! Get the name of the inlined deletion table for a given table ID
-	virtual string GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
-	                                           bool include_local_changes = true);
+	virtual Identifier GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
+	                                               bool include_local_changes = true);
 	//! Probe for the physical inlined-deletion table without aborting the active metadata transaction.
-	virtual bool InlinedDeletionTableExists(const string &table_name);
+	virtual bool InlinedDeletionTableExists(const Identifier &table_name);
 	//! Also drops the empty inlined data tables of the replaced tables
 	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables,
 	                                     const set<TableIndex> &replaced_tables);
 	//! Drop the current inlined data table of a table if it holds no rows
 	string DropInlinedTableIfEmpty(TableIndex table_id, const DuckLakeTableEntry &table);
 	//! A query that returns a row if the inlined data table holds any row
-	static string InlinedTableHasRowsQuery(const string &table_name);
-	static string DropInlinedTableSql(idx_t table_id, idx_t schema_version, const string &table_name);
-	virtual string GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
-	                                      vector<string> &inlined_tables, string &inlined_table_queries);
-	static string InlinedTableNameFor(idx_t table_id, idx_t schema_version);
-	static string InlinedTableDdlSql(const string &table_name, const string &column_defs,
+	static string InlinedTableHasRowsQuery(const Identifier &table_name);
+	static string DropInlinedTableSql(idx_t table_id, idx_t schema_version, const Identifier &table_name);
+	virtual Identifier GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
+	                                          vector<string> &inlined_tables, string &inlined_table_queries);
+	static Identifier InlinedTableNameFor(idx_t table_id, idx_t schema_version);
+	static string InlinedTableDdlSql(const Identifier &table_name, const string &column_defs,
 	                                 const DuckLakeInlinedColNames &col_names);
 	DuckLakeInlinedColNames InlinedColNames() const;
-	static string InlinedTableRegistrationTuple(idx_t table_id, const string &table_name, idx_t schema_version);
+	static string InlinedTableRegistrationTuple(idx_t table_id, const Identifier &table_name, idx_t schema_version);
 	static string LatestInlinedTableQuery(idx_t table_id);
 	static string DropDataFiles(const set<DataFileIndex> &dropped_files);
 	//! Selects the given data files that are still in the metadata
@@ -560,31 +557,31 @@ public:
 	                                                 idx_t newest_snapshot_id);
 
 	virtual idx_t GetNextColumnId(TableIndex table_id);
-	virtual unique_ptr<QueryResult> ReadInlinedData(DuckLakeSnapshot snapshot, const string &inlined_table_name,
+	virtual unique_ptr<QueryResult> ReadInlinedData(DuckLakeSnapshot snapshot, const Identifier &inlined_table_name,
 	                                                const vector<string> &columns_to_read);
 	virtual unique_ptr<QueryResult> ReadInlinedDataInsertions(DuckLakeSnapshot start_snapshot,
 	                                                          DuckLakeSnapshot end_snapshot,
-	                                                          const string &inlined_table_name,
+	                                                          const Identifier &inlined_table_name,
 	                                                          const vector<string> &columns_to_read);
 	virtual unique_ptr<QueryResult> ReadInlinedDataDeletions(DuckLakeSnapshot start_snapshot,
 	                                                         DuckLakeSnapshot end_snapshot,
-	                                                         const string &inlined_table_name,
+	                                                         const Identifier &inlined_table_name,
 	                                                         const vector<string> &columns_to_read);
 	virtual unique_ptr<QueryResult> ReadAllInlinedDataForFlush(DuckLakeSnapshot snapshot,
-	                                                           const string &inlined_table_name,
+	                                                           const Identifier &inlined_table_name,
 	                                                           const DuckLakeTableEntry &table,
 	                                                           const string &sort_order_sql,
 	                                                           const vector<string> &columns_to_read);
 	//! SQL builders for the stats-refresh queries used by DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite.
 	//! Caller substitutes `{METADATA_CATALOG}` / `{SNAPSHOT_ID}` and executes via the commit context's executor.
-	static string ReadInlinedDataAggregatesSql(const string &inlined_table_name, const string &select_list,
+	static string ReadInlinedDataAggregatesSql(const Identifier &inlined_table_name, const string &select_list,
 	                                           const DuckLakeInlinedColNames &col_names);
 	//! The column stats of the data files committed before the snapshot's next file id
 	static string ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness);
 	//! Throws on a failed inlined data read, hinting at the migration for legacy named catalogs
-	void CheckInlinedDataReadError(QueryResult &result, const string &inlined_table_name);
+	void CheckInlinedDataReadError(QueryResult &result, const Identifier &inlined_table_name);
 	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types,
-	                                                     const string &inlined_table_name);
+	                                                     const Identifier &inlined_table_name);
 
 	//! The statements deleting the inlined rows and inlined file deletions that the transaction flushed
 	static string GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
@@ -599,8 +596,10 @@ public:
 	optional_idx GetTaggedSnapshot(const string &name);
 	//! The snapshot id of a VERSION value, a snapshot id or the name of a snapshot tag
 	idx_t ResolveSnapshotVersion(const Value &version);
-	static string WriteSnapshotTagChanges(const case_insensitive_map_t<idx_t> &created,
+	static string WriteSnapshotTagChanges(const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &created,
 	                                      const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped);
+	//! Ends the row of a committed tag at the snapshot of the commit
+	static string EndSnapshotTagSql(const DuckLakeSnapshotTagInfo &tag);
 	static string DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots);
 	//! Deletes the snapshots once the caller checked the catalog version
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
@@ -623,7 +622,9 @@ public:
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
 	//! Renames the given (old name, new name) columns of each inlined table
-	virtual void RenameInlinedColumns(const map<string, vector<pair<string, string>>> &renames);
+	virtual void RenameInlinedColumns(const map<Identifier, vector<pair<Identifier, Identifier>>> &renames);
+	//! Renames by copying the tables, for a database that parses its whole schema for every renamed column
+	void RenameInlinedColumnsByCopy(const map<Identifier, vector<pair<Identifier, Identifier>>> &renames);
 	//! Adds the schema version rows of inlined tables that older versions registered without one
 	void MigrateInlinedSchemaVersions();
 	//! Restores the defaults that older versions dropped when they renamed a struct field
@@ -691,9 +692,9 @@ public:
 	                              const string &base_data_path, const string &separator);
 
 protected:
-	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const string &table_name);
-	bool CanInlineColumn(const string &name, const LogicalType &type);
-	string GetInliningObstacle(const string &name, const LogicalType &type);
+	string GetInlinedTableQuery(const DuckLakeTableInfo &table, const Identifier &table_name);
+	bool CanInlineColumn(const Identifier &name, const LogicalType &type);
+	string GetInliningObstacle(const Identifier &name, const LogicalType &type);
 	string GetColumnType(const DuckLakeColumnInfo &col);
 	string GetColumnDefinitions(const vector<DuckLakeColumnInfo> &columns);
 	string GetKnownFilesForCleanupQuery() const;
@@ -741,6 +742,8 @@ protected:
 	virtual FilterSQLResult ConvertFilterPushdownToSQL(const FilterPushdownInfo &filter_info);
 	string GenerateCTESectionFromRequirements(const map<idx_t, CTERequirement> &requirements, TableIndex table_id,
 	                                          const string &metadata_table_prefix);
+	//! Whether the stats CTEs of the file list query are materialized, for a database that plans the query itself
+	virtual bool MaterializeStatsCTEs() const;
 	//! Join each column's stats CTE once. Leading newline per join, empty when there are none.
 	static string GenerateStatsJoinList(const map<idx_t, CTERequirement> &requirements);
 	virtual bool ValueIsFinite(const Value &val);
@@ -775,11 +778,11 @@ private:
 
 	unordered_set<idx_t> GetFileIdsWithInlinedDeletions(TableIndex table_id, DuckLakeSnapshot snapshot);
 	unique_ptr<QueryResult> ReadInlinedDataChanges(DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot,
-	                                               const string &inlined_table_name,
+	                                               const Identifier &inlined_table_name,
 	                                               const vector<string> &columns_to_read,
-	                                               const string &snapshot_column);
+	                                               const Identifier &snapshot_column);
 
-	unordered_map<idx_t, string> insert_inlined_table_name_cache;
+	unordered_map<idx_t, Identifier> insert_inlined_table_name_cache;
 	unordered_set<idx_t> delete_inlined_table_cache;
 
 protected:

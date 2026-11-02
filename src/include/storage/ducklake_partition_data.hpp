@@ -101,7 +101,7 @@ struct DuckLakePartitionUtils {
 
 	//! Throws when the transform of the field cannot compute the partition values of a column of the type
 	static void VerifyTransformSupportsType(ClientContext &context, const DuckLakePartitionField &field,
-	                                        const string &column_name, const LogicalType &type);
+	                                        const Identifier &column_name, const LogicalType &type);
 };
 
 } // namespace duckdb

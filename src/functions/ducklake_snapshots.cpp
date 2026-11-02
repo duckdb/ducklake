@@ -25,10 +25,10 @@ static Value NameListToValue(const case_insensitive_set_t &list_val) {
 	return Value::LIST(LogicalType::VARCHAR, std::move(list_values));
 }
 
-using CatalogNameMap = case_insensitive_map_t<case_insensitive_set_t>;
+using CatalogNameMap = case_insensitive_map_t<identifier_set_t>;
 
-static void SplitCreatedEntries(const case_insensitive_map_t<case_insensitive_map_t<string>> &created,
-                                const string &type, CatalogNameMap &matching, optional_ptr<CatalogNameMap> other) {
+static void SplitCreatedEntries(const case_insensitive_map_t<identifier_map_t<string>> &created, const string &type,
+                                CatalogNameMap &matching, optional_ptr<CatalogNameMap> other) {
 	for (auto &entry : created) {
 		for (auto &sub_entry : entry.second) {
 			if (sub_entry.second == type) {

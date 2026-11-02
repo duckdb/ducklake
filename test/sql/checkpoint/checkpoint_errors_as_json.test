@@ -1,0 +1,46 @@
+# name: test/sql/checkpoint/checkpoint_errors_as_json.test
+# description: A failed CHECKPOINT reports the error of its step as text, also under a global errors_as_json
+# group: [checkpoint]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/checkpoint_errors_as_json.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/checkpoint_errors_as_json')
+
+statement ok
+CALL lake.set_option('expire_older_than', '1 day')
+
+# an age before the year 1 makes the expiration step of the CHECKPOINT fail
+statement ok
+UPDATE __ducklake_metadata_lake.ducklake_metadata SET value = '3000 years' WHERE key = 'expire_older_than'
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/checkpoint_errors_as_json')
+
+statement ok
+SET GLOBAL errors_as_json = true
+
+statement error
+CHECKPOINT lake
+----
+<REGEX>:.*"exception_message":"Failed to perform CHECKPOINT; in DuckLake:  The expire_older_than option '3000 years' reaches back before the year 1".*
+
+statement ok
+SET errors_as_json = false
+
+statement error
+CHECKPOINT lake
+----
+<REGEX>:Invalid Input Error: Failed to perform CHECKPOINT; in DuckLake:  The expire_older_than option '3000 years' reaches back before the year 1[^{]*
+
+statement ok
+SET GLOBAL errors_as_json = false

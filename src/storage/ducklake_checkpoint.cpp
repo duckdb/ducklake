@@ -1,6 +1,7 @@
 #include "ducklake_extension.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/connection.hpp"
+#include "duckdb/main/settings.hpp"
 #include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_schema_entry.hpp"
@@ -14,6 +15,8 @@ namespace duckdb {
 void DuckLakeTransactionManager::Checkpoint(ClientContext &context, bool force) {
 	auto conn = make_uniq<Connection>(ducklake_catalog.GetDatabase());
 	DuckLakeUtil::CopyExtensionSettings(context, *conn->context);
+	// the errors of the steps become part of the CHECKPOINT error, which a global SET errors_as_json would nest
+	Settings::Set<ErrorsAsJSONSetting>(*conn->context, SetScope::SESSION, Value::BOOLEAN(false));
 	// 1. We first flush inlined data, since these can generate many files, which would be important for compaction
 	// 2. We expire snapshots since these can create more compaction opportunities.
 	// 3. We call the compaction functions, merge_adjacent and rewrite, unclear what is the best order here.

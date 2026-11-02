@@ -1,0 +1,46 @@
+# name: test/sql/types/timestamptz_ns_values.test
+# description: The TIMESTAMPTZ_NS values of test_all_types round trip through inlined data and data files
+# group: [types]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/timestamptz_ns_values', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE VIEW tz_ns AS SELECT timestamp_tz_ns FROM test_all_types()
+
+query I nosort tz_ns
+FROM tz_ns
+----
+
+statement ok
+CREATE TABLE ducklake.inlined AS FROM tz_ns
+
+query I nosort tz_ns
+FROM ducklake.inlined
+----
+
+statement ok
+CREATE TABLE ducklake.files (timestamp_tz_ns TIMESTAMPTZ_NS)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0, table_name => 'files')
+
+statement ok
+INSERT INTO ducklake.files FROM tz_ns
+
+query I nosort tz_ns
+FROM ducklake.files
+----
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 'files')
+----
+1

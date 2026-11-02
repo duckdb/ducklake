@@ -12,13 +12,13 @@
 #include "duckdb/storage/storage_manager.hpp"
 
 #include "storage/ducklake_initializer.hpp"
+#include "storage/ducklake_metadata_profile.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "common/ducklake_version.hpp"
 #include "metadata_manager/ducklake_metadata_manager_v1_1.hpp"
 #include "metadata_manager/ducklake_metadata_manager_v2_0.hpp"
-#include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "metadata_manager/quack_metadata_manager.hpp"
 
@@ -81,9 +81,9 @@ void DuckLakeInitializer::Initialize() {
 	// the metadata database would truncate a longer name, and the catalog is then not found under its name
 	auto max_name_length = transaction.GetMetadataManager().MaxIdentifierLength();
 	if (options.metadata_schema.GetIdentifierName().size() > max_name_length) {
-		throw InvalidInputException("METADATA_SCHEMA \"%s\" is longer than the %d bytes that the metadata database "
+		throw InvalidInputException("METADATA_SCHEMA %s is longer than the %d bytes that the metadata database "
 		                            "allows for a name",
-		                            options.metadata_schema.GetIdentifierName(), max_name_length);
+		                            options.metadata_schema, max_name_length);
 	}
 	// after the metadata database is attached initialize the ducklake
 	// check if we are loading an existing DuckLake or creating a new one
@@ -175,6 +175,9 @@ void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction) {
 	auto result = transaction.GetMetadataManager().AttachMetadata(attach_query);
 	result->ThrowIfError("Failed to attach DuckLake MetaData \"" + catalog.MetadataDatabaseName() + "\" at path + \"" +
 	                     catalog.MetadataPath() + "\"");
+	// the extension of the metadata database registers its profile when the ATTACH loads it
+	auto catalog_type = transaction.GetMetadataCatalog().GetCatalogType();
+	catalog.SetMetadataProfile(DuckLakeMetadataProfiles::Get(*context.db).Find(catalog_type));
 }
 
 bool DuckLakeInitializer::DuckLakeIsInitialized(DuckLakeTransaction &transaction) {
@@ -219,8 +222,7 @@ void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction
 		version = DUCKLAKE_LATEST_VERSION;
 	}
 	if (options.data_path.empty()) {
-		auto &metadata_catalog =
-		    Catalog::GetCatalog(*transaction.GetConnection().context, Identifier(options.metadata_database));
+		auto &metadata_catalog = Catalog::GetCatalog(*transaction.GetConnection().context, options.metadata_database);
 		if (!metadata_catalog.IsDuckCatalog()) {
 			throw InvalidInputException(
 			    "Attempting to create a new ducklake instance but data_path is not set - set the "
@@ -375,9 +377,6 @@ static unique_ptr<DuckLakeMetadataManager> MakeVersionedManager(DuckLakeTransact
 	}
 	if (dynamic_cast<PostgresMetadataManager *>(&current)) {
 		return make_uniq<MANAGER<PostgresMetadataManager>>(transaction);
-	}
-	if (dynamic_cast<SQLiteMetadataManager *>(&current)) {
-		return make_uniq<MANAGER<SQLiteMetadataManager>>(transaction);
 	}
 	return make_uniq<MANAGER<DuckLakeMetadataManager>>(transaction);
 }
