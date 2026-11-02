@@ -438,9 +438,10 @@ void LocalTableChanges::AddColumnToLocalInlinedData(ClientContext &context, Tabl
 		new_data->Append(append_state, new_chunk);
 	}
 
-	// Add stats for new column
-	table_changes.new_inlined_data->column_stats.emplace(
-	    new_field_index, DuckLakeColumnStats::FromConstant(new_column_type, default_value, existing.Count()));
+	// AddFieldsToLocalFiles adds the stats, a default that GetAddedFieldStats omits (a VARIANT) stays unknown
+	if (!default_value.IsNull() && DuckLakeColumnStats(new_column_type).extra_stats) {
+		table_changes.new_inlined_data->column_stats.emplace(new_field_index, DuckLakeColumnStats(new_column_type));
+	}
 	table_changes.new_inlined_data->data = std::move(new_data);
 }
 
@@ -454,6 +455,13 @@ void LocalTableChanges::AddFieldsToLocalFiles(TableIndex table_id, const DuckLak
 	for (auto &file : entry->new_data_files) {
 		for (auto &field_stats : table.GetAddedFieldStats(fields, file.row_count)) {
 			file.column_stats.insert(std::move(field_stats));
+		}
+	}
+	// the inlined rows get the same stats per leaf field, which the next inlined write merges into
+	if (entry->new_inlined_data) {
+		auto &inlined_data = *entry->new_inlined_data;
+		for (auto &field_stats : table.GetAddedFieldStats(fields, inlined_data.Count())) {
+			inlined_data.column_stats.insert(std::move(field_stats));
 		}
 	}
 }
