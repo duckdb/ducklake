@@ -15,12 +15,9 @@
 #include "duckdb/parser/parsed_expression.hpp"
 
 namespace duckdb {
-class ClientContext;
-}
-
-namespace duckdb {
 struct AlterTableInfo;
 struct SetPartitionedByInfo;
+class ClientContext;
 class DuckLakeTransaction;
 class ColumnDefinition;
 class ColumnList;
