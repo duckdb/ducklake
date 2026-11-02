@@ -23,6 +23,7 @@
 #include "duckdb/parser/tableref/pivotref.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
 
 namespace duckdb {
 
@@ -97,7 +98,7 @@ bool DuckLakeSchemaEntry::HandleCreateConflict(CatalogTransaction transaction, C
 		DropInfo info;
 		info.type = catalog_type;
 		info.SetName(entry_name);
-		DropEntry(transaction.GetContext(), info);
+		DropEntry(transaction.GetContext(), info, true);
 		break;
 	}
 	default:
@@ -524,7 +525,45 @@ void DuckLakeSchemaEntry::Scan(CatalogType type, const std::function<void(Catalo
 	}
 }
 
+//! Matches the name alone, as a default resolves through the table schema and the search path, and x.f() can be f(x)
+static bool CallsFunctionNamed(const ParsedExpression &expr, const Identifier &name) {
+	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION &&
+	    expr.Cast<FunctionExpression>().GetQualifiedName().Name() == name) {
+		return true;
+	}
+	bool calls = false;
+	ParsedExpressionIterator::EnumerateChildren(
+	    expr, [&](const ParsedExpression &child) { calls = calls || CallsFunctionNamed(child, name); });
+	return calls;
+}
+
+//! Column defaults are bound on every write, so a table cannot be written once a macro its defaults call is dropped
+static void ThrowIfTableCallsMacro(ClientContext &context, Catalog &catalog, const Identifier &macro_name,
+                                   const reference_set_t<SchemaCatalogEntry> &dropped_schemas = {}) {
+	catalog.ScanSchemas(context, [&](SchemaCatalogEntry &schema) {
+		if (dropped_schemas.find(schema) != dropped_schemas.end()) {
+			return;
+		}
+		schema.Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
+			if (entry.type != CatalogType::TABLE_ENTRY) {
+				return;
+			}
+			for (auto &column : entry.Cast<DuckLakeTableEntry>().GetColumns().Logical()) {
+				if (column.HasDefaultValue() && CallsFunctionNamed(column.DefaultValue(), macro_name)) {
+					throw DependencyException(
+					    "Cannot drop macro %s because the default of column %s of table %s calls it", macro_name,
+					    column.Name(), entry.name);
+				}
+			}
+		});
+	});
+}
+
 void DuckLakeSchemaEntry::DropEntry(ClientContext &context, DropInfo &info) {
+	DropEntry(context, info, false);
+}
+
+void DuckLakeSchemaEntry::DropEntry(ClientContext &context, DropInfo &info, bool replacing) {
 	if (info.cascade) {
 		throw NotImplementedException("Cascade Drop not supported in DuckLake");
 	}
@@ -540,6 +579,10 @@ void DuckLakeSchemaEntry::DropEntry(ClientContext &context, DropInfo &info) {
 	if (catalog_entry->type != info.type) {
 		throw CatalogException("Existing object %s is of type %s, trying to drop type %s", catalog_entry->name,
 		                       CatalogTypeToString(catalog_entry->type), CatalogTypeToString(info.type));
+	}
+	// a replaced macro stays callable
+	if (info.type == CatalogType::MACRO_ENTRY && !replacing) {
+		ThrowIfTableCallsMacro(context, catalog, catalog_entry->name);
 	}
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	transaction.DropEntry(*catalog_entry);
@@ -607,6 +650,13 @@ void DuckLakeSchemaEntry::TryDropSchema(CatalogTransaction transaction, bool cas
 		for (auto type : {CatalogType::TABLE_ENTRY, CatalogType::MACRO_ENTRY, CatalogType::TABLE_MACRO_ENTRY}) {
 			schema.Scan(transaction.GetContext(), type, [&](CatalogEntry &entry) { entries.emplace_back(entry); });
 		}
+	});
+	reference_set_t<SchemaCatalogEntry> dropped_schemas;
+	ScanSchemaTree(transaction, [&](SchemaCatalogEntry &schema) { dropped_schemas.insert(schema); });
+	ScanSchemaTree(transaction, [&](SchemaCatalogEntry &schema) {
+		schema.Scan(transaction.GetContext(), CatalogType::MACRO_ENTRY, [&](CatalogEntry &entry) {
+			ThrowIfTableCallsMacro(transaction.GetContext(), schema.ParentCatalog(), entry.name, dropped_schemas);
+		});
 	});
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	for (idx_t i = entries.size(); i > 0; i--) {
