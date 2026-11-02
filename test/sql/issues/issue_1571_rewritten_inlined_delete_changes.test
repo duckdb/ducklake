@@ -26,33 +26,27 @@ DELETE FROM ducklake.t WHERE id = 0
 statement ok
 CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
 
-query IIII
-SELECT snapshot_id, count(*), min(id), max(id) FROM ducklake_table_deletions('ducklake', 'main', 't', 4, 4)
-GROUP BY ALL ORDER BY ALL
+query I
+SELECT count(*) FROM ducklake_table_deletions('ducklake', 'main', 't', 4, 4)
 ----
-4	19	1	19
+0
 
 query IIII
 SELECT snapshot_id, count(*), min(id), max(id) FROM ducklake_table_deletions('ducklake', 'main', 't', 3, 4)
 GROUP BY ALL ORDER BY ALL
 ----
 3	1	0	0
-4	19	1	19
 
 query III
 SELECT snapshot_id, change_type, count(*) FROM ducklake_table_changes('ducklake', 'main', 't', 3, 4)
 GROUP BY ALL ORDER BY ALL
 ----
 3	delete	1
-4	update_postimage	19
-4	update_preimage	19
 
-query III
-SELECT snapshot_id, change_type, count(*) FROM ducklake_table_changes('ducklake', 'main', 't', 4, 4)
-GROUP BY ALL ORDER BY ALL
+query I
+SELECT count(*) FROM ducklake_table_changes('ducklake', 'main', 't', 4, 4)
 ----
-4	update_postimage	19
-4	update_preimage	19
+0
 
 # a rewritten data file with a delete file and inlined deletes before and inside the range
 statement ok
@@ -80,14 +74,12 @@ GROUP BY ALL ORDER BY ALL
 7	12	0	11
 8	1	12	12
 9	1	13	13
-10	6	14	19
 
 query IIII
 SELECT snapshot_id, count(*), min(id), max(id) FROM ducklake_table_deletions('ducklake', 'main', 'u', 9, 10)
 GROUP BY ALL ORDER BY ALL
 ----
 9	1	13	13
-10	6	14	19
 
 query III
 SELECT snapshot_id, change_type, count(*) FROM ducklake_table_changes('ducklake', 'main', 'u', 0, 10)
@@ -97,8 +89,6 @@ GROUP BY ALL ORDER BY ALL
 7	delete	12
 8	delete	1
 9	delete	1
-10	update_postimage	6
-10	update_preimage	6
 
 # applying the whole change feed gives the current rows
 query II

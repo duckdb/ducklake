@@ -1,0 +1,53 @@
+# name: test/sql/attach/detach_evicts_object_cache_open_transaction.test
+# description: entries a transaction caches after another connection detached the DuckLake are removed when it ends
+# group: [attach]
+
+require ducklake
+
+require parquet
+
+# an open transaction reads a detached DuckLake through its pinned metadata database, which DuckDB files allow
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/detach_evicts_object_cache_open_transaction.ducklake' AS lake (DATA_PATH '{TEST_DIR}/detach_evicts_object_cache_open_transaction')
+
+statement ok
+CREATE TABLE lake.t0(i INTEGER)
+
+statement ok
+CREATE TABLE lake.t1(i INTEGER)
+
+statement ok
+INSERT INTO lake.t0 VALUES (1), (2)
+
+statement ok
+DETACH lake
+
+statement ok
+SET VARIABLE cache_before = (SELECT coalesce(sum(memory_usage_bytes), 0) FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/detach_evicts_object_cache_open_transaction.ducklake' AS lake (DATA_PATH '{TEST_DIR}/detach_evicts_object_cache_open_transaction')
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM lake.t1
+----
+0
+
+statement ok
+DETACH lake
+
+query I con1
+SELECT count(*) FROM lake.t0
+----
+2
+
+statement ok con1
+COMMIT
+
+query I
+SELECT coalesce(sum(memory_usage_bytes), 0) <= getvariable('cache_before') FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+true

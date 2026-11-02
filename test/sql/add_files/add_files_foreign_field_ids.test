@@ -1,0 +1,138 @@
+# name: test/sql/add_files/add_files_foreign_field_ids.test
+# description: Files with field ids from another writer, such as Iceberg, are added by column name
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/add_files_foreign_field_ids', DATA_INLINING_ROW_LIMIT 0)
+
+# the field ids an Iceberg table has after dropping its column 2 and adding columns 4 and 5
+statement ok
+CREATE TABLE lake.t (a INTEGER, b VARCHAR, c INTEGER)
+
+statement ok
+COPY (SELECT 1 AS a, 'x' AS b, 10 AS c) TO '{DATA_PATH}/foreign_evolved.parquet' (FIELD_IDS {a: 1, b: 4, c: 5})
+
+statement ok
+CALL ducklake_add_data_files('lake', 't', '{DATA_PATH}/foreign_evolved.parquet')
+
+query III
+SELECT a, b, c FROM lake.t
+----
+1	x	10
+
+query II
+SELECT min(c), max(b) FROM lake.t WHERE c > 5
+----
+10	x
+
+# a field id of a dropped column under another name is not that column
+statement ok
+CREATE TABLE lake.d (a INTEGER, b VARCHAR, c INTEGER, e INTEGER)
+
+statement ok
+ALTER TABLE lake.d DROP COLUMN e
+
+statement ok
+CALL ducklake_add_data_files('lake', 'd', '{DATA_PATH}/foreign_evolved.parquet')
+
+query III
+SELECT a, b, c FROM lake.d
+----
+1	x	10
+
+# nested fields
+statement ok
+CREATE TABLE lake.n (s STRUCT(i INTEGER, j VARCHAR))
+
+statement ok
+COPY (SELECT {'i': 2, 'j': 'y'} AS s) TO '{DATA_PATH}/foreign_nested.parquet' (FIELD_IDS {s: {__duckdb_field_id: 7, i: 8, j: 9}})
+
+statement ok
+CALL ducklake_add_data_files('lake', 'n', '{DATA_PATH}/foreign_nested.parquet')
+
+query I
+SELECT s FROM lake.n
+----
+{'i': 2, 'j': y}
+
+# a field id this table gave a dropped column of the same name is still refused
+statement ok
+CREATE TABLE lake.r (a INTEGER, b VARCHAR)
+
+statement ok
+ALTER TABLE lake.r DROP COLUMN b
+
+statement ok
+ALTER TABLE lake.r ADD COLUMN b VARCHAR
+
+statement ok
+COPY (SELECT 3 AS a, 'z' AS b) TO '{DATA_PATH}/stale.parquet' (FIELD_IDS {a: 1, b: 2})
+
+statement error
+CALL ducklake_add_data_files('lake', 'r', '{DATA_PATH}/stale.parquet')
+----
+field ID 2 is not a live field
+
+query I
+SELECT count(*) FROM lake.r
+----
+0
+
+# also for a column added and dropped in the transaction
+statement ok
+CREATE TABLE lake.tx (a INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.tx ADD COLUMN b INTEGER
+
+statement ok
+INSERT INTO lake.tx VALUES (1, 99)
+
+statement ok
+COPY (SELECT content FROM read_blob('{DATA_PATH}/add_files_foreign_field_ids/main/tx/*.parquet')) TO '{DATA_PATH}/stale_tx.parquet' (FORMAT BLOB)
+
+statement ok
+ALTER TABLE lake.tx DROP COLUMN b
+
+statement ok
+ALTER TABLE lake.tx ADD COLUMN b INTEGER
+
+statement error
+CALL ducklake_add_data_files('lake', 'tx', '{DATA_PATH}/stale_tx.parquet')
+----
+field ID 2 is not a live field
+
+statement ok
+ROLLBACK
+
+# the field ids of the row lineage columns are refused also in a file of another writer
+statement ok
+CREATE TABLE lake.ice (a BIGINT)
+
+statement ok
+COPY (SELECT 1::BIGINT AS a, 100::BIGINT AS _row_id) TO '{DATA_PATH}/foreign_row_id.parquet' (FIELD_IDS {a: 7, _row_id: 2147483540})
+
+statement error
+CALL ducklake_add_data_files('lake', 'ice', '{DATA_PATH}/foreign_row_id.parquet', ignore_extra_columns => true)
+----
+field ID 2147483540 is not a live field
+
+# a file with DuckLake's internal columns was written by DuckLake, so its ids are checked
+statement ok
+COPY (SELECT 1::BIGINT AS a, 100::BIGINT AS _ducklake_internal_row_id) TO '{DATA_PATH}/internal_row_id.parquet' (FIELD_IDS {a: 7, _ducklake_internal_row_id: 2147483540})
+
+statement error
+CALL ducklake_add_data_files('lake', 'ice', '{DATA_PATH}/internal_row_id.parquet', ignore_extra_columns => true)
+----
+field ID 7 is not a live field

@@ -4,6 +4,7 @@
 #include "duckdb/parser/parsed_data/attach_info.hpp"
 
 #include "storage/ducklake_storage.hpp"
+#include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_secret.hpp"
@@ -11,6 +12,10 @@
 namespace duckdb {
 
 static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option, const Value &value) {
+	// options of a secret skip the NULL check of ATTACH
+	if (value.IsNull()) {
+		throw BinderException("NULL is not supported as a valid option for ATTACH option \"%s\"", option);
+	}
 	auto lcase = StringUtil::Lower(option);
 	if (lcase == "data_path") {
 		options.data_path = value.ToString();
@@ -19,7 +24,7 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 	} else if (lcase == "metadata_schema") {
 		options.metadata_schema = Identifier(value.ToString());
 	} else if (lcase == "metadata_catalog") {
-		options.metadata_database = value.ToString();
+		options.metadata_database = Identifier(value.ToString());
 	} else if (lcase == "metadata_path") {
 		options.metadata_path = value.ToString();
 	} else if (lcase == "metadata_parameters") {
@@ -41,7 +46,7 @@ static void HandleDuckLakeOption(DuckLakeOptions &options, const string &option,
 		if (options.at_clause) {
 			throw InvalidInputException("Cannot specify both VERSION and TIMESTAMP");
 		}
-		options.at_clause = make_uniq<BoundAtClause>("version", value.DefaultCastAs(LogicalType::BIGINT));
+		options.at_clause = make_uniq<BoundAtClause>(DuckLakeTableFunctionUtil::VersionAtClauseFromValue(value));
 	} else if (lcase == "snapshot_time") {
 		if (options.at_clause) {
 			throw InvalidInputException("Cannot specify both VERSION and TIMESTAMP");
@@ -117,7 +122,7 @@ static unique_ptr<Catalog> DuckLakeAttach(optional_ptr<StorageExtensionInfo> sto
 	}
 	options.hide_metadata_catalog = options.metadata_database.empty();
 	if (options.metadata_database.empty()) {
-		options.metadata_database = "__ducklake_metadata_" + name;
+		options.metadata_database = Identifier("__ducklake_metadata_" + name);
 	}
 	if (options.at_clause) {
 		if (attach_options.access_mode == AccessMode::READ_WRITE) {

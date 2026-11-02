@@ -1,6 +1,6 @@
 {
   "description": "Run DuckLake tests using Postgres as a catalog DBMS.",
-  "on_init": "ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres); USE pg; DROP SCHEMA public CASCADE; DROP SCHEMA IF EXISTS metadata_s1 CASCADE; DROP SCHEMA IF EXISTS metadata_s2 CASCADE; DROP SCHEMA IF EXISTS junk_1064 CASCADE; DROP SCHEMA IF EXISTS scoped_meta_1064 CASCADE; CREATE SCHEMA public;USE memory; DETACH pg;",
+  "on_init": "ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres); USE pg; DROP SCHEMA public CASCADE; DROP SCHEMA IF EXISTS metadata_s1 CASCADE; DROP SCHEMA IF EXISTS metadata_s2 CASCADE; DROP SCHEMA IF EXISTS junk_1064 CASCADE; DROP SCHEMA IF EXISTS scoped_meta_1064 CASCADE; DROP SCHEMA IF EXISTS read_only_new_lake CASCADE; DROP SCHEMA IF EXISTS read_only_v10_lake CASCADE; CREATE SCHEMA public;USE memory; DETACH pg;",
   "autoloading": "none",
   "statically_loaded_extensions": [
     "core_functions",
@@ -18,6 +18,12 @@
     }
   ],
   "skip_tests": [
+    {
+      "reason": "Postgres text cannot hold a NUL byte, test/sql/general/postgres_nul_byte_text.test covers the error",
+      "paths": [
+        "test/sql/snapshot_info/commit_message_nul_byte.test"
+      ]
+    },
     {
       "reason": "Only DuckDB catalogs drop the empty inlined data table that an ALTER supersedes",
       "paths": [
@@ -80,6 +86,7 @@
         "test/sql/data_inlining/sqlite_column_limit.test",
         "test/sql/data_inlining/sqlite_system_column_names.test",
         "test/sql/issues/issue_1309.test",
+        "test/sql/retry/sqlite_lock_retry_errors_as_json.test",
         "test/sql/issues/issue_sqlite_snapshot_time.test",
         "test/sql/data_inlining/data_inlining_variant_sql_rollback.test"
       ]

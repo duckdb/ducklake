@@ -1,0 +1,286 @@
+# name: test/sql/tags/tags_conflict.test
+# description: concurrent transactions on the same snapshot tag conflict
+# group: [tags]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_conflict_files')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+SET immediate_transaction_mode=true
+
+# two transactions create different tags
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_create_tag('dl', 'a')
+
+statement ok con2
+CALL ducklake_create_tag('dl', 'b')
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl')
+----
+2
+
+# two transactions create the same tag name, the second one fails
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_create_tag('dl', 'same')
+
+statement ok con2
+CALL ducklake_create_tag('dl', 'SAME')
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') WHERE tag_name = 'same'
+----
+same	4
+
+# two transactions drop the same tag, the second one fails
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_drop_tag('dl', 'same')
+
+statement ok con2
+CALL ducklake_drop_tag('dl', 'same')
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+Transaction conflict
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl') WHERE tag_name = 'same'
+----
+0
+
+# a transaction that commits a tag together with data is retried after a concurrent commit
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (2)
+
+statement ok con1
+CALL ducklake_create_tag('dl', 'with_two')
+
+statement ok con2
+INSERT INTO dl.t VALUES (3)
+
+statement ok con2
+CALL ducklake_create_tag('dl', 'with_three')
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+3
+
+query III
+SELECT tag_name, snapshot_id, created_snapshot_id FROM ducklake_tags('dl') WHERE tag_name LIKE 'with_%' ORDER BY created_snapshot_id
+----
+with_two	6	7
+with_three	6	8
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 6)
+----
+1
+
+# a tag of a snapshot that another transaction expired before committing a snapshot of its own
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_create_tag('dl', 'expired', version => 7)
+
+statement ok con2
+CALL ducklake_expire_snapshots('dl', versions => [7])
+
+statement ok con2
+INSERT INTO dl.t VALUES (4)
+
+statement error con1
+COMMIT
+----
+another transaction has expired the snapshot
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl') WHERE tag_name = 'expired'
+----
+0
+
+# a tag of a snapshot that another transaction expired while the tag was pending is not created
+statement ok
+INSERT INTO dl.t VALUES (5)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_create_tag('dl', 'gone', version => 9)
+
+statement ok con2
+CALL ducklake_expire_snapshots('dl', versions => [9])
+
+statement error con1
+COMMIT
+----
+another transaction has expired the snapshot
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl') WHERE tag_name = 'gone'
+----
+0
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = 9
+----
+0
+
+# the same when the expiry runs in a transaction that commits before the tag
+statement ok
+INSERT INTO dl.t VALUES (6)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_expire_snapshots('dl', versions => [10])
+
+statement ok con2
+BEGIN
+
+statement ok con2
+CALL ducklake_create_tag('dl', 'gone', version => 10)
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+another transaction has expired the snapshot
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = 10
+----
+0
+
+# the drop of a tag conflicts with a tag committed after the drop was validated, also without immediate transactions
+statement ok
+SET immediate_transaction_mode=false
+
+statement ok
+CALL ducklake_create_tag('dl', 'replaced', version => 8)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_drop_tag('dl', 'replaced')
+
+statement ok con2
+CALL ducklake_drop_tag('dl', 'replaced')
+
+statement ok con2
+CALL ducklake_create_tag('dl', 'replaced', version => 11)
+
+statement ok con2
+COMMIT
+
+statement error con1
+COMMIT
+----
+Transaction conflict
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') WHERE tag_name = 'replaced'
+----
+replaced	11
+
+# a tag created again after a committed drop conflicts with that drop
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_drop_tag('dl', 'replaced')
+
+statement ok con2
+CALL ducklake_drop_tag('dl', 'replaced')
+
+statement ok con2
+CALL ducklake_create_tag('dl', 'replaced', version => 12)
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+dropped a tag with this name
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl') WHERE tag_name = 'replaced'
+----
+0

@@ -1,0 +1,42 @@
+# name: test/sql/remove_orphans/remove_orphans_null_paths.test
+# description: The orphan cleanup keeps the files of a schema and table without a stored path
+# group: [remove_orphans]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/remove_orphans_null_paths', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT 42 AS i
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_schema SET path = NULL, path_is_relative = NULL
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table SET path = NULL, path_is_relative = NULL
+
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_data_file SET path = 'main/t/' || path WHERE path_is_relative
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/remove_orphans_null_paths', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('ducklake', cleanup_all => true)
+----
+0
+
+query I
+SELECT sum(i) FROM ducklake.t
+----
+42

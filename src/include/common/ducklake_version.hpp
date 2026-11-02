@@ -22,12 +22,15 @@ enum class DuckLakeVersion : uint8_t {
 	V0_4 = 6,
 	V1_0 = 7,
 	V1_1_DEV_1 = 8,
-	V1_1 = 9
+	V1_1 = 9,
+	V2_0_DEV1 = 10
 };
 
-static constexpr DuckLakeVersion DUCKLAKE_LATEST_VERSION = DuckLakeVersion::V1_1;
+static constexpr DuckLakeVersion DUCKLAKE_LATEST_VERSION = DuckLakeVersion::V2_0_DEV1;
 
 DuckLakeVersion DuckLakeVersionFromString(const string &version_str);
+//! The versions this build attaches without a migration, the releases and the version it writes
+bool DuckLakeVersionIsSupported(DuckLakeVersion version);
 DuckLakeVersion ParseWritableDuckLakeVersion(const string &version_str, const string &option_name);
 string DuckLakeVersionToString(DuckLakeVersion version);
 [[noreturn]] void ThrowUnsupportedByVersion(DuckLakeVersion version, const string &feature);

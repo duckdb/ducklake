@@ -1,0 +1,44 @@
+# name: benchmark/micro/fixtures/snap20k.benchmark.in
+# description: Lake with an empty table t and 20001 snapshots written directly into the metadata, restored for every run
+# group: [fixtures]
+
+argument lake snap20k
+
+cache_file ${lake}_ready.marker
+
+# Snapshots 2 to 20000 copy snapshot 1 with a distinct time, and their changes insert, delete and compact other tables
+load
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CALL lake.set_option('data_inlining_row_limit', 10);
+CREATE TABLE lake.t (id BIGINT, v VARCHAR);
+INSERT INTO __ducklake_metadata_lake.ducklake_snapshot
+SELECT i, to_timestamp(i), schema_version, next_catalog_id, next_file_id
+FROM range(2, 20001) r(i), __ducklake_metadata_lake.ducklake_snapshot
+WHERE snapshot_id = 1;
+INSERT INTO __ducklake_metadata_lake.ducklake_snapshot_changes
+SELECT i,
+CASE i % 4
+WHEN 0 THEN 'inserted_into_table:' || ((i % 7) + 2)
+WHEN 1 THEN 'inserted_into_table:' || ((i % 7) + 2) || ',deleted_from_table:' || ((i % 7) + 2)
+WHEN 2 THEN 'merge_adjacent:' || ((i % 7) + 2)
+ELSE 'rewrite_delete:' || ((i % 7) + 2)
+END,
+NULL, NULL, NULL
+FROM range(2, 20001) r(i);
+SELECT CASE WHEN (SELECT count(*) <> 20001 FROM lake.snapshots())
+THEN error('snap20k: expected 20001 snapshots') END;
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
+
+include benchmark/micro/fixtures/restore_reload.benchmark.in

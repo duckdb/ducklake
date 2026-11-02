@@ -1,0 +1,37 @@
+# name: test/sql/add_files/add_files_finer_timestamp_retype_concurrent.test
+# description: A retype to a finer timestamp unit clears the bounds of a file that another transaction adds in between
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/add_files_finer_timestamp_retype_concurrent', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+COPY (SELECT TIMESTAMP_NS '2020-01-01 00:00:00.000000001' AS t) TO '{DATA_PATH}/finer_timestamp_concurrent.parquet'
+
+statement ok
+CREATE TABLE dl.c (t TIMESTAMP)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+ALTER TABLE dl.c ALTER t TYPE TIMESTAMP_NS
+
+statement ok con2
+CALL ducklake_add_data_files('dl', 'c', '{DATA_PATH}/finer_timestamp_concurrent.parquet')
+
+statement ok con1
+COMMIT
+
+query I
+SELECT count(*) FROM dl.c WHERE t = TIMESTAMP_NS '2020-01-01 00:00:00.000000001'
+----
+1

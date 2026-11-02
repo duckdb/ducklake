@@ -1,0 +1,242 @@
+# name: test/sql/tags/tags_basic.test
+# description: snapshot tags are created, listed and dropped
+# group: [tags]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_basic_files')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl')
+----
+0
+
+# a tag of an older snapshot
+statement ok
+CALL ducklake_create_tag('dl', 'v2', version => 2)
+
+# without a snapshot the tag points at the current snapshot of the transaction
+statement ok
+CALL ducklake_create_tag('dl', 'latest')
+
+query III
+SELECT tag_name, snapshot_id, created_snapshot_id FROM ducklake_tags('dl') ORDER BY created_snapshot_id
+----
+v2	2	4
+latest	4	5
+
+query I
+SELECT snapshot_time = (SELECT snapshot_time FROM ducklake_snapshots('dl') WHERE snapshot_id = 2) FROM ducklake_tags('dl') WHERE tag_name = 'v2'
+----
+true
+
+query II
+SELECT snapshot_id, changes FROM ducklake_snapshots('dl') WHERE snapshot_id >= 4 ORDER BY snapshot_id
+----
+4	{tags_created=[v2]}
+5	{tags_created=[latest]}
+
+# tag names are unique, case insensitive
+statement error
+CALL ducklake_create_tag('dl', 'V2')
+----
+A snapshot tag with the name "V2" already exists
+
+statement error
+CALL ducklake_create_tag('dl', NULL)
+----
+Tag name cannot be NULL or empty
+
+statement error
+CALL ducklake_create_tag('dl', '')
+----
+Tag name cannot be NULL or empty
+
+# a name that reads as a snapshot id keeps naming that snapshot
+statement error
+CALL ducklake_create_tag('dl', '2')
+----
+A snapshot tag cannot be named like a snapshot id, got "2"
+
+statement error
+CALL ducklake_create_tag('dl', '-0.4')
+----
+A snapshot tag cannot be named like a snapshot id, got "-0.4"
+
+# a drop takes any name, so no tag is out of its reach
+statement error
+CALL ducklake_drop_tag('dl', '2')
+----
+A snapshot tag with the name "2" does not exist
+
+statement error
+CALL ducklake_create_tag('dl', 'both', version => 1, timestamp => '2000-01-01 00:00:00+00')
+----
+specify either version or timestamp, not both
+
+statement error
+CALL ducklake_create_tag('dl', 'missing', version => 999)
+----
+No snapshot found at version 999
+
+statement error
+CALL ducklake_create_tag('dl', 'early', timestamp => '2000-01-01 00:00:00+00')
+----
+No snapshot found at timestamp
+
+statement error
+CALL ducklake_create_tag('dl', 'future', timestamp => '2100-01-01 00:00:00+00')
+----
+Cannot time travel to a future timestamp
+
+# a tag of a timestamp points at the newest snapshot at that time
+statement ok
+SET VARIABLE t2 = (SELECT snapshot_time FROM ducklake_snapshots('dl') WHERE snapshot_id = 2)
+
+statement ok
+CALL ducklake_create_tag('dl', 'ts', timestamp => getvariable('t2'))
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') WHERE tag_name = 'ts'
+----
+ts	2
+
+# tags are dropped by name, case insensitive
+statement ok
+CALL ducklake_drop_tag('dl', 'LATEST')
+
+statement error
+CALL ducklake_drop_tag('dl', 'latest')
+----
+A snapshot tag with the name "latest" does not exist
+
+query III
+SELECT tag_name, snapshot_id, created_snapshot_id FROM ducklake_tags('dl') ORDER BY created_snapshot_id
+----
+v2	2	4
+ts	2	6
+
+query II
+SELECT snapshot_id, changes FROM ducklake_snapshots('dl') WHERE snapshot_id = 7
+----
+7	{tags_dropped=[latest]}
+
+# the dropped name can be used again
+statement ok
+CALL ducklake_create_tag('dl', 'latest', version => 1)
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') WHERE tag_name = 'latest'
+----
+latest	1
+
+# one statement cannot create or drop a tag twice
+statement error
+SELECT * FROM ducklake_create_tag('dl', 'twice', version => 1) UNION ALL SELECT * FROM ducklake_create_tag('dl', 'twice', version => 2)
+----
+A snapshot tag with the name "twice" already exists
+
+statement error
+SELECT * FROM ducklake_drop_tag('dl', 'latest') UNION ALL SELECT * FROM ducklake_drop_tag('dl', 'latest')
+----
+A snapshot tag with the name "latest" does not exist
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl') WHERE tag_name IN ('twice', 'latest')
+----
+1
+
+# names differ in case like identifiers, so only ASCII letters fold, whatever the collation of the catalog
+statement ok
+SET GLOBAL default_collation = 'nocase'
+
+statement ok
+CALL ducklake_create_tag('dl', 'Ä', version => 1)
+
+statement ok
+CALL ducklake_create_tag('dl', 'ä', version => 2)
+
+statement ok
+CALL ducklake_drop_tag('dl', 'Ä')
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') WHERE tag_name IN ('Ä', 'ä')
+----
+ä	2
+
+statement ok
+RESET GLOBAL default_collation
+
+# the tags of one commit are listed in order, and names may hold any character
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_create_tag('dl', 'b"b,c:d', version => 1)
+
+statement ok
+CALL ducklake_create_tag('dl', 'a', version => 1)
+
+statement ok
+COMMIT
+
+query I
+SELECT changes FROM ducklake_snapshots('dl') WHERE snapshot_id = 12
+----
+{tags_created=[a, 'b"b,c:d']}
+
+statement ok
+CALL ducklake_drop_tag('dl', 'b"b,c:d')
+
+query I
+SELECT changes FROM ducklake_snapshots('dl') WHERE snapshot_id = 13
+----
+{tags_dropped=['b"b,c:d']}
+
+query I
+SELECT COUNT(*) FROM dl.t
+----
+2
+
+# a drop keeps a tag that differs beyond ASCII case, also on the same snapshot and of the same commit
+statement ok
+SET GLOBAL default_collation = 'nocase'
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_create_tag('dl', 'Ö', version => 1)
+
+statement ok
+CALL ducklake_create_tag('dl', 'ö', version => 1)
+
+statement ok
+COMMIT
+
+statement ok
+CALL ducklake_drop_tag('dl', 'Ö')
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') WHERE tag_name IN ('Ö', 'ö')
+----
+ö	1
+
+statement ok
+RESET GLOBAL default_collation

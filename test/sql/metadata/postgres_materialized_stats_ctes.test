@@ -1,0 +1,85 @@
+# name: test/sql/metadata/postgres_materialized_stats_ctes.test
+# description: The file list query sent to Postgres materializes the stats of each filtered column
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/postgres_materialized_stats_ctes', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t (a INTEGER, b INTEGER, c INTEGER)
+
+statement ok
+INSERT INTO lake.t SELECT i, i * 2, i * 3 FROM range(0, 10) t(i)
+
+statement ok
+INSERT INTO lake.t SELECT i, i * 2, i * 3 FROM range(10, 20) t(i)
+
+statement ok
+INSERT INTO lake.t SELECT i, i * 2, i * 3 FROM range(20, 30) t(i)
+
+statement ok
+DELETE FROM lake.t WHERE a = 24
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+query I
+SELECT count(*) FROM lake.t WHERE a >= 12 AND b < 50 AND c > 30
+----
+12
+
+statement ok
+CALL disable_logging()
+
+# Postgres would otherwise inline the stats into nested loops that read them again for every file
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('lake')) = 'postgres' THEN
+    (SELECT count(*) > 0 FROM duckdb_logs
+     WHERE type = 'QueryLog' AND message LIKE '%col_1_stats AS MATERIALIZED (%'
+       AND message LIKE '%col_2_stats AS MATERIALIZED (%' AND message LIKE '%col_3_stats AS MATERIALIZED (%')
+    ELSE true END
+----
+true
+
+query II
+SELECT count(*), sum(a) FROM lake.t WHERE a >= 12 AND b < 50 AND c > 30
+----
+12	210
+
+# a single stats join is left to the planner
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+query I
+SELECT count(*) FROM lake.t WHERE a >= 12
+----
+17
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('lake')) = 'postgres' THEN
+    (SELECT count(*) > 0 FROM duckdb_logs
+     WHERE type = 'QueryLog' AND message LIKE '%col_1_stats AS (%' AND message NOT LIKE '%MATERIALIZED%')
+    ELSE true END
+----
+true

@@ -36,7 +36,7 @@ public:
 	}
 	void SetParentSchema(DuckLakeSchemaEntry &parent);
 	const string &PathKey() const;
-	static string ChildPathKey(optional_ptr<const DuckLakeSchemaEntry> parent, const string &name);
+	static string ChildPathKey(optional_ptr<const DuckLakeSchemaEntry> parent, const Identifier &name);
 	const string &GetSchemaUUID() const {
 		return schema_uuid;
 	}
@@ -65,6 +65,8 @@ public:
 	void Scan(ClientContext &context, CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;
 	void Scan(CatalogType type, const std::function<void(CatalogEntry &)> &callback) override;
 	void DropEntry(ClientContext &context, DropInfo &info) override;
+	//! Drops an entry, a replaced one without checking for tables that call it
+	void DropEntry(ClientContext &context, DropInfo &info, bool replacing);
 	optional_ptr<CatalogEntry> LookupEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
 
 	void AddEntry(CatalogType type, unique_ptr<CatalogEntry> entry);
@@ -74,9 +76,10 @@ public:
 
 private:
 	DuckLakeCatalogSet &GetCatalogSet(CatalogType type);
-	bool HandleCreateConflict(CatalogTransaction transaction, CatalogType type, const string &name, CreateInfo &info);
+	bool HandleCreateConflict(CatalogTransaction transaction, CatalogType type, const Identifier &name,
+	                          CreateInfo &info);
 
-	optional_ptr<CatalogEntry> TryLoadBuiltInFunction(const string &entry_name);
+	optional_ptr<CatalogEntry> TryLoadBuiltInFunction(const Identifier &entry_name);
 	optional_ptr<CatalogEntry> LoadBuiltInFunction(DefaultTableMacro macro);
 
 private:
@@ -89,7 +92,7 @@ private:
 	DuckLakeCatalogSet scalar_macros;
 	DuckLakeCatalogSet table_macros;
 	mutex default_function_lock;
-	case_insensitive_map_t<unique_ptr<CatalogEntry>> default_function_map;
+	identifier_map_t<unique_ptr<CatalogEntry>> default_function_map;
 };
 
 } // namespace duckdb
