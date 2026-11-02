@@ -485,10 +485,10 @@ void PostgresMetadataManager::ClearCache() {
 		if (!result->HasError()) {
 			return;
 		}
-		if (!StringUtil::Contains(result->GetError(), "clear_catalog_cache")) {
+		// the error of a postgres_scanner from before the option, which can only clear every catalog
+		if (!StringUtil::Contains(result->GetError(), "Invalid named parameter \"clear_catalog_cache\"")) {
 			result->ThrowIfError("Failed to clear the PostgreSQL metadata cache: ");
 		}
-		// a postgres_scanner from before the option clears every catalog
 		catalog.SetScopedCacheClear(false);
 	}
 	auto result = transaction.ExecuteRaw("CALL postgres_clear_cache();");
