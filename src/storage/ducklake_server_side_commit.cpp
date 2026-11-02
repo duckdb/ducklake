@@ -98,7 +98,7 @@ void DuckLakeServerSideCommit::SetRetryConfigOverride(const DuckLakeRetryConfig 
 DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	auto catalog_version = ReadCatalogVersion();
 	supports_v1_1_metadata = catalog_version >= DuckLakeVersion::V1_1;
-	supports_branching = catalog_version >= DuckLakeVersion::V2_0_DEV1;
+	supports_v2_0_metadata = catalog_version >= DuckLakeVersion::V2_0_DEV1;
 	ReadCommitHeader();
 	ReadColumnTypes();
 	ReadStagedDeleteFiles();
@@ -164,8 +164,10 @@ void DuckLakeServerSideCommit::ReadCommitHeader() {
 		transaction_snapshot.snapshot_id = AsIdx(row, 3);
 		transaction_snapshot.next_catalog_id = row.GetValue<uint64_t>(6);
 		transaction_snapshot.next_file_id = row.GetValue<uint64_t>(7);
-		transaction_snapshot.global_watermark =
-		    !row.IsNull(8) ? row.GetValue<uint64_t>(8) : transaction_snapshot.snapshot_id;
+		// a header of an older client has no watermark column and commits through the conflict path
+		if (DuckLakeMetadataManager::ResultHasColumn(*result, "transaction_watermark") && !row.IsNull(8)) {
+			transaction_snapshot.global_watermark = row.GetValue<uint64_t>(8);
+		}
 	}
 	if (schema_version < 0) {
 		transaction_snapshot.schema_version =
@@ -556,7 +558,7 @@ shared_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::GetExistingTableStats(T
 	    [&](string query) {
 		    return RunQuery(StringUtil::Replace(query, "{METADATA_CATALOG}", schema_id), "read missing table sizes");
 	    },
-	    supports_branching);
+	    supports_v2_0_metadata);
 	for (auto &read_table : read_tables) {
 		existing_table_stats[read_table] = nullptr;
 	}
@@ -577,7 +579,7 @@ DuckLakeVersion DuckLakeServerSideCommit::ReadCatalogVersion() {
 }
 
 DuckLakeSnapshot DuckLakeServerSideCommit::ReadLatestSnapshot() {
-	string sql = StringUtil::Replace(DuckLakeMetadataManager::MainHeadSnapshotQuery(supports_branching),
+	string sql = StringUtil::Replace(DuckLakeMetadataManager::MainHeadSnapshotQuery(supports_v2_0_metadata),
 	                                 "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read latest snapshot");
 	auto snapshot = DuckLakeMetadataManager::ParseSnapshot(*result);
@@ -658,9 +660,9 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.commit_info = state->commit_info;
 	ctx.skip_drop_empty_inlined = true;
 	ctx.supports_v1_1_metadata = supports_v1_1_metadata;
-	ctx.supports_branching = supports_branching;
+	ctx.supports_v2_0_metadata = supports_v2_0_metadata;
 	ctx.snapshot_and_stats_query =
-	    DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(supports_v1_1_metadata, supports_branching);
+	    DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(supports_v1_1_metadata, supports_v2_0_metadata);
 	ctx.conflict_query_executor = [this](string q) -> unique_ptr<QueryResult> {
 		auto sql = SubstitutePlaceholders(std::move(q), transaction_snapshot);
 		return fresh_conn.Query(sql);
@@ -732,7 +734,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 			inlined_deletion_table = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
 		}
 		auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetNetDataFileRowCountSql(
-		                                      table_id, inlined_deletion_table, supports_branching, false, true),
+		                                      table_id, inlined_deletion_table, supports_v2_0_metadata, false, true),
 		                                  transaction_snapshot);
 		auto result = RunQuery(sql, "read net data file row count");
 		for (auto &row : *result) {

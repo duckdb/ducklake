@@ -101,7 +101,7 @@ private:
 	//! The tables the commit writes, whose stats are read together
 	vector<TableIndex> commit_tables;
 	bool supports_v1_1_metadata = false;
-	bool supports_branching = false;
+	bool supports_v2_0_metadata = false;
 	bool staged_dropped_files_read = false;
 	vector<pair<string, idx_t>> staged_dropped_files;
 	map<TableIndex, DroppedDataFileStats> staged_dropped_file_stats;

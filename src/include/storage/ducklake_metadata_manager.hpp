@@ -673,6 +673,7 @@ public:
 		bool drop_delete_end = true;
 	};
 	V2_0Dev1Additions ProbeV2_0Dev1Additions();
+	void VerifyHealableV2_0Dev1(const V2_0Dev1Additions &missing);
 	static string V2_0Dev1AdditionsSql(const V2_0Dev1Additions &add);
 	static string GetSnapshotTagTableStatement();
 	static string GetFileVisibilityTableStatement();

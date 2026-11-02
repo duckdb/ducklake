@@ -28,6 +28,7 @@ SET VARIABLE inlined_delete_tables = (SELECT list('__ducklake_metadata_lake.duck
 FROM __ducklake_metadata_lake.ducklake_table);
 SELECT CASE WHEN (SELECT count(*) <> 40 OR min(record_count) <> 2048 OR max(record_count) <> 2048
 FROM __ducklake_metadata_lake.ducklake_data_file)
+OR (SELECT coalesce(sum(file_count), 0) <> 40 FROM ducklake_table_info('lake'))
 OR (SELECT count(*) <> 0 FROM __ducklake_metadata_lake.ducklake_delete_file)
 OR (SELECT count(*) <> 20 OR count(DISTINCT file_id) <> 20 OR max(row_id) <> 0
 FROM query_table(getvariable('inlined_delete_tables')))

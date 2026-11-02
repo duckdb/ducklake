@@ -162,8 +162,8 @@ struct DuckLakeCommitContext {
 	bool skip_drop_empty_inlined = false;
 	//! Whether the metadata schema has the >= 1.1 additions.
 	bool supports_v1_1_metadata = false;
-	//! Whether the metadata schema has the branching tables and columns.
-	bool supports_branching = false;
+	//! Whether the metadata schema has the 2.0 layout, visibility rows instead of inline ranges.
+	bool supports_v2_0_metadata = false;
 	//! Column names of the inlined data tables under this catalog version.
 	DuckLakeInlinedColNames InlinedColNames() const {
 		return DuckLakeInlinedColNames(supports_v1_1_metadata);

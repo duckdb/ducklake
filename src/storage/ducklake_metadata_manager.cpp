@@ -697,7 +697,9 @@ string DuckLakeMetadataManager::GetSnapshotTagTableStatement() {
 
 void DuckLakeMetadataManager::MigrateV11() {
 	// a catalog can hold some of the additions already, from an older dev build or an interrupted heal
-	auto migrate_query = GetSnapshotTagTableStatement() + "\n" + V2_0Dev1AdditionsSql(ProbeV2_0Dev1Additions()) + R"(
+	auto missing = ProbeV2_0Dev1Additions();
+	VerifyHealableV2_0Dev1(missing);
+	auto migrate_query = GetSnapshotTagTableStatement() + "\n" + V2_0Dev1AdditionsSql(missing) + R"(
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version';
 )";
 	ExecuteMigration(migrate_query, false, "1.1", "2.0-dev1");
@@ -976,8 +978,18 @@ DuckLakeMetadataManager::V2_0Dev1Additions DuckLakeMetadataManager::ProbeV2_0Dev
 	return missing;
 }
 
+void DuckLakeMetadataManager::VerifyHealableV2_0Dev1(const V2_0Dev1Additions &missing) {
+	bool ranges_present = missing.drop_data_begin && missing.drop_data_end;
+	if (!ranges_present && !HasBranchZeroVisibility()) {
+		throw InvalidInputException("Cannot heal this DuckLake catalog: the inline file ranges were dropped and the "
+		                            "visibility rows that replaced them are missing");
+	}
+}
+
 void DuckLakeMetadataManager::AddV2_0Dev1Additions() {
-	ExecuteMigration(V2_0Dev1AdditionsSql(ProbeV2_0Dev1Additions()), false, "2.0-dev1", "2.0-dev1");
+	auto missing = ProbeV2_0Dev1Additions();
+	VerifyHealableV2_0Dev1(missing);
+	ExecuteMigration(V2_0Dev1AdditionsSql(missing), false, "2.0-dev1", "2.0-dev1");
 }
 
 void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {
@@ -5651,18 +5663,12 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot(BoundAtClause 
 	const string timestamp_condition = bound == SnapshotBound::LOWER_BOUND ? ">" : "<";
 	const string visible_condition = StringUtil::Format(" AND snapshot_id <= %llu", newest_snapshot_id);
 	auto lineage_condition = BranchLineageFilter();
-	// a pinned snapshot can seed a commit, so it carries the allocation watermark too
-	string watermark_columns;
-	if (transaction.GetCatalog().SupportsBranching()) {
-		watermark_columns = ", NULL, (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot)";
-	}
 	if (unit == "version") {
 		result = Query(StringUtil::Format(R"(
-SELECT snapshot_id, schema_version, next_catalog_id, next_file_id%s
+SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
 FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = %llu%s%s;)",
-		                                  watermark_columns, ResolveSnapshotVersion(val), visible_condition,
-		                                  lineage_condition));
+		                                  ResolveSnapshotVersion(val), visible_condition, lineage_condition));
 	} else if (unit == "timestamp") {
 		auto timestamp = val.CastAs(*transaction.GetConnection().context, LogicalType::TIMESTAMP_TZ);
 		auto current_time = timestamp_tz_t(Timestamp::GetCurrentTimestamp());
