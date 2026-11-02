@@ -321,6 +321,8 @@ public:
 	//! The live snapshot tags, with the changes of this transaction
 	vector<DuckLakeSnapshotTagInfo> GetSnapshotTags();
 
+	//! The catalog of the attached metadata database
+	Catalog &GetMetadataCatalog();
 	Identifier GetDefaultSchemaName();
 
 	bool HasLocalDeletes(TableIndex table_id) const;
