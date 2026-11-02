@@ -1,0 +1,159 @@
+# name: test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test
+# description: Postgres commits that create inlined tables keep the postgres_scanner cache, which finds the new tables
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS new_inlined_keeps_cache CASCADE')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/new_inlined_keeps_cache', METADATA_SCHEMA 'new_inlined_keeps_cache', DATA_INLINING_ROW_LIMIT 200)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+# a second DuckLake on the catalog stays attached with its scanner cache loaded
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl2
+(DATA_PATH '{DATA_PATH}/new_inlined_keeps_cache', METADATA_SCHEMA 'new_inlined_keeps_cache')
+
+query I
+SELECT count(*) FROM dl2.t
+----
+1
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+# each of these commits creates an inlined data table
+statement ok
+ALTER TABLE dl.t ADD COLUMN j INTEGER
+
+statement ok
+CREATE TABLE dl.u(k INTEGER)
+
+# the next commits write the new tables, more than 100 rows through an INSERT the scanner binds
+statement ok
+INSERT INTO dl.t VALUES (2, 20)
+
+statement ok
+INSERT INTO dl.u SELECT range FROM range(150)
+
+# a commit that creates an inlined table and then binds an INSERT into it
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE dl.x(i INTEGER)
+
+statement ok
+INSERT INTO dl.x SELECT range FROM range(150)
+
+statement ok
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%postgres_clear_cache%'
+----
+0
+
+query II
+FROM dl.t ORDER BY i
+----
+1	NULL
+2	20
+
+query IIII
+SELECT (SELECT count(*) FROM dl.u), (SELECT sum(k) FROM dl.u), (SELECT count(*) FROM dl.x), (SELECT sum(i) FROM dl.x)
+----
+150	11175	150	11175
+
+# a delete from a data file creates the inlined deletion table of the table
+statement ok
+CREATE TABLE dl.w AS SELECT range i FROM range(300)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+statement ok
+DELETE FROM dl.w WHERE i < 10
+
+statement ok
+DELETE FROM dl.w WHERE i < 20
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%postgres_clear_cache%'
+----
+0
+
+query II
+SELECT count(*), min(i) FROM dl.w
+----
+280	20
+
+# the DuckLake that stayed attached finds the new tables
+query IIIII
+SELECT (SELECT count(*) FROM dl2.t), (SELECT sum(j) FROM dl2.t), (SELECT count(*) FROM dl2.u), (SELECT count(*) FROM dl2.x), (SELECT count(*) FROM dl2.w)
+----
+2	20	150	150	280
+
+# a commit that fails after the scanner bound its new inlined table rolls back, and the next commit reuses the name
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE dl.failed(v VARIANT)
+
+statement ok
+INSERT INTO dl.failed VALUES (INTERVAL '1 day')
+
+statement error
+COMMIT
+----
+Can't convert VARIANT of type 'INTERVAL' to Parquet VARIANT
+
+statement ok
+CREATE TABLE dl.failed(a INTEGER, b VARCHAR)
+
+statement ok
+INSERT INTO dl.failed SELECT range, range::VARCHAR FROM range(150)
+
+query II
+SELECT count(*), max(b) FROM dl.failed
+----
+150	99
+
+query II
+SELECT count(*), max(b) FROM dl2.failed
+----
+150	99

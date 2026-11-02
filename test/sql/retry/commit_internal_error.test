@@ -1,0 +1,32 @@
+# name: test/sql/retry/commit_internal_error.test
+# description: an internal error during a commit fails at once instead of being retried
+# group: [retry]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/commit_internal_error', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1), (2)
+
+# stored stats below the rows of the file make dropping the file fail with an internal error
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_stats SET record_count = 0
+
+# let the INTERNAL error of the commit through the runner
+set always_fail_error_messages
+
+statement error
+DELETE FROM ducklake.t
+----
+<REGEX>:.*Failed to commit DuckLake transaction\.\nDropped DuckLake file stats exceed current table stats.*

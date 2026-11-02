@@ -1,4 +1,5 @@
 #include "functions/ducklake_table_functions.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "common/ducklake_util.hpp"
@@ -10,6 +11,7 @@
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/hive_partitioning.hpp"
+#include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/types/vector.hpp"
@@ -57,6 +59,9 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 	} else if (file_list.type() == LogicalType::LIST(LogicalType::VARCHAR)) {
 		auto paths = ListValue::GetChildren(file_list);
 		for (const auto &path : paths) {
+			if (path.IsNull()) {
+				throw InvalidInputException("File list cannot contain NULL");
+			}
 			result->globs.push_back(StringValue::Get(path));
 		}
 	} else {
@@ -80,7 +85,7 @@ static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context,
 
 struct ParquetColumn {
 	idx_t column_id;
-	string name;
+	Identifier name;
 	//! The name in the Parquet schema, which the mapping can rename
 	string parquet_name;
 	string converted_type;
@@ -93,6 +98,8 @@ struct ParquetColumn {
 	bool skip_bounds = false;
 	//! Set when the field mapping is made if the bounds are in a type that the reader casts to the field type
 	LogicalType bounds_type;
+	//! The dotted path of the column, set when the field mapping is made
+	string path;
 	//! A root group that the Parquet reader reads as VARIANT
 	bool is_variant = false;
 	vector<DuckLakeColumnStats> column_stats;
@@ -186,7 +193,8 @@ private:
 	                                                    const string &prefix = string(), bool repeated = false);
 	void CollectLiveFieldIds(const vector<unique_ptr<DuckLakeFieldId>> &field_ids, unordered_set<idx_t> &result);
 	void ValidateParquetFieldIds(const ParquetFileMetadata &file, const vector<unique_ptr<ParquetColumn>> &columns,
-	                             const unordered_set<idx_t> &live_field_ids, const string &prefix = string());
+	                             const unordered_set<idx_t> &live_field_ids, bool foreign_field_ids,
+	                             const string &prefix = string());
 	void MapColumnStats(ParquetFileMetadata &file_metadata, DuckLakeDataFile &result);
 	DuckLakeColumnStats ConstantColumnStats(const ParquetFileMetadata &file_metadata, FieldIndex field_index,
 	                                        const LogicalType &field_type, const Value &value) const;
@@ -213,7 +221,7 @@ private:
 	//! The types bound from the DuckDB type strings of the files
 	unordered_map<string, LogicalType> bound_types;
 	//! The root columns of the table that do not allow NULL values, by field index
-	unordered_map<idx_t, string> not_null_columns;
+	unordered_map<idx_t, Identifier> not_null_columns;
 	vector<string> partition_key_names;
 	//! The hive keys of the identity partitions by field index
 	unordered_map<idx_t, string> identity_hive_keys;
@@ -230,6 +238,12 @@ static optional_idx GetOptionalIndex(const VectorIterator<int64_t>::ValueEntry &
 // Negative counts signal a parquet reader underflow
 static bool TryGetCount(const VectorIterator<int64_t>::ValueEntry &entry, idx_t &result) {
 	return entry.IsValid() && TryCast::Operation<int64_t, idx_t>(entry.GetValue(), result);
+}
+
+static InvalidInputException MappingError(const string &column_name, const string &file_path,
+                                          const DuckLakeTableEntry &table, const string &failures) {
+	return InvalidInputException("Failed to map column \"%s\" from file \"%s\" to the column in table %s\n* %s",
+	                             column_name, file_path, table.name, failures);
 }
 
 void DuckLakeFileProcessor::ReadParquetFullMetadata(const string &glob, vector<DuckLakeDataFile> &written_files) {
@@ -335,8 +349,8 @@ FROM parquet_full_metadata(%s)
 			}
 
 			auto column = make_uniq<ParquetColumn>();
-			column->name = schema_entry.GetChildValue<0>().GetValue().GetString();
-			column->parquet_name = column->name;
+			column->parquet_name = schema_entry.GetChildValue<0>().GetValue().GetString();
+			column->name = Identifier(column->parquet_name);
 			column->converted_type = GetStringOrEmpty(schema_entry.GetChildValue<2>());
 			column->field_id = GetOptionalIndex(schema_entry.GetChildValue<3>());
 			column->logical_type = GetStringOrEmpty(schema_entry.GetChildValue<4>());
@@ -406,10 +420,11 @@ FROM parquet_full_metadata(%s)
 			auto &column = column_entry->second.get();
 			auto &column_field = column_field_entry->second;
 			DuckLakeColumnStats stats(column_field.second);
-			// min/max are copied out of the footer here, once per row group, so a skipped column
-			// never materializes them - the geo bbox below is untouched, as ClearBounds was too
+			// a skipped column reads its bounds only to check that they fit the table type
+			auto check_bounds = column.bounds_type.id() != LogicalTypeId::INVALID;
+			auto read_bounds = !column.skip_bounds || check_bounds;
 			auto stats_min = stats_entry.GetChildValue<1>();
-			if (!column.skip_bounds && stats_min.IsValid()) {
+			if (read_bounds && stats_min.IsValid()) {
 				stats.has_min = true;
 				stats.min = stats_min.GetValue().GetString();
 				// files without the footer flag conservatively count as truncated
@@ -418,14 +433,22 @@ FROM parquet_full_metadata(%s)
 			}
 
 			auto stats_max = stats_entry.GetChildValue<2>();
-			if (!column.skip_bounds && stats_max.IsValid()) {
+			if (read_bounds && stats_max.IsValid()) {
 				stats.has_max = true;
 				stats.max = stats_max.GetValue().GetString();
 				auto max_is_exact = stats_entry.GetChildValue<9>();
 				stats.max_is_exact = max_is_exact.IsValid() && max_is_exact.GetValue();
 			}
-			if (column.bounds_type.id() != LogicalTypeId::INVALID) {
-				stats.CastBoundsFrom(column.bounds_type);
+			if (check_bounds) {
+				auto dropped_value = stats.CastBoundsFrom(column.bounds_type);
+				if (dropped_value) {
+					throw MappingError(column.path, file.filepath, table,
+					                   StringUtil::Format("The value %s of type %s in the file does not fit type %s",
+					                                      *dropped_value, column.bounds_type, stats.type));
+				}
+			}
+			if (column.skip_bounds) {
+				stats.ClearBounds();
 			}
 
 			stats.has_null_count = TryGetCount(stats_entry.GetChildValue<3>(), stats.null_count);
@@ -535,9 +558,8 @@ bool DuckLakeParquetTypeChecker::CheckTypes(const vector<LogicalType> &types) {
 }
 
 void DuckLakeParquetTypeChecker::Fail() {
-	throw InvalidInputException("Failed to map column \"%s%s\" from file \"%s\" to the column in table \"%s\"\n* %s",
-	                            prefix.empty() ? prefix : prefix + ".", column.name, file_metadata.filepath,
-	                            table.name.GetIdentifierName(), StringUtil::Join(failures, "\n* "));
+	auto column_name = prefix.empty() ? column.name.GetIdentifierName() : prefix + "." + column.name;
+	throw MappingError(column_name, file_metadata.filepath, table, StringUtil::Join(failures, "\n* "));
 }
 
 void DuckLakeParquetTypeChecker::CheckSignedInteger() {
@@ -745,7 +767,7 @@ static void CollapseRepeatedGroup(unique_ptr<ParquetColumn> &element) {
 void DuckLakeFileProcessor::WrapRepeatedColumn(ParquetFileMetadata &file_metadata, ParquetColumn &column) {
 	auto element = make_uniq<ParquetColumn>();
 	element->column_id = column.column_id;
-	element->name = column.parquet_name;
+	element->name = Identifier(column.parquet_name);
 	element->parquet_name = column.parquet_name;
 	element->converted_type = column.converted_type;
 	element->field_id = column.field_id;
@@ -776,9 +798,10 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 		prefix += ".";
 	}
 	prefix += column.name;
+	column.path = prefix;
 
 	auto map_entry = make_uniq<DuckLakeNameMapEntry>();
-	map_entry->source_name = column.name;
+	map_entry->source_name = column.name.GetIdentifierName();
 	map_entry->target_field_id = field_id.GetFieldIndex();
 
 	// Store the mapping from column to field for later statistics processing
@@ -789,8 +812,12 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 	}
 	column.skip_bounds = skipped_fields.count(field_id.GetFieldIndex().index) > 0;
 	auto &field_type = field_id.Type();
-	if (!field_id.HasChildren() && !column.skip_bounds && column.duckdb_type != field_type &&
-	    !DuckLakeColumnStats::BoundsSurviveTypePromotion(column.duckdb_type, field_type)) {
+	auto bounds_survive = DuckLakeColumnStats::BoundsSurviveTypePromotion(column.duckdb_type, field_type);
+	if (bounds_survive && field_type.id() == LogicalTypeId::DECIMAL) {
+		// a decimal with fewer integer digits holds only some values of the file
+		bounds_survive = BoundCastExpression::CastIsInvertible(column.duckdb_type, field_type);
+	}
+	if (!field_id.HasChildren() && column.duckdb_type != field_type && !bounds_survive) {
 		column.bounds_type = column.duckdb_type;
 	}
 
@@ -815,8 +842,8 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 		case LogicalTypeId::MAP: {
 			// skip the repeated element between the map and its children, the first of which is the key
 			auto &key_value = column.child_columns[0]->child_columns;
-			if (key_value.size() == 2 && StringUtil::CIEquals(key_value[0]->name, field_children[1]->Name()) &&
-			    StringUtil::CIEquals(key_value[1]->name, field_children[0]->Name())) {
+			if (key_value.size() == 2 && field_children[1]->Name() == key_value[0]->name &&
+			    field_children[0]->Name() == key_value[1]->name) {
 				key_value[0]->name = field_children[0]->Name();
 				key_value[1]->name = field_children[1]->Name();
 			}
@@ -865,7 +892,7 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFil
 	auto cast_result = hive_value.DefaultTryCastAs(target_type, &error);
 	if (!cast_result) {
 		// LCOV_EXCL_START
-		throw InvalidInputException("Column \"%s\" exists as a hive partition with value \"%s\", but this value cannot "
+		throw InvalidInputException("Column %s exists as a hive partition with value \"%s\", but this value cannot "
 		                            "be cast to the column type \"%s\"",
 		                            field_id.Name(), hive_value.ToString(), field_id.Type());
 		// LCOV_EXCL_STOP
@@ -982,7 +1009,7 @@ void DuckLakeFileProcessor::CheckNotNullValues(const ParquetFileMetadata &file_m
 	ParquetFileScanner scanner(context, file);
 	auto column_idx = scanner.FindColumn(column.name);
 	if (!column_idx.IsValid()) {
-		throw InternalException("Column \"%s\" not found in file \"%s\"", column.name, file.path);
+		throw InternalException("Column %s not found in file \"%s\"", column.name, file.path);
 	}
 	scanner.SetColumnIds({column_idx.GetIndex()});
 	DataChunk chunk;
@@ -1009,7 +1036,7 @@ vector<unique_ptr<DuckLakeNameMapEntry>> DuckLakeFileProcessor::MapColumns(
     ParquetFileMetadata &file_metadata, vector<unique_ptr<ParquetColumn>> &parquet_columns,
     const vector<unique_ptr<DuckLakeFieldId>> &field_ids, const string &prefix, bool repeated) {
 	// create a top-level map of columns
-	case_insensitive_map_t<const_reference<DuckLakeFieldId>> field_id_map;
+	identifier_map_t<const_reference<DuckLakeFieldId>> field_id_map;
 	for (auto &field_id : field_ids) {
 		field_id_map.emplace(field_id->Name(), *field_id);
 	}
@@ -1021,12 +1048,12 @@ vector<unique_ptr<DuckLakeNameMapEntry>> DuckLakeFileProcessor::MapColumns(
 			if (ignore_extra_columns) {
 				continue;
 			}
-			throw InvalidInputException("Column \"%s%s\" exists in file \"%s\" but was not found in table \"%s\"\n* "
+			throw InvalidInputException("Column \"%s%s\" exists in file \"%s\" but was not found in table %s\n* "
 			                            "Set ignore_extra_columns => true to add the file anyway",
-			                            prefix.empty() ? prefix : prefix + ".", col->name, file_metadata.filepath,
-			                            table.name.GetIdentifierName());
+			                            prefix.empty() ? prefix : prefix + ".", col->name.GetIdentifierName(),
+			                            file_metadata.filepath, table.name);
 		}
-		if (!TryMapHiveColumn(file_metadata, prefix, col->name, entry->second.get(), column_maps)) {
+		if (!TryMapHiveColumn(file_metadata, prefix, col->name.GetIdentifierName(), entry->second.get(), column_maps)) {
 			column_maps.push_back(MapColumn(file_metadata, *col, entry->second.get(), prefix, repeated));
 		}
 		field_id_map.erase(entry);
@@ -1034,16 +1061,15 @@ vector<unique_ptr<DuckLakeNameMapEntry>> DuckLakeFileProcessor::MapColumns(
 	for (auto &entry : field_id_map) {
 		auto &field_id = entry.second.get();
 		// column does not exist in the file - check hive partitions
-		if (TryMapHiveColumn(file_metadata, prefix, field_id.Name(), field_id, column_maps)) {
+		if (TryMapHiveColumn(file_metadata, prefix, field_id.Name().GetIdentifierName(), field_id, column_maps)) {
 			continue;
 		}
 		// column does not exist - check if we are ignoring missing columns
 		if (!allow_missing) {
-			throw InvalidInputException(
-			    "Column \"%s%s\" exists in table \"%s\" but was not found in file \"%s\"\n* Set "
-			    "allow_missing => true to allow missing fields and columns",
-			    prefix.empty() ? prefix : prefix + ".", entry.second.get().Name(), table.name.GetIdentifierName(),
-			    file_metadata.filepath);
+			throw InvalidInputException("Column \"%s%s\" exists in table %s but was not found in file \"%s\"\n* Set "
+			                            "allow_missing => true to allow missing fields and columns",
+			                            prefix.empty() ? prefix : prefix + ".", field_id.Name().GetIdentifierName(),
+			                            table.name, file_metadata.filepath);
 		}
 		DuckLakeMissingField::Collect(field_id, field_id.GetColumnData().initial_default.IsNull(), repeated,
 		                              file_metadata.missing_columns);
@@ -1063,21 +1089,57 @@ void DuckLakeFileProcessor::CollectLiveFieldIds(const vector<unique_ptr<DuckLake
 	}
 }
 
-void DuckLakeFileProcessor::ValidateParquetFieldIds(const ParquetFileMetadata &file,
-                                                    const vector<unique_ptr<ParquetColumn>> &columns,
-                                                    const unordered_set<idx_t> &live_field_ids, const string &prefix) {
+//! The reader takes these field ids for the row id and snapshot id columns that DuckLake writes
+static bool IsRowLineageFieldId(idx_t field_id) {
+	return field_id == idx_t(MultiFileReader::ROW_ID_FIELD_ID) ||
+	       field_id == idx_t(MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID);
+}
+
+static bool HasFieldIdNotGivenOut(const vector<unique_ptr<ParquetColumn>> &columns, idx_t next_column_id) {
 	for (auto &column : columns) {
-		const auto full_name = prefix.empty() ? column->name : StringUtil::Format("%s.%s", prefix, column->name);
-		if (!IsDuckLakeInternalColumn(column->name) && column->field_id.IsValid()) {
-			const auto source_field_id = column->field_id.GetIndex();
-			if (live_field_ids.find(source_field_id) == live_field_ids.end()) {
-				throw InvalidInputException(
-				    "Parquet field ID mismatch for column \"%s\" in file \"%s\": field ID %d is not a live field in "
-				    "table \"%s\"",
-				    full_name, file.filepath, source_field_id, table.name.GetIdentifierName());
+		if (!IsDuckLakeInternalColumn(column->parquet_name) && column->field_id.IsValid()) {
+			auto field_id = column->field_id.GetIndex();
+			if (field_id >= next_column_id && !IsRowLineageFieldId(field_id)) {
+				return true;
 			}
 		}
-		ValidateParquetFieldIds(file, column->child_columns, live_field_ids, full_name);
+		if (HasFieldIdNotGivenOut(column->child_columns, next_column_id)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+//! Whether another writer such as Iceberg wrote the file: it has a field id the table never gave out, and none of the
+//! internal columns that DuckLake writes
+static bool HasForeignFieldIds(const vector<unique_ptr<ParquetColumn>> &columns, idx_t next_column_id) {
+	for (auto &column : columns) {
+		if (StringUtil::StartsWith(column->parquet_name, "_ducklake_internal_")) {
+			return false;
+		}
+	}
+	return HasFieldIdNotGivenOut(columns, next_column_id);
+}
+
+void DuckLakeFileProcessor::ValidateParquetFieldIds(const ParquetFileMetadata &file,
+                                                    const vector<unique_ptr<ParquetColumn>> &columns,
+                                                    const unordered_set<idx_t> &live_field_ids, bool foreign_field_ids,
+                                                    const string &prefix) {
+	for (auto &column : columns) {
+		const auto full_name =
+		    prefix.empty() ? column->parquet_name : StringUtil::Format("%s.%s", prefix, column->parquet_name);
+		if (!IsDuckLakeInternalColumn(column->parquet_name) && column->field_id.IsValid()) {
+			const auto source_field_id = column->field_id.GetIndex();
+			// columns map by name, the ids of another writer's file are not DuckLake's
+			if (live_field_ids.find(source_field_id) == live_field_ids.end() &&
+			    (!foreign_field_ids || IsRowLineageFieldId(source_field_id))) {
+				throw InvalidInputException(
+				    "Parquet field ID mismatch for column \"%s\" in file \"%s\": field ID %d is not a live field in "
+				    "table %s",
+				    full_name, file.filepath, source_field_id, table.name);
+			}
+		}
+		ValidateParquetFieldIds(file, column->child_columns, live_field_ids, foreign_field_ids, full_name);
 	}
 }
 
@@ -1124,7 +1186,9 @@ void DuckLakeFileProcessor::DetermineMapping(ParquetFileMetadata &file) {
 	// Before we map parquet columns to DuckLake columns, we need to validate that the parquet field ids are live.
 	unordered_set<idx_t> live_field_ids;
 	CollectLiveFieldIds(table.GetFieldData().GetFieldIds(), live_field_ids);
-	ValidateParquetFieldIds(file, file.columns, live_field_ids);
+	// a file this table wrote only has ids it gave out, so one with an id of a dropped column cannot be added
+	auto foreign_field_ids = HasForeignFieldIds(file.columns, table.GetNextColumnId(transaction));
+	ValidateParquetFieldIds(file, file.columns, live_field_ids, foreign_field_ids);
 
 	file.map_entries = MapColumns(file, file.columns, table.GetFieldData().GetFieldIds());
 }

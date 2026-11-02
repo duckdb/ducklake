@@ -1,0 +1,213 @@
+# name: test/sql/tags/tags_time_travel.test
+# description: a snapshot tag names a snapshot in AT clauses, attaches and the metadata functions
+# group: [tags]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_time_travel_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+CALL ducklake_create_tag('dl', 'one')
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+CALL ducklake_create_tag('dl', 'two')
+
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+query I
+SELECT i FROM dl.t AT (VERSION => 'one') ORDER BY i
+----
+1
+
+query I
+SELECT i FROM dl.t AT (VERSION => 'TWO') ORDER BY i
+----
+1
+2
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+2
+
+# a number in a string is still a snapshot id
+query I
+SELECT i FROM dl.t AT (VERSION => '2') ORDER BY i
+----
+1
+
+statement error
+SELECT i FROM dl.t AT (VERSION => 'three')
+----
+No snapshot tag with the name "three" exists
+
+statement error
+SELECT i FROM dl.t AT (VERSION => NULL)
+----
+Snapshot identifier cannot be NULL
+
+statement error
+SELECT i FROM dl.t AT (VERSION => NULL::VARCHAR)
+----
+Snapshot identifier cannot be NULL
+
+# a tag created in the transaction resolves, a tag dropped in it does not
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_create_tag('dl', 'local', version => 2)
+
+query I
+SELECT i FROM dl.t AT (VERSION => 'local') ORDER BY i
+----
+1
+
+statement ok
+CALL ducklake_drop_tag('dl', 'one')
+
+statement error
+SELECT i FROM dl.t AT (VERSION => 'one')
+----
+No snapshot tag with the name "one" exists
+
+statement ok
+ROLLBACK
+
+query I
+SELECT i FROM dl.t AT (VERSION => 'one') ORDER BY i
+----
+1
+
+# the metadata functions accept a tag name where they accept a snapshot id
+query I
+SELECT COUNT(*) FROM ducklake_list_files('dl', 't', snapshot_version => 'two')
+----
+2
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('dl', 't', snapshot_version => 2)
+----
+1
+
+# other values are converted to a snapshot id or rejected
+query I
+SELECT COUNT(*) FROM ducklake_list_files('dl', 't', snapshot_version => 2.0)
+----
+1
+
+statement error
+SELECT COUNT(*) FROM ducklake_list_files('dl', 't', snapshot_version => [2])
+----
+not by a INTEGER[]
+
+statement error
+SELECT COUNT(*) FROM ducklake_list_files('dl', 't', snapshot_version => TIMESTAMP '2000-01-01 00:00:00')
+----
+not by a TIMESTAMP
+
+statement error
+SELECT COUNT(*) FROM ducklake_list_files('dl', 't', snapshot_version => TIMESTAMPTZ '2000-01-01 00:00:00+00')
+----
+snapshot_time takes a timestamp
+
+# the change feed includes both named snapshots
+query II
+SELECT i, change_type FROM ducklake_table_changes('dl', 'main', 't', 'one', 'two') ORDER BY i
+----
+1	insert
+2	insert
+
+query I
+SELECT i FROM ducklake_table_insertions('dl', 'main', 't', 'one', 'two') ORDER BY i
+----
+1
+2
+
+query I
+SELECT COUNT(*) FROM ducklake_table_deletions('dl', 'main', 't', 'one', 'two')
+----
+0
+
+statement error
+SELECT * FROM ducklake_table_insertions('dl', 'main', 't', 'one', 'three')
+----
+No snapshot tag with the name "three" exists
+
+# a tag at one bound goes with a snapshot id at the other
+query I
+SELECT i FROM dl.table_changes('t', 1, 'two') ORDER BY i
+----
+1
+2
+
+query I
+SELECT i FROM ducklake_table_deletions('dl', 'main', 't', 'two', 6)
+----
+1
+
+# a quoted timestamp next to a timestamp is a timestamp
+query I
+SELECT i FROM ducklake_table_insertions('dl', 'main', 't', '1970-01-01', now()) ORDER BY i
+----
+1
+2
+
+# a string that reads as a number is a snapshot id, as the BIGINT parameters read it
+query I
+SELECT i FROM ducklake_table_insertions('dl', 'main', 't', '-0.4', 'two') ORDER BY i
+----
+1
+2
+
+statement error
+SELECT i FROM dl.t AT (VERSION => '-0.4')
+----
+does not exist at version -0.4
+
+statement error
+SELECT i FROM dl.t AT (VERSION => '-1')
+----
+can't be cast because the value is out of range
+
+statement ok
+DETACH dl
+
+# a read-only attach at a tag
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl_one (DATA_PATH '{DATA_PATH}/tags_time_travel_files', SNAPSHOT_VERSION 'one')
+
+query I
+SELECT i FROM dl_one.t ORDER BY i
+----
+1
+
+statement error
+INSERT INTO dl_one.t VALUES (3)
+----
+read-only
+
+statement ok
+DETACH dl_one
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl_three (DATA_PATH '{DATA_PATH}/tags_time_travel_files', SNAPSHOT_VERSION 'three')
+----
+No snapshot tag with the name "three" exists

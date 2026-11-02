@@ -112,12 +112,19 @@ INSERT INTO ducklake.compact_me FROM range(100, 200);
 statement ok
 CALL ducklake.merge_adjacent_files()
 
+statement ok
+SET VARIABLE compacted_file = (SELECT data_file FROM ducklake_list_files('ducklake', 'compact_me'))
+
+statement ok
+SET VARIABLE compacted_rg_count = (SELECT num_row_groups FROM parquet_file_metadata(getvariable('compacted_file')))
+
 query II
-SELECT record_count, row_group_count FROM dl.ducklake_data_file
+SELECT record_count, row_group_count = getvariable('compacted_rg_count')
+FROM dl.ducklake_data_file
 WHERE table_id = (SELECT table_id FROM dl.ducklake_table WHERE table_name = 'compact_me')
   AND end_snapshot IS NULL
 ----
-200	1
+200	true
 
 # Flushing inlined data writes parquet files with a row group count
 statement ok

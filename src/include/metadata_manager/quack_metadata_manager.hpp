@@ -42,10 +42,14 @@ public:
 	void ClearCache() override;
 
 	bool MetadataExists() override;
-	bool InlinedDeletionTableExists(const string &table_name) override;
+	bool InlinedDeletionTableExists(const Identifier &table_name) override;
 
 protected:
 	string MetadataExistsQuery() const override;
+	string SnapshotTimeSql() const override {
+		// the server's clock, the commit batch runs in a new server transaction
+		return "NOW()";
+	}
 };
 
 } // namespace duckdb

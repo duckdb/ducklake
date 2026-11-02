@@ -1,0 +1,102 @@
+# name: test/sql/partitioning/bucket_pruning_reset_retype_set.test
+# description: bucket pruning keeps the files written before RESET PARTITIONED BY, a type change and SET PARTITIONED BY back to the same spec in one transaction
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/bucket_pruning_reset_retype_set', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+USE ducklake
+
+# type changes that change the hash of a value, and one that keeps it
+foreach source,target INTEGER,HUGEINT INTEGER,DOUBLE BIGINT,HUGEINT INTEGER,BIGINT
+
+statement ok
+CREATE TABLE t (c {source}, k INTEGER)
+
+statement ok
+ALTER TABLE t SET PARTITIONED BY (bucket(16, c))
+
+statement ok
+INSERT INTO t VALUES (5, 10), (6, 11)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE t RESET PARTITIONED BY
+
+statement ok
+ALTER TABLE t ALTER c TYPE {target}
+
+statement ok
+ALTER TABLE t SET PARTITIONED BY (bucket(16, c))
+
+statement ok
+INSERT INTO t VALUES (5, 20)
+
+statement ok
+COMMIT
+
+query I
+SELECT k FROM t WHERE c = 5 ORDER BY k
+----
+10
+20
+
+query I
+SELECT k FROM t WHERE c IN (5, 6, 99) ORDER BY k
+----
+10
+11
+20
+
+statement ok
+INSERT INTO t VALUES (6, 21)
+
+query I
+SELECT k FROM t WHERE c = 6 ORDER BY k
+----
+11
+21
+
+statement ok
+DROP TABLE t
+
+endloop
+
+# a spec that changes nothing is not written again
+statement ok
+CREATE TABLE same (c INTEGER, k INTEGER)
+
+statement ok
+ALTER TABLE same SET PARTITIONED BY (bucket(16, c))
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE same RESET PARTITIONED BY
+
+statement ok
+ALTER TABLE same ALTER c TYPE BIGINT
+
+statement ok
+ALTER TABLE same SET PARTITIONED BY (bucket(16, c))
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_partition_info
+WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'same' AND end_snapshot IS NULL)
+----
+1

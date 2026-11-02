@@ -1,0 +1,106 @@
+# name: test/sql/settings/set_option_commit_retry.test
+# description: Options set or reset in a transaction are written by its commit, also when the commit is retried
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/set_option_commit_retry', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+CREATE TABLE dl.u (i INTEGER) WITH (parquet_version = 2)
+
+# con1 commits first, so the commit of con2 is retried
+statement ok con2
+BEGIN
+
+statement ok con2
+SELECT count(*) FROM dl.t
+
+statement ok con2
+CALL dl.set_option('parquet_compression', 'gzip', table_name => 'u')
+
+statement ok con2
+ALTER TABLE dl.u SET (parquet_row_group_size = 1000)
+
+statement ok con2
+ALTER TABLE dl.u RESET (parquet_version)
+
+query II con2
+SELECT option_name, value FROM dl.options() WHERE scope = 'TABLE' ORDER BY ALL
+----
+parquet_compression	gzip
+parquet_row_group_size	1000
+
+statement ok con2
+INSERT INTO dl.t VALUES (1)
+
+statement ok con1
+INSERT INTO dl.t VALUES (2)
+
+statement ok con2
+COMMIT
+
+query I
+SELECT count(*) FROM dl.t
+----
+2
+
+# options() reads the options from the metadata catalog
+query III
+SELECT option_name, value, scope FROM dl.options() WHERE option_name LIKE 'parquet%' ORDER BY ALL
+----
+parquet_compression	gzip	TABLE
+parquet_row_group_size	1000	TABLE
+
+# a transaction that only changes options writes them as well
+statement ok
+BEGIN
+
+statement ok
+CALL dl.set_option('parquet_compression', 'snappy', table_name => 't')
+
+statement ok
+ALTER TABLE dl.u RESET (parquet_row_group_size)
+
+statement ok
+COMMIT
+
+query III
+SELECT option_name, value, scope_entry FROM dl.options() WHERE option_name LIKE 'parquet%' ORDER BY ALL
+----
+parquet_compression	gzip	main.u
+parquet_compression	snappy	main.t
+
+# a reset after a set in the same transaction removes the option
+statement ok
+BEGIN
+
+statement ok
+CALL dl.set_option('parquet_row_group_size', 500, table_name => 't')
+
+statement ok
+ALTER TABLE dl.t RESET (parquet_row_group_size)
+
+query II
+SELECT option_name, value FROM dl.options() WHERE scope_entry = 'main.t' ORDER BY ALL
+----
+parquet_compression	snappy
+
+statement ok
+COMMIT
+
+query II
+SELECT option_name, value FROM dl.options() WHERE scope_entry = 'main.t' ORDER BY ALL
+----
+parquet_compression	snappy
+

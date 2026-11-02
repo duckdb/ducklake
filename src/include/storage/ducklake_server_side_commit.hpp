@@ -26,7 +26,7 @@ struct DuckLakeServerSideCommitResult {
 //! Executes a DuckLake commit server-side from staged tables.
 class DuckLakeServerSideCommit {
 public:
-	DuckLakeServerSideCommit(ClientContext &context, string metadata_schema_name, int64_t schema_version);
+	DuckLakeServerSideCommit(ClientContext &context, Identifier metadata_schema_name, int64_t schema_version);
 
 	//! Transform staged tables to Objects and commit.
 	DuckLakeServerSideCommitResult Run();
@@ -58,8 +58,8 @@ private:
 	void ReadStagedCompactions();
 	//! Read staged name maps and rebuild entry trees.
 	void ReadStagedNameMaps();
-	//! Load current global table stats from the metadata catalog.
-	void ReadExistingTableStats();
+	//! The current global stats of a table, read from the metadata catalog when first asked for
+	shared_ptr<DuckLakeTableStats> GetExistingTableStats(TableIndex table_id);
 
 	//! Query the metadata catalog for the latest snapshot.
 	DuckLakeSnapshot ReadLatestSnapshot();
@@ -74,9 +74,9 @@ private:
 	//! Build INSERT SQL from staged inlined tuples.
 	string BuildInlinedDataInserts(const vector<DuckLakeInlinedDataInfo> &new_data);
 	//! Resolve and cache the latest inlined-data table name.
-	const string &ResolveInlinedTableName(TableIndex table_id);
+	const Identifier &ResolveInlinedTableName(TableIndex table_id);
 	//! All inlined-data table names registered for a table id (any schema version).
-	vector<string> LookupInlinedTableNames(TableIndex table_id);
+	vector<Identifier> LookupInlinedTableNames(TableIndex table_id);
 	//! Replace {METADATA_CATALOG}, {SNAPSHOT_ID}, etc. in SQL.
 	string SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const;
 	bool InlinedFileDeletionTableExists(TableIndex table_id);
@@ -87,7 +87,7 @@ private:
 
 private:
 	ClientContext &context;
-	const string metadata_schema_name;
+	const Identifier metadata_schema_name;
 	const string schema_id;
 	const int64_t schema_version;
 	Connection fresh_conn;
@@ -99,6 +99,8 @@ private:
 	TransactionChangeInformation transaction_changes;
 	map<pair<TableIndex, FieldIndex>, LogicalType> column_types;
 	map<TableIndex, shared_ptr<DuckLakeTableStats>> existing_table_stats;
+	//! The tables the commit writes, whose stats are read together
+	vector<TableIndex> commit_tables;
 	bool supports_v1_1_metadata = false;
 	bool staged_dropped_files_read = false;
 	vector<pair<string, idx_t>> staged_dropped_files;
@@ -109,7 +111,7 @@ private:
 	//! Parallel row_ids for update-inlining; empty if !HasPreservedRowIds.
 	map<TableIndex, vector<int64_t>> staged_inlined_row_ids;
 	//! Cache of inlined_table_name lookups across the commit retry loop.
-	map<idx_t, string> inlined_table_name_cache;
+	map<idx_t, Identifier> inlined_table_name_cache;
 	//! Delete files attached to transaction-local data files.
 	map<idx_t, vector<DuckLakeDeleteFile>> attached_deletes;
 	//! Compaction-output files indexed by compaction_id, then ordered by file_order.

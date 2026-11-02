@@ -149,6 +149,16 @@ CALL ducklake.set_option('rewrite_delete_threshold', -1)
 ----
 The rewrite_delete_threshold must be between 0 and 1
 
+statement error
+CALL ducklake_rewrite_data_files('ducklake', 'test', delete_threshold => 'nan'::DOUBLE);
+----
+The delete_threshold option must be between 0 and 1
+
+statement error
+CALL ducklake.set_option('rewrite_delete_threshold', 'nan')
+----
+The rewrite_delete_threshold must be between 0 and 1
+
 # Test cleanup
 query I
 SELECT COUNT(*) FROM GLOB('{DATA_PATH}/ducklake_rewrite_data/**/*')

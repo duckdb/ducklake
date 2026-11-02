@@ -1,0 +1,52 @@
+# name: test/sql/partitioning/bucket_long_values.test
+# description: Bucket partitions of strings longer than the inlined string bytes and of HUGEINT values
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/bucket_long_values', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.s (id INTEGER, c VARCHAR)
+
+statement ok
+ALTER TABLE lake.s SET PARTITIONED BY (bucket(7, c))
+
+statement ok
+INSERT INTO lake.s SELECT range, repeat('x', 13 + range) FROM range(5)
+
+statement ok
+CREATE TABLE lake.h (v HUGEINT)
+
+statement ok
+ALTER TABLE lake.h SET PARTITIONED BY (bucket(7, v))
+
+statement ok
+INSERT INTO lake.h VALUES (170141183460469231731687303715884105727)
+
+# the buckets of the Iceberg Murmur3 hash, 13 to 17 times 'x' fall into 1, 2, 3, 3 and 6
+query III
+SELECT t.table_name, pv.partition_value, sum(df.record_count)
+FROM __ducklake_metadata_lake.ducklake_file_partition_value pv
+JOIN __ducklake_metadata_lake.ducklake_data_file df USING (data_file_id)
+JOIN __ducklake_metadata_lake.ducklake_table t ON t.table_id = df.table_id
+GROUP BY ALL
+ORDER BY ALL
+----
+h	3	1
+s	1	1
+s	2	1
+s	3	2
+s	6	1
+
+query I
+SELECT count(*) FROM lake.s WHERE c = repeat('x', 16)
+----
+1

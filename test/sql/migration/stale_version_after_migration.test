@@ -28,10 +28,21 @@ SELECT * FROM stale.scd
 ----
 The catalog was migrated by another connection from version 1.0 to
 
+query I
+SELECT count(*) FROM ducklake_snapshots('migrated')
+----
+3
+
 statement error
 CALL ducklake_expire_snapshots('stale', older_than => now())
 ----
 The catalog was migrated by another connection from version 1.0 to
+
+# the stale connection expired nothing
+query I
+SELECT count(*) FROM ducklake_snapshots('migrated')
+----
+3
 
 query I
 SELECT count(*) FROM migrated.scd

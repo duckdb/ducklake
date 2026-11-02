@@ -1,0 +1,54 @@
+# name: test/sql/sorted_table/sorted_by_prepared_rebind.test
+# description: a prepared insert evaluates sort keys that depend on the session again on every execution
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/sorted_by_prepared_rebind', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+SET VARIABLE allow_sort = true
+
+statement ok
+CREATE TABLE lake.t (i INTEGER)
+
+statement ok
+ALTER TABLE lake.t SET SORTED BY (CASE WHEN getvariable('allow_sort') THEN i ELSE error('sort disabled') END)
+
+statement ok
+PREPARE ins AS INSERT INTO lake.t VALUES (1)
+
+statement ok
+EXECUTE ins
+
+statement ok
+SET VARIABLE allow_sort = false
+
+statement error
+EXECUTE ins
+----
+sort disabled
+
+statement error
+INSERT INTO lake.t VALUES (3)
+----
+sort disabled
+
+statement ok
+SET VARIABLE allow_sort = true
+
+statement ok
+EXECUTE ins
+
+query I
+SELECT i FROM lake.t ORDER BY i
+----
+1
+1

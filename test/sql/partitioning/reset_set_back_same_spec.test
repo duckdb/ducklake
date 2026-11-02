@@ -1,0 +1,198 @@
+# name: test/sql/partitioning/reset_set_back_same_spec.test
+# description: files written after RESET PARTITIONED BY and SET PARTITIONED BY back to the committed columns in one transaction keep the committed spec
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/reset_set_back/', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(id INTEGER, v INTEGER)
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (id)
+
+statement ok
+INSERT INTO lake.t VALUES (1, 10)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.t RESET PARTITIONED BY
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (id)
+
+statement ok
+INSERT INTO lake.t VALUES (2, 20)
+
+statement ok
+INSERT INTO lake.t VALUES (2, 21)
+
+statement ok
+COMMIT
+
+# every file refers to a written spec, the committed one
+query II
+SELECT count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_info p WHERE p.table_id = f.table_id AND p.partition_id = f.partition_id)), count(DISTINCT partition_id)
+FROM meta.ducklake_data_file f
+WHERE end_snapshot IS NULL
+----
+0	1
+
+statement ok
+INSERT INTO lake.t VALUES (2, 22)
+
+query II
+SELECT count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_info p WHERE p.table_id = f.table_id AND p.partition_id = f.partition_id)), count(DISTINCT partition_id)
+FROM meta.ducklake_data_file f
+WHERE end_snapshot IS NULL
+----
+0	1
+
+# the three files of partition 2 merge into one
+query III
+SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('lake', 't')
+----
+t	3	1
+
+query II
+SELECT * FROM lake.t ORDER BY v
+----
+1	10
+2	20
+2	21
+2	22
+
+query I
+SELECT count(*) FROM lake.t WHERE id = 2
+----
+3
+
+# an intermediate spec is kept for its files, the last one set back keeps the committed spec
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.t RESET PARTITIONED BY
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (v)
+
+statement ok
+INSERT INTO lake.t VALUES (5, 50)
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (id)
+
+statement ok
+INSERT INTO lake.t VALUES (6, 60)
+
+statement ok
+COMMIT
+
+query II
+SELECT count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_info p WHERE p.table_id = f.table_id AND p.partition_id = f.partition_id)), count(DISTINCT partition_id)
+FROM meta.ducklake_data_file f
+WHERE end_snapshot IS NULL
+----
+0	2
+
+query II
+SELECT * FROM lake.t WHERE id = 6
+----
+6	60
+
+# inlined rows, added files and deletes after the spec is set back
+statement ok
+CREATE TABLE lake.b(id INTEGER, v INTEGER)
+
+statement ok
+ALTER TABLE lake.b SET PARTITIONED BY (bucket(4, id))
+
+statement ok
+INSERT INTO lake.b VALUES (1, 10)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.b RESET PARTITIONED BY
+
+statement ok
+ALTER TABLE lake.b SET PARTITIONED BY (bucket(4, id))
+
+statement ok
+INSERT INTO lake.b VALUES (2, 20)
+
+statement ok
+COMMIT
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10, table_name => 'b')
+
+statement ok
+INSERT INTO lake.b VALUES (3, 30)
+
+statement ok
+DELETE FROM lake.b WHERE id = 2
+
+statement ok
+CALL ducklake_flush_inlined_data('lake', table_name => 'b')
+
+query II
+SELECT count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_info p WHERE p.table_id = f.table_id AND p.partition_id = f.partition_id)), count(DISTINCT partition_id)
+FROM meta.ducklake_data_file f
+WHERE end_snapshot IS NULL AND table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'b')
+----
+0	1
+
+query II
+SELECT * FROM lake.b ORDER BY id
+----
+1	10
+3	30
+
+query II
+SELECT * FROM lake.b WHERE id = 3
+----
+3	30
+
+# a file added after the spec is set back takes its partition value from its Hive directory
+statement ok
+COPY (SELECT 8 AS id, 80 AS v) TO '{DATA_PATH}/reset_set_back_hive' (FORMAT parquet, PARTITION_BY (id))
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.t RESET PARTITIONED BY
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (id)
+
+statement ok
+CALL ducklake_add_data_files('lake', 't', '{DATA_PATH}/reset_set_back_hive/**/*.parquet', hive_partitioning => true)
+
+statement ok
+COMMIT
+
+query II
+SELECT count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_info p WHERE p.table_id = f.table_id AND p.partition_id = f.partition_id)), count(DISTINCT partition_id)
+FROM meta.ducklake_data_file f
+WHERE end_snapshot IS NULL AND table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't')
+----
+0	2
+
+query II
+SELECT * FROM lake.t WHERE id = 8
+----
+8	80

@@ -327,7 +327,7 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 			auto transaction = read_info.GetTransaction();
 			auto inlined_deletes =
 			    read_info.include_local_changes
-			        ? transaction->GetInlinedDeletes(read_info.table.GetTableId(), file_entry.file.path)
+			        ? transaction->GetInlinedDeletes(read_info.table.GetTableId(), Identifier(file_entry.file.path))
 			        : nullptr;
 			// the flush source query already excludes these rows
 			if (inlined_deletes && read_info.scan_type != DuckLakeScanType::SCAN_FOR_FLUSH) {
@@ -381,7 +381,8 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 	                                 gstate.file_list, bind_data.reader_bind, bind_data.virtual_columns, global_state);
 
 	// Handle snapshot filters for files with multiple snapshots (partial_max set)
-	if (file_entry.snapshot_filter_max.IsValid() || file_entry.snapshot_filter_min.IsValid()) {
+	if (file_entry.snapshot_filter_max.IsValid() || file_entry.snapshot_filter_min.IsValid() ||
+	    !file_entry.snapshot_filter_excluded.empty()) {
 		// we have a snapshot filter - add it to the filter list
 		// find the column we need to filter on
 		auto &reader = *reader_data.reader;
@@ -421,6 +422,11 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 		if (file_entry.snapshot_filter_min.IsValid()) {
 			AddSnapshotFilter(reader, snapshot_col_idx, snapshot_col_type, file_entry.snapshot_filter_min.GetIndex(),
 			                  ExpressionType::COMPARE_GREATERTHANOREQUALTO, snapshot_filter_identity);
+		}
+
+		for (auto snapshot_id : file_entry.snapshot_filter_excluded) {
+			AddSnapshotFilter(reader, snapshot_col_idx, snapshot_col_type, snapshot_id,
+			                  ExpressionType::COMPARE_NOTEQUAL, snapshot_filter_identity);
 		}
 	}
 	return result;
@@ -478,7 +484,7 @@ shared_ptr<BaseFileReader> DuckLakeMultiFileReader::TryCreateInlinedDataReader(c
 		return nullptr;
 		// LCOV_EXCL_STOP
 	}
-	return make_shared_ptr<DuckLakeInlinedDataReader>(read_info, file, std::move(inlined_table_name),
+	return make_shared_ptr<DuckLakeInlinedDataReader>(read_info, file, Identifier(std::move(inlined_table_name)),
 	                                                  std::move(columns));
 }
 

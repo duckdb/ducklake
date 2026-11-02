@@ -23,7 +23,7 @@ namespace duckdb {
 using option_map_t = unordered_map<string, string>;
 
 struct DuckLakeOptions {
-	string metadata_database;
+	Identifier metadata_database;
 	string metadata_path;
 	Identifier metadata_schema;
 	string data_path;

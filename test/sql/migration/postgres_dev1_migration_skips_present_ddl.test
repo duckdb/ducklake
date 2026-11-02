@@ -48,6 +48,10 @@ SELECT count(*) FROM postgres_query('pg', 'SELECT 1 FROM information_schema.colu
 ----
 1
 
+# a dev catalog has no table of the versions after 1.1
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_snapshot_tag')
+
 statement ok
 CALL postgres_execute('pg', 'UPDATE dev1_skips_present_ddl.ducklake_metadata SET value = ''1.1-dev1'' WHERE key = ''version''')
 
@@ -64,7 +68,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_SCHEMA 'dev1_skips_prese
 query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
-1.1
+2.0-dev1
 
 query I
 SELECT * FROM dl.t

@@ -1,0 +1,244 @@
+# name: test/sql/tags/tags_transaction.test
+# description: snapshot tags follow the transaction that creates or drops them
+# group: [tags]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_transaction_files')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+# a rolled back tag is gone
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_create_tag('dl', 'v1')
+
+query III
+SELECT tag_name, snapshot_id, created_snapshot_id FROM ducklake_tags('dl')
+----
+v1	2	NULL
+
+statement ok
+ROLLBACK
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl')
+----
+0
+
+# a tag created and dropped in one transaction leaves nothing behind
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_create_tag('dl', 'v1')
+
+statement ok
+CALL ducklake_drop_tag('dl', 'v1')
+
+statement ok
+COMMIT
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl')
+----
+0
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('dl')
+----
+3
+
+# a tag commits with the other changes of its transaction
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+CALL ducklake_create_tag('dl', 'v1')
+
+statement ok
+COMMIT
+
+query III
+SELECT tag_name, snapshot_id, created_snapshot_id FROM ducklake_tags('dl')
+----
+v1	2	3
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 2)
+----
+1
+
+# a committed tag dropped and created again in one transaction ends the old row and starts a new one
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_drop_tag('dl', 'v1')
+
+statement ok
+CALL ducklake_create_tag('dl', 'v1', version => 1)
+
+statement ok
+COMMIT
+
+query III
+SELECT tag_name, snapshot_id, created_snapshot_id FROM ducklake_tags('dl')
+----
+v1	1	4
+
+query II
+SELECT snapshot_id, changes FROM ducklake_snapshots('dl') WHERE snapshot_id = 4
+----
+4	{tags_created=[v1], tags_dropped=[v1]}
+
+# a tag is not a schema change
+query I
+SELECT schema_version FROM ducklake_snapshots('dl') WHERE snapshot_id = 4
+----
+1
+
+# expiry in the transaction keeps the snapshots the transaction tagged
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_create_tag('dl', 'v2', version => 2)
+
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [2], dry_run => true)
+----
+0
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [2])
+
+statement ok
+COMMIT
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = 2
+----
+1
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') WHERE tag_name = 'v2'
+----
+v2	2
+
+# a committed tag dropped in the transaction is not listed and no longer protects its snapshot
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_drop_tag('dl', 'v2')
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl') WHERE tag_name = 'v2'
+----
+0
+
+statement ok
+ROLLBACK
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl') WHERE tag_name = 'v2'
+----
+1
+
+# a tag created earlier in the statement protects its snapshot from an expiry of the same statement
+statement ok
+SET threads = 1
+
+query I
+SELECT NULL::BIGINT AS snapshot_id FROM ducklake_create_tag('dl', 'pin', version => 3) UNION ALL SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [3])
+----
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = 3
+----
+1
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') WHERE tag_name = 'pin'
+----
+pin	3
+
+# the expiry reports the snapshots it expired
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [0, 3])
+----
+0
+
+# a snapshot expired earlier in the transaction cannot be tagged
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+statement ok
+BEGIN
+
+# the version is resolved before the expiry, so it is cached
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 6)
+----
+2
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [6])
+
+statement error
+CALL ducklake_create_tag('dl', 'expired_here', version => 6)
+----
+<REGEX>:.*(expired by this transaction|No snapshot found at version 6).*
+
+statement ok
+ROLLBACK
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = 6
+----
+1
+
+# a read-only transaction cannot create or drop tags
+statement ok
+BEGIN TRANSACTION READ ONLY
+
+statement error
+CALL ducklake_create_tag('dl', 'read_only')
+----
+read-only mode
+
+statement ok
+ROLLBACK
+
+statement ok
+BEGIN TRANSACTION READ ONLY
+
+statement error
+CALL ducklake_drop_tag('dl', 'pin')
+----
+read-only mode
+
+statement ok
+ROLLBACK
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') WHERE tag_name = 'pin'
+----
+pin	3

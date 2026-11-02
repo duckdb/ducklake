@@ -24,7 +24,7 @@ enum class InlinedVirtualColumn { NONE, COLUMN_ROW_ID, COLUMN_FILE_ROW_NUMBER, C
 class DuckLakeInlinedDataReader : public BaseFileReader {
 public:
 	//! Initialize an inlined data reader over a set of data stored within a table in the metadata catalog
-	DuckLakeInlinedDataReader(DuckLakeFunctionInfo &read_info, const OpenFileInfo &info, string table_name,
+	DuckLakeInlinedDataReader(DuckLakeFunctionInfo &read_info, const OpenFileInfo &info, Identifier table_name,
 	                          vector<MultiFileColumnDefinition> columns);
 	//! Initialize an inlined data reader over a set of data
 	DuckLakeInlinedDataReader(DuckLakeFunctionInfo &read_info, const OpenFileInfo &info,
@@ -45,7 +45,7 @@ public:
 
 	//! Read the columns of a committed inlined table, and the next file id of the catalog when it has rows
 	static shared_ptr<DuckLakeCommittedInlinedRows> ReadCommittedRows(DuckLakeFunctionInfo &read_info,
-	                                                                  const string &table_name,
+	                                                                  const Identifier &table_name,
 	                                                                  const vector<MultiFileColumnDefinition> &columns,
 	                                                                  optional_idx &next_file_id);
 
@@ -58,7 +58,7 @@ private:
 
 	mutex lock;
 	DuckLakeFunctionInfo &read_info;
-	string table_name;
+	Identifier table_name;
 	shared_ptr<DuckLakeInlinedData> data;
 	shared_ptr<DuckLakeCommittedInlinedRows> committed_rows;
 	bool initialized_scan = false;

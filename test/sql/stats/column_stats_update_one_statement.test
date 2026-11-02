@@ -1,0 +1,58 @@
+# name: test/sql/stats/column_stats_update_one_statement.test
+# description: A commit updates the column stats of a table in one statement, also for long strings mixed with NULLs
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lk (DATA_PATH '{DATA_PATH}/column_stats_update_one_statement', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lk.w (c0 INTEGER, c1 INTEGER, c2 INTEGER, c3 INTEGER, c4 INTEGER, c5 INTEGER, c6 INTEGER, c7 INTEGER, c8 INTEGER, c9 INTEGER, n VARCHAR, s VARCHAR)
+
+statement ok
+INSERT INTO lk.w SELECT r, r + 1, r + 2, r + 3, r + 4, r + 5, r + 6, r + 7, r + 8, r + 9, NULL, CASE WHEN r % 2 = 0 THEN repeat('a', 40) || r END FROM range(5) t(r)
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+statement ok
+INSERT INTO lk.w SELECT r, r + 1, r + 2, r + 3, r + 4, r + 5, r + 6, r + 7, r + 8, r + 9, NULL, CASE WHEN r % 2 = 0 THEN repeat('0', 40) || r ELSE repeat('z', 40) || r END FROM range(5, 10) t(r)
+
+statement ok
+CALL disable_logging()
+
+# one UPDATE, which a server-side commit runs on the server
+query I
+SELECT coalesce(sum(len(regexp_extract_all(message, 'UPDATE\s+\S*ducklake_table_column_stats'))), 0) <= 1 FROM duckdb_logs WHERE type = 'QueryLog'
+----
+true
+
+statement ok
+DETACH lk
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lk
+
+query IIII
+SELECT col.column_name, stats.contains_null::BOOLEAN, stats.min_value, stats.max_value
+FROM __ducklake_metadata_lk.ducklake_table_column_stats stats
+JOIN __ducklake_metadata_lk.ducklake_column col USING (table_id, column_id)
+WHERE col.column_name IN ('c0', 'c9', 's', 'n') AND col.end_snapshot IS NULL
+ORDER BY col.column_name
+----
+c0	false	0	9
+c9	false	9	18
+n	true	NULL	NULL
+s	true	00000000000000000000000000000000000000006	zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz9
+
+query III
+SELECT count(*), max(s), count(n) FROM lk.w WHERE c9 >= 9
+----
+10	zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz9	0
