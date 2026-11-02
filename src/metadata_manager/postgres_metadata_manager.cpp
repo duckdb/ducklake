@@ -474,6 +474,23 @@ unique_ptr<QueryResult> PostgresMetadataManager::ExecuteDropInTransaction(string
 }
 
 void PostgresMetadataManager::ClearCache() {
+	// clear the cache of the metadata catalog only: a global clear empties the schema sets of every Postgres catalog,
+	// and a catalog that reloads one while its connection runs a query fails with "another command is already in
+	// progress"
+	auto &catalog = transaction.GetCatalog();
+	if (catalog.ScopedCacheClear()) {
+		auto catalog_literal = SQLString::ToString(catalog.MetadataDatabaseName().GetIdentifierName());
+		auto result = transaction.ExecuteRaw(StringUtil::Format(
+		    "SELECT * FROM postgres_query(%s, 'SELECT 1', clear_catalog_cache = true);", catalog_literal));
+		if (!result->HasError()) {
+			return;
+		}
+		if (!StringUtil::Contains(result->GetError(), "clear_catalog_cache")) {
+			result->ThrowIfError("Failed to clear the PostgreSQL metadata cache: ");
+		}
+		// a postgres_scanner from before the option clears every catalog
+		catalog.SetScopedCacheClear(false);
+	}
 	auto result = transaction.ExecuteRaw("CALL postgres_clear_cache();");
 	result->ThrowIfError("Failed to clear the PostgreSQL metadata cache: ");
 }
