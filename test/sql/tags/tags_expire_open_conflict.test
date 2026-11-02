@@ -1,0 +1,90 @@
+# name: test/sql/tags/tags_expire_open_conflict.test
+# description: an open expiry does not hold up tag commits, it is applied when its transaction commits
+# group: [tags]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_expire_open_conflict_files')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+# a tag commits while an expiry of its snapshot is open, the expiry keeps it
+statement ok con1
+BEGIN
+
+query I con1
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [1, 2])
+----
+1
+2
+
+statement ok con2
+CALL ducklake_create_tag('dl', 'contended', version => 2)
+
+statement ok con1
+COMMIT
+
+query I
+SELECT snapshot_id FROM ducklake_snapshots('dl') ORDER BY snapshot_id
+----
+0
+2
+3
+4
+5
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl')
+----
+contended	2
+
+# an expiry that selects nothing at its commit writes no snapshot
+statement ok con1
+BEGIN
+
+query I con1
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [3])
+----
+3
+
+statement ok con2
+CALL ducklake_create_tag('dl', 'kept', version => 3)
+
+statement ok con1
+COMMIT
+
+query I
+SELECT MAX(snapshot_id) FROM ducklake_snapshots('dl')
+----
+6
+
+# a rolled back expiry keeps its snapshot
+statement ok con1
+BEGIN
+
+query I con1
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [4])
+----
+4
+
+statement ok con1
+ROLLBACK
+
+query I
+SELECT COUNT(*) FROM ducklake_snapshots('dl') WHERE snapshot_id = 4
+----
+1

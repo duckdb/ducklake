@@ -1,0 +1,65 @@
+# name: test/sql/retry/sqlite_lock_retry_errors_as_json.test
+# description: A global errors_as_json does not stop a locked SQLite catalog commit from being retried
+# group: [retry]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+test-env CATALOG_PATH {TEST_DIR}/sqlite_lock_retry_errors_as_json.sqlite
+
+test-env DATA_PATH {TEST_DIR}/sqlite_lock_retry_errors_as_json_data
+
+# the SQLite config ignores lock errors
+set ignore_error_messages
+
+statement ok
+SET GLOBAL errors_as_json = true
+
+# this connection keeps plain errors
+statement ok
+SET errors_as_json = false
+
+statement ok
+ATTACH 'ducklake:sqlite:{CATALOG_PATH}' AS lake (
+    DATA_PATH '{DATA_PATH}',
+    METADATA_CATALOG 'meta',
+    META_BUSY_TIMEOUT 100
+)
+
+statement ok
+CREATE TABLE lake.items (id INTEGER)
+
+statement ok
+CREATE TABLE meta.lock_holder (id INTEGER)
+
+statement ok
+SET ducklake_max_retry_count = 1
+
+statement ok
+SET ducklake_retry_wait_ms = 10
+
+# con2 holds the write lock of the catalog
+statement ok con2
+BEGIN
+
+statement ok con2
+INSERT INTO meta.lock_holder VALUES (1)
+
+statement error
+INSERT INTO lake.items VALUES (1)
+----
+Exceeded the maximum retry count of 1
+
+statement ok con2
+COMMIT
+
+statement ok
+INSERT INTO lake.items VALUES (2)
+
+query I
+SELECT id FROM lake.items
+----
+2

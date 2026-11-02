@@ -75,7 +75,7 @@ ATTACH 'ducklake:{TEST_DIR}/inconsistent_parent.db' AS dl
 statement error
 SELECT * FROM dl.t
 ----
-Could not find parent column for column a
+Could not find parent column for column "a"
 
 statement ok
 DETACH dl
@@ -100,6 +100,30 @@ statement error
 SELECT * FROM dl.v
 ----
 could not find schema that corresponds to the view entry "v"
+
+statement ok
+DETACH dl
+
+# a struct with two fields of the same name
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/inconsistent_child_name.db' AS dl (DATA_PATH '{DATA_PATH}/inconsistent_child_name')
+
+statement ok
+CREATE TABLE dl.t(s STRUCT(a INTEGER, b INTEGER))
+
+statement ok
+UPDATE __ducklake_metadata_dl.ducklake_column SET column_name = 'a' WHERE column_name = 'b'
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/inconsistent_child_name.db' AS dl
+
+statement error
+SELECT * FROM dl.t
+----
+Duplicate child name "a" found in column "s"
 
 statement ok
 DETACH dl

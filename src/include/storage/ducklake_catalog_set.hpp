@@ -32,8 +32,16 @@ public:
 
 	void CreateEntry(unique_ptr<CatalogEntry> entry);
 	void CreateEntry(const string &key, unique_ptr<CatalogEntry> entry);
-	optional_ptr<CatalogEntry> GetEntry(const string &name);
-	unique_ptr<CatalogEntry> DropEntry(const string &name);
+	//! Entries are keyed by their name, except in the set of schemas created by a transaction, which holds schemas of
+	//! every depth and so keys them by their path key
+	optional_ptr<CatalogEntry> GetEntry(const string &key);
+	optional_ptr<CatalogEntry> GetEntry(const Identifier &name) {
+		return GetEntry(name.GetIdentifierName());
+	}
+	unique_ptr<CatalogEntry> DropEntry(const string &key);
+	unique_ptr<CatalogEntry> DropEntry(const Identifier &name) {
+		return DropEntry(name.GetIdentifierName());
+	}
 	optional_ptr<CatalogEntry> GetEntryById(SchemaIndex index);
 	optional_ptr<CatalogEntry> GetEntryById(TableIndex index);
 	void AddEntry(DuckLakeSchemaEntry &schema, TableIndex id, unique_ptr<CatalogEntry> entry);

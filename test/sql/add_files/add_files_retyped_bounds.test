@@ -122,25 +122,22 @@ SELECT min(t) FROM ducklake.ms
 ----
 2020-01-01 12:34:56.124
 
-# a bound that does not cast to the type of the table is dropped
+# a value that does not fit the type of the table rejects the file, whose rows could not be read
 statement ok
 COPY (FROM (VALUES (TIMESTAMP '2020-01-01'), (TIMESTAMP '294247-01-10 04:00:54.775806')) v(t)) TO '{DATA_PATH}/retyped_ts_max.parquet'
 
 statement ok
 CREATE TABLE ducklake.ms_max (t TIMESTAMP_MS)
 
-statement ok
+statement error
 CALL ducklake_add_data_files('ducklake', 'ms_max', '{DATA_PATH}/retyped_ts_max.parquet')
+----
+The value 294247-01-10 04:00:54.775806 of type TIMESTAMP in the file does not fit type TIMESTAMP_MS
 
 query I
-SELECT count(*) FROM ducklake.ms_max WHERE t < TIMESTAMP_MS '2019-01-01'
+SELECT count(*) FROM ducklake.ms_max
 ----
 0
-
-statement error
-SELECT count(*) FROM ducklake.ms_max WHERE t < TIMESTAMP_MS '2021-01-01'
-----
-can't be cast to the destination type
 
 # the bounds are stored as values of the table type
 query III
@@ -151,4 +148,3 @@ SELECT table_id, min_value, max_value FROM __ducklake_metadata_ducklake.ducklake
 3	2020-01-01 12:34:56.123457+00	2020-01-01 12:34:56.123457+00
 4	0.10000000149011612	0.10000000149011612
 5	2020-01-01 12:34:56.124	2021-01-01 00:00:00
-6	2020-01-01 00:00:00	NULL

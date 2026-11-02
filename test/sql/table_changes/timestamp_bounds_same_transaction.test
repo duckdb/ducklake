@@ -1,0 +1,93 @@
+# name: test/sql/table_changes/timestamp_bounds_same_transaction.test
+# description: A timestamp used as a change feed start and as an AT read or feed end in one transaction keeps both bounds
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/timestamp_bounds_same_transaction')
+
+statement ok
+CREATE TABLE lake.t (i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (0)
+
+statement ok
+INSERT INTO lake.t VALUES (1)
+
+statement ok
+INSERT INTO lake.t VALUES (2)
+
+# ta lies between the snapshots of the first and second insert, tb between the second and third, tc is the third
+statement ok
+SET VARIABLE ta = (SELECT snapshot_time + INTERVAL 1 MICROSECOND FROM lake.snapshots() WHERE snapshot_id = 2)
+
+statement ok
+SET VARIABLE tb = (SELECT snapshot_time + INTERVAL 1 MICROSECOND FROM lake.snapshots() WHERE snapshot_id = 3)
+
+statement ok
+SET VARIABLE tc = (SELECT snapshot_time FROM lake.snapshots() WHERE snapshot_id = 4)
+
+statement ok
+BEGIN
+
+query I
+SELECT list(i ORDER BY i) FROM ducklake_table_changes('lake', 'main', 't', getvariable('ta'), getvariable('tc'))
+----
+[1, 2]
+
+query I
+SELECT list(i ORDER BY i) FROM lake.t AT (TIMESTAMP => getvariable('ta'))
+----
+[0]
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+query I
+SELECT list(i ORDER BY i) FROM lake.t AT (TIMESTAMP => getvariable('ta'))
+----
+[0]
+
+query I
+SELECT list(i ORDER BY i) FROM ducklake_table_changes('lake', 'main', 't', getvariable('ta'), getvariable('tc'))
+----
+[1, 2]
+
+statement ok
+COMMIT
+
+# consecutive polls share their boundary, whose row is returned once
+statement ok
+BEGIN
+
+query I
+SELECT list(i ORDER BY i) FROM ducklake_table_changes('lake', 'main', 't', getvariable('ta'), getvariable('tb'))
+----
+[1]
+
+query I
+SELECT list(i ORDER BY i) FROM ducklake_table_changes('lake', 'main', 't', getvariable('tb'), getvariable('tc'))
+----
+[2]
+
+statement ok
+COMMIT
+
+# also within one statement
+query II
+SELECT (SELECT list(i ORDER BY i) FROM ducklake_table_changes('lake', 'main', 't', getvariable('ta'), getvariable('tc'))), (SELECT list(i ORDER BY i) FROM lake.t AT (TIMESTAMP => getvariable('ta')))
+----
+[1, 2]	[0]

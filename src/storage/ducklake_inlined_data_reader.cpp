@@ -11,7 +11,8 @@
 namespace duckdb {
 
 DuckLakeInlinedDataReader::DuckLakeInlinedDataReader(DuckLakeFunctionInfo &read_info, const OpenFileInfo &info,
-                                                     string table_name_p, vector<MultiFileColumnDefinition> columns_p)
+                                                     Identifier table_name_p,
+                                                     vector<MultiFileColumnDefinition> columns_p)
     : BaseFileReader(info), read_info(read_info), table_name(std::move(table_name_p)) {
 	columns = std::move(columns_p);
 }
@@ -33,7 +34,7 @@ void DuckLakeInlinedDataReader::GetColumnToRead(const DuckLakeFunctionInfo &read
                                                 const MultiFileColumnDefinition &col, string &column,
                                                 LogicalType &type) {
 	if (!col.identifier.IsNull() && col.identifier.type().id() == LogicalTypeId::INTEGER) {
-		string virtual_column;
+		Identifier virtual_column;
 		switch (IntegerValue::Get(col.identifier)) {
 		case MultiFileReader::ORDINAL_FIELD_ID:
 		case MultiFileReader::ROW_ID_FIELD_ID:
@@ -56,7 +57,7 @@ void DuckLakeInlinedDataReader::GetColumnToRead(const DuckLakeFunctionInfo &read
 			return;
 		}
 	}
-	column = SQLIdentifier::ToString(col.name.GetIdentifierName());
+	column = SQLIdentifier::ToString(col.name);
 	if (read_info.scan_type != DuckLakeScanType::SCAN_FOR_FLUSH) {
 		// the flush source already casts its columns
 		column = metadata_manager.CastColumnToTarget(column, col.type);
@@ -65,7 +66,7 @@ void DuckLakeInlinedDataReader::GetColumnToRead(const DuckLakeFunctionInfo &read
 }
 
 shared_ptr<DuckLakeCommittedInlinedRows>
-DuckLakeInlinedDataReader::ReadCommittedRows(DuckLakeFunctionInfo &read_info, const string &table_name,
+DuckLakeInlinedDataReader::ReadCommittedRows(DuckLakeFunctionInfo &read_info, const Identifier &table_name,
                                              const vector<MultiFileColumnDefinition> &columns,
                                              optional_idx &next_file_id) {
 	auto transaction = read_info.GetTransaction();

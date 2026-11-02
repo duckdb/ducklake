@@ -13,6 +13,7 @@ add_library(
   ducklake_set_commit_message.cpp
   ducklake_set_option.cpp
   ducklake_snapshots.cpp
+  ducklake_snapshot_tags.cpp
   ducklake_options.cpp
   ducklake_settings.cpp
   ducklake_table_changes.cpp

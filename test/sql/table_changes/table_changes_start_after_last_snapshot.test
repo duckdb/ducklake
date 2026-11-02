@@ -1,0 +1,83 @@
+# name: test/sql/table_changes/table_changes_start_after_last_snapshot.test
+# description: a change feed that starts after the last snapshot returns no rows instead of failing
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/table_changes_start_after_last_snapshot')
+
+statement ok
+CREATE TABLE lake.t (i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (0)
+
+statement ok
+SET VARIABLE after_last = (SELECT max(snapshot_time) + INTERVAL '1 microsecond' FROM lake.snapshots())
+
+query I
+SELECT count(*) FROM lake.table_changes('t', getvariable('after_last'), now())
+----
+0
+
+query I
+SELECT count(*) FROM ducklake_table_insertions('lake', 'main', 't', getvariable('after_last'), now())
+----
+0
+
+query I
+SELECT count(*) FROM ducklake_table_deletions('lake', 'main', 't', getvariable('after_last'), now())
+----
+0
+
+query I
+SELECT count(*) FROM lake.table_changes('t', now() - INTERVAL '1 week', now())
+----
+1
+
+# a transaction does not see changes committed after it started
+statement ok con1
+SET VARIABLE after_last = (SELECT max(snapshot_time) + INTERVAL '1 microsecond' FROM lake.snapshots())
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM lake.t
+----
+1
+
+statement ok con2
+INSERT INTO lake.t VALUES (1)
+
+query I con1
+SELECT count(*) FROM lake.table_changes('t', getvariable('after_last'), get_current_timestamp())
+----
+0
+
+query I con1
+SELECT count(*) FROM lake.t AT (TIMESTAMP => getvariable('after_last'))
+----
+1
+
+query I con1
+SELECT count(*) FROM lake.table_changes('t', now() - INTERVAL '1 week', getvariable('after_last'))
+----
+1
+
+statement ok con1
+COMMIT
+
+query II
+SELECT change_type, i FROM lake.table_changes('t', getvariable('after_last'), now())
+----
+insert	1

@@ -1,0 +1,77 @@
+# name: test/sql/general/read_only_attach_refuses_writes.test
+# description: A read-only attach refuses every write, also when the metadata catalog is attached writable
+# group: [general]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/read_only_attach_refuses_writes.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/read_only_attach_refuses_writes')
+
+statement ok
+CREATE TABLE lake.t AS SELECT 1 AS i
+
+statement ok
+INSERT INTO lake.t VALUES (2)
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (READ_ONLY)
+
+query I
+SELECT sum(i) FROM lake.t
+----
+3
+
+statement error
+INSERT INTO lake.t VALUES (3)
+----
+read-only
+
+statement error
+CREATE TABLE lake.t2 (i INTEGER)
+----
+read-only
+
+statement error
+CALL lake.set_option('data_inlining_row_limit', 0)
+----
+read-only
+
+statement error
+CALL ducklake_flush_inlined_data('lake')
+----
+read-only
+
+statement error
+CALL ducklake_merge_adjacent_files('lake')
+----
+read-only
+
+statement error
+CALL ducklake_expire_snapshots('lake', older_than => now())
+----
+read-only
+
+statement error
+CALL ducklake_cleanup_old_files('lake', cleanup_all => true)
+----
+read-only
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake
+
+query II
+SELECT count(*), max(snapshot_id) FROM lake.snapshots()
+----
+3	2

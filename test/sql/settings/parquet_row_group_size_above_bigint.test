@@ -1,0 +1,75 @@
+# name: test/sql/settings/parquet_row_group_size_above_bigint.test
+# description: Merges and checkpoints work with a row group size above the largest BIGINT
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# the batch copy needs more than one thread
+statement ok
+SET threads = 2
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+(DATA_PATH '{DATA_PATH}/parquet_row_group_size_above_bigint', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER)
+
+statement ok
+CREATE TABLE ducklake.u (id INTEGER)
+
+statement ok
+CALL ducklake.set_option('parquet_row_group_size', '18446744073709551615', table_name => 't')
+
+statement ok
+CALL ducklake.set_option('parquet_row_group_size_bytes', '10000000TB', table_name => 'u')
+
+loop i 0 2
+
+statement ok
+INSERT INTO ducklake.t VALUES ({i})
+
+statement ok
+INSERT INTO ducklake.u VALUES ({i})
+
+endloop
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake')
+
+query IIII
+SELECT (SELECT count(*) FROM ducklake.t), (SELECT count(*) FROM ducklake.u),
+       (SELECT count(*) FROM ducklake_list_files('ducklake', 't')),
+       (SELECT count(*) FROM ducklake_list_files('ducklake', 'u'))
+----
+2	2	1	1
+
+# the options stay in the catalog, so a later session checkpoints with them
+statement ok
+INSERT INTO ducklake.t VALUES (2)
+
+statement ok
+INSERT INTO ducklake.u VALUES (2)
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake
+(DATA_PATH '{DATA_PATH}/parquet_row_group_size_above_bigint', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CHECKPOINT ducklake
+
+query IIII
+SELECT (SELECT sum(id) FROM ducklake.t), (SELECT sum(id) FROM ducklake.u),
+       (SELECT count(*) FROM ducklake_list_files('ducklake', 't')),
+       (SELECT count(*) FROM ducklake_list_files('ducklake', 'u'))
+----
+3	3	1	1

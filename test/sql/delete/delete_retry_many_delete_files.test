@@ -1,0 +1,72 @@
+# name: test/sql/delete/delete_retry_many_delete_files.test
+# description: A retried commit dates the new deletes of every rewritten delete file to its own snapshot
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/delete_retry_many_delete_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+SET ducklake_retry_wait_ms = 0
+
+statement ok
+CREATE TABLE lake.t (k INTEGER, i INTEGER)
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (k)
+
+statement ok
+INSERT INTO lake.t SELECT k, i FROM range(60) a(k), range(3) b(i)
+
+# one delete file per data file
+statement ok
+DELETE FROM lake.t WHERE i = 0
+
+statement ok
+CREATE TABLE lake.other (x INTEGER)
+
+statement ok
+SET VARIABLE before_delete = (SELECT max(snapshot_id) FROM lake.snapshots())
+
+statement ok con1
+BEGIN
+
+statement ok con1
+DELETE FROM lake.t WHERE i = 1
+
+# takes the snapshot that con1 expected, so its commit retries
+statement ok con2
+INSERT INTO lake.other VALUES (1)
+
+statement ok con1
+COMMIT
+
+statement ok
+SET VARIABLE after_delete = (SELECT max(snapshot_id) FROM lake.snapshots())
+
+query II
+SELECT count(*), count(DISTINCT snapshot_id) FROM ducklake_table_deletions('lake', 'main', 't', getvariable('before_delete') + 1, getvariable('after_delete'))
+----
+60	1
+
+query I
+SELECT min(snapshot_id) - getvariable('before_delete') FROM ducklake_table_deletions('lake', 'main', 't', getvariable('before_delete') + 1, getvariable('after_delete'))
+----
+2
+
+query II
+SELECT count(*), sum(i) FROM lake.t AT (VERSION => getvariable('before_delete'))
+----
+120	180
+
+query II
+SELECT count(*), sum(i) FROM lake.t
+----
+60	120

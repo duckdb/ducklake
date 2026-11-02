@@ -35,6 +35,10 @@ SET s3_url_style='path';
 statement ok
 SET s3_use_ssl=false;
 
+# a query string is part of the object key unless S3 URL parameters are enabled
+statement ok
+SET s3_enable_deprecated_url_parameters=true;
+
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/remote_path_aliases/')
 
