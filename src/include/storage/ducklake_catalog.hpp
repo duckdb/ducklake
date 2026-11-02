@@ -69,6 +69,26 @@ struct DuckLakeTableStatsCacheEntry : public ObjectCacheEntry {
 	optional_idx GetEstimatedCacheMemory() const override;
 };
 
+//! Cached net row count of a table at a snapshot
+struct DuckLakeTableNetRowCountCacheEntry : public ObjectCacheEntry {
+	DuckLakeTableNetRowCountCacheEntry(idx_t snapshot_id_p, idx_t row_count_p)
+	    : snapshot_id(snapshot_id_p), row_count(row_count_p) {
+	}
+
+	idx_t snapshot_id;
+	idx_t row_count;
+
+	static string ObjectType() {
+		return "ducklake_table_net_row_count";
+	}
+	string GetObjectType() override {
+		return ObjectType();
+	}
+	optional_idx GetEstimatedCacheMemory() const override {
+		return sizeof(DuckLakeTableNetRowCountCacheEntry);
+	}
+};
+
 //! Cached record counts for a snapshot
 struct DuckLakeTableRecordCountCacheEntry : public ObjectCacheEntry {
 	static constexpr idx_t ESTIMATED_BYTES_PER_TABLE = 64;
@@ -259,6 +279,8 @@ public:
 	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                             TableIndex table_id,
 	                                             optional_ptr<const vector<TableIndex>> load_tables = nullptr);
+	//! Returns an invalid index when a file is only partially visible to the snapshot
+	optional_idx GetTableNetRowCount(DuckLakeTransaction &transaction, DuckLakeTableEntry &table);
 	//! Returns zero when the table has no stats
 	idx_t GetTableRecordCount(DuckLakeTransaction &transaction, TableIndex table_id);
 
@@ -435,6 +457,7 @@ private:
 	void LoadNameMaps(DuckLakeTransaction &transaction);
 	string StatsCacheKey(idx_t next_file_id, TableIndex table_id) const;
 	string RecordCountCacheKey(idx_t snapshot_id) const;
+	string NetRowCountCacheKey(TableIndex table_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
 	ObjectCache &GetObjectCacheInstance();
 	//! A table stats entry this DuckLake put in the object cache, kept without its key as there is one per table
