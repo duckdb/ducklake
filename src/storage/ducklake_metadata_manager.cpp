@@ -904,19 +904,15 @@ bool DuckLakeMetadataManager::HasAllFileRangeColumns() {
 	       HasMetadataColumn("ducklake_delete_file", "end_snapshot");
 }
 
-bool DuckLakeMetadataManager::HasBranchZeroVisibility() {
-	auto probe = Query(R"(
-SELECT COUNT(*) FROM (
-SELECT 1 FROM {METADATA_CATALOG}.ducklake_data_file f
-WHERE NOT EXISTS (
-    SELECT 1 FROM {METADATA_CATALOG}.ducklake_file_visibility v
-    WHERE v.branch_id = 0 AND v.data_file_id = f.data_file_id)
-UNION ALL
-SELECT 1 FROM {METADATA_CATALOG}.ducklake_delete_file f
-WHERE NOT EXISTS (
-    SELECT 1 FROM {METADATA_CATALOG}.ducklake_delete_file_visibility v
-    WHERE v.branch_id = 0 AND v.delete_file_id = f.delete_file_id)
-LIMIT 1);)");
+bool DuckLakeMetadataManager::HasBranchZeroFileVisibility(const string &file_table, const string &file_column,
+                                                          bool has_visibility_table, const string &visibility_table) {
+	// a file table without rows needs no visibility rows
+	string files_without_rows = "SELECT 1 FROM {METADATA_CATALOG}." + file_table + " f";
+	if (has_visibility_table) {
+		files_without_rows += " WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}." + visibility_table +
+		                      " v WHERE v.branch_id = 0 AND v." + file_column + " = f." + file_column + ")";
+	}
+	auto probe = Query("SELECT COUNT(*) FROM (" + files_without_rows + " LIMIT 1);");
 	if (probe->HasError()) {
 		return false;
 	}
@@ -924,6 +920,20 @@ LIMIT 1);)");
 		return row.GetValue<int64_t>(0) == 0;
 	}
 	return false;
+}
+
+bool DuckLakeMetadataManager::HasBranchZeroDataVisibility() {
+	return HasBranchZeroFileVisibility("ducklake_data_file", "data_file_id", HasFileVisibilityTable(),
+	                                   "ducklake_file_visibility");
+}
+
+bool DuckLakeMetadataManager::HasBranchZeroDeleteVisibility() {
+	return HasBranchZeroFileVisibility("ducklake_delete_file", "delete_file_id", HasDeleteFileVisibilityTable(),
+	                                   "ducklake_delete_file_visibility");
+}
+
+bool DuckLakeMetadataManager::HasBranchZeroVisibility() {
+	return HasBranchZeroDataVisibility() && HasBranchZeroDeleteVisibility();
 }
 
 bool DuckLakeMetadataManager::HasBranchInheritedVisibility() {
@@ -979,8 +989,11 @@ DuckLakeMetadataManager::V2_0Dev1Additions DuckLakeMetadataManager::ProbeV2_0Dev
 }
 
 void DuckLakeMetadataManager::VerifyHealableV2_0Dev1(const V2_0Dev1Additions &missing) {
-	bool ranges_present = missing.drop_data_begin && missing.drop_data_end;
-	if (!ranges_present && !HasBranchZeroVisibility()) {
+	// each file table heals from its own preserved ranges, so check them separately
+	bool data_ranges_present = missing.drop_data_begin && missing.drop_data_end;
+	bool delete_ranges_present = missing.drop_delete_begin && missing.drop_delete_end;
+	if ((!data_ranges_present && !HasBranchZeroDataVisibility()) ||
+	    (!delete_ranges_present && !HasBranchZeroDeleteVisibility())) {
 		throw InvalidInputException("Cannot heal this DuckLake catalog: the inline file ranges were dropped and the "
 		                            "visibility rows that replaced them are missing");
 	}

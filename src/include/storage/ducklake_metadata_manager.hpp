@@ -655,6 +655,10 @@ public:
 	bool HasMetadataColumn(const string &table, const string &column);
 	bool HasAnyFileRangeColumns();
 	bool HasAllFileRangeColumns();
+	bool HasBranchZeroFileVisibility(const string &file_table, const string &file_column, bool has_visibility_table,
+	                                 const string &visibility_table);
+	bool HasBranchZeroDataVisibility();
+	bool HasBranchZeroDeleteVisibility();
 	bool HasBranchZeroVisibility();
 	bool HasBranchInheritedVisibility();
 	bool HasV2_0Dev1Additions();

@@ -201,6 +201,7 @@
         "test/sql/deletion_inlining/test_deletion_multiple_tables.test",
         "test/sql/deletion_inlining/test_multiple_files_flush.test_slow",
         "test/sql/issues/issue_1573_rewritten_delete_snapshot.test",
+        "test/sql/migration/dev1_partial_heal.test",
         "test/sql/partitioning/bucket_pruning.test",
         "test/sql/partitioning/long_partition_value_path.test",
         "test/sql/partitioning/partition_nop.test",
