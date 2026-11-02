@@ -42,8 +42,7 @@ public:
 	//! File systems allow at most 255 bytes in a file name
 	static constexpr idx_t MAX_FILE_NAME_LENGTH = 255;
 
-	//! Extracts the value of a literal, or of a cast over a literal, as written in a DEFAULT or parameter default
-	//! A constant or a cast of one, folded with the context, which a cast of a time zone type needs
+	//! The value of a literal or of a cast over one, a cast of a time zone type needs the context
 	static bool TryGetLiteralValue(const ParsedExpression &expr, Value &result,
 	                               optional_ptr<ClientContext> context = nullptr);
 	//! Casts stored text to a type when the value prints as the same text
