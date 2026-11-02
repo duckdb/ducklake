@@ -18,6 +18,7 @@
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/storage/database_size.hpp"
 #include "storage/ducklake_initializer.hpp"
+#include "storage/ducklake_metadata_profile.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -329,6 +330,14 @@ DuckLakeCatalog::DuckLakeCatalog(AttachedDatabase &db_p, DuckLakeOptions options
 		string path = options.metadata_path;
 		DBPathAndType::ExtractExtensionPrefix(path, metadata_type);
 	}
+}
+
+const DuckLakeMetadataProfile &DuckLakeCatalog::MetadataProfile() const {
+	return metadata_profile ? *metadata_profile : DuckLakeMetadataProfile::Default();
+}
+
+void DuckLakeCatalog::SetMetadataProfile(shared_ptr<const DuckLakeMetadataProfile> profile) {
+	metadata_profile = std::move(profile);
 }
 
 DuckLakeCatalog::~DuckLakeCatalog() {
