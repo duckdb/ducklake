@@ -74,6 +74,12 @@
       ]
     },
     {
+      "reason": "A macro parameter default that is a cast of a time zone type needs DuckLake 1.1 and is rejected when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/default/time_zone_default_literals.test"
+      ]
+    },
+    {
       "reason": "The TIMESTAMPTZ_NS column type was added in 1.1 and is not available when ducklake_default_version is pinned to 1.0",
       "paths": [
         "test/sql/add_files/add_files_type_check_reader_types.test",

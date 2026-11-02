@@ -43,7 +43,9 @@ public:
 	static constexpr idx_t MAX_FILE_NAME_LENGTH = 255;
 
 	//! Extracts the value of a literal, or of a cast over a literal, as written in a DEFAULT or parameter default
-	static bool TryGetLiteralValue(const ParsedExpression &expr, Value &result);
+	//! A constant or a cast of one, folded with the context, which a cast of a time zone type needs
+	static bool TryGetLiteralValue(const ParsedExpression &expr, Value &result,
+	                               optional_ptr<ClientContext> context = nullptr);
 	//! Casts stored text to a type when the value prints as the same text
 	static bool TryReadTextAs(const Value &text, const LogicalType &type, Value &result);
 	//! The snapshot id a VERSION string reads as, such a string is never the name of a snapshot tag

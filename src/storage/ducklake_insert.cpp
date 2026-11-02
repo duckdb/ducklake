@@ -904,7 +904,7 @@ PhysicalOperator &DuckLakeCatalog::PlanCreateTableAs(ClientContext &context, Phy
 	auto &duck_schema = op.schema.Cast<DuckLakeSchemaEntry>();
 
 	// The table entry doesn't exist yet; build field/partition/sort specs now so the physical write can use them.
-	auto field_data = DuckLakeFieldData::FromColumns(columns);
+	auto field_data = DuckLakeFieldData::FromColumns(columns, context);
 	unique_ptr<DuckLakePartition> partition_data;
 	if (!create_info.partition_keys.empty()) {
 		partition_data =

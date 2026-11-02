@@ -1,0 +1,168 @@
+# name: test/sql/default/time_zone_default_literals.test
+# description: a cast default of a time zone type is read in the time zone of the session, also by an ADD COLUMN
+# group: [default]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS l (DATA_PATH '{DATA_PATH}/time_zone_default_literals')
+
+statement ok
+SET TimeZone = 'America/Los_Angeles'
+
+# a cast default is kept as an expression, so every row reads it in the session time zone
+statement ok
+CREATE TABLE l.t(id INT, c TIMESTAMPTZ DEFAULT TIMESTAMPTZ '2024-01-01 00:00:00')
+
+statement ok
+INSERT INTO l.t (id) VALUES (1)
+
+statement ok
+INSERT INTO l.t VALUES (2, TIMESTAMPTZ '2024-01-01 00:00:00')
+
+query II
+SELECT id, c = TIMESTAMPTZ '2024-01-01 08:00:00+00' FROM l.t ORDER BY id
+----
+1	true
+2	true
+
+query I
+SELECT column_default FROM information_schema.columns WHERE table_catalog = 'l' AND table_name = 't' AND column_name = 'c'
+----
+CAST('2024-01-01 00:00:00' AS TIMESTAMPTZ)
+
+# the rows that exist when a column is added get the same instant as the rows inserted after it
+statement ok
+CREATE TABLE l.u(id INT)
+
+statement ok
+INSERT INTO l.u VALUES (1)
+
+statement ok
+ALTER TABLE l.u ADD COLUMN c TIMESTAMPTZ DEFAULT '2024-01-01 00:00:00'
+
+statement ok
+INSERT INTO l.u (id) VALUES (2)
+
+query II
+SELECT id, c = TIMESTAMPTZ '2024-01-01 08:00:00+00' FROM l.u ORDER BY id
+----
+1	true
+2	true
+
+query I
+SELECT list(id ORDER BY id) FROM l.u WHERE c = '2024-01-01 00:00:00'
+----
+[1, 2]
+
+statement ok
+CREATE TABLE l.v(id INT)
+
+statement ok
+INSERT INTO l.v VALUES (1)
+
+statement ok
+ALTER TABLE l.v ADD COLUMN c TIMESTAMPTZ DEFAULT TIMESTAMPTZ '2024-01-01 00:00:00'
+
+statement ok
+INSERT INTO l.v (id) VALUES (2)
+
+query II
+SELECT id, c = TIMESTAMPTZ '2024-01-01 08:00:00+00' FROM l.v ORDER BY id
+----
+1	true
+2	true
+
+# a default of another type than the column is cast in the session too
+statement ok
+CREATE TABLE l.d(id INT, d DATE DEFAULT TIMESTAMPTZ '2024-01-01 02:00:00+00')
+
+statement ok
+INSERT INTO l.d (id) VALUES (1)
+
+query I
+SELECT d FROM l.d
+----
+2023-12-31
+
+# a time zone type nested in the cast is read in the session too
+statement ok
+CREATE TABLE l.n(id INT, c VARCHAR DEFAULT CAST('[2024-01-01 00:00:00]' AS TIMESTAMPTZ[]))
+
+statement ok
+INSERT INTO l.n (id) VALUES (1)
+
+query I
+SELECT c FROM l.n
+----
+['2024-01-01 00:00:00-08']
+
+# a later session reads the cast default in its own time zone
+statement ok
+SET TimeZone = 'Asia/Tokyo'
+
+statement ok
+INSERT INTO l.t (id) VALUES (3)
+
+query I
+SELECT c = TIMESTAMPTZ '2023-12-31 15:00:00+00' FROM l.t WHERE id = 3
+----
+true
+
+# the rows of the added columns keep their instant and new rows take the default in the new time zone, also after a reattach
+statement ok
+DETACH l
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS l (DATA_PATH '{DATA_PATH}/time_zone_default_literals')
+
+statement ok
+INSERT INTO l.u (id) VALUES (3)
+
+statement ok
+INSERT INTO l.v (id) VALUES (3)
+
+query II
+SELECT id, c FROM l.u ORDER BY id
+----
+1	2024-01-01 17:00:00+09
+2	2024-01-01 17:00:00+09
+3	2024-01-01 00:00:00+09
+
+query II
+SELECT id, c FROM l.v ORDER BY id
+----
+1	2024-01-01 17:00:00+09
+2	2024-01-01 17:00:00+09
+3	2024-01-01 00:00:00+09
+
+# a macro parameter default is folded when the macro is created, as in DuckDB, so it keeps that instant
+statement ok
+CREATE MACRO l.at_time(x := TIMESTAMPTZ '2024-01-01 00:00:00') AS x
+
+statement ok
+DETACH l
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS l (DATA_PATH '{DATA_PATH}/time_zone_default_literals')
+
+query I
+SELECT l.at_time() = TIMESTAMPTZ '2023-12-31 15:00:00+00'
+----
+true
+
+statement ok
+SET TimeZone = 'America/Los_Angeles'
+
+query I
+SELECT l.at_time() = TIMESTAMPTZ '2023-12-31 15:00:00+00'
+----
+true
