@@ -445,6 +445,47 @@ void LocalTableChanges::AddColumnToLocalInlinedData(ClientContext &context, Tabl
 	table_changes.new_inlined_data->data = std::move(new_data);
 }
 
+//! The path below field_id of a new field whose name the inlined rows still have
+static string FindReaddedChild(const DuckLakeFieldId &field_id, const LogicalType &inlined_type,
+                               const set<FieldIndex> &new_fields) {
+	if (!field_id.HasChildren() || field_id.Type().id() != inlined_type.id()) {
+		return string();
+	}
+	for (auto &member : LogicalType::GetNamedChildTypes(inlined_type)) {
+		auto child = field_id.GetChildByName(member.first);
+		if (!child) {
+			continue;
+		}
+		auto &name = member.first.GetIdentifierName();
+		if (new_fields.count(child->GetFieldIndex())) {
+			return name;
+		}
+		auto result = FindReaddedChild(*child, member.second, new_fields);
+		if (!result.empty()) {
+			return name + "." + result;
+		}
+	}
+	return string();
+}
+
+//! The path of a new field that the inlined rows, which are cast at the next write, still hold a dropped field under
+static string FindReaddedField(const DuckLakeTableEntry &table, const set<FieldIndex> &new_fields,
+                               const vector<LogicalType> &inlined_types) {
+	auto &root_fields = table.GetFieldData().GetFieldIds();
+	for (idx_t col_idx = 0; col_idx < root_fields.size() && col_idx < inlined_types.size(); col_idx++) {
+		auto &root = *root_fields[col_idx];
+		// the rows hold the default of an added column
+		if (new_fields.count(root.GetFieldIndex())) {
+			continue;
+		}
+		auto result = FindReaddedChild(root, inlined_types[col_idx], new_fields);
+		if (!result.empty()) {
+			return root.Name().GetIdentifierName() + "." + result;
+		}
+	}
+	return string();
+}
+
 void LocalTableChanges::AddFieldsToLocalFiles(TableIndex table_id, const DuckLakeTableEntry &table,
                                               const set<FieldIndex> &fields) {
 	lock_guard<mutex> guard(lock);
@@ -460,6 +501,13 @@ void LocalTableChanges::AddFieldsToLocalFiles(TableIndex table_id, const DuckLak
 	// the inlined rows get the same stats per leaf field, which the next inlined write merges into
 	if (entry->new_inlined_data) {
 		auto &inlined_data = *entry->new_inlined_data;
+		// the added field would read the values of the dropped one, which the stats would not cover
+		auto readded = FindReaddedField(table, fields, inlined_data.data->Types());
+		if (!readded.empty()) {
+			throw NotImplementedException("ALTER on a table with transaction-local inlined data is not supported when "
+			                              "a type change adds back field %s, commit the rows first",
+			                              readded);
+		}
 		for (auto &field_stats : table.GetAddedFieldStats(fields, inlined_data.Count())) {
 			inlined_data.column_stats.insert(std::move(field_stats));
 		}
@@ -2187,11 +2235,15 @@ void DuckLakeTransaction::ReportMetadataQuery(const string &query, std::chrono::
 	}
 }
 
-Identifier DuckLakeTransaction::GetDefaultSchemaName() {
+Catalog &DuckLakeTransaction::GetMetadataCatalog() {
 	auto &metadata_context = *GetConnection().context;
 	auto &db_manager = DatabaseManager::Get(metadata_context);
 	auto metadb = db_manager.GetDatabase(metadata_context, ducklake_catalog.MetadataDatabaseName());
-	auto default_schema = metadb->GetCatalog().GetDefaultSchema();
+	return metadb->GetCatalog();
+}
+
+Identifier DuckLakeTransaction::GetDefaultSchemaName() {
+	auto default_schema = GetMetadataCatalog().GetDefaultSchema();
 	if (!default_schema) {
 		// LCOV_EXCL_START
 		throw InvalidInputException("DuckLake metadata catalog %s has no default schema, set METADATA_SCHEMA "
