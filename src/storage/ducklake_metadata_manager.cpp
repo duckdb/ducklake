@@ -318,6 +318,20 @@ string DuckLakeMetadataManager::DataFileSource(bool branch_aware, idx_t branch_i
 	if (!branch_aware) {
 		return prefix + ".ducklake_data_file";
 	}
+	if (branch_id == 0) {
+		// the main lineage has at most one add and one delete event per file, so plain joins suffice
+		return StringUtil::Format(
+		    "(SELECT f.data_file_id, f.table_id, va.snapshot_id AS begin_snapshot, vd.snapshot_id AS end_snapshot, "
+		    "f.file_order, f.path, f.path_is_relative, f.file_format, f.record_count, f.file_size_bytes, "
+		    "f.footer_size, f.row_id_start, f.partition_id, f.encryption_key, f.mapping_id, f.partial_max, "
+		    "f.row_group_count "
+		    "FROM %s.ducklake_data_file f "
+		    "JOIN %s.ducklake_file_visibility va ON va.branch_id = 0 AND va.is_delete = FALSE "
+		    "AND va.data_file_id = f.data_file_id AND va.table_id = f.table_id "
+		    "LEFT JOIN %s.ducklake_file_visibility vd ON vd.branch_id = 0 AND vd.is_delete = TRUE "
+		    "AND vd.data_file_id = f.data_file_id AND vd.table_id = f.table_id)",
+		    prefix, prefix, prefix);
+	}
 	// the range of a file comes from the visibility events of the branch chain
 	return StringUtil::Format(
 	    "(SELECT f.data_file_id, f.table_id, v.begin_snapshot, v.end_snapshot, f.file_order, f.path, "
@@ -334,6 +348,18 @@ string DuckLakeMetadataManager::DeleteFileSource(bool branch_aware, idx_t branch
                                                  const string &prefix) {
 	if (!branch_aware) {
 		return prefix + ".ducklake_delete_file";
+	}
+	if (branch_id == 0) {
+		return StringUtil::Format(
+		    "(SELECT f.delete_file_id, f.table_id, va.snapshot_id AS begin_snapshot, vd.snapshot_id AS end_snapshot, "
+		    "f.data_file_id, f.path, f.path_is_relative, f.format, f.delete_count, f.file_size_bytes, f.footer_size, "
+		    "f.encryption_key, f.partial_max, f.row_group_count "
+		    "FROM %s.ducklake_delete_file f "
+		    "JOIN %s.ducklake_delete_file_visibility va ON va.branch_id = 0 AND va.is_delete = FALSE "
+		    "AND va.delete_file_id = f.delete_file_id AND va.table_id = f.table_id "
+		    "LEFT JOIN %s.ducklake_delete_file_visibility vd ON vd.branch_id = 0 AND vd.is_delete = TRUE "
+		    "AND vd.delete_file_id = f.delete_file_id AND vd.table_id = f.table_id)",
+		    prefix, prefix, prefix);
 	}
 	return StringUtil::Format(
 	    "(SELECT f.delete_file_id, f.table_id, v.begin_snapshot, v.end_snapshot, f.data_file_id, f.path, "
@@ -5380,10 +5406,15 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 	auto result = InsertValuesSql("ducklake_delete_file", delete_file_values) +
 	              InsertValuesSql("ducklake_delete_file_visibility", visibility_values);
 	if (!swap_values.empty()) {
-		// the rows of the old file go away, so branches that read it through inheritance get an
-		// explicit add event for the replacement at the old begin, keeping their dated deletes
+		// the rows of the old file go away, so the explicit branch events move to the replacement and
+		// branches that read it through inheritance get an add event at the old begin for their dated deletes
 		result += StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_delete_file_visibility
+SELECT v.branch_id, v.table_id, t.new_delete_file_id, v.snapshot_id, v.is_delete
+FROM (VALUES %s) t(new_delete_file_id, old_delete_file_id, data_file_id, table_id)
+JOIN {METADATA_CATALOG}.ducklake_delete_file_visibility v ON v.delete_file_id = t.old_delete_file_id
+WHERE v.branch_id <> 0
+UNION ALL
 SELECT b.branch_id, t.table_id, t.new_delete_file_id, v.snapshot_id, FALSE
 FROM (VALUES %s) t(new_delete_file_id, old_delete_file_id, data_file_id, table_id)
 JOIN {METADATA_CATALOG}.ducklake_delete_file_visibility v
@@ -5397,11 +5428,6 @@ AND NOT EXISTS (
     SELECT 1 FROM {METADATA_CATALOG}.ducklake_delete_file_visibility own
     JOIN {METADATA_CATALOG}.ducklake_delete_file df ON df.delete_file_id = own.delete_file_id
     WHERE own.branch_id = b.branch_id AND own.is_delete = FALSE AND df.data_file_id = t.data_file_id);
-INSERT INTO {METADATA_CATALOG}.ducklake_delete_file_visibility
-SELECT v.branch_id, v.table_id, t.new_delete_file_id, v.snapshot_id, v.is_delete
-FROM (VALUES %s) t(new_delete_file_id, old_delete_file_id, data_file_id, table_id)
-JOIN {METADATA_CATALOG}.ducklake_delete_file_visibility v ON v.delete_file_id = t.old_delete_file_id
-WHERE v.branch_id <> 0;
 DELETE FROM {METADATA_CATALOG}.ducklake_delete_file_visibility
 WHERE delete_file_id IN (%s);
 )",
@@ -6321,28 +6347,32 @@ WHERE data_file_id IN (%s);
 	return batch_query + InsertValuesSql("ducklake_files_scheduled_for_deletion", scheduled_deletions);
 }
 //! The data and delete file end and begin updates of a compaction, mirrored into the visibility events
-static string CompactionSnapshotUpdate(const string &file_table, const string &visibility_table,
-                                       const string &id_column, const string &snapshot_column, idx_t snapshot_id,
-                                       idx_t file_id, bool write_visibility) {
+static string CompactionSnapshotUpdates(const string &file_table, const string &visibility_table,
+                                        const string &id_column, const string &snapshot_column, idx_t snapshot_id,
+                                        const vector<idx_t> &file_ids, bool write_visibility) {
+	if (file_ids.empty()) {
+		return string();
+	}
+	auto id_list = StringUtil::Join(file_ids, file_ids.size(), ", ", [](idx_t id) { return to_string(id); });
 	if (!write_visibility) {
-		return StringUtil::Format("UPDATE {METADATA_CATALOG}.%s SET %s = %llu WHERE %s = %llu;\n", file_table,
-		                          snapshot_column, snapshot_id, id_column, file_id);
+		return StringUtil::Format("UPDATE {METADATA_CATALOG}.%s SET %s = %llu WHERE %s IN (%s);\n", file_table,
+		                          snapshot_column, snapshot_id, id_column, id_list);
 	}
 	if (snapshot_column == "begin_snapshot") {
 		return StringUtil::Format(
-		    "UPDATE {METADATA_CATALOG}.%s SET snapshot_id = %llu WHERE branch_id = 0 AND is_delete = FALSE AND %s = "
-		    "%llu;\n",
-		    visibility_table, snapshot_id, id_column, file_id);
+		    "UPDATE {METADATA_CATALOG}.%s SET snapshot_id = %llu WHERE branch_id = 0 AND is_delete = FALSE AND %s IN "
+		    "(%s);\n",
+		    visibility_table, snapshot_id, id_column, id_list);
 	}
 	// ending a file moves its delete event, or writes one when the file had none yet
 	return StringUtil::Format(
-	    "UPDATE {METADATA_CATALOG}.%s SET snapshot_id = %llu WHERE branch_id = 0 AND is_delete = TRUE AND %s = "
-	    "%llu;\n"
+	    "UPDATE {METADATA_CATALOG}.%s SET snapshot_id = %llu WHERE branch_id = 0 AND is_delete = TRUE AND %s IN "
+	    "(%s);\n"
 	    "INSERT INTO {METADATA_CATALOG}.%s SELECT 0, v.table_id, v.%s, %llu, TRUE FROM {METADATA_CATALOG}.%s v "
-	    "WHERE v.branch_id = 0 AND v.is_delete = FALSE AND v.%s = %llu AND NOT EXISTS (SELECT 1 FROM "
-	    "{METADATA_CATALOG}.%s d WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.%s = %llu);\n",
-	    visibility_table, snapshot_id, id_column, file_id, visibility_table, id_column, snapshot_id, visibility_table,
-	    id_column, file_id, visibility_table, id_column, file_id);
+	    "WHERE v.branch_id = 0 AND v.is_delete = FALSE AND v.%s IN (%s) AND NOT EXISTS (SELECT 1 FROM "
+	    "{METADATA_CATALOG}.%s d WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.%s = v.%s);\n",
+	    visibility_table, snapshot_id, id_column, id_list, visibility_table, id_column, snapshot_id, visibility_table,
+	    id_column, id_list, visibility_table, id_column, id_column);
 }
 
 string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions,
@@ -6358,26 +6388,35 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 		}
 	}
 
-	string batch_query;
+	// one statement per rewrite snapshot and file kind instead of one per file
+	map<idx_t, vector<idx_t>> ended_delete_files;
+	map<idx_t, vector<idx_t>> ended_data_files;
+	map<idx_t, vector<idx_t>> new_data_files;
 	for (idx_t i = 0; i < compactions.size(); ++i) {
 		auto &compaction = compactions[i];
 		D_ASSERT(!compaction.path.empty());
 		auto last_snapshot = table_idx_last_snapshot[compaction.table_index.index];
 		if (compaction.delete_file_id.IsValid() && !compaction.delete_file_end_snapshot.IsValid()) {
-			batch_query += CompactionSnapshotUpdate("ducklake_delete_file", "ducklake_delete_file_visibility",
-			                                        "delete_file_id", "end_snapshot", last_snapshot,
-			                                        compaction.delete_file_id.index, write_visibility);
+			ended_delete_files[last_snapshot].push_back(compaction.delete_file_id.index);
 		}
-		// We must update the data file table
-		batch_query +=
-		    CompactionSnapshotUpdate("ducklake_data_file", "ducklake_file_visibility", "data_file_id", "end_snapshot",
-		                             last_snapshot, compaction.source_id.index, write_visibility);
-		// update the snapshot of our newly added file (if it was created)
+		ended_data_files[last_snapshot].push_back(compaction.source_id.index);
 		if (compaction.new_id.IsValid()) {
-			batch_query +=
-			    CompactionSnapshotUpdate("ducklake_data_file", "ducklake_file_visibility", "data_file_id",
-			                             "begin_snapshot", last_snapshot, compaction.new_id.index, write_visibility);
+			new_data_files[last_snapshot].push_back(compaction.new_id.index);
 		}
+	}
+	string batch_query;
+	for (auto &entry : ended_delete_files) {
+		batch_query +=
+		    CompactionSnapshotUpdates("ducklake_delete_file", "ducklake_delete_file_visibility", "delete_file_id",
+		                              "end_snapshot", entry.first, entry.second, write_visibility);
+	}
+	for (auto &entry : ended_data_files) {
+		batch_query += CompactionSnapshotUpdates("ducklake_data_file", "ducklake_file_visibility", "data_file_id",
+		                                         "end_snapshot", entry.first, entry.second, write_visibility);
+	}
+	for (auto &entry : new_data_files) {
+		batch_query += CompactionSnapshotUpdates("ducklake_data_file", "ducklake_file_visibility", "data_file_id",
+		                                         "begin_snapshot", entry.first, entry.second, write_visibility);
 	}
 	return batch_query;
 }
