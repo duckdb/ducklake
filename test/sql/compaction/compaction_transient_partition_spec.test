@@ -66,7 +66,7 @@ statement ok
 SET VARIABLE spec_ids = (SELECT list(partition_id) FROM meta.ducklake_partition_info WHERE table_id = getvariable('t_id'))
 
 statement ok
-SET VARIABLE t_files = (SELECT list(data_file_id) FROM meta.ducklake_file_visibility v WHERE v.branch_id = 0 AND v.is_delete = FALSE AND NOT EXISTS (SELECT 1 FROM meta.ducklake_file_visibility d WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.data_file_id = v.data_file_id) AND v.table_id = getvariable('t_id'))
+SET VARIABLE t_files = (SELECT list(data_file_id) FROM (SELECT data_file_id FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND table_id = getvariable('t_id') GROUP BY data_file_id HAVING MAX(CASE WHEN is_delete = TRUE THEN 1 ELSE 0 END) = 0))
 
 query II
 SELECT count(DISTINCT partition_id), bool_and(list_contains(getvariable('spec_ids'), partition_id))

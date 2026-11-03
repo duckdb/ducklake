@@ -5581,10 +5581,10 @@ string DuckLakeMetadataManager::WriteNewColumnMappings(const vector<DuckLakeColu
 }
 
 string DuckLakeMetadataManager::InsertSnapshotSql(bool write_branch_id) {
-	return StringUtil::Format(R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot
-(snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id%s)
+	return StringUtil::Format(
+	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id%s)
 VALUES ({SNAPSHOT_ID}, {SNAPSHOT_TIME}, {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID}%s);)",
-	                          write_branch_id ? ", branch_id" : "", write_branch_id ? ", 0" : "");
+	    write_branch_id ? ", branch_id" : "", write_branch_id ? ", 0" : "");
 }
 
 static string SQLStringOrNull(const string &str) {

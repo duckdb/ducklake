@@ -65,10 +65,10 @@ SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't');
 # Capture expected partial_max before merge: max begin_snapshot of the small files (B and C)
 # (exclude file A which has the smallest begin_snapshot and won't be merged)
 statement ok
-SET VARIABLE min_begin = (SELECT min(v.snapshot_id) FROM __ducklake_metadata_ducklake.ducklake_file_visibility v WHERE v.branch_id = 0 AND v.is_delete = FALSE AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_file_visibility d WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.data_file_id = v.data_file_id));
+SET VARIABLE min_begin = (SELECT min(snapshot_id) FROM (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) AS snapshot_id FROM __ducklake_metadata_ducklake.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id HAVING MAX(CASE WHEN is_delete = TRUE THEN 1 ELSE 0 END) = 0));
 
 statement ok
-SET VARIABLE expected_pm_1 = (SELECT max(v.snapshot_id) FROM __ducklake_metadata_ducklake.ducklake_file_visibility v WHERE v.branch_id = 0 AND v.is_delete = FALSE AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_file_visibility d WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.data_file_id = v.data_file_id) AND v.snapshot_id != getvariable('min_begin'));
+SET VARIABLE expected_pm_1 = (SELECT max(snapshot_id) FROM (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) AS snapshot_id FROM __ducklake_metadata_ducklake.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id HAVING MAX(CASE WHEN is_delete = TRUE THEN 1 ELSE 0 END) = 0) WHERE snapshot_id != getvariable('min_begin'));
 
 # Merge B+C into a single file (A is too big to merge)
 query III
@@ -122,7 +122,7 @@ statement ok
 SET VARIABLE merge1_snap = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake') WHERE changes::VARCHAR LIKE '%merge%');
 
 statement ok
-SET VARIABLE expected_pm_2 = (SELECT max(v.snapshot_id) FROM __ducklake_metadata_ducklake.ducklake_file_visibility v WHERE v.branch_id = 0 AND v.is_delete = FALSE AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_file_visibility d WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.data_file_id = v.data_file_id) AND v.snapshot_id > getvariable('merge1_snap'));
+SET VARIABLE expected_pm_2 = (SELECT max(snapshot_id) FROM (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) AS snapshot_id FROM __ducklake_metadata_ducklake.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id HAVING MAX(CASE WHEN is_delete = TRUE THEN 1 ELSE 0 END) = 0) WHERE snapshot_id > getvariable('merge1_snap'));
 
 # Merge D+E into a single file (A is too big to merge)
 query III

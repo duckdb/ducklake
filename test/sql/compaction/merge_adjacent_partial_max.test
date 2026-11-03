@@ -58,7 +58,7 @@ CALL ducklake_flush_inlined_data('ducklake')
 
 # Capture expected partial_max before merge: max begin_snapshot of active files
 statement ok
-SET VARIABLE expected_pm = (SELECT max(v.snapshot_id) FROM __ducklake_metadata_ducklake.ducklake_file_visibility v WHERE v.branch_id = 0 AND v.is_delete = FALSE AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_file_visibility d WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.data_file_id = v.data_file_id));
+SET VARIABLE expected_pm = (SELECT max(snapshot_id) FROM (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) AS snapshot_id FROM __ducklake_metadata_ducklake.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id HAVING MAX(CASE WHEN is_delete = TRUE THEN 1 ELSE 0 END) = 0));
 
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't')

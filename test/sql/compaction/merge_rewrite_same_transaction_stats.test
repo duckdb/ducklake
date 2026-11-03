@@ -41,7 +41,7 @@ statement ok
 COMMIT
 
 statement ok
-SET VARIABLE live_file_ids = (SELECT LIST(data_file_id) FROM meta.ducklake_file_visibility v WHERE v.branch_id = 0 AND v.is_delete = FALSE AND NOT EXISTS (SELECT 1 FROM meta.ducklake_file_visibility d WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.data_file_id = v.data_file_id))
+SET VARIABLE live_file_ids = (SELECT LIST(data_file_id) FROM (SELECT data_file_id FROM meta.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id HAVING MAX(CASE WHEN is_delete = TRUE THEN 1 ELSE 0 END) = 0))
 
 statement ok
 SET VARIABLE live_size = (SELECT sum(file_size_bytes) FROM meta.ducklake_data_file WHERE data_file_id IN (SELECT UNNEST(getvariable('live_file_ids'))))
