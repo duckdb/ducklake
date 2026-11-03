@@ -2842,11 +2842,12 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			RollbackKeepingError(context);
 			retryable_metadata_error =
 			    retryable_metadata_error || context.is_retryable_metadata_error(error.RawMessage());
+			auto error_without_query = context.commit_error_without_query(error.RawMessage());
 			// an internal error is a bug that a retry cannot fix
 			// a retryable metadata error in the conflict check is retried, a conflict that it finds is not
 			bool retry_on_error =
 			    error.Type() != ExceptionType::INTERNAL && !context.skip_retry() &&
-			    (retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error.RawMessage())));
+			    (retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error_without_query)));
 			if (retry_on_error) {
 				try {
 					context.verify_retry();

@@ -1710,6 +1710,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.skip_retry = [&]() {
 		return option_lock_failed && metadata_written;
 	};
+	context.commit_error_without_query = [&](const string &message) {
+		return metadata_manager->CommitErrorWithoutQuery(message);
+	};
 	context.commit_error_hint = [&](const string &message) {
 		if (context.skip_retry()) {
 			return string("Another transaction changed options at the same time, and a retry would undo what the "
