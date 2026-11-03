@@ -1,0 +1,101 @@
+# name: test/sql/migration/v20_dev1_missing_tag_expiry.test
+# description: a 2.0-dev1 catalog written without the expiry time of tags gets the column with AUTOMATIC_MIGRATION
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v20_dev1_missing_tag_expiry', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+CALL ducklake_create_tag('dl', 'first', version => 1)
+
+# the first 2.0-dev1 builds wrote the tag table without the column
+statement ok
+ALTER TABLE meta.ducklake_snapshot_tag DROP COLUMN expires_at
+
+statement ok
+DETACH dl
+
+# without AUTOMATIC_MIGRATION the catalog is attached as it is, and the tag functions say what to do
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v20_dev1_missing_tag_expiry', METADATA_CATALOG 'meta')
+
+query I
+SELECT i FROM dl.t
+----
+42
+
+statement error
+SELECT tag_name FROM ducklake_tags('dl')
+----
+reattach with AUTOMATIC_MIGRATION TRUE
+
+statement error
+SELECT i FROM dl.t AT (VERSION => 'first')
+----
+reattach with AUTOMATIC_MIGRATION TRUE
+
+statement error
+CALL ducklake_expire_snapshots('dl', versions => [1])
+----
+reattach with AUTOMATIC_MIGRATION TRUE
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v20_dev1_missing_tag_expiry', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query II
+SELECT tag_name, expires_at IS NULL FROM ducklake_tags('dl')
+----
+first	true
+
+query I
+SELECT i FROM dl.t AT (VERSION => 'first')
+----
+42
+
+statement ok
+CALL ducklake_create_tag('dl', 'second', version => 1, expires_at => TIMESTAMPTZ '2099-01-01 00:00:00+00')
+
+query II
+SELECT tag_name, expires_at = TIMESTAMPTZ '2099-01-01 00:00:00+00' FROM ducklake_tags('dl') ORDER BY tag_name
+----
+first	NULL
+second	true
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+query I
+SELECT i FROM dl.t AT (VERSION => 'first')
+----
+42
+
+statement ok
+DETACH dl
+
+# a catalog that has the column is left alone
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v20_dev1_missing_tag_expiry', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT count(*) FROM ducklake_tags('dl')
+----
+2

@@ -298,6 +298,12 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			}
 			if (catalog_version >= target_version) {
 				migrating = false;
+				if (catalog_version == DuckLakeVersion::V2_0_DEV1 && options.automatic_migration &&
+				    !metadata_manager.HasSnapshotTagExpiry()) {
+					// the first 2.0-dev1 builds wrote the tag table without the expiry time
+					catalog.VerifyWritable();
+					metadata_manager.AddSnapshotTagExpiry();
+				}
 				resolved_version = catalog_version;
 				continue;
 			}

@@ -175,7 +175,8 @@ const char *const SQLITE_PROFILE =
 	"types": {
 		"natively_unsupported": ["STRUCT", "MAP", "LIST", "FLOAT", "DOUBLE", "TIMESTAMP WITH TIME ZONE",
 		                         "TIMESTAMPTZ_NS", "VARIANT"],
-		"column_type_overrides": {"FLOAT": "VARCHAR", "DOUBLE": "VARCHAR", "NULL": "INTEGER"}
+		"column_type_overrides": {"FLOAT": "VARCHAR", "DOUBLE": "VARCHAR", "NULL": "INTEGER",
+		                          "TIMESTAMP WITH TIME ZONE": "VARCHAR"}
 	},
 	"max_column_count": 2000,
 	"system_column_names": ["rowid", "oid", "_rowid_"],
