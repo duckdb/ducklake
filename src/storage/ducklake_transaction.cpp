@@ -1,4 +1,5 @@
 #include "storage/ducklake_transaction.hpp"
+#include "duckdb/parallel/task_executor.hpp"
 #include "storage/ducklake_inline_data.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/database.hpp"
@@ -742,16 +743,46 @@ bool LocalTableChanges::HasDatedNewDeletes() const {
 	return result;
 }
 
+class SetDeleteCommitSnapshotTask : public BaseExecutorTask {
+public:
+	SetDeleteCommitSnapshotTask(TaskExecutor &executor, ClientContext &context, DuckLakeTransaction &transaction,
+	                            DuckLakeDeleteFile &file, idx_t commit_snapshot)
+	    : BaseExecutorTask(executor), context(context), transaction(transaction), file(file),
+	      commit_snapshot(commit_snapshot) {
+	}
+
+	void ExecuteTask() override {
+		DuckLakeDeleteFileWriter::SetCommitSnapshot(context, transaction, file, commit_snapshot);
+	}
+
+private:
+	ClientContext &context;
+	DuckLakeTransaction &transaction;
+	DuckLakeDeleteFile &file;
+	idx_t commit_snapshot;
+};
+
 void LocalTableChanges::SetDeleteCommitSnapshot(ClientContext &context, DuckLakeTransaction &transaction,
                                                 idx_t commit_snapshot) {
 	lock_guard<mutex> guard(lock);
+	vector<reference<DuckLakeDeleteFile>> files;
 	for (auto &entry : changes) {
 		ForEachDeleteFile(entry.second, [&](DuckLakeDeleteFile &file) {
-			if (file.DatesNewDeletes()) {
-				DuckLakeDeleteFileWriter::SetCommitSnapshot(context, transaction, file, commit_snapshot);
+			if (file.DatesNewDeletes() && file.max_snapshot.GetIndex() != commit_snapshot) {
+				files.push_back(file);
 			}
 		});
 	}
+	if (files.empty()) {
+		return;
+	}
+	// a retry rewrites them before it can take its snapshot, so they are written in parallel to keep that short
+	TaskExecutor executor(context);
+	for (auto &file : files) {
+		executor.ScheduleTask(
+		    make_uniq<SetDeleteCommitSnapshotTask>(executor, context, transaction, file.get(), commit_snapshot));
+	}
+	executor.WorkOnTasks();
 }
 
 LocalTableChangeIterationHelper LocalTableChanges::Changes() const {
