@@ -27,10 +27,7 @@ ALTER TABLE ducklake.t SET SORTED BY (sort_key(i))
 
 # the macro now expands to a subquery, which the flush cannot sort the inlined rows by
 statement ok
-DROP MACRO ducklake.sort_key
-
-statement ok
-CREATE MACRO ducklake.sort_key(x) AS x + (SELECT 0)
+CREATE OR REPLACE MACRO ducklake.sort_key(x) AS x + (SELECT 0)
 
 statement error
 CALL ducklake_flush_inlined_data('ducklake')

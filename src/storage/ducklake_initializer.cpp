@@ -192,6 +192,8 @@ void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction) {
 	// the extension of the metadata database registers its profile when the ATTACH loads it
 	auto catalog_type = transaction.GetMetadataCatalog().GetCatalogType();
 	catalog.SetMetadataProfile(DuckLakeMetadataProfiles::Get(*context.db).Find(catalog_type));
+	// a rollback of the transaction can undo the attach and the creation or migration of the catalog
+	transaction.MarkMetadataWritten();
 }
 
 bool DuckLakeInitializer::DuckLakeIsInitialized(DuckLakeTransaction &transaction) {
