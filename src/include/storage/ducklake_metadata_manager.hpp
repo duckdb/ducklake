@@ -367,7 +367,8 @@ public:
 	                                    DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeFileListExtendedEntry>
 	GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
-	                         const FilterPushdownInfo *filter_info = nullptr);
+	                         const FilterPushdownInfo *filter_info = nullptr, bool include_partition_values = false,
+	                         const vector<idx_t> &stats_columns = {});
 	//! Sets the schema version of the partition spec of the files written with an older spec
 	void SetPartitionSchemaVersions(DuckLakeTableEntry &table, vector<DuckLakeCompactionFileEntry> &files);
 	virtual vector<DuckLakeCompactionFileEntry> GetFilesForCompaction(DuckLakeTableEntry &table, CompactionType type,
@@ -640,7 +641,7 @@ public:
 	string GetPathSeparator(const string &path);
 
 protected:
-	enum class FileListType : uint8_t { SCAN, EXTENDED };
+	enum class FileListType : uint8_t { SCAN, EXTENDED, EXTENDED_WITH_PARTITIONS };
 	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
 
 	virtual string GetLatestSnapshotQuery() const;

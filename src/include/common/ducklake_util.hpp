@@ -110,6 +110,8 @@ public:
 	//! Copy extension-registered settings from one context onto another. Core engine settings
 	//! are not copied, and settings that change the types read are turned off.
 	static void CopyExtensionSettings(ClientContext &from, ClientContext &to);
+	//! Turn off registered settings that change the types read, without clearing shared catalog caches.
+	static void SetNativeExtensionTypes(ClientContext &context);
 
 	static string ParseConfigOptionValue(ClientContext &context, const string &option, const Value &val);
 	static void ValidateConfigOptionScope(const string &option, bool has_schema, bool has_table);

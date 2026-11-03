@@ -178,6 +178,8 @@ void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction) {
 	// the extension of the metadata database registers its profile when the ATTACH loads it
 	auto catalog_type = transaction.GetMetadataCatalog().GetCatalogType();
 	catalog.SetMetadataProfile(DuckLakeMetadataProfiles::Get(*context.db).Find(catalog_type));
+	// The metadata extension may have been autoloaded after the internal connection was created.
+	DuckLakeUtil::SetNativeExtensionTypes(*transaction.GetConnection().context);
 }
 
 bool DuckLakeInitializer::DuckLakeIsInitialized(DuckLakeTransaction &transaction) {

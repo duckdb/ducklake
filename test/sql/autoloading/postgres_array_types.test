@@ -1,0 +1,75 @@
+# name: test/sql/autoloading/postgres_array_types.test
+# description: Transactional ATTACH autoloads PostgreSQL before pinning native metadata array types
+# group: [autoloading]
+
+require-env DUCKLAKE_POSTGRES_AUTOLOAD
+
+require-env DUCKLAKE_CONNECTION
+
+require-env LOCAL_EXTENSION_REPO
+
+require ducklake
+
+require parquet
+
+query I
+SELECT loaded FROM duckdb_extensions() WHERE extension_name = 'postgres_scanner'
+----
+false
+
+# Run the setup test in a separate process so PostgreSQL options have never been registered.
+query I
+SELECT count(*) FROM duckdb_settings() WHERE name = 'pg_array_as_varchar'
+----
+0
+
+foreach scope GLOBAL SESSION
+
+statement ok
+BEGIN
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (METADATA_SCHEMA 'array_autoload')
+
+query I
+SELECT loaded FROM duckdb_extensions() WHERE extension_name = 'postgres_scanner'
+----
+true
+
+statement ok
+SET {scope} pg_array_as_varchar = true
+
+query I
+DELETE FROM lake.t WHERE p = 1
+----
+1
+
+query I
+SELECT p FROM lake.t
+----
+2
+
+query I
+SELECT current_setting('pg_array_as_varchar')
+----
+true
+
+statement ok
+ROLLBACK
+
+statement ok
+SET {scope} pg_array_as_varchar = false
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (METADATA_SCHEMA 'array_autoload')
+
+query I rowsort
+SELECT p FROM lake.t
+----
+1
+2
+
+statement ok
+DETACH lake
+
+endloop
