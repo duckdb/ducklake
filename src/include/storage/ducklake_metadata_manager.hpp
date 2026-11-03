@@ -231,6 +231,10 @@ public:
 	//! Whether the client can skip the snapshot fetch and let the server read it.
 	virtual bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const;
 	virtual bool IsRetryableCommitError(const string &message) const;
+	//! Whether a failed COMMIT can still have been carried out by the catalog, as when only its reply was lost
+	virtual bool IsCommitOutcomeUnknown(const string &message) const {
+		return false;
+	}
 	//! Advice added to the error of a commit that failed for good
 	virtual string CommitErrorHint(const string &message) const;
 	//! SQL that the commit of a transaction that changed options runs, so two commits cannot both insert an option

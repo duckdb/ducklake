@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/error_data.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "storage/ducklake_transaction.hpp"
 
@@ -65,6 +66,10 @@ struct DuckLakeCommitContext {
 	};
 	//! Rolls back the metadata connection if a transaction is active.
 	std::function<void()> try_rollback = []() {
+	};
+	//! What became of the commit whose COMMIT failed with the error, a catalog can have carried it out anyway
+	std::function<DuckLakeCommitOutcome(const ErrorData &)> commit_outcome = [](const ErrorData &) {
+		return DuckLakeCommitOutcome::NOT_COMMITTED;
 	};
 	//! Resets per-attempt state before a retry.
 	std::function<void()> prepare_retry = []() {

@@ -110,6 +110,8 @@ public:
 	LocalTableChangeIterationHelper Changes() const;
 	void CleanupFiles(DatabaseInstance &db);
 	void CleanupFiles(ClientContext &context, TableIndex table_id);
+	//! The files the transaction created itself, without the files it registered
+	void GetCreatedFiles(vector<string> &result) const;
 	void GetWrittenFiles(vector<string> &result) const;
 	bool HasTransactionLocalInserts(TableIndex table_id) const;
 	bool HasTransactionInlinedData(TableIndex table_id) const;
@@ -180,6 +182,9 @@ struct DuckLakeRetryConfig {
 	//! The wait of an attempt, never longer than the milliseconds left
 	idx_t WaitMs(idx_t attempt, idx_t remaining_ms, double multiplier = 1.0) const;
 };
+
+//! What became of a commit whose COMMIT statement failed
+enum class DuckLakeCommitOutcome : uint8_t { NOT_COMMITTED, COMMITTED, UNKNOWN };
 
 class DuckLakeTransaction : public Transaction, public enable_shared_from_this<DuckLakeTransaction> {
 	friend class DuckLakeTransactionState;
@@ -370,6 +375,8 @@ public:
 	void ApplyServerSideCommit(idx_t schema_version);
 	//! Removes the files that this transaction wrote
 	void CleanupFiles();
+	//! What became of a commit whose COMMIT failed, read from the catalog through the files the transaction wrote
+	DuckLakeCommitOutcome CommitOutcome();
 	//! Post-commit cleanup of empty inlined-data tables superseded by later schema versions.
 	void DropEmptySupersededInlinedTablesClientSide();
 	void ReportPostCommitError(const string &message);
