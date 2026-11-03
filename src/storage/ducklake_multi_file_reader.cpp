@@ -146,17 +146,16 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column
 	}
 }
 
-static bool CanSkipFileByPrefixRangeFilter(const DuckLakeFileColumnStats &file_stats,
-                                           const ColumnFilterInfo &column_filter, ClientContext &context) {
-	if (!ExpressionFilter::ContainsInternalFunction(*column_filter.table_filter->expr, PrefixRangeScalarFun::NAME)) {
-		return false;
-	}
-
+//! Checks a filter against the file statistics, which covers the filters the file list query cannot express
+static bool CanSkipFileByStatistics(const DuckLakeFileColumnStats &file_stats, const ColumnFilterInfo &column_filter,
+                                    ClientContext &context) {
 	DuckLakeColumnStats column_stats(column_filter.column_type);
 	column_stats.min = file_stats.min;
 	column_stats.max = file_stats.max;
 	column_stats.has_min = file_stats.has_min;
 	column_stats.has_max = file_stats.has_max;
+	column_stats.contains_nan = file_stats.contains_nan;
+	column_stats.has_contains_nan = file_stats.has_contains_nan;
 
 	auto stats = column_stats.ToStats();
 	return stats &&
@@ -176,7 +175,7 @@ static bool CanSkipFileByRuntimeFilter(const DuckLakeFileListEntry &file_entry, 
 		}
 		const auto &column_stats = stats_entry->second;
 		if (CanSkipFileByTopNDynamicFilter(column_stats, column_filter) ||
-		    CanSkipFileByPrefixRangeFilter(column_stats, column_filter, context)) {
+		    CanSkipFileByStatistics(column_stats, column_filter, context)) {
 			return true;
 		}
 	}

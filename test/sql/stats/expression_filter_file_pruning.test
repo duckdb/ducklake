@@ -1,0 +1,96 @@
+# name: test/sql/stats/expression_filter_file_pruning.test
+# description: filters on an expression over a column prune files through the statistics DuckDB derives for them
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/expression_filter_file_pruning', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+SET TimeZone = 'UTC'
+
+statement ok
+CREATE TABLE dl.t (ts TIMESTAMP, utc TIMESTAMPTZ, k BIGINT)
+
+# one file per month of 2026, with an hour between the rows
+statement ok
+INSERT INTO dl.t SELECT TIMESTAMP '2026-01-01' + to_hours(range), to_timestamp(1767225600 + range * 3600), range FROM range(744)
+
+statement ok
+INSERT INTO dl.t SELECT TIMESTAMP '2026-02-01' + to_hours(range), to_timestamp(1769904000 + range * 3600), 1000 + range FROM range(672)
+
+statement ok
+INSERT INTO dl.t SELECT TIMESTAMP '2026-03-01' + to_hours(range), to_timestamp(1772323200 + range * 3600), 2000 + range FROM range(744)
+
+# a date part that is not a range on the column
+query I
+SELECT count(*) FROM dl.t WHERE month(ts) = 2
+----
+672
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE month(ts) = 2
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# arithmetic on the column
+query I
+SELECT count(*) FROM dl.t WHERE k // 1000 = 1
+----
+672
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE k // 1000 = 1
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# a value between the files
+query I
+SELECT count(*) FROM dl.t WHERE k // 100 = 8
+----
+0
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE k // 100 = 8
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 0.*
+
+# together with a filter the file list query expresses
+query I
+SELECT count(*) FROM dl.t WHERE month(ts) = 2 AND k >= 1500
+----
+172
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE month(ts) = 2 AND k >= 1500
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# an instant filter written as a local time of a zone
+query I
+SELECT k FROM dl.t WHERE utc AT TIME ZONE 'America/Los_Angeles' = TIMESTAMP '2026-02-01 00:00:00'
+----
+1008
+
+# a file of NULL values has no bounds to check
+statement ok
+INSERT INTO dl.t SELECT NULL, NULL, NULL FROM range(10)
+
+query I
+SELECT count(*) FROM dl.t WHERE month(ts) = 2
+----
+672
+
+query I
+SELECT count(*) FROM dl.t WHERE month(ts) IS NULL
+----
+10

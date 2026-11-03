@@ -2471,7 +2471,12 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 				dynamic_filter_columns.push_back(
 				    {col_filter.column_field_index, comparison_type, col_filter.column_type});
 			}
-			if (dynamic_filter_data || has_prefix_range_filter) {
+			// a filter the file list query cannot express is checked against the file statistics instead
+			unordered_set<string> referenced_stats;
+			const auto in_query = !GenerateFilterPushdown(*col_filter.table_filter, referenced_stats,
+			                                              StatsCteName(col_filter.column_field_index))
+			                           .empty();
+			if (dynamic_filter_data || has_prefix_range_filter || !in_query) {
 				runtime_filter_stats_columns.push_back(col_filter.column_field_index);
 			}
 		}
