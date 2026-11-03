@@ -473,9 +473,7 @@ unique_ptr<QueryResult> PostgresMetadataManager::ExecuteDropInTransaction(string
 }
 
 void PostgresMetadataManager::ClearCache() {
-	// clear the cache of the metadata catalog only: a global clear empties the schema sets of every Postgres catalog,
-	// and a catalog that reloads one while its connection runs a query fails with "another command is already in
-	// progress"
+	// clear the cache of the metadata catalog alone, a global clear breaks queries running in other Postgres catalogs
 	auto &catalog = transaction.GetCatalog();
 	if (catalog.ScopedCacheClear()) {
 		auto catalog_literal = SQLString::ToString(catalog.MetadataDatabaseName().GetIdentifierName());
