@@ -164,10 +164,6 @@ void DuckLakeServerSideCommit::ReadCommitHeader() {
 		transaction_snapshot.snapshot_id = AsIdx(row, 3);
 		transaction_snapshot.next_catalog_id = row.GetValue<uint64_t>(6);
 		transaction_snapshot.next_file_id = row.GetValue<uint64_t>(7);
-		// a header of an older client has no watermark column and commits through the conflict path
-		if (DuckLakeMetadataManager::ResultHasColumn(*result, "transaction_watermark") && !row.IsNull(8)) {
-			transaction_snapshot.global_watermark = row.GetValue<uint64_t>(8);
-		}
 	}
 	if (schema_version < 0) {
 		transaction_snapshot.schema_version =
@@ -669,6 +665,19 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	};
 	ctx.get_snapshot = [this]() {
 		return transaction_snapshot;
+	};
+	ctx.get_global_snapshot_max = [this]() -> optional_idx {
+		// the metadata lives on this server, so the newest snapshot of any branch is one local read
+		string sql = StringUtil::Replace("SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot",
+		                                 "{METADATA_CATALOG}", schema_id);
+		auto result = RunQuery(sql, "read the newest snapshot id");
+		for (auto &row : *result) {
+			if (row.IsNull(0)) {
+				break;
+			}
+			return optional_idx(row.GetValue<uint64_t>(0));
+		}
+		return optional_idx();
 	};
 	ctx.execute_commit_batch = [this](DuckLakeSnapshot snapshot, string &query) -> unique_ptr<QueryResult> {
 		query = SubstitutePlaceholders(query, snapshot);

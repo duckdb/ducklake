@@ -2790,11 +2790,11 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			can_retry = false;
 			bool check_conflicts = i > 0 || attempt_changes.HasRefChanges();
 			if (!check_conflicts && context.supports_v2_0_metadata) {
-				// snapshots of other branches hide behind the lineage head, so a watermark past it,
-				// or a staged header without one, refreshes the schema and the allocators too
+				// snapshots of other branches hide behind the lineage head, so a global maximum past
+				// it refreshes the schema and the allocators through the conflict path
 				auto read_snapshot = context.get_snapshot();
-				check_conflicts = read_snapshot.global_watermark == DConstants::INVALID_INDEX ||
-				                  read_snapshot.global_watermark != read_snapshot.snapshot_id;
+				auto global_max = context.get_global_snapshot_max();
+				check_conflicts = !global_max.IsValid() || global_max.GetIndex() != read_snapshot.snapshot_id;
 			}
 			if (check_conflicts) {
 				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);

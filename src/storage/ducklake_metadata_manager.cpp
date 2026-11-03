@@ -5715,7 +5715,8 @@ DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(SnapshotAndStats &current
 }
 
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult &result,
-                                                                    optional_ptr<string> catalog_version) {
+                                                                    optional_ptr<string> catalog_version,
+                                                                    optional_ptr<optional_idx> global_snapshot_max) {
 	unique_ptr<DuckLakeSnapshot> snapshot;
 	for (auto &row : result) {
 		if (snapshot) {
@@ -5729,8 +5730,8 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult 
 		if (catalog_version && result.ColumnCount() > 4 && !row.IsNull(4)) {
 			*catalog_version = row.GetValue<string>(4);
 		}
-		if (result.ColumnCount() > 5 && !row.IsNull(5)) {
-			snapshot->global_watermark = row.GetValue<idx_t>(5);
+		if (global_snapshot_max && result.ColumnCount() > 5 && !row.IsNull(5)) {
+			*global_snapshot_max = row.GetValue<idx_t>(5);
 		}
 	}
 	return snapshot;
@@ -5823,7 +5824,8 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
 	auto result = Query(GetLatestSnapshotQuery());
 	result->ThrowIfError("Failed to query most recent snapshot for DuckLake: ");
 	string catalog_version;
-	auto snapshot = ParseSnapshot(*result, &catalog_version);
+	global_snapshot_max = optional_idx();
+	auto snapshot = ParseSnapshot(*result, &catalog_version, &global_snapshot_max);
 	if (!snapshot) {
 		throw InvalidInputException("No snapshot found in DuckLake");
 	}

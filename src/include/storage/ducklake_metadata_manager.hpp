@@ -339,7 +339,12 @@ public:
 	static string GlobalTableStatsQuery(bool include_exactness, const vector<TableIndex> &table_ids = {});
 	//! Pure parsers for the results of the above queries.
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
-	                                                  optional_ptr<string> catalog_version = nullptr);
+	                                                  optional_ptr<string> catalog_version = nullptr,
+	                                                  optional_ptr<optional_idx> global_snapshot_max = nullptr);
+	//! The newest snapshot of any branch as of the last snapshot read, commits allocate past it
+	optional_idx GetGlobalSnapshotMax() const {
+		return global_snapshot_max;
+	}
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
 	//! Take the table sizes that stats rows lack from the live data files
 	static void FillMissingTableSizes(vector<DuckLakeGlobalStatsInfo> &stats,
@@ -862,6 +867,8 @@ public:
 private:
 	static unordered_map<string /* name */, create_t> metadata_managers;
 	static mutex metadata_managers_lock;
+	//! The global snapshot maximum read along with the latest snapshot
+	optional_idx global_snapshot_max;
 
 	unordered_set<idx_t> GetFileIdsWithInlinedDeletions(TableIndex table_id, DuckLakeSnapshot snapshot);
 	unique_ptr<QueryResult> ReadInlinedDataChanges(DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot,
