@@ -485,9 +485,8 @@ unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapsh
 	// the scanner drops trailing semicolons before it repeats the query in an error
 	StringUtil::RTrim(query, "; \t\n\v\f\r");
 	executed_query_size = query.size();
-	auto result = transaction.GetConnection().Query(
+	return transaction.ExecuteRaw(
 	    StringUtil::Format("CALL postgres_execute(%s, %s, prepare=FALSE)", catalog_literal, SQLString(query)));
-	return std::move(result);
 }
 
 unique_ptr<QueryResult> PostgresMetadataManager::ExecuteDropInTransaction(string &query) {
