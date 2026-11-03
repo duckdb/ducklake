@@ -366,9 +366,11 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			} else if ((manager.HasFileVisibilityTable() &&
 			            !manager.HasVisibilityEventShape("ducklake_file_visibility")) ||
 			           (manager.HasDeleteFileVisibilityTable() &&
-			            !manager.HasVisibilityEventShape("ducklake_delete_file_visibility"))) {
-				throw InvalidInputException("This DuckLake catalog was written by an older dev build and its "
-				                            "visibility rows still hold ranges, attach it writable once to heal it");
+			            !manager.HasVisibilityEventShape("ducklake_delete_file_visibility")) ||
+			           manager.HasVisibilityMigrationTable("ducklake_file_visibility") ||
+			           manager.HasVisibilityMigrationTable("ducklake_delete_file_visibility")) {
+				throw InvalidInputException("This DuckLake catalog holds the visibility rows of an older dev build "
+				                            "or an unfinished rewrite of them, attach it writable once to heal it");
 			}
 		} else {
 			try {

@@ -123,5 +123,42 @@ SELECT * FROM dl.t
 ----
 100
 
+# a rewrite interrupted after creating the empty event table resumes from the backup
+statement ok
+CREATE TABLE meta.ducklake_file_visibility_migration(branch_id BIGINT, table_id BIGINT, data_file_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT)
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility_migration SELECT branch_id, table_id, data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END), MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) FROM meta.ducklake_file_visibility GROUP BY branch_id, table_id, data_file_id
+
+statement ok
+DELETE FROM meta.ducklake_file_visibility
+
+statement ok
+DETACH dl
+
+# a read only attach rejects the unfinished rewrite
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_visibility_events_rewrite_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+attach it writable once
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_visibility_events_rewrite_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT * FROM dl.t
+----
+100
+
+query II
+SELECT COUNT(*) FILTER (WHERE is_delete = FALSE), COUNT(*) FILTER (WHERE is_delete = TRUE) FROM meta.ducklake_file_visibility WHERE branch_id = 0
+----
+2	1
+
+statement error
+SELECT * FROM meta.ducklake_file_visibility_migration
+----
+does not exist
+
 statement ok
 DETACH dl

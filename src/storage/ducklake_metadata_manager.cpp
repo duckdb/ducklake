@@ -1004,15 +1004,19 @@ bool DuckLakeMetadataManager::HasBranchZeroFileVisibility(const string &file_tab
                                                           bool has_visibility_table, const string &visibility_table) {
 	// a file table without rows needs no visibility events
 	string files_without_rows = "SELECT 1 FROM {METADATA_CATALOG}." + file_table + " f";
-	if (has_visibility_table) {
-		// range rows of an older dev build and the backup of an interrupted rewrite count as the add events
-		string add_filter = HasVisibilityEventShape(visibility_table) ? " AND v.is_delete = FALSE" : "";
+	bool has_old_shape = has_visibility_table && !HasVisibilityEventShape(visibility_table);
+	if (has_old_shape) {
+		// range rows of an older dev build count as the add events
 		files_without_rows += " WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}." + visibility_table +
-		                      " v WHERE v.branch_id = 0 AND v." + file_column + " = f." + file_column + add_filter +
-		                      ")";
+		                      " v WHERE v.branch_id = 0 AND v." + file_column + " = f." + file_column + ")";
 	} else if (HasVisibilityMigrationTable(visibility_table)) {
+		// the backup of an interrupted rewrite is the source until it is consumed
 		files_without_rows += " WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}." + visibility_table +
 		                      "_migration v WHERE v.branch_id = 0 AND v." + file_column + " = f." + file_column + ")";
+	} else if (has_visibility_table) {
+		files_without_rows += " WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}." + visibility_table +
+		                      " v WHERE v.branch_id = 0 AND v." + file_column + " = f." + file_column +
+		                      " AND v.is_delete = FALSE)";
 	}
 	auto probe = Query("SELECT COUNT(*) FROM (" + files_without_rows + " LIMIT 1);");
 	if (probe->HasError()) {
@@ -4946,6 +4950,9 @@ JOIN {METADATA_CATALOG}.ducklake_delete_file_visibility own
 ON own.branch_id = b.branch_id AND own.is_delete = FALSE AND own.delete_file_id <> t.delete_file_id
 JOIN {METADATA_CATALOG}.ducklake_delete_file df
 ON df.delete_file_id = own.delete_file_id AND df.data_file_id = t.data_file_id
+WHERE NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.ducklake_delete_file_visibility e
+    WHERE e.branch_id = own.branch_id AND e.delete_file_id = t.delete_file_id)
 GROUP BY own.branch_id, t.table_id, t.delete_file_id;
 )",
 	                          StringUtil::Join(retro_values, ", "));
