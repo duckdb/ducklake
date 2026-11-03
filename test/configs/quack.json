@@ -50,6 +50,9 @@
         "test/sql/metadata/metadata_schema_scoped_attach.test",
         "test/sql/migration/postgres_concurrent_migration.test",
         "test/sql/retry/postgres_localized_conflict_retry.test",
+        "test/sql/retry/postgres_cleanup_overlap.test",
+        "test/sql/retry/postgres_cleanup_unrelated_error.test",
+        "test/sql/retry/postgres_cleanup_completed.test",
         "test/sql/retry/postgres_commit_connection_loss.test",
         "test/sql/concurrent/postgres_concurrent_attach_new.test",
         "test/sql/concurrent/postgres_concurrent_attach_new_migrate.test",
@@ -149,12 +152,6 @@
       "reason": "FIXME: Each metadata query runs in its own server-side transaction on quack, so a reader that began before a concurrent TRUNCATE reads the post-truncate record counts from ducklake_table_stats.",
       "paths": [
         "test/sql/metadata/duckdb_tables_record_counts_concurrent.test"
-      ]
-    },
-    {
-      "reason": "FIXME: Each metadata query runs in its own server-side transaction on quack, so a reader that began before a rewrite reads the narrowed bounds from ducklake_table_column_stats.",
-      "paths": [
-        "test/sql/compaction/rewrite_narrow_older_transaction.test"
       ]
     },
     {
