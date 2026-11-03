@@ -1,0 +1,57 @@
+# name: test/sql/compaction/compaction_many_inlined_tables.test_slow
+# description: Refreshing totals of many inlined tables does not exceed SQL nesting limits
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/refresh_depth', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (-1)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+loop n 0 550
+
+statement ok
+ALTER TABLE lake.t RENAME COLUMN i TO j
+
+statement ok
+INSERT INTO lake.t VALUES (1)
+
+statement ok
+ALTER TABLE lake.t RENAME COLUMN j TO i
+
+statement ok
+INSERT INTO lake.t VALUES (1)
+
+endloop
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_tables
+----
+1100
+
+statement ok
+DELETE FROM lake.t WHERE i = -1
+
+query I
+SELECT count(*) FROM lake.t
+----
+1100
+
+query II
+SELECT record_count, next_row_id FROM meta.ducklake_table_stats
+----
+1100	1101
