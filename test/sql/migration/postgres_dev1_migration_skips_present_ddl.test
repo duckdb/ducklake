@@ -66,7 +66,10 @@ statement ok
 CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_data_file ADD COLUMN end_snapshot BIGINT')
 
 statement ok
-CALL postgres_execute('pg', 'UPDATE dev1_skips_present_ddl.ducklake_data_file f SET begin_snapshot = v.begin_snapshot, end_snapshot = v.end_snapshot FROM dev1_skips_present_ddl.ducklake_file_visibility v WHERE v.branch_id = 0 AND v.data_file_id = f.data_file_id')
+CALL postgres_execute('pg', 'UPDATE dev1_skips_present_ddl.ducklake_data_file f SET begin_snapshot = v.snapshot_id FROM dev1_skips_present_ddl.ducklake_file_visibility v WHERE v.branch_id = 0 AND v.is_delete = FALSE AND v.data_file_id = f.data_file_id')
+
+statement ok
+CALL postgres_execute('pg', 'UPDATE dev1_skips_present_ddl.ducklake_data_file f SET end_snapshot = v.snapshot_id FROM dev1_skips_present_ddl.ducklake_file_visibility v WHERE v.branch_id = 0 AND v.is_delete = TRUE AND v.data_file_id = f.data_file_id')
 
 statement ok
 CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_file_visibility')

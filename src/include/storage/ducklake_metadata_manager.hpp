@@ -419,7 +419,8 @@ public:
 	virtual void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files);
 	static string DropSchemas(const set<SchemaIndex> &ids);
 	static string DropTables(const set<TableIndex> &ids, bool renamed, bool write_visibility);
-	static string VisibilityFlushDrop(const string &visibility_table, const string &id_name, const string &id_list);
+	static string VisibilityFlushDrop(const string &visibility_table, const string &file_id_column,
+	                                  const string &filter_column, const string &id_list);
 	static string DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags = false);
 	static string DropMacros(const set<MacroIndex> &ids);
 
@@ -636,7 +637,8 @@ public:
 	string BranchAwareLatestSnapshotQuery() const;
 	//! The snapshots that live branches depend on, their fork points and their own snapshots
 	set<idx_t> GetBranchProtectedSnapshots();
-	string FileVisibilityGuard(const string &visibility_table, const string &file_id_column, const string &alias = "f");
+	string FileVisibilityGuard(const string &visibility_table, const string &file_id_column, const string &alias = "f",
+	                           bool include_inherited = true);
 	static string MainHeadSnapshotQuery(bool branch_aware);
 	string BranchLineageFilter() const;
 	//! The branch whose visibility rows a read at the given snapshot resolves through
@@ -648,8 +650,14 @@ public:
 	bool HasFileVisibilityTable();
 	bool HasDeleteFileVisibilityTable();
 	bool HasMainBranchRow();
-	static string DataFileSource(bool branch_aware, idx_t branch_id, const string &prefix);
-	static string DeleteFileSource(bool branch_aware, idx_t branch_id, const string &prefix);
+	//! The predicate selecting the visibility events a read of the branch resolves through
+	static string VisibilityChainPredicate(idx_t branch_id, optional_idx fork_snapshot);
+	//! The per file ranges a branch derives from its visibility events
+	static string VisibilityEventRanges(const string &visibility_table, const string &file_id_column,
+	                                    const string &chain_predicate, const string &prefix);
+	static string DataFileSource(bool branch_aware, idx_t branch_id, optional_idx fork_snapshot, const string &prefix);
+	static string DeleteFileSource(bool branch_aware, idx_t branch_id, optional_idx fork_snapshot,
+	                               const string &prefix);
 	string DataFiles() const;
 	string DeleteFiles() const;
 	bool HasMetadataColumn(const string &table, const string &column);
@@ -660,7 +668,8 @@ public:
 	bool HasBranchZeroDataVisibility();
 	bool HasBranchZeroDeleteVisibility();
 	bool HasBranchZeroVisibility();
-	bool HasBranchInheritedVisibility();
+	bool HasVisibilityEventShape(const string &visibility_table);
+	bool HasVisibilityMigrationTable(const string &visibility_table);
 	bool HasV2_0Dev1Additions();
 	virtual void AddV2_0Dev1Additions();
 	//! The branch additions a dev catalog is missing, all of them for the 1.1 migration
@@ -675,10 +684,21 @@ public:
 		bool drop_data_end = true;
 		bool drop_delete_begin = true;
 		bool drop_delete_end = true;
+		//! Visibility tables of an older dev build with range rows, rewritten into events
+		bool file_visibility_ranges = false;
+		bool delete_file_visibility_ranges = false;
+		//! Backup tables of an interrupted rewrite, consumed and dropped
+		bool file_visibility_migration = false;
+		bool delete_file_visibility_migration = false;
 	};
 	V2_0Dev1Additions ProbeV2_0Dev1Additions();
 	void VerifyHealableV2_0Dev1(const V2_0Dev1Additions &missing);
 	static string V2_0Dev1AdditionsSql(const V2_0Dev1Additions &add);
+	static string VisibilityEventBackfillSql(const string &visibility_table, const string &file_table,
+	                                         const string &file_id_column);
+	static string VisibilityEventRewriteSql(bool table_missing, bool has_ranges, bool has_migration,
+	                                        const string &visibility_table, const string &file_id_column,
+	                                        const string &create_statement);
 	static string GetSnapshotTagTableStatement();
 	static string GetFileVisibilityTableStatement();
 	static string GetDeleteFileVisibilityTableStatement();

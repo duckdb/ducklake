@@ -1,5 +1,5 @@
 # name: test/sql/branches/branch_heal_inheritance.test
-# description: healing maps the files of a bare branch and the fork bounds an inherited cumulative delete file
+# description: a bare branch inherits files through the fork and the fork bounds an inherited cumulative delete file
 # group: [branches]
 
 require ducklake
@@ -26,7 +26,7 @@ DELETE FROM dl.t WHERE i = 1
 statement ok
 DELETE FROM dl.t WHERE i = 2
 
-# a branch forked between the two deletes, without any visibility rows of its own
+# a branch forked between the two deletes, without any visibility events of its own
 statement ok
 INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 3, 3, NULL)
 
@@ -36,17 +36,23 @@ INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, 
 statement ok
 DETACH dl
 
-# the writable attach materializes the branch's inherited visibility
+# a writable attach leaves the branch without rows, it inherits through the fork
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_heal_inheritance_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
 
 query I
 SELECT COUNT(*) FROM meta.ducklake_file_visibility WHERE branch_id = 1
 ----
-1
+0
 
 query I
 SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility WHERE branch_id = 1
+----
+0
+
+# the replacement delete file carries the begin of the file it replaced, so the fork inherits it
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility WHERE branch_id = 0 AND is_delete = FALSE AND snapshot_id <= 3
 ----
 1
 

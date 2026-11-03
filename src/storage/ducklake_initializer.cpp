@@ -359,9 +359,16 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	}
 	if (resolved_version == DuckLakeVersion::V2_0_DEV1 && !transaction.GetMetadataManager().HasV2_0Dev1Additions()) {
 		if (catalog.GetAttached().IsReadOnly()) {
-			// once the inline range columns are gone the visibility rows are the only readable ranges
-			if (transaction.GetMetadataManager().HasAllFileRangeColumns()) {
+			// once the inline range columns are gone the visibility events are the only readable ranges
+			auto &manager = transaction.GetMetadataManager();
+			if (manager.HasAllFileRangeColumns()) {
 				catalog.SetBranchMetadataMissing();
+			} else if ((manager.HasFileVisibilityTable() &&
+			            !manager.HasVisibilityEventShape("ducklake_file_visibility")) ||
+			           (manager.HasDeleteFileVisibilityTable() &&
+			            !manager.HasVisibilityEventShape("ducklake_delete_file_visibility"))) {
+				throw InvalidInputException("This DuckLake catalog was written by an older dev build and its "
+				                            "visibility rows still hold ranges, attach it writable once to heal it");
 			}
 		} else {
 			try {

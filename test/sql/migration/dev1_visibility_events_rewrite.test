@@ -1,0 +1,127 @@
+# name: test/sql/migration/dev1_visibility_events_rewrite.test
+# description: visibility tables of an older dev build with range rows are rewritten into events on a writable attach
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_visibility_events_rewrite_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t SELECT i FROM range(10) t(i)
+
+statement ok
+DELETE FROM dl.t WHERE i = 5
+
+statement ok
+INSERT INTO dl.t VALUES (100)
+
+# a full file delete ends the first data file
+statement ok
+DELETE FROM dl.t WHERE i < 100
+
+# rewrite the visibility tables into the range layout of an older dev build
+statement ok
+CREATE TABLE meta.fv_backup(branch_id BIGINT, table_id BIGINT, data_file_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT)
+
+statement ok
+INSERT INTO meta.fv_backup SELECT branch_id, table_id, data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END), MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) FROM meta.ducklake_file_visibility GROUP BY branch_id, table_id, data_file_id
+
+statement ok
+DROP TABLE meta.ducklake_file_visibility
+
+statement ok
+CREATE TABLE meta.ducklake_file_visibility(branch_id BIGINT, table_id BIGINT, data_file_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, PRIMARY KEY(branch_id, data_file_id))
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT * FROM meta.fv_backup
+
+statement ok
+DROP TABLE meta.fv_backup
+
+statement ok
+CREATE TABLE meta.dfv_backup(branch_id BIGINT, table_id BIGINT, delete_file_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT)
+
+statement ok
+INSERT INTO meta.dfv_backup SELECT branch_id, table_id, delete_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END), MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) FROM meta.ducklake_delete_file_visibility GROUP BY branch_id, table_id, delete_file_id
+
+statement ok
+DROP TABLE meta.ducklake_delete_file_visibility
+
+statement ok
+CREATE TABLE meta.ducklake_delete_file_visibility(branch_id BIGINT, table_id BIGINT, delete_file_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, PRIMARY KEY(branch_id, delete_file_id))
+
+statement ok
+INSERT INTO meta.ducklake_delete_file_visibility SELECT * FROM meta.dfv_backup
+
+statement ok
+DROP TABLE meta.dfv_backup
+
+statement ok
+DETACH dl
+
+# a read only attach cannot use the range rows once the inline columns are gone
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_visibility_events_rewrite_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+attach it writable once
+
+# a writable attach rewrites the range rows into events
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_visibility_events_rewrite_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT * FROM dl.t
+----
+100
+
+# the delete and the full file delete still travel in time
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 2)
+----
+10
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 3)
+----
+9
+
+# every live file has an add event and the ended file kept its delete event
+query II
+SELECT COUNT(*) FILTER (WHERE is_delete = FALSE), COUNT(*) FILTER (WHERE is_delete = TRUE) FROM meta.ducklake_file_visibility WHERE branch_id = 0
+----
+2	1
+
+statement error
+SELECT * FROM meta.ducklake_file_visibility_migration
+----
+does not exist
+
+statement error
+SELECT * FROM meta.ducklake_delete_file_visibility_migration
+----
+does not exist
+
+# a second attach finds nothing left to heal
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_visibility_events_rewrite_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT * FROM dl.t
+----
+100
+
+statement ok
+DETACH dl

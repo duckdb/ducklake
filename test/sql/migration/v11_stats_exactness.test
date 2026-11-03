@@ -80,7 +80,8 @@ query IIII
 SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN
 FROM dl.ducklake_file_column_stats stats
 JOIN dl.ducklake_file_visibility f USING (data_file_id)
-WHERE f.branch_id = 0 AND f.end_snapshot IS NULL
+WHERE f.branch_id = 0 AND f.is_delete = FALSE AND NOT EXISTS (SELECT 1 FROM dl.ducklake_file_visibility d
+    WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.data_file_id = f.data_file_id)
 ORDER BY column_id
 ----
 0	5	true	true

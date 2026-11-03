@@ -28,12 +28,17 @@ INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 3, 3, NULL)
 statement ok
 INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 3
 
-# the flush rehomes the inlined rows into a file that starts before the fork
+# the flush rehomes the inlined rows into a file that starts before the fork, which the fork inherits
 statement ok
 CALL ducklake_flush_inlined_data('dl')
 
 query I
 SELECT COUNT(*) FROM meta.ducklake_file_visibility WHERE branch_id = 1
+----
+0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND is_delete = FALSE AND snapshot_id <= 3
 ----
 1
 

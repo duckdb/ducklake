@@ -27,7 +27,10 @@ statement ok
 ALTER TABLE meta.ducklake_delete_file ADD COLUMN end_snapshot BIGINT
 
 statement ok
-UPDATE meta.ducklake_delete_file SET begin_snapshot = v.begin_snapshot, end_snapshot = v.end_snapshot FROM meta.ducklake_delete_file_visibility v WHERE v.branch_id = 0 AND v.delete_file_id = ducklake_delete_file.delete_file_id
+UPDATE meta.ducklake_delete_file SET begin_snapshot = v.snapshot_id FROM meta.ducklake_delete_file_visibility v WHERE v.branch_id = 0 AND v.is_delete = FALSE AND v.delete_file_id = ducklake_delete_file.delete_file_id
+
+statement ok
+UPDATE meta.ducklake_delete_file SET end_snapshot = v.snapshot_id FROM meta.ducklake_delete_file_visibility v WHERE v.branch_id = 0 AND v.is_delete = TRUE AND v.delete_file_id = ducklake_delete_file.delete_file_id
 
 statement ok
 DROP TABLE meta.ducklake_delete_file_visibility

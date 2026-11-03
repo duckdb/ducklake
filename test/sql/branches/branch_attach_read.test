@@ -1,5 +1,5 @@
 # name: test/sql/branches/branch_attach_read.test
-# description: a read-only attach at a branch reads inherited data at the fork and its own visibility rows
+# description: a read-only attach at a branch reads inherited data at the fork and its own visibility events
 # group: [branches]
 
 require ducklake
@@ -92,7 +92,7 @@ read-only mode
 statement ok
 DETACH dl
 
-# a snapshot of the branch and a visibility row that ends the inherited file on dev
+# a snapshot of the branch and a delete event that ends the inherited file on dev
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS m (DATA_PATH '{DATA_PATH}/branch_attach_read_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
 
@@ -100,7 +100,7 @@ statement ok
 INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2
 
 statement ok
-INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, begin_snapshot, 100 FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND begin_snapshot = 2
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, 100, TRUE FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND is_delete = FALSE AND snapshot_id = 2
 
 statement ok
 DETACH m
@@ -108,7 +108,7 @@ DETACH m
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_attach_read_files', METADATA_CATALOG 'meta', BRANCH 'dev')
 
-# the visibility row of the branch is authoritative, the file is gone at the branch head
+# the delete event of the branch is authoritative, the file is gone at the branch head
 query I
 SELECT COUNT(*) FROM dl.t
 ----

@@ -2493,7 +2493,8 @@ SnapshotDeletedFromFiles DuckLakeTransactionState::GetFilesDeletedOrDroppedAfter
     const std::function<unique_ptr<QueryResult>(string)> &executor, bool branch_aware) {
 	// replacement delete files keep an older begin_snapshot, so also match on new file ids
 	// each filter gets its own scan, so it is pushed into the metadata database
-	string sql = StringUtil::Format(R"(
+	string sql = StringUtil::Format(
+	    R"(
 	SELECT data_file_id
 	FROM %s
 	WHERE begin_snapshot > {SNAPSHOT_ID}
@@ -2506,9 +2507,9 @@ SnapshotDeletedFromFiles DuckLakeTransactionState::GetFilesDeletedOrDroppedAfter
 	FROM %s
 	WHERE end_snapshot IS NOT NULL AND end_snapshot > {SNAPSHOT_ID}
 	)",
-	                                DuckLakeMetadataManager::DeleteFileSource(branch_aware, 0, "{METADATA_CATALOG}"),
-	                                DuckLakeMetadataManager::DeleteFileSource(branch_aware, 0, "{METADATA_CATALOG}"),
-	                                DuckLakeMetadataManager::DataFileSource(branch_aware, 0, "{METADATA_CATALOG}"));
+	    DuckLakeMetadataManager::DeleteFileSource(branch_aware, 0, optional_idx(), "{METADATA_CATALOG}"),
+	    DuckLakeMetadataManager::DeleteFileSource(branch_aware, 0, optional_idx(), "{METADATA_CATALOG}"),
+	    DuckLakeMetadataManager::DataFileSource(branch_aware, 0, optional_idx(), "{METADATA_CATALOG}"));
 	auto result = executor(sql);
 	result->ThrowIfError(
 	    "Failed to commit DuckLake transaction - failed to get files with deletions for conflict resolution:");

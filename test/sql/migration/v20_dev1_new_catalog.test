@@ -45,23 +45,24 @@ merge_snapshot_id	BIGINT
 old_snapshot_id	BIGINT
 new_snapshot_id	BIGINT
 
+# SQLite reports the boolean column as a number
 query II
-SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_file_visibility') ORDER BY column_index
+SELECT column_name, CASE WHEN column_name = 'is_delete' AND data_type = 'BIGINT' THEN 'BOOLEAN' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_file_visibility') ORDER BY column_index
 ----
 branch_id	BIGINT
 table_id	BIGINT
 data_file_id	BIGINT
-begin_snapshot	BIGINT
-end_snapshot	BIGINT
+snapshot_id	BIGINT
+is_delete	BOOLEAN
 
 query II
-SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_delete_file_visibility') ORDER BY column_index
+SELECT column_name, CASE WHEN column_name = 'is_delete' AND data_type = 'BIGINT' THEN 'BOOLEAN' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_delete_file_visibility') ORDER BY column_index
 ----
 branch_id	BIGINT
 table_id	BIGINT
 delete_file_id	BIGINT
-begin_snapshot	BIGINT
-end_snapshot	BIGINT
+snapshot_id	BIGINT
+is_delete	BOOLEAN
 
 # the initial snapshot belongs to main
 query IIIIII
