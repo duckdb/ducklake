@@ -527,7 +527,7 @@ bool PostgresMetadataManager::MaterializeStatsCTEs() const {
 string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                                                       const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
-                                                      const vector<idx_t> &runtime_filter_stats_columns,
+                                                      vector<idx_t> &runtime_filter_stats_columns,
                                                       FileListType file_list_type, const string &) {
 	auto schema = SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName());
 	auto remote_query = DuckLakeMetadataManager::GenerateFileListQuery(

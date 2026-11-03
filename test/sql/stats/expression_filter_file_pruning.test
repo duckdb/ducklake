@@ -64,7 +64,7 @@ EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE k // 100 = 8
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 0.*
 
-# together with a filter the file list query expresses
+# together with a filter the file list query expresses, on another column and on the same column
 query I
 SELECT count(*) FROM dl.t WHERE month(ts) = 2 AND k >= 1500
 ----
@@ -75,11 +75,41 @@ EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE month(ts) = 2 AND k >= 1500
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 
+query I
+SELECT count(*) FROM dl.t WHERE k >= 500 AND k // 1000 = 1
+----
+672
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE k >= 500 AND k // 1000 = 1
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
 # an instant filter written as a local time of a zone
 query I
 SELECT k FROM dl.t WHERE utc AT TIME ZONE 'America/Los_Angeles' = TIMESTAMP '2026-02-01 00:00:00'
 ----
 1008
+
+# the statistics of a geometry are not its bounds, so the files are read
+statement ok
+CREATE TABLE dl.shapes (g GEOMETRY)
+
+statement ok
+INSERT INTO dl.shapes VALUES ('POINT(1 2)'::GEOMETRY)
+
+statement ok
+INSERT INTO dl.shapes VALUES ('POINT(3 4)'::GEOMETRY)
+
+query I
+SELECT count(*) FROM dl.shapes WHERE vertex_extract(g, 'y') = 4
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.shapes WHERE vertex_extract(g, 'y') = 4
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
 
 # a file of NULL values has no bounds to check
 statement ok
