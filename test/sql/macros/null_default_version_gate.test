@@ -30,6 +30,12 @@ CREATE MACRO typed_default(a, b := NULL::INTEGER) AS COALESCE(b, a)
 ----
 DuckLake 1.0 does not support the NULL type
 
+# a cast of a time zone type is stored as an expression, which 1.0 readers take for a type name
+statement error
+CREATE MACRO at_time(x := TIMESTAMPTZ '2024-01-01 00:00:00') AS x
+----
+DuckLake 1.0 does not support macro parameter defaults that are not scalar constants
+
 # regular defaults keep working
 statement ok
 CREATE MACRO with_default(a, b := 5) AS a + b

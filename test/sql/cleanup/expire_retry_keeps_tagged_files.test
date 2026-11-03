@@ -1,0 +1,86 @@
+# name: test/sql/cleanup/expire_retry_keeps_tagged_files.test
+# description: A retried commit expires again, and a snapshot tagged meanwhile keeps its files
+# group: [cleanup]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/expire_retry_keeps_tagged_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DELETE FROM dl.t
+
+statement ok
+CREATE TABLE dl.v AS SELECT 7 AS i
+
+statement ok
+DELETE FROM dl.v
+
+statement ok
+CREATE TABLE dl.u (i INTEGER)
+
+# the retry expires snapshot 1 again
+statement ok a
+BEGIN
+
+statement ok a
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+statement ok a
+INSERT INTO dl.t VALUES (10)
+
+statement ok b
+INSERT INTO dl.u VALUES (20)
+
+statement ok a
+COMMIT
+
+query II
+SELECT (SELECT count(*) FROM dl.snapshots() WHERE snapshot_id = 1), (SELECT sum(i) FROM dl.t)
+----
+0	10
+
+# the retry keeps snapshot 3, which another connection tagged before the commit
+statement ok a
+BEGIN
+
+statement ok a
+CALL ducklake_expire_snapshots('dl', versions => [3])
+
+statement ok a
+INSERT INTO dl.t VALUES (11)
+
+statement ok b
+CALL ducklake_create_tag('dl', 'keep', version => 3)
+
+statement ok a
+COMMIT
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+query III
+SELECT (SELECT count(*) FROM dl.snapshots() WHERE snapshot_id = 3), (SELECT sum(i) FROM dl.t),
+       (SELECT count(*) FROM glob('{DATA_PATH}/expire_retry_keeps_tagged_files/main/v/*.parquet'))
+----
+1	21	1
+
+query I
+SELECT i FROM dl.v AT (VERSION => 'keep')
+----
+7
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/expire_retry_keeps_tagged_files/main/t/*.parquet')
+----
+2
