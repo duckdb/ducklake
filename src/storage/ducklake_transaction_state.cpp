@@ -344,18 +344,29 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 		ConflictCheck(view_id, other_changes.dropped_views, "alter view", "dropped it");
 		ConflictCheck(view_id, other_changes.altered_views, "alter view", "altered it");
 	}
-	// the snapshot changes record a rename only by its new name
-	auto tables_renamed_by_others = GetRenamedAfterSnapshot("ducklake_table", "table_id", renamed_tables, context);
+	// the snapshot changes record a rename only by its new name, so renamed and dropped entries look it up
+	auto rename_checked_tables = renamed_tables;
+	rename_checked_tables.insert(changes.dropped_tables.begin(), changes.dropped_tables.end());
+	auto tables_renamed_by_others =
+	    GetRenamedAfterSnapshot("ducklake_table", "table_id", rename_checked_tables, context);
 	for (auto &table_id : renamed_tables) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "rename table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "rename table", "altered it");
 		ConflictCheck(table_id, tables_renamed_by_others, "rename table", "renamed it");
 	}
-	auto views_renamed_by_others = GetRenamedAfterSnapshot("ducklake_view", "view_id", renamed_views, context);
+	for (auto &table_id : changes.dropped_tables) {
+		ConflictCheck(table_id, tables_renamed_by_others, "drop table", "renamed it");
+	}
+	auto rename_checked_views = renamed_views;
+	rename_checked_views.insert(changes.dropped_views.begin(), changes.dropped_views.end());
+	auto views_renamed_by_others = GetRenamedAfterSnapshot("ducklake_view", "view_id", rename_checked_views, context);
 	for (auto &view_id : renamed_views) {
 		ConflictCheck(view_id, other_changes.dropped_views, "rename view", "dropped it");
 		ConflictCheck(view_id, other_changes.altered_views, "rename view", "altered it");
 		ConflictCheck(view_id, views_renamed_by_others, "rename view", "renamed it");
+	}
+	for (auto &view_id : changes.dropped_views) {
+		ConflictCheck(view_id, views_renamed_by_others, "drop view", "renamed it");
 	}
 	for (auto &name : changes.created_snapshot_tags) {
 		NameConflictCheck(name, other_changes.created_snapshot_tags, "create tag",
