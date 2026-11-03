@@ -1,0 +1,101 @@
+# name: test/sql/sorted_table/drop_macro_sort_key.test
+# description: DROP MACRO is refused while a sort key of a table calls the macro
+# group: [sorted_table]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/drop_macro_sort_key')
+
+statement ok
+CREATE MACRO lake.sort_m(x) AS -x
+
+statement ok
+CREATE TABLE lake.s (i INTEGER)
+
+statement ok
+ALTER TABLE lake.s SET SORTED BY (lake.sort_m(i))
+
+statement ok
+INSERT INTO lake.s VALUES (1), (2)
+
+statement error
+DROP MACRO lake.sort_m
+----
+Cannot drop macro "sort_m" because the sort key of table "s" calls it
+
+statement ok
+INSERT INTO lake.s VALUES (3)
+
+query I
+SELECT count(*) FROM lake.s
+----
+3
+
+# a replaced macro stays callable, and the sort key uses its new definition
+statement ok
+CREATE OR REPLACE MACRO lake.sort_m(x) AS x
+
+statement ok
+INSERT INTO lake.s VALUES (4)
+
+# a call nested in the sort expression holds the macro too
+statement ok
+ALTER TABLE lake.s SET SORTED BY (abs(lake.sort_m(i)) DESC)
+
+statement error
+DROP MACRO lake.sort_m
+----
+Cannot drop macro "sort_m" because the sort key of table "s" calls it
+
+statement ok
+ALTER TABLE lake.s RESET SORTED BY
+
+statement ok
+DROP MACRO lake.sort_m
+
+statement ok
+INSERT INTO lake.s VALUES (5)
+
+query I
+SELECT sum(i) FROM lake.s
+----
+15
+
+# a schema cascade keeps a macro that a table of another schema sorts by
+statement ok
+CREATE SCHEMA lake.m
+
+statement ok
+CREATE MACRO lake.m.key(x) AS x * 2
+
+statement ok
+CREATE TABLE lake.w (i INTEGER)
+
+statement ok
+ALTER TABLE lake.w SET SORTED BY (lake.m.key(i))
+
+statement error
+DROP SCHEMA lake.m CASCADE
+----
+Cannot drop macro "key" because the sort key of table "w" calls it
+
+statement ok
+INSERT INTO lake.w VALUES (1)
+
+statement ok
+ALTER TABLE lake.w RESET SORTED BY
+
+statement ok
+DROP SCHEMA lake.m CASCADE
+
+query I
+SELECT i FROM lake.w
+----
+1
