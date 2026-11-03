@@ -175,7 +175,7 @@ void DuckLakeInitializer::RestartMetadataTransaction(DuckLakeTransaction &transa
 
 void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction) {
 	// ATTACH OR REPLACE may reuse an attached catalog and its cached table definitions.
-	if (DatabaseManager::Get(context).GetDatabase(context, catalog.MetadataDatabaseName())) {
+	if (DatabaseManager::Get(context).GetDatabase(catalog.MetadataDatabaseName())) {
 		metadata_cache_stale = true;
 	}
 	const string attach_query =
