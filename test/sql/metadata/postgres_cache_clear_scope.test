@@ -1,0 +1,89 @@
+# name: test/sql/metadata/postgres_cache_clear_scope.test
+# description: a DuckLake catalog on Postgres clears the metadata cache of its own catalog only
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS cache_scope, cache_scope_other, cache_scope_probe CASCADE')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/cache_scope', METADATA_SCHEMA 'cache_scope')
+
+# pg loads its schemas
+query I
+SELECT count(*) FROM pg.cache_scope.ducklake_snapshot
+----
+1
+
+# a schema created behind pg's back stays unknown to pg until its cache is cleared
+statement ok
+CALL postgres_execute('pg', 'CREATE SCHEMA cache_scope_probe')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE TABLE cache_scope_probe.t (i INTEGER)')
+
+statement error
+SELECT * FROM pg.cache_scope_probe.t
+----
+does not exist
+
+# the attach of a DuckLake catalog clears the cache of its own metadata catalog, not of pg
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl_other (DATA_PATH '{DATA_PATH}/cache_scope_other', METADATA_SCHEMA 'cache_scope_other')
+
+statement error
+SELECT * FROM pg.cache_scope_probe.t
+----
+does not exist
+
+# so does the cache clear of an expiry
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+CALL ducklake_expire_snapshots('dl', older_than => now())
+
+statement error
+SELECT * FROM pg.cache_scope_probe.t
+----
+does not exist
+
+query I
+SELECT count(*) FROM dl.t
+----
+1
+
+# the global clear makes pg see the schema
+statement ok
+CALL postgres_clear_cache()
+
+query I
+SELECT count(*) FROM pg.cache_scope_probe.t
+----
+0
+
+statement ok
+DETACH dl
+
+statement ok
+DETACH dl_other
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA cache_scope, cache_scope_other, cache_scope_probe CASCADE')
