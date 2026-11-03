@@ -18,6 +18,7 @@
 #include "duckdb/planner/parsed_data/bound_create_table_info.hpp"
 #include "duckdb/storage/database_size.hpp"
 #include "storage/ducklake_initializer.hpp"
+#include "storage/ducklake_metadata_profile.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "storage/ducklake_transaction.hpp"
@@ -329,6 +330,14 @@ DuckLakeCatalog::DuckLakeCatalog(AttachedDatabase &db_p, DuckLakeOptions options
 		string path = options.metadata_path;
 		DBPathAndType::ExtractExtensionPrefix(path, metadata_type);
 	}
+}
+
+const DuckLakeMetadataProfile &DuckLakeCatalog::MetadataProfile() const {
+	return metadata_profile ? *metadata_profile : DuckLakeMetadataProfile::Default();
+}
+
+void DuckLakeCatalog::SetMetadataProfile(shared_ptr<const DuckLakeMetadataProfile> profile) {
+	metadata_profile = std::move(profile);
 }
 
 DuckLakeCatalog::~DuckLakeCatalog() {
@@ -680,14 +689,19 @@ unique_ptr<CreateMacroInfo> CreateMacroInfoFromDucklake(ClientContext &context, 
 	return macro_info;
 }
 
-static void ApplyTags(const vector<DuckLakeTag> &tags, CreateInfo &info) {
+static void SplitTags(const vector<DuckLakeTag> &tags, Value &comment,
+                      InsertionOrderPreservingMap<string> &other_tags) {
 	for (auto &tag : tags) {
 		if (tag.key == "comment") {
-			info.comment = tag.value;
+			comment = tag.value;
 		} else {
-			info.tags[tag.key] = tag.value;
+			other_tags[tag.key] = tag.value;
 		}
 	}
+}
+
+static void ApplyTags(const vector<DuckLakeTag> &tags, CreateInfo &info) {
+	SplitTags(tags, info.comment, info.tags);
 }
 
 static set<SchemaIndex> FindUnreachableSchemas(const vector<DuckLakeSchemaInfo> &schemas) {
@@ -823,13 +837,11 @@ unique_ptr<DuckLakeCatalogSet> DuckLakeCatalog::LoadSchemaForSnapshot(DuckLakeTr
 				not_null_columns.insert(col_info.name);
 			}
 			ColumnDefinition column(std::move(col_info.name), field_id->Type());
-			for (auto &tag : col_info.tags) {
-				if (tag.key == "comment") {
-					column.SetComment(tag.value);
-				} else {
-					throw NotImplementedException("Only comment tags are supported for columns currently");
-				}
-			}
+			Value comment;
+			InsertionOrderPreservingMap<string> column_tags;
+			SplitTags(col_info.tags, comment, column_tags);
+			column.SetComment(comment);
+			column.SetTags(std::move(column_tags));
 			auto default_val = field_id->GetDefault();
 			if (default_val) {
 				column.SetDefaultValue(std::move(default_val));
@@ -1569,6 +1581,23 @@ string DuckLakeCatalog::SchemaCacheKey(idx_t schema_version) const {
 
 void DuckLakeCatalog::InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id) {
 	GetObjectCacheInstance().Delete(StatsCacheKey(next_file_id, table_id));
+}
+
+void DuckLakeCatalog::InvalidateTableStatsCaches(const unordered_set<idx_t> &next_file_ids) {
+	auto &cache = GetObjectCacheInstance();
+	lock_guard<mutex> guard(cache_entries_lock);
+	// only the entries this DuckLake put in the object cache can be there
+	auto evict = [&](const TrackedStatsEntry &entry) {
+		if (next_file_ids.find(entry.next_file_id) == next_file_ids.end()) {
+			return false;
+		}
+		if (!entry.entry.expired()) {
+			cache.Delete(StatsCacheKey(entry.next_file_id, entry.table_id));
+		}
+		return true;
+	};
+	stats_cache_entries.erase(std::remove_if(stats_cache_entries.begin(), stats_cache_entries.end(), evict),
+	                          stats_cache_entries.end());
 }
 
 void DuckLakeCatalog::InvalidateSchemaCache(idx_t schema_version) {

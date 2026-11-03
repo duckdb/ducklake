@@ -1,0 +1,58 @@
+# name: test/sql/comments/column_tags_load.test
+# description: a catalog with column tags other than comments loads, and keeps those tags
+# group: [comments]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/column_tags_load')
+
+statement ok
+CREATE TABLE lake.tagged (id INTEGER, v VARCHAR)
+
+statement ok
+CREATE TABLE lake.other (i INTEGER)
+
+statement ok
+INSERT INTO lake.other VALUES (1), (2)
+
+statement ok
+COMMENT ON COLUMN lake.tagged.v IS 'a comment'
+
+statement ok
+INSERT INTO __ducklake_metadata_lake.ducklake_column_tag
+SELECT c.table_id, c.column_id, c.begin_snapshot, NULL, 'owner', 'maintenance'
+FROM __ducklake_metadata_lake.ducklake_column c JOIN __ducklake_metadata_lake.ducklake_table t USING (table_id)
+WHERE t.table_name = 'tagged' AND c.column_name = 'id' AND c.end_snapshot IS NULL
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake
+
+query I
+SELECT count(*) FROM lake.other
+----
+2
+
+query TTT
+SELECT column_name, comment, tags FROM duckdb_columns()
+WHERE database_name = 'lake' AND table_name = 'tagged' ORDER BY column_index
+----
+id	NULL	{owner=maintenance}
+v	a comment	{}
+
+statement ok
+COMMENT ON COLUMN lake.tagged.id IS 'the id'
+
+query TT
+SELECT comment, tags FROM duckdb_columns() WHERE database_name = 'lake' AND table_name = 'tagged' AND column_name = 'id'
+----
+the id	{owner=maintenance}

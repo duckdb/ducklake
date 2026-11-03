@@ -1,4 +1,5 @@
 #include "storage/ducklake_metadata_manager.hpp"
+#include "storage/ducklake_metadata_profile.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/path.hpp"
 #include "duckdb/common/exception/conversion_exception.hpp"
@@ -20,7 +21,6 @@
 #include "duckdb/main/appender.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "metadata_manager/quack_metadata_manager.hpp"
-#include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/planner/expression.hpp"
@@ -50,9 +50,10 @@ DuckLakeMetadataManager::~DuckLakeMetadataManager() {
 }
 
 unordered_map<string /* name */, DuckLakeMetadataManager::create_t> DuckLakeMetadataManager::metadata_managers = {
-    {"postgres", PostgresMetadataManager::Create}, {"postgres_scanner", PostgresMetadataManager::Create},
-    {"quack", QuackMetadataManager::Create},       {"quack_scanner", QuackMetadataManager::Create},
-    {"sqlite", SQLiteMetadataManager::Create},     {"sqlite_scanner", SQLiteMetadataManager::Create}};
+    {"postgres", PostgresMetadataManager::Create},
+    {"postgres_scanner", PostgresMetadataManager::Create},
+    {"quack", QuackMetadataManager::Create},
+    {"quack_scanner", QuackMetadataManager::Create}};
 
 mutex DuckLakeMetadataManager::metadata_managers_lock;
 
@@ -66,6 +67,17 @@ void DuckLakeMetadataManager::Register(const string &name, DuckLakeMetadataManag
 }
 // LCOV_EXCL_STOP
 
+bool DuckLakeMetadataManager::HasBuiltInManager(const string &name) {
+	lock_guard<mutex> lock(metadata_managers_lock);
+	// profiles are looked up case-insensitively, so a profile must not shadow a manager in another case
+	for (const auto &entry : metadata_managers) {
+		if (StringUtil::CIEquals(entry.first, name)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 unique_ptr<DuckLakeMetadataManager> DuckLakeMetadataManager::Create(DuckLakeTransaction &transaction) {
 	lock_guard<mutex> lock(metadata_managers_lock);
 	auto &catalog = transaction.GetCatalog();
@@ -76,6 +88,42 @@ unique_ptr<DuckLakeMetadataManager> DuckLakeMetadataManager::Create(DuckLakeTran
 		return create(transaction);
 	}
 	return make_uniq<DuckLakeMetadataManager>(transaction);
+}
+
+const DuckLakeMetadataProfile &DuckLakeMetadataManager::GetMetadataProfile() const {
+	return transaction.GetCatalog().MetadataProfile();
+}
+
+bool DuckLakeMetadataManager::DroppedTablesStayReadable() const {
+	return GetMetadataProfile().dropped_tables_stay_readable;
+}
+
+idx_t DuckLakeMetadataManager::MaxColumnCount() const {
+	return GetMetadataProfile().max_column_count;
+}
+
+vector<string> DuckLakeMetadataManager::SystemColumnNames() const {
+	return GetMetadataProfile().system_column_names;
+}
+
+bool DuckLakeMetadataManager::IsRetryableCommitError(const string &message) const {
+	auto rule = GetMetadataProfile().FindCommitErrorRule(message);
+	return rule && rule->retryable;
+}
+
+string DuckLakeMetadataManager::CommitErrorHint(const string &message) const {
+	auto rule = GetMetadataProfile().FindCommitErrorRule(message);
+	if (!rule) {
+		return string();
+	}
+	auto &parameters = transaction.GetCatalog().MetadataParameters();
+	for (auto &entry : rule->hint_unless_parameters) {
+		auto parameter = parameters.find(entry.first);
+		if (parameter != parameters.end() && StringUtil::CIEquals(parameter->second.ToString(), entry.second)) {
+			return string();
+		}
+	}
+	return rule->hint;
 }
 
 bool DuckLakeMetadataManager::ExecuteRetrialsServerSide() const {
@@ -95,7 +143,7 @@ void DuckLakeMetadataManager::FlushChangesServerSide(DuckLakeTransaction &, Duck
 }
 
 bool DuckLakeMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
-	return true;
+	return !GetMetadataProfile().natively_unsupported_types.count(type.id());
 }
 
 bool DuckLakeMetadataManager::SupportsInlining(const LogicalType &type) {
@@ -732,6 +780,10 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 
 void DuckLakeMetadataManager::RenameInlinedColumns(
     const map<Identifier, vector<pair<Identifier, Identifier>>> &renames) {
+	if (GetMetadataProfile().rename_inlined_columns_by_copy) {
+		RenameInlinedColumnsByCopy(renames);
+		return;
+	}
 	// one batch for all tables, as every metadata DDL statement can reload the catalog
 	string query;
 	for (auto &table : renames) {
@@ -744,6 +796,27 @@ void DuckLakeMetadataManager::RenameInlinedColumns(
 	auto result = Execute(DuckLakeSnapshot(), query);
 	result->ThrowIfError("Failed to rename inlined-data metadata columns while migrating to v1.1: ");
 	ClearCache();
+}
+
+void DuckLakeMetadataManager::RenameInlinedColumnsByCopy(
+    const map<Identifier, vector<pair<Identifier, Identifier>>> &renames) {
+	string query;
+	for (auto &table : renames) {
+		auto &table_name = table.first;
+		vector<string> renamed_columns;
+		for (auto &column : table.second) {
+			renamed_columns.push_back(StringUtil::Format("%s AS %s", column.first, column.second));
+		}
+		query += StringUtil::Format(
+		    "CREATE TEMP TABLE ducklake_renamed_inlined AS SELECT * FROM {METADATA_CATALOG}.%s;", table_name);
+		query += StringUtil::Format("DROP TABLE {METADATA_CATALOG}.%s;", table_name);
+		query += StringUtil::Format(
+		    "CREATE TABLE {METADATA_CATALOG}.%s AS SELECT * RENAME (%s) FROM temp.ducklake_renamed_inlined;",
+		    table_name, StringUtil::Join(renamed_columns, ", "));
+		query += "DROP TABLE temp.ducklake_renamed_inlined;";
+	}
+	auto result = Execute(query);
+	result->ThrowIfError("Failed to rename inlined-data metadata columns while migrating to v1.1: ");
 }
 
 DuckLakeMetadata DuckLakeMetadataManager::LoadDuckLake() {
@@ -3294,13 +3367,21 @@ static void ColumnToSQLRecursive(const DuckLakeColumnInfo &column, TableIndex ta
 }
 
 string DuckLakeMetadataManager::GetColumnTypeInternal(const LogicalType &column_type) {
+	auto &overrides = GetMetadataProfile().column_type_overrides;
+	auto entry = overrides.find(column_type.id());
+	if (entry != overrides.end()) {
+		return entry->second;
+	}
 	return column_type.ToString();
 }
 
 string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const LogicalType &type) {
 	auto &metadata_type = transaction.GetCatalog().MetadataType();
-	if (metadata_type.empty() || metadata_type == "duckdb" || metadata_type == "quack" ||
-	    metadata_type == "quack_scanner") {
+	// a column created with an overridden type is cast back like on any other database
+	auto storage_type = DuckLakeUtil::GetInlinedStorageType(*this, type);
+	bool type_overridden = GetMetadataProfile().column_type_overrides.count(storage_type.id());
+	if (!type_overridden && (metadata_type.empty() || metadata_type == "duckdb" || metadata_type == "quack" ||
+	                         metadata_type == "quack_scanner")) {
 		// older versions stored struct fields in the order of an ALTER, which a cast by field name restores
 		return DuckLakeTypes::IsNested(type) ? "CAST(" + column + " AS " + type.ToString() + ")" : column;
 	}
@@ -3309,7 +3390,6 @@ string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const L
 		// Postgres stores VARCHAR and JSON as BYTEA.
 		expression = "decode(" + expression + ")";
 	}
-	auto storage_type = DuckLakeUtil::GetInlinedStorageType(*this, type);
 	expression = "CAST(" + expression + " AS " + storage_type.ToString() + ")";
 	if (storage_type != type) {
 		expression = DuckLakeUtil::InlinedVariantExpression(expression, type, false);
@@ -5777,12 +5857,6 @@ void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo>
 
 void DuckLakeMetadataManager::CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
 	unique_ptr<QueryResult> result;
-	vector<TableIndex> stats_table_ids;
-	result = Query("SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_table_stats;");
-	result->ThrowIfError("Failed to list table stats for cache invalidation in DuckLake: ");
-	for (auto &row : *result) {
-		stats_table_ids.push_back(TableIndex(row.GetValue<idx_t>(0)));
-	}
 
 	// get a list of tables that are no longer required after these deletions
 	result = Query(R"(
@@ -6014,11 +6088,11 @@ WHERE NOT EXISTS (
 		result->ThrowIfError("Failed to delete from ducklake_name_mapping in DuckLake: ");
 	}
 
+	unordered_set<idx_t> expired_next_file_ids;
 	for (auto &snapshot : snapshots) {
-		for (auto &table_id : stats_table_ids) {
-			catalog.InvalidateTableStatsCache(snapshot.next_file_id, table_id);
-		}
+		expired_next_file_ids.insert(snapshot.next_file_id);
 	}
+	catalog.InvalidateTableStatsCaches(expired_next_file_ids);
 	ClearCache();
 }
 
@@ -6132,22 +6206,34 @@ DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s
 	return result->Fetch()->GetValue(0, 0).GetValue<idx_t>() > 0;
 }
 
-void DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option) {
-	// check if the option already exists
+idx_t DuckLakeMetadataManager::ConfigOptionRowCount(const DuckLakeConfigOption &option,
+                                                    optional_ptr<const string> value) {
+	string scope;
+	string scope_id;
+	string scope_filter;
+	ConfigOptionScope(option, scope, scope_id, scope_filter);
+	if (value) {
+		scope_filter += StringUtil::Format(" AND value = %s", SQLString(*value));
+	}
+	auto result = Query(StringUtil::Format(R"(
+SELECT COUNT(*)
+FROM {METADATA_CATALOG}.ducklake_metadata
+WHERE key = %s AND %s
+)",
+	                                       SQLString(option.option.key), scope_filter));
+	return result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
+}
+
+idx_t DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option) {
 	auto &option_key = option.option.key;
 	auto &option_value = option.option.value;
 	string scope;
 	string scope_id;
 	string scope_filter;
 	ConfigOptionScope(option, scope, scope_id, scope_filter);
-	auto result = Query(StringUtil::Format(R"(
-SELECT COUNT(*)
-FROM {METADATA_CATALOG}.ducklake_metadata
-WHERE key = %s AND %s
-)",
-	                                       SQLString(option_key), scope_filter));
-
-	auto count = result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
+	// check if the option already exists
+	auto count = ConfigOptionRowCount(option);
+	unique_ptr<QueryResult> result;
 	if (count == 0) {
 		// option does not yet exist - insert the value
 		result = Execute(StringUtil::Format(R"(
@@ -6155,13 +6241,18 @@ INSERT INTO {METADATA_CATALOG}.ducklake_metadata VALUES (%s, %s, %s, %s)
 )",
 		                                    SQLString(option_key), SQLString(option_value), scope, scope_id));
 	} else {
-		// option already exists - update it
+		// update the option, or insert it when another commit removed it under READ COMMITTED
 		result = Execute(StringUtil::Format(R"(
-UPDATE {METADATA_CATALOG}.ducklake_metadata SET value=%s WHERE key=%s AND %s
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value=%s WHERE key=%s AND %s;
+INSERT INTO {METADATA_CATALOG}.ducklake_metadata SELECT %s, %s, %s, %s
+WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_metadata WHERE key=%s AND %s);
 )",
-		                                    SQLString(option_value), SQLString(option_key), scope_filter));
+		                                    SQLString(option_value), SQLString(option_key), scope_filter,
+		                                    SQLString(option_key), SQLString(option_value), scope, scope_id,
+		                                    SQLString(option_key), scope_filter));
 	}
 	result->ThrowIfError("Failed to insert config option in DuckLake: ");
+	return count == 0 ? 1 : count;
 }
 
 bool DuckLakeMetadataManager::IsEncrypted() const {

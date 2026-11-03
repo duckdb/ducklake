@@ -34,6 +34,8 @@
     {
       "reason": "Snapshot tags need DuckLake 2.0 and are not available when ducklake_default_version is pinned to 1.0",
       "paths": [
+        "test/sql/cleanup/expire_retry_keeps_tagged_files.test",
+        "test/sql/settings/set_option_concurrent_insert_expiry.test",
         "test/sql/tags/tags_basic.test",
         "test/sql/tags/tags_conflict.test",
         "test/sql/tags/tags_expire.test",
@@ -74,6 +76,12 @@
       ]
     },
     {
+      "reason": "A macro parameter default that is a cast of a time zone type needs DuckLake 1.1 and is rejected when ducklake_default_version is pinned to 1.0",
+      "paths": [
+        "test/sql/macros/time_zone_macro_default.test"
+      ]
+    },
+    {
       "reason": "The TIMESTAMPTZ_NS column type was added in 1.1 and is not available when ducklake_default_version is pinned to 1.0",
       "paths": [
         "test/sql/add_files/add_files_type_check_reader_types.test",
@@ -82,6 +90,7 @@
         "test/sql/stats/filter_pushdown_postgres_types.test",
         "test/sql/stats/timestamptz_retype_stats_time_zone.test",
         "test/sql/stats/timestamptz_retype_topn_time_zone.test",
+        "test/sql/partitioning/calendar_timestamptz_ns.test",
         "test/sql/types/timestamptz_ns_values.test"
       ]
     },

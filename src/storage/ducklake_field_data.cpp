@@ -5,6 +5,7 @@
 #include "duckdb/common/exception/catalog_exception.hpp"
 #include "duckdb/parser/column_list.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/main/client_context.hpp"
 
 namespace duckdb {
 
@@ -76,23 +77,25 @@ static void VerifyDefaultType(const LogicalType &type) {
 }
 
 static Value ExtractInitialValue(optional_ptr<const ParsedExpression> initial_expr, const LogicalType &type,
-                                 bool add_column) {
+                                 optional_ptr<ClientContext> context, bool add_column) {
 	if (!initial_expr) {
 		return Value(type);
 	}
 	Value literal_value;
-	if (!DuckLakeUtil::TryGetLiteralValue(*initial_expr, literal_value)) {
+	if (!DuckLakeUtil::TryGetLiteralValue(*initial_expr, literal_value, context)) {
 		if (!add_column) {
 			return Value(type);
 		}
 		throw NonLiteralAddColumnDefault();
 	}
-	return literal_value.DefaultCastAs(type);
+	// the rows that exist get the value the session reads, as the rows inserted later do
+	return context ? literal_value.CastAs(*context, type) : literal_value.DefaultCastAs(type);
 }
 
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const Identifier &name, const LogicalType &type,
                                                              optional_ptr<const ParsedExpression> default_expr,
-                                                             idx_t &column_id, bool add_column) {
+                                                             idx_t &column_id, optional_ptr<ClientContext> context,
+                                                             bool add_column) {
 	DuckLakeColumnData column_data;
 	column_data.id = FieldIndex(column_id++);
 	vector<unique_ptr<DuckLakeFieldId>> field_children;
@@ -105,13 +108,14 @@ unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromType(const Identifier &n
 			VerifyDefaultType(type);
 		}
 		for (auto &child : LogicalType::GetNamedChildTypes(type)) {
-			field_children.push_back(FieldIdFromType(child.first, child.second, nullptr, column_id, add_column));
+			field_children.push_back(
+			    FieldIdFromType(child.first, child.second, nullptr, column_id, context, add_column));
 		}
 		break;
 	default:
 		break;
 	}
-	column_data.initial_default = ExtractInitialValue(default_expr, type, add_column);
+	column_data.initial_default = ExtractInitialValue(default_expr, type, context, add_column);
 	if (default_expr) {
 		column_data.default_value = default_expr->Copy();
 	}
@@ -134,21 +138,22 @@ unique_ptr<ParsedExpression> DuckLakeFieldId::GetInitialDefault() const {
 }
 
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::FieldIdFromColumn(const ColumnDefinition &col, idx_t &column_id,
-                                                               bool add_column) {
+                                                               optional_ptr<ClientContext> context, bool add_column) {
 	auto default_val = col.HasDefaultValue() ? optional_ptr<const ParsedExpression>(col.DefaultValue()) : nullptr;
-	return DuckLakeFieldId::FieldIdFromType(col.Name(), col.Type(), default_val, column_id, add_column);
+	return DuckLakeFieldId::FieldIdFromType(col.Name(), col.Type(), default_val, column_id, context, add_column);
 }
 
-shared_ptr<DuckLakeFieldData> DuckLakeFieldData::FromColumns(const ColumnList &columns) {
+shared_ptr<DuckLakeFieldData> DuckLakeFieldData::FromColumns(const ColumnList &columns, ClientContext &context) {
 	// generate field ids based on the column ids
 	idx_t column_id = 1;
-	return FromColumns(columns, column_id);
+	return FromColumns(columns, column_id, context);
 }
 
-shared_ptr<DuckLakeFieldData> DuckLakeFieldData::FromColumns(const ColumnList &columns, idx_t &column_id) {
+shared_ptr<DuckLakeFieldData> DuckLakeFieldData::FromColumns(const ColumnList &columns, idx_t &column_id,
+                                                             ClientContext &context) {
 	auto field_data = make_shared_ptr<DuckLakeFieldData>();
 	for (auto &col : columns.Logical()) {
-		auto field_id = DuckLakeFieldId::FieldIdFromColumn(col, column_id);
+		auto field_id = DuckLakeFieldId::FieldIdFromColumn(col, column_id, context);
 		field_data->Add(std::move(field_id));
 	}
 	return field_data;
@@ -275,12 +280,13 @@ shared_ptr<DuckLakeFieldData> DuckLakeFieldData::RenameColumn(const DuckLakeFiel
 }
 
 shared_ptr<DuckLakeFieldData> DuckLakeFieldData::AddColumn(const DuckLakeFieldData &field_data,
-                                                           const ColumnDefinition &new_col, idx_t &next_column_id) {
+                                                           const ColumnDefinition &new_col, idx_t &next_column_id,
+                                                           ClientContext &context) {
 	auto result = make_shared_ptr<DuckLakeFieldData>();
 	for (auto &existing_id : field_data.field_ids) {
 		result->Add(existing_id->Copy());
 	}
-	auto field_id = DuckLakeFieldId::FieldIdFromColumn(new_col, next_column_id, true);
+	auto field_id = DuckLakeFieldId::FieldIdFromColumn(new_col, next_column_id, context, true);
 	result->Add(std::move(field_id));
 	return result;
 }
@@ -299,13 +305,14 @@ shared_ptr<DuckLakeFieldData> DuckLakeFieldData::ReplaceRootField(const DuckLake
 }
 
 shared_ptr<DuckLakeFieldData> DuckLakeFieldData::SetDefault(const DuckLakeFieldData &field_data, FieldIndex field_index,
-                                                            const ColumnDefinition &new_col, bool add_column) {
+                                                            const ColumnDefinition &new_col, ClientContext &context,
+                                                            bool add_column) {
 	auto new_default =
 	    new_col.HasDefaultValue() ? optional_ptr<const ParsedExpression>(new_col.DefaultValue()) : nullptr;
 	if (new_default) {
 		VerifyDefaultType(new_col.Type());
 		Value literal_value;
-		if (add_column && !DuckLakeUtil::TryGetLiteralValue(*new_default, literal_value)) {
+		if (add_column && !DuckLakeUtil::TryGetLiteralValue(*new_default, literal_value, context)) {
 			throw NonLiteralAddColumnDefault();
 		}
 	}

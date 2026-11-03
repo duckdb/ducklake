@@ -36,6 +36,7 @@ class DuckLakeSchemaEntry;
 class DuckLakeTableEntry;
 class DuckLakeTransaction;
 struct DuckLakeRetryConfig;
+struct DuckLakeMetadataProfile;
 struct TransactionChangeInformation;
 class BoundAtClause;
 class SQLStatement;
@@ -200,8 +201,12 @@ public:
 
 	typedef unique_ptr<DuckLakeMetadataManager> (*create_t)(DuckLakeTransaction &transaction);
 	static void Register(const string &name, create_t);
+	//! Whether a metadata manager of the given name is built in, so that no profile can be registered for it
+	static bool HasBuiltInManager(const string &name);
 
 	static unique_ptr<DuckLakeMetadataManager> Create(DuckLakeTransaction &transaction);
+	//! The profile of the metadata database, which the defaults of the metadata manager follow
+	const DuckLakeMetadataProfile &GetMetadataProfile() const;
 
 	virtual bool TypeIsNativelySupported(const LogicalType &type);
 	//! Check if a type supports data inlining on this metadata backend
@@ -219,9 +224,7 @@ public:
 		return false;
 	}
 	//! Whether transactions that started before a metadata table was dropped still read it
-	virtual bool DroppedTablesStayReadable() const {
-		return true;
-	}
+	virtual bool DroppedTablesStayReadable() const;
 	//! Whether a commit inserts inlined rows after its batch instead of sending them as VALUES text in it
 	virtual bool InsertsInlinedRowsAfterBatch(idx_t row_count) const {
 		return !CommitsEachStatement();
@@ -233,11 +236,11 @@ public:
 	bool ExecuteRetrialsServerSide() const;
 	//! Whether the client can skip the snapshot fetch and let the server read it.
 	virtual bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const;
-	virtual bool IsRetryableCommitError(const string &) const {
-		return false;
-	}
+	virtual bool IsRetryableCommitError(const string &message) const;
 	//! Advice added to the error of a commit that failed for good
-	virtual string CommitErrorHint(const string &) const {
+	virtual string CommitErrorHint(const string &message) const;
+	//! SQL that the commit of a transaction that changed options runs, so two commits cannot both insert an option
+	virtual string ConfigOptionLockSql() const {
 		return string();
 	}
 
@@ -268,13 +271,9 @@ public:
 		return NumericLimits<idx_t>::Maximum();
 	}
 	//! Maximum number of columns of a table supported by this backend
-	virtual idx_t MaxColumnCount() const {
-		return NumericLimits<idx_t>::Maximum();
-	}
+	virtual idx_t MaxColumnCount() const;
 	//! Names of the system columns that the tables of this backend have
-	virtual vector<string> SystemColumnNames() const {
-		return {};
-	}
+	virtual vector<string> SystemColumnNames() const;
 
 	//! Why the rows of a table with the given columns cannot be inlined, empty when they can
 	string GetInliningObstacle(const ColumnList &columns);
@@ -617,8 +616,10 @@ public:
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	//! The tables with data files that are not dropped
 	unordered_set<idx_t> GetTablesWithLiveDataFiles();
-	virtual void SetConfigOption(const DuckLakeConfigOption &option);
+	//! Returns the rows the option is expected to have after it is written
+	virtual idx_t SetConfigOption(const DuckLakeConfigOption &option);
 	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);
+	idx_t ConfigOptionRowCount(const DuckLakeConfigOption &option, optional_ptr<const string> value = nullptr);
 	//! Runs a migration in one metadata transaction on a catalog where each statement commits on its own
 	virtual void BeginMigration() {
 	}
@@ -641,6 +642,8 @@ public:
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
 	//! Renames the given (old name, new name) columns of each inlined table
 	virtual void RenameInlinedColumns(const map<Identifier, vector<pair<Identifier, Identifier>>> &renames);
+	//! Renames by copying the tables, for a database that parses its whole schema for every renamed column
+	void RenameInlinedColumnsByCopy(const map<Identifier, vector<pair<Identifier, Identifier>>> &renames);
 	//! Adds the schema version rows of inlined tables that older versions registered without one
 	void MigrateInlinedSchemaVersions();
 	//! Restores the defaults that older versions dropped when they renamed a struct field

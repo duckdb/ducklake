@@ -1,0 +1,187 @@
+# name: test/sql/data_inlining/data_inlining_transaction_local_add_nested_column.test
+# description: ADD COLUMN of a nested type between two inlined writes of one transaction
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/inlining_add_nested_column', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t(k INTEGER)
+
+# a list
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN l INTEGER[]
+
+statement ok
+INSERT INTO ducklake.t VALUES (2, [3])
+
+statement ok
+COMMIT
+
+query II
+SELECT k, l FROM ducklake.t ORDER BY k
+----
+1	NULL
+2	[3]
+
+# the table stats of the list elements come from the merged inlined stats
+query II
+SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats
+WHERE column_id = (SELECT column_id FROM ducklake_meta.ducklake_column WHERE column_name = 'element' AND end_snapshot IS NULL)
+----
+3	3
+
+# a struct, a map and a scalar with a default, also written as NULL
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t VALUES (3, [4, 5])
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN s STRUCT(a INTEGER, b VARCHAR)
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN m MAP(VARCHAR, INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN d INTEGER DEFAULT 7
+
+statement ok
+INSERT INTO ducklake.t VALUES (4, [], {'a': 1, 'b': 'x'}, MAP {'y': 2}, 8)
+
+statement ok
+INSERT INTO ducklake.t VALUES (5, NULL, NULL, NULL, NULL)
+
+statement ok
+COMMIT
+
+query IIIII
+SELECT k, l, s, m, d FROM ducklake.t ORDER BY k
+----
+1	NULL	NULL	NULL	7
+2	[3]	NULL	NULL	7
+3	[4, 5]	NULL	NULL	7
+4	[]	{'a': 1, 'b': x}	{y=2}	8
+5	NULL	NULL	NULL	NULL
+
+query IIII
+SELECT c.column_name, s.contains_null::BOOLEAN, s.min_value, s.max_value FROM ducklake_meta.ducklake_table_column_stats s
+JOIN ducklake_meta.ducklake_column c USING (table_id, column_id)
+WHERE c.end_snapshot IS NULL AND c.column_name IN ('a', 'b', 'd', 'value') ORDER BY c.column_name
+----
+a	true	1	1
+b	true	x	x
+d	true	7	8
+value	true	2	2
+
+# an UPDATE of one of two inlined rows as the second write
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t VALUES (6, [6], NULL, NULL, 9), (7, [7], NULL, NULL, 9)
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN n STRUCT(c INTEGER)
+
+statement ok
+UPDATE ducklake.t SET n = {'c': 2} WHERE k = 6
+
+statement ok
+COMMIT
+
+query II
+SELECT k, n FROM ducklake.t WHERE k >= 5 ORDER BY k
+----
+5	NULL
+6	{'c': 2}
+7	NULL
+
+# a type change that adds a struct field
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t VALUES (8, [8], NULL, NULL, 9, {'c': 3})
+
+statement ok
+ALTER TABLE ducklake.t ALTER COLUMN n TYPE STRUCT(c INTEGER, e INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (9, [9], NULL, NULL, 9, {'c': 4, 'e': 5})
+
+statement ok
+COMMIT
+
+query II
+SELECT k, n FROM ducklake.t WHERE k >= 8 ORDER BY k
+----
+8	{'c': 3, 'e': NULL}
+9	{'c': 4, 'e': 5}
+
+query III
+SELECT s.contains_null::BOOLEAN, s.min_value, s.max_value FROM ducklake_meta.ducklake_table_column_stats s
+JOIN ducklake_meta.ducklake_column c USING (table_id, column_id)
+WHERE c.end_snapshot IS NULL AND c.column_name = 'e'
+----
+true	5	5
+
+# a VARIANT default has no statistics, so the inlined rows keep the stats of the column unknown
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.probe(k INTEGER)
+
+statement ok
+INSERT INTO ducklake.probe VALUES (1)
+
+statement ok
+ALTER TABLE ducklake.probe ADD COLUMN v VARIANT DEFAULT 7
+
+statement ok
+INSERT INTO ducklake.probe VALUES (2, 7)
+
+statement ok
+INSERT INTO ducklake.probe SELECT i + 3, (100 + i)::INTEGER::VARIANT FROM range(11) r(i)
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.probe WHERE v::INTEGER = 7
+----
+2
+
+# the flushed file keeps the rows
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+query IIIII
+SELECT k, l, s, m, d FROM ducklake.t WHERE k <= 5 ORDER BY k
+----
+1	NULL	NULL	NULL	7
+2	[3]	NULL	NULL	7
+3	[4, 5]	NULL	NULL	7
+4	[]	{'a': 1, 'b': x}	{y=2}	8
+5	NULL	NULL	NULL	NULL
+
+query I
+SELECT count(*) FROM ducklake.probe WHERE v::INTEGER = 7
+----
+2

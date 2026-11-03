@@ -598,6 +598,8 @@ struct DuckLakeConfigOptionUndo {
 	string previous_value;
 	bool was_set = false;
 	bool reset = false;
+	//! the rows the option is expected to have in the metadata after this change
+	idx_t metadata_rows = 0;
 };
 
 struct DuckLakeNameMapColumnInfo {
