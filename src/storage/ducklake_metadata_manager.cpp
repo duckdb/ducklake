@@ -5161,7 +5161,8 @@ WHERE snapshot_id = (
 //! Iceberg's snapshot log, time travel by timestamp only reaches the snapshots after the newest such gap.
 void DuckLakeMetadataManager::CheckSnapshotAfterExpiredGap(const DuckLakeSnapshot &snapshot, const Value &timestamp,
                                                            idx_t newest_snapshot_id) {
-	// a gap counts when its newest expired snapshot is visible to the transaction, its first survivor may not be
+	// the newest gap above the snapshot with an expired id the transaction could see: a concurrent expiry may have
+	// removed ids above the transaction's newest snapshot as well, and the first survivor may be newer than it
 	auto result = Query(StringUtil::Format(R"(
 SELECT first_after_gap,
 	(SELECT snapshot_time FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id = first_after_gap),
@@ -5169,20 +5170,18 @@ SELECT first_after_gap,
 FROM (
 	SELECT MAX(s.snapshot_id) AS first_after_gap
 	FROM {METADATA_CATALOG}.ducklake_snapshot s
-	WHERE s.snapshot_id - 1 <= %llu
-	AND s.snapshot_id > (SELECT MIN(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot)
+	WHERE s.snapshot_id > %llu
 	AND NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_snapshot p WHERE p.snapshot_id = s.snapshot_id - 1)
+	AND (SELECT MAX(p.snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot p
+	     WHERE p.snapshot_id < s.snapshot_id) < %llu
 ) gaps;)",
-	                                       newest_snapshot_id));
+	                                       snapshot.snapshot_id, newest_snapshot_id));
 	result->ThrowIfError("Failed to query the expired snapshots of DuckLake: ");
 	for (auto &row : *result) {
 		if (row.IsNull(0)) {
 			return;
 		}
 		auto first_after_gap = row.GetValue<idx_t>(0);
-		if (snapshot.snapshot_id >= first_after_gap) {
-			return;
-		}
 		auto gap_time = row.GetValue<string>(1);
 		auto last_before_gap = row.GetValue<idx_t>(2);
 		throw InvalidInputException(
