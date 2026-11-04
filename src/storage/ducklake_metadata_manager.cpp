@@ -1045,15 +1045,15 @@ bool DuckLakeMetadataManager::HasBranchZeroFileVisibility(const string &file_tab
 	if (has_old_shape) {
 		// range rows of an older dev build count as the add events
 		files_without_rows += " WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}." + visibility_table +
-		                      " v WHERE v.branch_id = 0 AND v." + file_column + " = f." + file_column + ")";
+		                      " v WHERE v." + file_column + " = f." + file_column + ")";
 	} else if (HasVisibilityMigrationTable(visibility_table)) {
 		// the backup of an interrupted rewrite is the source until it is consumed
 		files_without_rows += " WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}." + visibility_table +
-		                      "_migration v WHERE v.branch_id = 0 AND v." + file_column + " = f." + file_column + ")";
+		                      "_migration v WHERE v." + file_column + " = f." + file_column + ")";
 	} else if (has_visibility_table) {
+		// a file added only on a branch is coherent too, any add event counts
 		files_without_rows += " WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}." + visibility_table +
-		                      " v WHERE v.branch_id = 0 AND v." + file_column + " = f." + file_column +
-		                      " AND v.is_delete = FALSE)";
+		                      " v WHERE v." + file_column + " = f." + file_column + " AND v.is_delete = FALSE)";
 	}
 	auto probe = Query("SELECT COUNT(*) FROM (" + files_without_rows + " LIMIT 1);");
 	if (probe->HasError()) {
@@ -5807,10 +5807,19 @@ idx_t DuckLakeMetadataManager::ReadBranchId(DuckLakeSnapshot snapshot) const {
 	return catalog.AttachedBranchId();
 }
 
+string DuckLakeMetadataManager::GetSnapshotMaximaQuery() const {
+	string query = "SELECT MAX(snapshot_id), MAX(CASE WHEN branch_id = 0 THEN snapshot_id END), "
+	               "MAX(CASE WHEN branch_id <> 0 THEN snapshot_id END) "
+	               "FROM {METADATA_CATALOG}.ducklake_snapshot";
+	SubstituteCatalogPlaceholders(query);
+	return query;
+}
+
 DuckLakeSnapshotMaxima DuckLakeMetadataManager::GetSnapshotMaxima() {
 	DuckLakeSnapshotMaxima maxima;
-	auto result = Query("SELECT MAX(snapshot_id), MAX(CASE WHEN branch_id = 0 THEN snapshot_id END) "
-	                    "FROM {METADATA_CATALOG}.ducklake_snapshot");
+	// a fresh connection sees the snapshots committed after the metadata transaction began
+	Connection fresh_connection(*transaction.GetConnection().context->db);
+	auto result = fresh_connection.Query(GetSnapshotMaximaQuery());
 	if (result->HasError()) {
 		return maxima;
 	}
@@ -5820,6 +5829,9 @@ DuckLakeSnapshotMaxima DuckLakeMetadataManager::GetSnapshotMaxima() {
 		}
 		if (!row.IsNull(1)) {
 			maxima.lineage_head = row.GetValue<idx_t>(1);
+		}
+		if (!row.IsNull(2)) {
+			maxima.branch_max = row.GetValue<idx_t>(2);
 		}
 	}
 	return maxima;

@@ -345,8 +345,9 @@ public:
 	optional_idx GetGlobalSnapshotMax() const {
 		return global_snapshot_max;
 	}
-	//! The newest snapshot of any branch and of the main lineage, read fresh
+	//! The newest snapshot of any branch and of the main lineage, read on a fresh connection
 	DuckLakeSnapshotMaxima GetSnapshotMaxima();
+	virtual string GetSnapshotMaximaQuery() const;
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
 	//! Take the table sizes that stats rows lack from the live data files
 	static void FillMissingTableSizes(vector<DuckLakeGlobalStatsInfo> &stats,

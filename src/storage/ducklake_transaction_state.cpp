@@ -2797,15 +2797,22 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			} else {
 				commit_stats_snapshot.snapshot = context.get_snapshot();
 				if (context.supports_v2_0_metadata && context.get_snapshot_maxima) {
-					// snapshots of other branches hide behind the lineage head, so read both maxima
-					// in the commit transaction and allocate past them while the lineage is unchanged,
-					// a moved lineage keeps the read snapshot and collides on the snapshot insert
+					// snapshots of other branches hide behind the lineage head and leave id gaps,
+					// so read the maxima fresh and allocate past them while the lineage is unchanged
 					auto maxima = context.get_snapshot_maxima();
-					if (!maxima.global_max.IsValid() || !maxima.lineage_head.IsValid()) {
+					bool unreadable = !maxima.global_max.IsValid() || !maxima.lineage_head.IsValid();
+					bool lineage_moved =
+					    !unreadable && maxima.lineage_head.GetIndex() != commit_stats_snapshot.snapshot.snapshot_id;
+					if (unreadable || (lineage_moved && maxima.branch_max.IsValid())) {
+						// with branch snapshots an id below the gap is free, so a moved lineage cannot
+						// rely on the snapshot insert colliding, restart the metadata transaction like
+						// a retry and refresh through the conflict path instead
+						context.try_rollback();
+						context.prepare_retry();
+						context.rewrite_before_retry();
 						commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);
 						stats = &commit_stats_snapshot.stats;
-					} else if (maxima.lineage_head.GetIndex() == commit_stats_snapshot.snapshot.snapshot_id &&
-					           maxima.global_max.GetIndex() > maxima.lineage_head.GetIndex()) {
+					} else if (!lineage_moved && maxima.global_max.GetIndex() > maxima.lineage_head.GetIndex()) {
 						commit_stats_snapshot.snapshot.snapshot_id = maxima.global_max.GetIndex();
 					}
 				}

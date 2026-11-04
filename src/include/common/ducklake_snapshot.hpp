@@ -40,6 +40,8 @@ struct DuckLakeSnapshot {
 struct DuckLakeSnapshotMaxima {
 	optional_idx global_max;
 	optional_idx lineage_head;
+	//! The newest snapshot of a branch, set when any branch committed, so id gaps can exist
+	optional_idx branch_max;
 };
 
 } // namespace duckdb
