@@ -149,7 +149,7 @@ SELECT t FROM dl.times ORDER BY t LIMIT 1
 query I
 SELECT z FROM dl.times ORDER BY z DESC LIMIT 1
 ----
-03:00:00+01
+02:00:00+00
 
 # a file of NULL values has no bounds to check
 statement ok
