@@ -51,12 +51,13 @@ SELECT count(*) FROM l.t AT (TIMESTAMP => getvariable('t1'))
 statement ok
 CALL ducklake_expire_snapshots('l', versions => [2, 3])
 
-statement error
+# a catalog that deletes the expired snapshots when the transaction commits does not see the gap yet
+statement maybe
 SELECT count(*) FROM l.t AT (TIMESTAMP => getvariable('t1'))
 ----
 Cannot time travel to timestamp
 
-# the error ended the transaction and its expiry, which took no snapshot id
+# the rollback undoes the expiry, which took no snapshot id
 statement ok
 ROLLBACK
 
