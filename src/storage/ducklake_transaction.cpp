@@ -860,13 +860,18 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
 DuckLakeTransaction::~DuckLakeTransaction() {
 }
 
-void DuckLakeTransaction::PinSchemaCacheEntry(shared_ptr<DuckLakeSchemaCacheEntry> entry) {
+shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeTransaction::PinSchemaCacheEntry(const string &key,
+                                                                              shared_ptr<DuckLakeSchemaCacheEntry> entry) {
 	if (!entry) {
 		// LCOV_EXCL_START
-		return;
+		return entry;
 		// LCOV_EXCL_STOP
 	}
-	schema_pins->Pin(std::move(entry));
+	return schema_pins->Pin(key, std::move(entry));
+}
+
+shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeTransaction::GetPinnedSchemaCacheEntry(const string &key) {
+	return schema_pins->Get(key);
 }
 
 void DuckLakeTransaction::ClearSchemaCachePins() {

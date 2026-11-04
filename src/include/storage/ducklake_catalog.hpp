@@ -127,14 +127,17 @@ struct DuckLakeAttachedCatalogs : public ObjectCacheEntry {
 //! Holds pins on DuckLake schema cache entries, keeping them alive while they are still referenced.
 class DuckLakeSchemaPinState {
 public:
-	void Pin(shared_ptr<DuckLakeSchemaCacheEntry> entry);
+	//! The entry pinned for the cache key, if any
+	shared_ptr<DuckLakeSchemaCacheEntry> Get(const string &key);
+	//! Pins the entry for the cache key, returning the entry that was already pinned for it if there is one
+	shared_ptr<DuckLakeSchemaCacheEntry> Pin(const string &key, shared_ptr<DuckLakeSchemaCacheEntry> entry);
 	//! Clear all pinned schema cache entries for this pin state.
 	void Clear();
 
 private:
 	mutex lock;
-	// Maps from address of the schema cache entry to the schema cache entry.
-	unordered_map<DuckLakeSchemaCacheEntry *, shared_ptr<DuckLakeSchemaCacheEntry>> pins;
+	// Maps from the schema cache key to the schema cache entry.
+	unordered_map<string, shared_ptr<DuckLakeSchemaCacheEntry>> pins;
 };
 
 enum class InlinedDeletionCacheResult { EXISTS, DOES_NOT_EXIST, UNKNOWN };

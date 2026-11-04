@@ -300,11 +300,20 @@ void DuckLakeSchemaPinState::Clear() {
 	pins.clear();
 }
 
-void DuckLakeSchemaPinState::Pin(shared_ptr<DuckLakeSchemaCacheEntry> entry) {
+shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeSchemaPinState::Get(const string &key) {
+	lock_guard<mutex> guard(lock);
+	auto entry = pins.find(key);
+	if (entry == pins.end()) {
+		return nullptr;
+	}
+	return entry->second;
+}
+
+shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeSchemaPinState::Pin(const string &key,
+                                                                 shared_ptr<DuckLakeSchemaCacheEntry> entry) {
 	D_ASSERT(entry);
 	lock_guard<mutex> guard(lock);
-	auto *raw = entry.get();
-	pins.emplace(raw, std::move(entry));
+	return pins.emplace(key, std::move(entry)).first->second;
 }
 
 void DuckLakeCatalog::EnsureCommitInfoProvided(const DuckLakeSnapshotCommit &commit_info) const {
@@ -520,30 +529,29 @@ shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeCatalog::GetSchemaCacheEntry(DuckLa
                                                                           DuckLakeSnapshot snapshot) {
 	auto &cache = GetObjectCacheInstance();
 	auto key = SchemaCacheKey(snapshot.schema_version);
+	// the transaction keeps the entry it pinned, also when the version was evicted and loaded again since
+	auto pinned = transaction.GetPinnedSchemaCacheEntry(key);
+	if (pinned) {
+		return pinned;
+	}
 	auto cached = cache.Get<DuckLakeSchemaCacheEntry>(key);
 	if (cached) {
-		return cached;
+		return transaction.PinSchemaCacheEntry(key, std::move(cached));
 	}
 	auto catalog_set = LoadSchemaForSnapshot(transaction, snapshot);
 	lock_guard<mutex> guard(cache_entries_lock);
 	auto entry =
 	    cache.GetOrCreate<DuckLakeSchemaCacheEntry>(key, std::move(catalog_set), GetNewUncommittedCatalogVersion());
 	TrackCacheEntry(key, entry);
-	return entry;
+	return transaction.PinSchemaCacheEntry(key, std::move(entry));
 }
 
 DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
-	auto entry = GetSchemaCacheEntry(transaction, snapshot);
-	auto &catalog_set = entry->catalog_set;
-	transaction.PinSchemaCacheEntry(std::move(entry));
-	return catalog_set;
+	return GetSchemaCacheEntry(transaction, snapshot)->catalog_set;
 }
 
 idx_t DuckLakeCatalog::GetSchemaCatalogVersion(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
-	auto entry = GetSchemaCacheEntry(transaction, snapshot);
-	auto version = entry->catalog_version;
-	transaction.PinSchemaCacheEntry(std::move(entry));
-	return version;
+	return GetSchemaCacheEntry(transaction, snapshot)->catalog_version;
 }
 
 static unique_ptr<DuckLakeFieldId> TransformColumnType(const DuckLakeColumnInfo &col) {
