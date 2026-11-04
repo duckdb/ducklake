@@ -2386,11 +2386,7 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 	auto table_id = table.GetTableId();
 
 	for (auto &column_field_index : runtime_filter_stats_columns) {
-		auto entry =
-		    filter_result.required_ctes.emplace(column_field_index, CTERequirement(column_field_index, {})).first;
-		entry->second.referenced_stats.insert("min_value");
-		entry->second.referenced_stats.insert("max_value");
-		entry->second.referenced_stats.insert("contains_nan");
+		AddCTERequirement(filter_result.required_ctes, column_field_index, {"min_value", "max_value", "contains_nan"});
 	}
 	string query = GenerateCTESectionFromRequirements(filter_result.required_ctes, table_id, metadata_table_prefix);
 	// one join per column serves both the filter conditions and the runtime stats below

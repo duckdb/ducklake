@@ -131,7 +131,7 @@ EXPLAIN ANALYZE SELECT count(*) FROM dl.f WHERE isnan(x)
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 
-# a Top-N query orders the files by statistics that are not bounds
+# a Top-N query on a type the bounds check leaves out still orders the files by its bounds
 statement ok
 CREATE TABLE dl.times (t TIME_NS, z TIMETZ)
 
