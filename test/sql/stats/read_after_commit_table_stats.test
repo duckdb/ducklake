@@ -176,3 +176,35 @@ query II
 SELECT (SELECT count(*) FROM lk.t1 WHERE i = 700), (SELECT count(*) FROM lk.t0 WHERE i = 800)
 ----
 1	1
+
+# concurrent reads after a commit refresh once, none of them reads every table again
+statement ok con2
+INSERT INTO lk.t2 VALUES (900)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+concurrentloop i 0 6
+
+statement ok
+SELECT count(*) FROM lk.t{i}
+
+endloop
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FILTER (WHERE NOT regexp_matches(message, 'WHERE\s+table_id\s+IN\s+\('))
+FROM duckdb_logs
+WHERE type = 'QueryLog' AND regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count')
+----
+0
+
+query II
+SELECT (SELECT count(*) FROM lk.t2), (SELECT count(*) FROM lk.t0)
+----
+5	3
