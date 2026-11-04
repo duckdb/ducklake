@@ -5161,6 +5161,7 @@ WHERE snapshot_id = (
 //! Iceberg's snapshot log, time travel by timestamp only reaches the snapshots after the newest such gap.
 void DuckLakeMetadataManager::CheckSnapshotAfterExpiredGap(const DuckLakeSnapshot &snapshot, const Value &timestamp,
                                                            idx_t newest_snapshot_id) {
+	// a gap counts when its newest expired snapshot is visible to the transaction, its first survivor may not be
 	auto result = Query(StringUtil::Format(R"(
 SELECT first_after_gap,
 	(SELECT snapshot_time FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id = first_after_gap),
@@ -5168,7 +5169,7 @@ SELECT first_after_gap,
 FROM (
 	SELECT MAX(s.snapshot_id) AS first_after_gap
 	FROM {METADATA_CATALOG}.ducklake_snapshot s
-	WHERE s.snapshot_id <= %llu
+	WHERE s.snapshot_id - 1 <= %llu
 	AND s.snapshot_id > (SELECT MIN(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot)
 	AND NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_snapshot p WHERE p.snapshot_id = s.snapshot_id - 1)
 ) gaps;)",
