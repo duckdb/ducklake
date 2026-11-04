@@ -1,0 +1,134 @@
+# name: test/sql/data_inlining/data_inlining_transaction_local_field_readd_rejected.test
+# description: a type change that adds back a struct field is rejected while the transaction has inlined rows
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/inlining_field_readd_rejected', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t(k INTEGER, s STRUCT(a INTEGER, b INTEGER))
+
+# the inlined rows still hold the dropped field, so the added field would read its values
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t VALUES (1, {'a': 1, 'b': 42})
+
+statement ok
+ALTER TABLE ducklake.t ALTER s TYPE STRUCT(a INTEGER)
+
+query II
+SELECT k, s FROM ducklake.t
+----
+1	{'a': 1}
+
+statement error
+ALTER TABLE ducklake.t ALTER s TYPE STRUCT(a INTEGER, b INTEGER)
+----
+ALTER on a table with transaction-local inlined data is not supported when a type change adds back field s.b, commit the rows first
+
+statement ok
+ROLLBACK
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+0
+
+# the same changes work once the rows are committed
+statement ok
+INSERT INTO ducklake.t VALUES (1, {'a': 1, 'b': 42})
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t ALTER s TYPE STRUCT(a INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t ALTER s TYPE STRUCT(a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (2, {'a': 2, 'b': 8})
+
+statement ok
+COMMIT
+
+query II
+SELECT k, s FROM ducklake.t ORDER BY k
+----
+1	{'a': 1, 'b': NULL}
+2	{'a': 2, 'b': 8}
+
+query I
+SELECT k FROM ducklake.t WHERE s.b = 42
+----
+
+query I
+SELECT k FROM ducklake.t WHERE s.b = 8
+----
+2
+
+query III
+SELECT s.contains_null::BOOLEAN, s.min_value, s.max_value FROM ducklake_meta.ducklake_table_column_stats s
+JOIN ducklake_meta.ducklake_column c USING (table_id, column_id)
+WHERE c.column_name = 'b' AND c.end_snapshot IS NULL
+----
+true	8	8
+
+# rows inlined after the drop never had the field, so adding it back is allowed
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t ALTER s TYPE STRUCT(a INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (3, {'a': 3})
+
+statement ok
+ALTER TABLE ducklake.t ALTER s TYPE STRUCT(a INTEGER, b INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (4, {'a': 4, 'b': 9})
+
+statement ok
+COMMIT
+
+query II
+SELECT k, s.b FROM ducklake.t ORDER BY k
+----
+1	NULL
+2	NULL
+3	NULL
+4	9
+
+# a struct inside a list
+statement ok
+CREATE TABLE ducklake.l(k INTEGER, l STRUCT(a INTEGER, b INTEGER)[])
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.l VALUES (1, [{'a': 1, 'b': 42}])
+
+statement ok
+ALTER TABLE ducklake.l ALTER l TYPE STRUCT(a INTEGER)[]
+
+statement error
+ALTER TABLE ducklake.l ALTER l TYPE STRUCT(a INTEGER, b INTEGER)[]
+----
+ALTER on a table with transaction-local inlined data is not supported when a type change adds back field l.element.b, commit the rows first
+
+statement ok
+ROLLBACK

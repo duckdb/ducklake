@@ -465,9 +465,8 @@ unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapsh
 	auto catalog_literal = SQLString::ToString(ducklake_catalog.MetadataDatabaseName().GetIdentifierName());
 	// casts of float bounds to text keep their exact value
 	query = "SET LOCAL extra_float_digits = 3;" + query;
-	auto result = transaction.GetConnection().Query(
+	return transaction.ExecuteRaw(
 	    StringUtil::Format("CALL postgres_execute(%s, %s, prepare=FALSE)", catalog_literal, SQLString(query)));
-	return std::move(result);
 }
 
 unique_ptr<QueryResult> PostgresMetadataManager::ExecuteDropInTransaction(string &query) {
@@ -478,6 +477,21 @@ unique_ptr<QueryResult> PostgresMetadataManager::ExecuteDropInTransaction(string
 }
 
 void PostgresMetadataManager::ClearCache() {
+	// clear the cache of the metadata catalog alone, a global clear breaks queries running in other Postgres catalogs
+	auto &catalog = transaction.GetCatalog();
+	if (catalog.ScopedCacheClear()) {
+		auto catalog_literal = SQLString::ToString(catalog.MetadataDatabaseName().GetIdentifierName());
+		auto result = transaction.ExecuteRaw(StringUtil::Format(
+		    "SELECT * FROM postgres_query(%s, 'SELECT 1', clear_catalog_cache = true);", catalog_literal));
+		if (!result->HasError()) {
+			return;
+		}
+		// the error of a postgres_scanner from before the option, which can only clear every catalog
+		if (!StringUtil::Contains(result->GetError(), "Invalid named parameter \"clear_catalog_cache\"")) {
+			result->ThrowIfError("Failed to clear the PostgreSQL metadata cache: ");
+		}
+		catalog.SetScopedCacheClear(false);
+	}
 	auto result = transaction.ExecuteRaw("CALL postgres_clear_cache();");
 	result->ThrowIfError("Failed to clear the PostgreSQL metadata cache: ");
 }

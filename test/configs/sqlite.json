@@ -116,6 +116,8 @@
         "test/sql/retry/postgres_localized_conflict_retry.test",
         "test/sql/retry/postgres_commit_connection_loss.test",
         "test/sql/concurrent/postgres_concurrent_attach_new.test",
+        "test/sql/concurrent/postgres_concurrent_attach_other_catalogs.test",
+        "test/sql/metadata/postgres_cache_clear_scope.test",
         "test/sql/concurrent/postgres_concurrent_attach_new_migrate.test",
         "test/sql/migration/postgres_dev_migration_failure.test",
         "test/sql/migration/postgres_dev1_migration_skips_present_ddl.test",

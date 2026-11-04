@@ -61,13 +61,14 @@ CALL enable_logging(level => 'debug')
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_rename_batches', METADATA_CATALOG 'dlmeta', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
-# one statement batch renames the columns, also on the Postgres server, and SQLite rebuilds the tables instead
-query I
-SELECT CASE WHEN (SELECT type FROM duckdb_databases() WHERE database_name = 'dlmeta') = 'sqlite'
-	THEN count(*) = 0 ELSE count(*) <= 1 END
-FROM duckdb_logs WHERE type IN ('DuckLakeMetadata', 'PostgresQueryLog') AND contains(message, 'RENAME COLUMN')
+# one statement batch renames the metadata columns of all inlined tables
+query II
+SELECT count(DISTINCT query), count(DISTINCT table_name)
+FROM inlined_columns, duckdb_logs_parsed('DuckLakeMetadata')
+WHERE contains(query, 'RENAME')
+  AND contains(query, table_name)
 ----
-true
+1	7
 
 # the tables keep their columns and types, with the metadata columns renamed
 query I

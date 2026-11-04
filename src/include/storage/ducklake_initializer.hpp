@@ -40,6 +40,7 @@ private:
 	ClientContext &context;
 	DuckLakeCatalog &catalog;
 	DuckLakeOptions &options;
+	bool migrating = false;
 };
 
 } // namespace duckdb
