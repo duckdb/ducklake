@@ -1082,9 +1082,12 @@ static set<FieldIndex> ReadSkippedStatsFields(TableIndex table_id, const DuckLak
 	return result;
 }
 
-bool DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(
-    string &batch_query, TableIndex table_id, DuckLakeSnapshot snapshot, const CompactionInformation &rewrite_changes,
-    const set<DataFileIndex> &removed_source_ids, const DuckLakeCommitContext &context, bool &deleted_rows_remain) {
+bool DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_query, TableIndex table_id,
+                                                                DuckLakeSnapshot snapshot,
+                                                                const CompactionInformation &rewrite_changes,
+                                                                const set<DataFileIndex> &removed_source_ids,
+                                                                const DuckLakeCommitContext &context,
+                                                                bool &deleted_rows_remain, idx_t dropped_row_count) {
 	deleted_rows_remain = false;
 	if (tables_changed_by_others.find(table_id) != tables_changed_by_others.end()) {
 		return false; // the stats below are read at the transaction snapshot, which misses the other commits
@@ -1194,7 +1197,8 @@ bool DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(
 	// 2. Delete-free gate: the merged parquet stats are exact only if no deletions remain on the table's data files.
 	//    That holds iff the gross row count of the post-rewrite files equals the net (delete-adjusted) data-file count.
 	//    (Covers partial rewrites with delete_threshold > 0, leftover delete files, and inlined file deletions.)
-	if (parquet_gross_rows != context.get_net_data_file_row_count(table_id)) {
+	//    The net count still includes the rows of the files dropped by this commit.
+	if (parquet_gross_rows + dropped_row_count != context.get_net_data_file_row_count(table_id)) {
 		deleted_rows_remain = true;
 		return false;
 	}
@@ -1374,10 +1378,44 @@ string DuckLakeTransactionState::UpdateStatsForDroppedFiles(
 
 		DuckLakeNewGlobalStats new_globals;
 		InitializeGlobalStats(table_id, *current_stats, new_globals);
+		auto dropped_row_count = attempt_dropped_file_stats[table_id].row_count;
 		bool delete_column_stats = ApplyDroppedFileStats(table_id, new_globals, attempt_dropped_file_stats);
+		if (delete_column_stats && !current_stats->record_count_unknown &&
+		    RecomputeGlobalStatsAfterDrop(result, table_id, dropped_row_count, context)) {
+			// the remaining files are delete-free - their stats describe the live rows exactly
+			continue;
+		}
 		result += WriteGlobalTableStatsSql(table_id, new_globals, delete_column_stats, context);
 	}
 	return result;
+}
+
+bool DuckLakeTransactionState::RecomputeGlobalStatsAfterDrop(string &batch_query, TableIndex table_id,
+                                                             idx_t dropped_row_count,
+                                                             const DuckLakeCommitContext &context) {
+	set<DataFileIndex> dropped_ids;
+	for (auto &entry : dropped_files) {
+		dropped_ids.insert(entry.second);
+	}
+	auto snapshot = context.get_snapshot();
+	// the rows already deleted from the dropped files are not part of the net row count of the table
+	// (dropped_ids spans every table of the transaction, the query only counts the files of this table)
+	auto result = context.query_metadata_with_snapshot(
+	    snapshot, DuckLakeMetadataManager::GetDeleteCountForDataFilesSql(table_id, dropped_ids));
+	result->ThrowIfError("Failed to read the delete counts of dropped files from DuckLake: ");
+	idx_t dropped_delete_count = 0;
+	for (auto &row : *result) {
+		dropped_delete_count = static_cast<idx_t>(row.GetValue<int64_t>(0));
+	}
+	if (dropped_delete_count > dropped_row_count) {
+		// LCOV_EXCL_START
+		return false;
+		// LCOV_EXCL_STOP
+	}
+	CompactionInformation no_rewrite;
+	bool deleted_rows_remain;
+	return RecomputeGlobalStatsAfterRewrite(batch_query, table_id, snapshot, no_rewrite, dropped_ids, context,
+	                                        deleted_rows_remain, dropped_row_count - dropped_delete_count);
 }
 
 string DuckLakeTransactionState::WriteAddedFieldStats(const vector<DuckLakeAddedFields> &added_fields,

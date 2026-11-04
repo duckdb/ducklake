@@ -259,10 +259,17 @@ public:
 	//! (+ committed inlined data) and append the UpdateGlobalTableStats SQL to `batch_query`. No-op (leaving the
 	//! existing stale stats, and the scan fallback) if the table is not fully delete-free post-rewrite or the
 	//! inlined data cannot be accounted for exactly. Returns whether it wrote the stats.
+	//! `dropped_row_count` live rows of files dropped by this commit are still part of the net row count of the table.
 	bool RecomputeGlobalStatsAfterRewrite(string &batch_query, TableIndex table_id, DuckLakeSnapshot snapshot,
 	                                      const CompactionInformation &rewrite_changes,
 	                                      const set<DataFileIndex> &removed_source_ids,
-	                                      const DuckLakeCommitContext &context, bool &deleted_rows_remain);
+	                                      const DuckLakeCommitContext &context, bool &deleted_rows_remain,
+	                                      idx_t dropped_row_count = 0);
+	//! After dropping whole data files, recompute the EXACT global stats of `table_id` from the files that remain
+	//! instead of discarding its column stats. Returns false, leaving the stats to the caller, when the remaining
+	//! files are not delete-free.
+	bool RecomputeGlobalStatsAfterDrop(string &batch_query, TableIndex table_id, idx_t dropped_row_count,
+	                                   const DuckLakeCommitContext &context);
 	//! Merge committed inlined data's per-column min/max into `target` via typed SQL aggregates. Returns false if the
 	//! inlined data cannot be accounted for exactly (e.g. a non-scalar column), in which case the caller must not
 	//! claim the recomputed stats are exact.
