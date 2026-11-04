@@ -2318,9 +2318,13 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::WriteNewTables(result.new_tables, resolved_table_paths);
 		batch_queries += DuckLakeMetadataManager::WriteNewTableOptions(result.new_table_options);
 		committed_table_options = result.new_table_options;
-		auto existing_catalog =
-		    DuckLakeMetadataManager::BuildCatalogForSnapshot(commit_snapshot, context.query_metadata_with_snapshot,
-		                                                     data_path, separator, context.supports_v1_1_metadata);
+		DuckLakeCatalogInfo existing_catalog;
+		if (!result.new_partition_keys.empty() || !result.new_sort_keys.empty()) {
+			// only a commit that changes a partition or sort spec compares it with the committed ones
+			existing_catalog =
+			    DuckLakeMetadataManager::BuildCatalogForSnapshot(commit_snapshot, context.query_metadata_with_snapshot,
+			                                                     data_path, separator, context.supports_v1_1_metadata);
+		}
 		batch_queries +=
 		    DuckLakeMetadataManager::WriteNewPartitionKeys(existing_catalog.partitions, result.new_partition_keys);
 		auto unchanged_partition_ids =
