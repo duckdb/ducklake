@@ -168,6 +168,26 @@ EXPLAIN ANALYZE SELECT count(*) FROM dl.wide WHERE least(COLUMNS(*), 1) = 0
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 
+# the file list query joins the statistics of the first 32 columns
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT count(*) FROM dl.wide WHERE least(COLUMNS(*), 1) = 0
+----
+1
+
+query I
+SELECT len(regexp_extract_all(query, 'col_[0-9]+_stats AS'))
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%col_%_stats AS%'
+ORDER BY timestamp DESC LIMIT 1
+----
+32
+
+statement ok
+CALL disable_logging()
+
 # a file of NULL values has no bounds to check
 statement ok
 INSERT INTO dl.t SELECT NULL, NULL, NULL FROM range(10)
