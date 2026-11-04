@@ -111,6 +111,26 @@ EXPLAIN ANALYZE SELECT count(*) FROM dl.shapes WHERE vertex_extract(g, 'y') = 4
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 2.*
 
+# a filter no row of a file satisfies or passes as NULL skips the file
+statement ok
+CREATE TABLE dl.f (x DOUBLE)
+
+statement ok
+INSERT INTO dl.f SELECT range::DOUBLE FROM range(10)
+
+statement ok
+INSERT INTO dl.f VALUES ('nan'::DOUBLE), (1.5)
+
+query I
+SELECT count(*) FROM dl.f WHERE isnan(x)
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.f WHERE isnan(x)
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
 # a file of NULL values has no bounds to check
 statement ok
 INSERT INTO dl.t SELECT NULL, NULL, NULL FROM range(10)

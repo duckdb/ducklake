@@ -146,7 +146,6 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column
 	}
 }
 
-//! Checks a filter against the min and max of the file
 static bool CanSkipFileByStatistics(const DuckLakeFileColumnStats &file_stats, const ColumnFilterInfo &column_filter,
                                     ClientContext &context) {
 	if (!DuckLakeColumnStats::StatsFromBounds(column_filter.column_type)) {
@@ -161,8 +160,12 @@ static bool CanSkipFileByStatistics(const DuckLakeFileColumnStats &file_stats, c
 	column_stats.has_contains_nan = file_stats.has_contains_nan;
 
 	auto stats = column_stats.ToStats();
-	return stats &&
-	       column_filter.table_filter->CheckStatistics(context, *stats) == FilterPropagateResult::FILTER_ALWAYS_FALSE;
+	if (!stats) {
+		return false;
+	}
+	const auto prune_result = column_filter.table_filter->CheckStatistics(context, *stats);
+	return prune_result == FilterPropagateResult::FILTER_ALWAYS_FALSE ||
+	       prune_result == FilterPropagateResult::FILTER_FALSE_OR_NULL;
 }
 
 static bool CanSkipFileByRuntimeFilter(const DuckLakeFileListEntry &file_entry, const FilterPushdownInfo &filter_info,
