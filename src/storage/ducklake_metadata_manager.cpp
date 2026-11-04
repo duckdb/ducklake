@@ -5165,7 +5165,7 @@ FROM {METADATA_CATALOG}.ducklake_snapshot_changes
 WHERE snapshot_id > %llu AND changes_made LIKE '%%expired_snapshot:%%';)",
 	                                       snapshot.snapshot_id));
 	result->ThrowIfError("Failed to query the expired snapshots of DuckLake: ");
-	// the transaction's own expiries are deleted already, while only its commit records them
+	// the transaction's own expiries are recorded by its commit
 	set<idx_t> expired_ids(expired_in_transaction);
 	for (auto &row : *result) {
 		auto changes = SnapshotChangeInformation::ParseChangesMade(row.GetValue<string>(0));

@@ -557,7 +557,7 @@ public:
 	virtual string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const;
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
-	//! Throws when time travel by timestamp resolves to a snapshot older than the newest expired snapshot it could see
+	//! Throws when the newest expired snapshot a time travel by timestamp could see is its resolved snapshot or newer
 	void CheckSnapshotAfterExpiredGap(const DuckLakeSnapshot &snapshot, const Value &timestamp,
 	                                  idx_t newest_snapshot_id, const set<idx_t> &expired_in_transaction);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound,
