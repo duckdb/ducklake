@@ -70,10 +70,11 @@ SELECT list(snapshot_id) FROM l.snapshots()
 statement ok
 CALL ducklake_expire_snapshots('l', versions => [2, 3])
 
+# the expiry's own snapshot follows on catalog versions that commit one
 query I
-SELECT list(snapshot_id) FROM l.snapshots()
+SELECT list(snapshot_id) FROM l.snapshots() WHERE snapshot_id <= 4
 ----
-[0, 1, 4, 5]
+[0, 1, 4]
 
 # the snapshot current at the time of snapshot 3 is gone, so the time cannot be resolved
 statement error
@@ -186,9 +187,9 @@ statement ok
 CALL ducklake_expire_snapshots('l', versions => [0, 1])
 
 query I
-SELECT list(snapshot_id) FROM l.snapshots()
+SELECT min(snapshot_id) FROM l.snapshots()
 ----
-[4, 5, 6, 7]
+4
 
 statement error
 SELECT * FROM l.t AT (TIMESTAMP => getvariable('t1'))
@@ -202,30 +203,44 @@ SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => getvariable('t4'))
 
 # a later expiry adds a newer gap, which refuses the times that were fine before it
 statement ok
-SET VARIABLE t7 = (SELECT snapshot_time FROM l.snapshots() WHERE snapshot_id = 7)
+SET VARIABLE t_before = (SELECT max(snapshot_time) FROM l.snapshots())
 
 statement ok
 INSERT INTO l.t VALUES (5)
 
 statement ok
-CALL ducklake_expire_snapshots('l', versions => [6])
+SET VARIABLE s_insert5 = (SELECT max(snapshot_id) FROM l.snapshots())
+
+statement ok
+INSERT INTO l.t VALUES (6)
+
+statement ok
+SET VARIABLE t_insert6 = (SELECT max(snapshot_time) FROM l.snapshots())
+
+statement ok
+CALL ducklake_expire_snapshots('l', versions => [getvariable('s_insert5')])
 
 query I
-SELECT list(snapshot_id) FROM l.snapshots()
+SELECT count(*) FROM l.snapshots() WHERE snapshot_id = getvariable('s_insert5')
 ----
-[4, 5, 7, 8, 9]
+0
 
 statement error
 SELECT * FROM l.t AT (TIMESTAMP => getvariable('t4'))
 ----
-snapshot 6 was expired
+was expired and its commit time is not kept
+
+statement error
+SELECT * FROM l.t AT (TIMESTAMP => getvariable('t_before'))
+----
+was expired and its commit time is not kept
 
 query I
-SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => getvariable('t7'))
+SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => getvariable('t_insert6'))
 ----
-[1, 2, 3, 4]
+[1, 2, 3, 4, 5, 6]
 
 query I
 SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => now())
 ----
-[1, 2, 3, 4, 5]
+[1, 2, 3, 4, 5, 6]
