@@ -2789,7 +2789,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		try {
 			can_retry = false;
 			bool check_conflicts = i > 0 || attempt_changes.HasRefChanges();
-			if (!check_conflicts && context.supports_v2_0_metadata) {
+			if (!check_conflicts && context.supports_v2_0_metadata && context.get_global_snapshot_max) {
 				// snapshots of other branches hide behind the lineage head, so a global maximum past
 				// it refreshes the schema and the allocators through the conflict path
 				auto read_snapshot = context.get_snapshot();

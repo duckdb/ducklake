@@ -666,19 +666,6 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.get_snapshot = [this]() {
 		return transaction_snapshot;
 	};
-	ctx.get_global_snapshot_max = [this]() -> optional_idx {
-		// the metadata lives on this server, so the newest snapshot of any branch is one local read
-		string sql = StringUtil::Replace("SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot",
-		                                 "{METADATA_CATALOG}", schema_id);
-		auto result = RunQuery(sql, "read the newest snapshot id");
-		for (auto &row : *result) {
-			if (row.IsNull(0)) {
-				break;
-			}
-			return optional_idx(row.GetValue<uint64_t>(0));
-		}
-		return optional_idx();
-	};
 	ctx.execute_commit_batch = [this](DuckLakeSnapshot snapshot, string &query) -> unique_ptr<QueryResult> {
 		query = SubstitutePlaceholders(query, snapshot);
 		return fresh_conn.Query(query);
