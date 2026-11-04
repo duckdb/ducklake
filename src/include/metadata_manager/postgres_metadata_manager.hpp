@@ -48,6 +48,7 @@ public:
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 	unique_ptr<QueryResult> ExecuteDropInTransaction(string &query) override;
+	string GetChangesSinceQuery(idx_t snapshot_id, DuckLakeSnapshot snapshot) const override;
 
 	void ClearCache() override;
 	//! postgres_scanner looks up a table it has not cached

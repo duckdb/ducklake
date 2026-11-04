@@ -1,0 +1,75 @@
+# name: benchmark/micro/read/big_lake_reads_after_commits.benchmark
+# description: 20 single-row commits to one table of a 2110-table lake, each followed by a read of another table
+# group: [read]
+
+name Big Lake Reads After Commits
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+argument work big_lake_reads_after_commits_work
+
+include benchmark/micro/fixtures/big_lake.benchmark.in
+
+# Each commit writes a file, after which the read looks up the stats of a table the commit did not change
+run
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+INSERT INTO lake.main.bg_0 SELECT * FROM lake.main.bg_0 LIMIT 1;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+
+# The restore_cleanup block plus a query that loads the catalog, so the first timed read does not pay a cold load
+cleanup
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
+SELECT sum(c1) FROM lake.main.bg_1 WHERE c0 >= 0;
+
+# A missed reset adds 20 more rows to bg_0
+result_query II
+SELECT (SELECT count(*) FROM lake.main.bg_0), (SELECT count(*) FROM ducklake_list_files('lake', 'bg_0'))
+----
+22	21

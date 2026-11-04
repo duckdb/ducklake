@@ -453,6 +453,11 @@ private:
 	};
 	//! Puts entries in the object cache and remembers them, under one lock so the entry kept is the one remembered
 	void PutCacheEntry(string key, shared_ptr<ObjectCacheEntry> entry);
+	//! The stats of a table from the last full load when no later commit changed it, and the changed tables to read
+	//! when this lookup read the changes; false when every table has to be read again
+	bool TryGetUnchangedTableStats(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot, TableIndex table_id,
+	                               idx_t table_count, bool read_changes,
+	                               shared_ptr<DuckLakeTableStatsCacheEntry> &result, vector<TableIndex> &load_tables);
 	void PutStatsCacheEntries(idx_t next_file_id, vector<pair<TableIndex, shared_ptr<ObjectCacheEntry>>> entries);
 	//! Requires cache_entries_lock
 	void TrackCacheEntry(const string &key, const shared_ptr<ObjectCacheEntry> &entry);
@@ -497,6 +502,15 @@ private:
 	//! The number of tracked entries at which the evicted ones are forgotten
 	idx_t cache_entries_prune_size = 64;
 	idx_t stats_cache_entries_prune_size = 512;
+	mutex stats_load_lock;
+	//! The latest snapshot whose stats were read for every table, later snapshots keep them for unchanged tables
+	DuckLakeSnapshot stats_load_snapshot;
+	bool has_stats_load_snapshot = false;
+	//! The entries of that load by table id, kept here since an older snapshot can share a next_file_id and its key
+	unordered_map<idx_t, shared_ptr<DuckLakeTableStatsCacheEntry>> stats_load_entries;
+	//! The latest snapshot whose changes since stats_load_snapshot are known, and the tables they changed
+	idx_t stats_changes_snapshot_id = 0;
+	set<TableIndex> stats_changed_tables;
 	//! Whether or not the catalog is initialized
 	bool initialized = false;
 	//! Whether or not the metadata server can execute the commit retry loop server-side.

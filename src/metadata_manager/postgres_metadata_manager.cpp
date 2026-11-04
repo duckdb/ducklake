@@ -509,6 +509,14 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	return PostgresQuery(remote_query);
 }
 
+string PostgresMetadataManager::GetChangesSinceQuery(idx_t snapshot_id, DuckLakeSnapshot snapshot) const {
+	// one statement on the server, a scan of the attached table would read every page of the change log
+	auto remote_query = DuckLakeMetadataManager::GetChangesSinceQuery(snapshot_id, snapshot);
+	SubstituteCatalogPlaceholders(remote_query,
+	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
+	return PostgresQuery(remote_query);
+}
+
 string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot,
                                                                    bool include_exactness) const {
 	// one statement reads the latest snapshot and the table stats from the same state at any isolation level
