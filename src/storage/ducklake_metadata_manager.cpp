@@ -2350,9 +2350,8 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 	return StringUtil::Format("(data.partition_id IS DISTINCT FROM %d OR (%s))", partition_data->partition_id, result);
 }
 
-//! Every column with runtime statistics adds a join and three columns to the file list query
-static constexpr idx_t MAX_RUNTIME_STATS_COLUMNS = 256;
-static constexpr idx_t FILE_LIST_RESERVED_COLUMNS = 64;
+//! Every statistics CTE adds a join to the file list query, which the expression depth limit bounds
+static constexpr idx_t MAX_STATS_CTES = 256;
 
 string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot,
                                                       const FilterPushdownInfo *filter_info,
@@ -2365,22 +2364,6 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 	FilterSQLResult filter_result;
 	if (filter_info && !filter_info->Empty()) {
 		filter_result = ConvertFilterPushdownToSQL(*filter_info);
-		if (file_list_type == FileListType::SCAN) {
-			// a filter the conditions do not express is checked against the file statistics per file
-			const auto max_columns =
-			    MinValue<idx_t>(MAX_RUNTIME_STATS_COLUMNS, (MaxColumnCount() - FILE_LIST_RESERVED_COLUMNS) / 3);
-			for (auto &column_field_index : filter_result.unexpressed_columns) {
-				if (runtime_filter_stats_columns.size() >= max_columns) {
-					break;
-				}
-				auto &column_filter = filter_info->column_filters.at(column_field_index);
-				if (DuckLakeColumnStats::StatsFromBounds(column_filter.column_type) &&
-				    std::find(runtime_filter_stats_columns.begin(), runtime_filter_stats_columns.end(),
-				              column_field_index) == runtime_filter_stats_columns.end()) {
-					runtime_filter_stats_columns.push_back(column_field_index);
-				}
-			}
-		}
 		if (table.GetPartitionData()) {
 			auto partition_value_table = metadata_table_prefix + ".ducklake_file_partition_value";
 			auto bucket_clause = BuildBucketPartitionPruningClause(table, *filter_info, partition_value_table);
@@ -2394,8 +2377,28 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 	}
 	auto table_id = table.GetTableId();
 
+	const unordered_set<string> runtime_stats {"min_value", "max_value", "contains_nan"};
 	for (auto &column_field_index : runtime_filter_stats_columns) {
-		AddCTERequirement(filter_result.required_ctes, column_field_index, {"min_value", "max_value", "contains_nan"});
+		AddCTERequirement(filter_result.required_ctes, column_field_index, runtime_stats);
+	}
+	if (filter_info && file_list_type == FileListType::SCAN) {
+		// a filter the conditions do not express is checked against the file statistics per file, as far as the
+		// query holds the joins and the three statistics columns per CTE next to the file columns
+		const auto max_ctes = MinValue<idx_t>(MAX_STATS_CTES, MaxColumnCount() / 4);
+		for (auto &column_field_index : filter_result.unexpressed_columns) {
+			auto &column_filter = filter_info->column_filters.at(column_field_index);
+			if (!DuckLakeColumnStats::StatsFromBounds(column_filter.column_type) ||
+			    std::find(runtime_filter_stats_columns.begin(), runtime_filter_stats_columns.end(),
+			              column_field_index) != runtime_filter_stats_columns.end()) {
+				continue;
+			}
+			if (filter_result.required_ctes.count(column_field_index) == 0 &&
+			    filter_result.required_ctes.size() >= max_ctes) {
+				break;
+			}
+			runtime_filter_stats_columns.push_back(column_field_index);
+			AddCTERequirement(filter_result.required_ctes, column_field_index, runtime_stats);
+		}
 	}
 	string query = GenerateCTESectionFromRequirements(filter_result.required_ctes, table_id, metadata_table_prefix);
 	// one join per column serves both the filter conditions and the runtime stats below

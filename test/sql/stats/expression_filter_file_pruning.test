@@ -156,15 +156,15 @@ statement ok
 CREATE TABLE dl.wide AS SELECT * FROM (PIVOT (SELECT range AS i, 0 AS v FROM range(600)) ON i USING first(v))
 
 statement ok
-INSERT INTO dl.wide SELECT * FROM (PIVOT (SELECT range AS i, 1 AS v FROM range(600)) ON i USING first(v))
+INSERT INTO dl.wide SELECT * FROM (PIVOT (SELECT range AS i, 3 AS v FROM range(600)) ON i USING first(v))
 
 query I
-SELECT count(*) FROM dl.wide WHERE COLUMNS(*) * 2 = 2
+SELECT count(*) FROM dl.wide WHERE COLUMNS(*) // 2 = 0
 ----
 1
 
 query II
-EXPLAIN ANALYZE SELECT count(*) FROM dl.wide WHERE COLUMNS(*) * 2 = 2
+EXPLAIN ANALYZE SELECT count(*) FROM dl.wide WHERE COLUMNS(*) // 2 = 0
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 
