@@ -19,11 +19,13 @@ CREATE TABLE lk.a AS SELECT 1 i
 statement ok
 CREATE TABLE lk.b AS SELECT 2 i
 
-# the first read loads the stats of every table
-query I
-SELECT max(i) FROM lk.a
-----
-1
+# the first reads load the stats of every table, the entries kept are the ones the last of them put in the cache
+concurrentloop i 0 12
+
+statement ok
+SELECT count(*) FROM lk.a
+
+endloop
 
 statement ok con2
 INSERT INTO lk.b VALUES (3)

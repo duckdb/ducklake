@@ -1133,9 +1133,12 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 		}
 		cache_entries_to_put.emplace_back(current_id, std::move(entry));
 	}
-	PutStatsCacheEntries(snapshot.next_file_id, std::move(cache_entries_to_put));
-	if (load_all) {
+	if (!load_all) {
+		PutStatsCacheEntries(snapshot.next_file_id, std::move(cache_entries_to_put));
+	} else {
+		// put and kept under one lock, so the entries kept are the ones in the object cache
 		lock_guard<mutex> guard(stats_load_lock);
+		PutStatsCacheEntries(snapshot.next_file_id, std::move(cache_entries_to_put));
 		if (!has_stats_load_snapshot || stats_load_snapshot.snapshot_id < snapshot.snapshot_id) {
 			stats_load_snapshot = snapshot;
 			has_stats_load_snapshot = true;
@@ -1791,6 +1794,7 @@ void DuckLakeCatalog::PutStatsCacheEntries(idx_t next_file_id,
 
 void DuckLakeCatalog::EvictCacheEntries() {
 	auto &cache = GetObjectCacheInstance();
+	lock_guard<mutex> stats_guard(stats_load_lock);
 	lock_guard<mutex> guard(cache_entries_lock);
 	for (auto &entry : cache_entries) {
 		if (!entry.second.expired()) {
@@ -1804,7 +1808,6 @@ void DuckLakeCatalog::EvictCacheEntries() {
 	}
 	cache_entries.clear();
 	stats_cache_entries.clear();
-	lock_guard<mutex> stats_guard(stats_load_lock);
 	ForgetStatsLoad();
 }
 
