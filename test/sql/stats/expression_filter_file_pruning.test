@@ -151,7 +151,7 @@ SELECT z FROM dl.times ORDER BY z DESC LIMIT 1
 ----
 02:00:00+00
 
-# a query with more filtered columns than the statistics budget of the file list query
+# more filtered columns than the statistics budget of the file list query, the first ones still prune
 statement ok
 CREATE TABLE dl.wide AS SELECT * FROM (PIVOT (SELECT range AS i, 0 AS v FROM range(600)) ON i USING first(v))
 
@@ -159,9 +159,34 @@ statement ok
 INSERT INTO dl.wide SELECT * FROM (PIVOT (SELECT range AS i, 3 AS v FROM range(600)) ON i USING first(v))
 
 query I
-SELECT count(*) FROM dl.wide WHERE COLUMNS(*) // 2 = 0
+SELECT count(*) FROM dl.wide WHERE least(COLUMNS(*), 1) = 0
 ----
 1
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.wide WHERE least(COLUMNS(*), 1) = 0
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# the same with a condition per column the query expresses, so every column already joins its statistics
+statement ok
+CREATE TABLE dl.wide_too AS SELECT * FROM (PIVOT (SELECT range AS i, 0 AS v FROM range(300)) ON i USING first(v))
+
+statement ok
+INSERT INTO dl.wide_too SELECT * FROM (PIVOT (SELECT range AS i, 3 AS v FROM range(300)) ON i USING first(v))
+
+statement ok
+INSERT INTO dl.wide_too SELECT * FROM (PIVOT (SELECT range AS i, -7 AS v FROM range(300)) ON i USING first(v))
+
+query I
+SELECT count(*) FROM dl.wide_too WHERE COLUMNS(*) >= -5 AND least(COLUMNS(*), 1) = 0
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.wide_too WHERE COLUMNS(*) >= -5 AND least(COLUMNS(*), 1) = 0
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 
 # a file of NULL values has no bounds to check
 statement ok
