@@ -246,7 +246,7 @@ class RegressionRunTest(unittest.TestCase):
         self.assertEqual(self.dropped(), self.created()[::-1])
         self.assertIs(signal.getsignal(signal.SIGTERM), handler)
 
-    def test_a_regression_fails_after_one_comparison(self):
+    def test_databases_survive_until_confirmation_finishes(self):
         def compare(script, root, passthrough, benchmarks):
             self.mocks["drop_database"].assert_not_called()
             self.assertEqual(len(self.created()), 2)
@@ -254,11 +254,12 @@ class RegressionRunTest(unittest.TestCase):
 
         self.compare.side_effect = compare
         self.assertEqual(self.main(), 1)
-        self.assertEqual(self.compare.call_count, 1)
-        self.assertEqual(self.compare.call_args.args[0], run.COMPARE)
+        self.assertEqual(self.compare.call_count, 2)
+        self.assertEqual(self.compare.call_args_list[0].args[2], self.compare.call_args_list[1].args[2])
+        self.assertEqual([call.args[0] for call in self.compare.call_args_list], [run.COMPARE, run.RUNNER])
         self.assertEqual(self.dropped(), self.created()[::-1])
         self.assertIn(
-            "::error::benchmark/example.benchmark (micro_postgres) is 10% or more slower",
+            "::error::benchmark/example.benchmark (micro_postgres) is 10% or more slower in two runs in a row",
             self.stdout.getvalue(),
         )
 
