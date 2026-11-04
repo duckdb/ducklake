@@ -458,6 +458,8 @@ private:
 	                               idx_t table_count, bool read_changes,
 	                               shared_ptr<DuckLakeTableStatsCacheEntry> &result, vector<TableIndex> &load_tables);
 	void PutStatsCacheEntries(idx_t next_file_id, vector<pair<TableIndex, shared_ptr<ObjectCacheEntry>>> entries);
+	//! Forgets the last full load, requires stats_load_lock
+	void ForgetStatsLoad();
 	//! Requires cache_entries_lock
 	void TrackCacheEntry(const string &key, const shared_ptr<ObjectCacheEntry> &entry);
 	//! Removes the entries of this DuckLake from the object cache, as their keys belong to this instance only

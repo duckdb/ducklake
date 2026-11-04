@@ -1202,6 +1202,8 @@ bool DuckLakeCatalog::TryGetUnchangedTableStats(DuckLakeTransaction &transaction
 				continue;
 			}
 			if (!changes_known) {
+				// no later snapshot can use the kept load without these changes, every table is read again
+				ForgetStatsLoad();
 				return false;
 			}
 			stats_changes_snapshot_id = snapshot.snapshot_id;
@@ -1231,6 +1233,12 @@ bool DuckLakeCatalog::TryGetUnchangedTableStats(DuckLakeTransaction &transaction
 	}
 	// a changed table, or one the full load did not know, is read again
 	return true;
+}
+
+void DuckLakeCatalog::ForgetStatsLoad() {
+	has_stats_load_snapshot = false;
+	stats_load_entries.clear();
+	stats_changed_tables.clear();
 }
 
 idx_t DuckLakeCatalog::GetTableRecordCount(DuckLakeTransaction &transaction, TableIndex table_id) {
@@ -1797,9 +1805,7 @@ void DuckLakeCatalog::EvictCacheEntries() {
 	cache_entries.clear();
 	stats_cache_entries.clear();
 	lock_guard<mutex> stats_guard(stats_load_lock);
-	has_stats_load_snapshot = false;
-	stats_load_entries.clear();
-	stats_changed_tables.clear();
+	ForgetStatsLoad();
 }
 
 void DuckLakeCatalog::RegisterCatalog() {

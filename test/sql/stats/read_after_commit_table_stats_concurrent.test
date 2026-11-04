@@ -49,3 +49,34 @@ FROM duckdb_logs
 WHERE type = 'QueryLog'
 ----
 1	1
+
+# when the changes of a snapshot are missing, the readers read them once and every table again
+statement ok con2
+INSERT INTO lk.b VALUES (4)
+
+statement ok
+DELETE FROM __ducklake_metadata_lk.ducklake_snapshot_changes WHERE snapshot_id = (SELECT max(snapshot_id) FROM __ducklake_metadata_lk.ducklake_snapshot_changes)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+concurrentloop i 0 12
+
+statement ok
+SELECT count(*) FROM lk.a
+
+endloop
+
+statement ok
+CALL disable_logging()
+
+query II
+SELECT count(*) FILTER (WHERE regexp_matches(message, 'SELECT\s+snapshot_id,\s*changes_made\s+FROM')),
+	count(*) FILTER (WHERE regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count') AND NOT regexp_matches(message, 'WHERE\s+table_id\s+IN\s+\(')) > 0
+FROM duckdb_logs
+WHERE type = 'QueryLog'
+----
+1	true
