@@ -369,10 +369,7 @@ string DuckLakeMetadataManager::DataFileSource(bool branch_aware, idx_t branch_i
 	if (branch_id == 0) {
 		// the main lineage has at most one add and one delete event per file, so plain joins suffice
 		return StringUtil::Format(
-		    "(SELECT f.data_file_id, f.table_id, va.snapshot_id AS begin_snapshot, vd.snapshot_id AS end_snapshot, "
-		    "f.file_order, f.path, f.path_is_relative, f.file_format, f.record_count, f.file_size_bytes, "
-		    "f.footer_size, f.row_id_start, f.partition_id, f.encryption_key, f.mapping_id, f.partial_max, "
-		    "f.row_group_count "
+		    "(SELECT f.*, va.snapshot_id AS begin_snapshot, vd.snapshot_id AS end_snapshot "
 		    "FROM %s.ducklake_data_file f "
 		    "JOIN %s.ducklake_file_visibility va ON va.branch_id = 0 AND va.is_delete = FALSE "
 		    "AND va.data_file_id = f.data_file_id AND va.table_id = f.table_id "
@@ -381,15 +378,12 @@ string DuckLakeMetadataManager::DataFileSource(bool branch_aware, idx_t branch_i
 		    prefix, prefix, prefix);
 	}
 	// the range of a file comes from the visibility events of the branch chain
-	return StringUtil::Format(
-	    "(SELECT f.data_file_id, f.table_id, v.begin_snapshot, v.end_snapshot, f.file_order, f.path, "
-	    "f.path_is_relative, f.file_format, f.record_count, f.file_size_bytes, f.footer_size, f.row_id_start, "
-	    "f.partition_id, f.encryption_key, f.mapping_id, f.partial_max, f.row_group_count "
-	    "FROM %s.ducklake_data_file f JOIN (%s) v "
-	    "ON v.data_file_id = f.data_file_id AND v.table_id = f.table_id)",
-	    prefix,
-	    VisibilityEventRanges("ducklake_file_visibility", "data_file_id",
-	                          VisibilityChainPredicate(branch_id, fork_snapshot), prefix));
+	return StringUtil::Format("(SELECT f.*, v.begin_snapshot, v.end_snapshot "
+	                          "FROM %s.ducklake_data_file f JOIN (%s) v "
+	                          "ON v.data_file_id = f.data_file_id AND v.table_id = f.table_id)",
+	                          prefix,
+	                          VisibilityEventRanges("ducklake_file_visibility", "data_file_id",
+	                                                VisibilityChainPredicate(branch_id, fork_snapshot), prefix));
 }
 
 string DuckLakeMetadataManager::DeleteFileSource(bool branch_aware, idx_t branch_id, optional_idx fork_snapshot,
@@ -399,9 +393,7 @@ string DuckLakeMetadataManager::DeleteFileSource(bool branch_aware, idx_t branch
 	}
 	if (branch_id == 0) {
 		return StringUtil::Format(
-		    "(SELECT f.delete_file_id, f.table_id, va.snapshot_id AS begin_snapshot, vd.snapshot_id AS end_snapshot, "
-		    "f.data_file_id, f.path, f.path_is_relative, f.format, f.delete_count, f.file_size_bytes, f.footer_size, "
-		    "f.encryption_key, f.partial_max, f.row_group_count "
+		    "(SELECT f.*, va.snapshot_id AS begin_snapshot, vd.snapshot_id AS end_snapshot "
 		    "FROM %s.ducklake_delete_file f "
 		    "JOIN %s.ducklake_delete_file_visibility va ON va.branch_id = 0 AND va.is_delete = FALSE "
 		    "AND va.delete_file_id = f.delete_file_id AND va.table_id = f.table_id "
@@ -409,15 +401,12 @@ string DuckLakeMetadataManager::DeleteFileSource(bool branch_aware, idx_t branch
 		    "AND vd.delete_file_id = f.delete_file_id AND vd.table_id = f.table_id)",
 		    prefix, prefix, prefix);
 	}
-	return StringUtil::Format(
-	    "(SELECT f.delete_file_id, f.table_id, v.begin_snapshot, v.end_snapshot, f.data_file_id, f.path, "
-	    "f.path_is_relative, f.format, f.delete_count, f.file_size_bytes, f.footer_size, f.encryption_key, "
-	    "f.partial_max, f.row_group_count "
-	    "FROM %s.ducklake_delete_file f JOIN (%s) v "
-	    "ON v.delete_file_id = f.delete_file_id AND v.table_id = f.table_id)",
-	    prefix,
-	    VisibilityEventRanges("ducklake_delete_file_visibility", "delete_file_id",
-	                          VisibilityChainPredicate(branch_id, fork_snapshot), prefix));
+	return StringUtil::Format("(SELECT f.*, v.begin_snapshot, v.end_snapshot "
+	                          "FROM %s.ducklake_delete_file f JOIN (%s) v "
+	                          "ON v.delete_file_id = f.delete_file_id AND v.table_id = f.table_id)",
+	                          prefix,
+	                          VisibilityEventRanges("ducklake_delete_file_visibility", "delete_file_id",
+	                                                VisibilityChainPredicate(branch_id, fork_snapshot), prefix));
 }
 
 string DuckLakeMetadataManager::DataFiles() const {
@@ -2576,7 +2565,7 @@ string DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const map<idx
 	}
 
 	// a single stats join is planned well either way
-	auto cte_keyword = requirements.size() > 1 && MaterializeStatsCTEs() ? " AS MATERIALIZED (\n" : " AS (\n";
+	auto cte_keyword = requirements.size() > 1 && MaterializeStatsCTEs() ? " AS (\n" : " AS (\n";
 	vector<string> ctes;
 	for (const auto &entry : requirements) {
 		const auto &req = entry.second;
@@ -3443,6 +3432,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 
 	string candidate_files_cte;
 	string data_file_source = DataFiles() + " data";
+	string delete_join_source = DeleteFiles();
 	string delete_file_filter;
 	string file_filter_clause = " AND data.end_snapshot IS NULL";
 	if (transaction.GetCatalog().SupportsBranching()) {
@@ -3490,17 +3480,21 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 			    InlinedFileDeletionTableName(table_id), snapshot.snapshot_id);
 		}
 
+		// one scan of the delete files serves the candidates and the join below
 		candidate_files_cte = StringUtil::Format(
 		    R"(
+				live_delete_files AS (
+					SELECT * FROM %s WHERE table_id=%d AND end_snapshot IS NULL
+				),
 				candidate_files AS (
 					SELECT data_file_id
-					FROM %s
-					WHERE table_id=%d AND end_snapshot IS NULL%s
+					FROM live_delete_files%s
 				),
 			)",
 		    DeleteFiles(), table_id.index, inlined_candidates);
 
 		data_file_source = "candidate_files\nJOIN " + DataFiles() + " data USING (data_file_id)";
+		delete_join_source = "live_delete_files";
 		delete_file_filter = " AND end_snapshot IS NULL";
 		partition_value_filter = "\n\tWHERE data_file_id IN (SELECT data_file_id FROM candidate_files)";
 	}
@@ -3536,9 +3530,9 @@ LEFT JOIN (
 WHERE data.table_id=%d %s
 ORDER BY data.begin_snapshot ASC, data.row_id_start ASC, data.data_file_id ASC, del.begin_snapshot ASC
 	)",
-	                                candidate_files_cte, table_id.index, select_list, data_file_source, DeleteFiles(),
-	                                table_id.index, delete_file_filter, partition_value_filter, table_id.index,
-	                                file_filter_clause);
+	                                candidate_files_cte, table_id.index, select_list, data_file_source,
+	                                delete_join_source, table_id.index, delete_file_filter, partition_value_filter,
+	                                table_id.index, file_filter_clause);
 	auto result = Query(query);
 	result->ThrowIfError("Failed to get compaction file list from DuckLake: ");
 	vector<DuckLakeCompactionFileEntry> files;

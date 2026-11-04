@@ -2492,22 +2492,24 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 SnapshotDeletedFromFiles DuckLakeTransactionState::GetFilesDeletedOrDroppedAfterSnapshot(
     const std::function<unique_ptr<QueryResult>(string)> &executor, bool branch_aware) {
 	// replacement delete files keep an older begin_snapshot, so also match on new file ids
-	// each filter gets its own scan, so it is pushed into the metadata database
+	// one scan of the delete files serves both filters, pushed into the metadata database
 	string sql = StringUtil::Format(
 	    R"(
+	WITH deletes AS (
+		SELECT data_file_id, delete_file_id, begin_snapshot FROM %s
+	)
 	SELECT data_file_id
-	FROM %s
+	FROM deletes
 	WHERE begin_snapshot > {SNAPSHOT_ID}
 	UNION ALL
 	SELECT data_file_id
-	FROM %s
+	FROM deletes
 	WHERE delete_file_id >= {NEXT_FILE_ID}
 	UNION ALL
 	SELECT data_file_id
 	FROM %s
 	WHERE end_snapshot IS NOT NULL AND end_snapshot > {SNAPSHOT_ID}
 	)",
-	    DuckLakeMetadataManager::DeleteFileSource(branch_aware, 0, optional_idx(), "{METADATA_CATALOG}"),
 	    DuckLakeMetadataManager::DeleteFileSource(branch_aware, 0, optional_idx(), "{METADATA_CATALOG}"),
 	    DuckLakeMetadataManager::DataFileSource(branch_aware, 0, optional_idx(), "{METADATA_CATALOG}"));
 	auto result = executor(sql);
