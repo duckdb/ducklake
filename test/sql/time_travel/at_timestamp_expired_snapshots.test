@@ -161,6 +161,23 @@ SELECT snapshot_id, a FROM ducklake_table_changes('l', 'main', 't', getvariable(
 3	2
 4	3
 
+# in one transaction the end of a change feed and time travel at the same timestamp resolve apart
+statement ok
+BEGIN
+
+query I
+SELECT count(*) FROM ducklake_table_changes('l', 'main', 't', getvariable('t1'), getvariable('t3'))
+----
+0
+
+statement error
+SELECT * FROM l.t AT (TIMESTAMP => getvariable('t3'))
+----
+snapshots 2 to 3 were expired
+
+statement ok
+ROLLBACK
+
 # snapshots expired at the start of the history leave no gap, times before the remaining ones find no snapshot
 statement ok
 INSERT INTO l.t VALUES (4)
@@ -182,3 +199,33 @@ query I
 SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => getvariable('t4'))
 ----
 [1, 2, 3]
+
+# a later expiry adds a newer gap, which refuses the times that were fine before it
+statement ok
+SET VARIABLE t7 = (SELECT snapshot_time FROM l.snapshots() WHERE snapshot_id = 7)
+
+statement ok
+INSERT INTO l.t VALUES (5)
+
+statement ok
+CALL ducklake_expire_snapshots('l', versions => [6])
+
+query I
+SELECT list(snapshot_id) FROM l.snapshots()
+----
+[4, 5, 7, 8, 9]
+
+statement error
+SELECT * FROM l.t AT (TIMESTAMP => getvariable('t4'))
+----
+snapshot 6 was expired
+
+query I
+SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => getvariable('t7'))
+----
+[1, 2, 3, 4]
+
+query I
+SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => now())
+----
+[1, 2, 3, 4, 5]
