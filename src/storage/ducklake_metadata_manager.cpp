@@ -5178,22 +5178,30 @@ WHERE snapshot_id > %llu AND changes_made LIKE '%%expired_snapshot:%%';)",
 		return;
 	}
 	newest_expired--;
-	// the remaining snapshots around it bound the gap, the resolved one stands in when it was expired meanwhile
+	// the remaining snapshots around it bound the gap, none may remain before it
 	auto bounds = Query(StringUtil::Format(R"(
-SELECT COALESCE((SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id < %llu), %llu),
-	snapshot_id, snapshot_time
+SELECT (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id < %llu), snapshot_id,
+	snapshot_time
 FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id > %llu
 ORDER BY snapshot_id
 LIMIT 1;)",
-	                                       *newest_expired, snapshot.snapshot_id, *newest_expired));
+	                                       *newest_expired, *newest_expired));
 	bounds->ThrowIfError("Failed to query the snapshots around an expired snapshot of DuckLake: ");
 	for (auto &row : *bounds) {
-		auto last_before_gap = row.GetValue<idx_t>(0);
 		auto first_after_gap = row.GetValue<idx_t>(1);
 		auto gap_time = row.GetValue<string>(2);
-		auto first_expired = *expired_ids.upper_bound(last_before_gap);
+		auto first_expired = *expired_ids.begin();
 		auto last_expired = *std::prev(expired_ids.lower_bound(first_after_gap));
+		string older;
+		if (!row.IsNull(0)) {
+			auto last_before_gap = row.GetValue<idx_t>(0);
+			first_expired = *expired_ids.upper_bound(last_before_gap);
+			older =
+			    StringUtil::Format("; it also refuses the earlier times at which snapshot %llu or an older snapshot "
+			                       "was current. Use AT (VERSION => ...) to read a remaining older snapshot",
+			                       last_before_gap);
+		}
 		string expired;
 		if (first_expired == last_expired) {
 			expired = StringUtil::Format("snapshot %llu was expired and its commit time is not kept", first_expired);
@@ -5212,9 +5220,8 @@ LIMIT 1;)",
 			                           first_after_gap, gap_time);
 		}
 		throw InvalidInputException("Cannot time travel to timestamp %s: %s, so the snapshot current at that time is "
-		                            "unknown. %s; it also refuses the earlier times at which snapshot %llu or an older "
-		                            "snapshot was current. Use AT (VERSION => ...) to read a remaining older snapshot.",
-		                            timestamp.ToString(), expired, reach, last_before_gap);
+		                            "unknown. %s%s.",
+		                            timestamp.ToString(), expired, reach, older);
 	}
 	throw InvalidInputException("Corrupt DuckLake - no snapshot remains after expired snapshot %llu", *newest_expired);
 }
