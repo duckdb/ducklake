@@ -1164,6 +1164,7 @@ bool DuckLakeCatalog::TryGetUnchangedTableStats(DuckLakeTransaction &transaction
 	bool table_changed;
 	bool changes_read = false;
 	{
+		unique_lock<mutex> read_guard(stats_changes_read_lock, std::defer_lock);
 		unique_lock<mutex> guard(stats_load_lock);
 		while (true) {
 			if (!has_stats_load_snapshot) {
@@ -1180,6 +1181,13 @@ bool DuckLakeCatalog::TryGetUnchangedTableStats(DuckLakeTransaction &transaction
 			}
 			if (!read_changes) {
 				return false;
+			}
+			if (!read_guard.owns_lock()) {
+				// one lookup reads the changes of a snapshot, the others wait for it and judge the state again
+				guard.unlock();
+				read_guard.lock();
+				guard.lock();
+				continue;
 			}
 			// only the commits after the snapshot whose changes are known are read
 			auto changes_snapshot_id = stats_changes_snapshot_id;

@@ -177,7 +177,7 @@ SELECT (SELECT count(*) FROM lk.t1 WHERE i = 700), (SELECT count(*) FROM lk.t0 W
 ----
 1	1
 
-# concurrent reads after a commit refresh once, none of them reads every table again
+# concurrent reads after a commit read its changes once, none of them reads every table again
 statement ok con2
 INSERT INTO lk.t2 VALUES (900)
 
@@ -197,12 +197,13 @@ endloop
 statement ok
 CALL disable_logging()
 
-query I
-SELECT count(*) FILTER (WHERE NOT regexp_matches(message, 'WHERE\s+table_id\s+IN\s+\('))
+query II
+SELECT count(*) FILTER (WHERE regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count') AND NOT regexp_matches(message, 'WHERE\s+table_id\s+IN\s+\(')),
+	count(*) FILTER (WHERE regexp_matches(message, 'SELECT\s+snapshot_id,\s*changes_made\s+FROM'))
 FROM duckdb_logs
-WHERE type = 'QueryLog' AND regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count')
+WHERE type = 'QueryLog'
 ----
-0
+0	1
 
 query II
 SELECT (SELECT count(*) FROM lk.t2), (SELECT count(*) FROM lk.t0)

@@ -1,0 +1,51 @@
+# name: test/sql/stats/read_after_commit_table_stats_concurrent.test
+# description: concurrent reads of an unchanged table after a commit read its changes once
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lk (DATA_PATH '{DATA_PATH}/read_after_commit_table_stats_concurrent/', DATA_INLINING_ROW_LIMIT 10000)
+
+statement ok
+CREATE TABLE lk.a AS SELECT 1 i
+
+statement ok
+CREATE TABLE lk.b AS SELECT 2 i
+
+# the first read loads the stats of every table
+query I
+SELECT max(i) FROM lk.a
+----
+1
+
+statement ok con2
+INSERT INTO lk.b VALUES (3)
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+concurrentloop i 0 12
+
+statement ok
+SELECT count(*) FROM lk.a
+
+endloop
+
+statement ok
+CALL disable_logging()
+
+# one reader reads the changes and the stats of the changed table, the others wait for it
+query II
+SELECT count(*) FILTER (WHERE regexp_matches(message, 'SELECT\s+snapshot_id,\s*changes_made\s+FROM')),
+	count(*) FILTER (WHERE regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count'))
+FROM duckdb_logs
+WHERE type = 'QueryLog'
+----
+1	1

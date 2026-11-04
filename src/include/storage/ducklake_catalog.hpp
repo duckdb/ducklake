@@ -511,6 +511,8 @@ private:
 	//! The latest snapshot whose changes since stats_load_snapshot are known, and the tables they changed
 	idx_t stats_changes_snapshot_id = 0;
 	set<TableIndex> stats_changed_tables;
+	//! Held by the lookup that reads the changes of a snapshot, the other lookups wait for it instead of reading too
+	mutex stats_changes_read_lock;
 	//! Whether or not the catalog is initialized
 	bool initialized = false;
 	//! Whether or not the metadata server can execute the commit retry loop server-side.
