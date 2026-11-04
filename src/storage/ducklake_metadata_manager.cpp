@@ -5184,12 +5184,29 @@ FROM (
 		auto first_after_gap = row.GetValue<idx_t>(0);
 		auto gap_time = row.GetValue<string>(1);
 		auto last_before_gap = row.GetValue<idx_t>(2);
-		throw InvalidInputException(
-		    "Cannot time travel to timestamp %s: snapshots %llu to %llu were expired and their commit times are not "
-		    "kept, so the snapshot current at that time is unknown. Time travel by timestamp reaches snapshot %llu "
-		    "(%s) and later; it also refuses the earlier times at which snapshot %llu or an older snapshot was "
-		    "current. Use AT (VERSION => ...) to read a remaining older snapshot.",
-		    timestamp.ToString(), last_before_gap + 1, first_after_gap - 1, first_after_gap, gap_time, last_before_gap);
+		auto first_expired = last_before_gap + 1;
+		auto last_expired = first_after_gap - 1;
+		string expired;
+		if (first_expired == last_expired) {
+			expired = StringUtil::Format("snapshot %llu was expired and its commit time is not kept", first_expired);
+		} else {
+			expired = StringUtil::Format("snapshots %llu to %llu were expired and their commit times are not kept",
+			                             first_expired, last_expired);
+		}
+		// a concurrent expiry can remove snapshots up to the transaction's newest one, the survivors are newer
+		string reach;
+		if (first_after_gap <= newest_snapshot_id) {
+			reach = StringUtil::Format("Time travel by timestamp reaches snapshot %llu (%s) and later", first_after_gap,
+			                           gap_time);
+		} else {
+			reach = StringUtil::Format("The snapshots after the gap, from snapshot %llu (%s) on, are newer than the "
+			                           "snapshot of this transaction",
+			                           first_after_gap, gap_time);
+		}
+		throw InvalidInputException("Cannot time travel to timestamp %s: %s, so the snapshot current at that time is "
+		                            "unknown. %s; it also refuses the earlier times at which snapshot %llu or an older "
+		                            "snapshot was current. Use AT (VERSION => ...) to read a remaining older snapshot.",
+		                            timestamp.ToString(), expired, reach, last_before_gap);
 	}
 }
 
