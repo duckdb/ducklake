@@ -526,7 +526,8 @@ shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeCatalog::GetSchemaCacheEntry(DuckLa
 	}
 	auto catalog_set = LoadSchemaForSnapshot(transaction, snapshot);
 	lock_guard<mutex> guard(cache_entries_lock);
-	auto entry = cache.GetOrCreate<DuckLakeSchemaCacheEntry>(key, std::move(catalog_set));
+	auto entry =
+	    cache.GetOrCreate<DuckLakeSchemaCacheEntry>(key, std::move(catalog_set), GetNewUncommittedCatalogVersion());
 	TrackCacheEntry(key, entry);
 	return entry;
 }
@@ -536,6 +537,13 @@ DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &t
 	auto &catalog_set = entry->catalog_set;
 	transaction.PinSchemaCacheEntry(std::move(entry));
 	return catalog_set;
+}
+
+idx_t DuckLakeCatalog::GetSchemaCatalogVersion(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
+	auto entry = GetSchemaCacheEntry(transaction, snapshot);
+	auto version = entry->catalog_version;
+	transaction.PinSchemaCacheEntry(std::move(entry));
+	return version;
 }
 
 static unique_ptr<DuckLakeFieldId> TransformColumnType(const DuckLakeColumnInfo &col) {

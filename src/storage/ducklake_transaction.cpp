@@ -3087,7 +3087,7 @@ idx_t DuckLakeTransaction::GetCatalogVersion() {
 	if (catalog_version > 0) {
 		return catalog_version;
 	}
-	return GetSnapshot().schema_version;
+	return ducklake_catalog.GetSchemaCatalogVersion(*this, GetSnapshot());
 }
 
 } // namespace duckdb

@@ -91,11 +91,13 @@ struct DuckLakeTableRecordCountCacheEntry : public ObjectCacheEntry {
 
 //! Cache entry for a DuckLake schema version
 struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
-	explicit DuckLakeSchemaCacheEntry(unique_ptr<DuckLakeCatalogSet> catalog_set_p)
-	    : catalog_set(std::move(*catalog_set_p)) {
+	DuckLakeSchemaCacheEntry(unique_ptr<DuckLakeCatalogSet> catalog_set_p, idx_t catalog_version_p)
+	    : catalog_set(std::move(*catalog_set_p)), catalog_version(catalog_version_p) {
 	}
 
 	DuckLakeCatalogSet catalog_set;
+	//! Unique per load, so plans bound to an evicted and reloaded schema version are re-bound
+	const idx_t catalog_version;
 
 	static string ObjectType() {
 		return "ducklake_schema";
@@ -384,6 +386,8 @@ public:
 	                                                   DuckLakeCatalogSet &schema);
 	//! Return the schema for the given snapshot - loading it if it is not yet loaded
 	DuckLakeCatalogSet &GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
+	//! The catalog version of the loaded schema for the snapshot
+	idx_t GetSchemaCatalogVersion(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 
 	//! Callback type for instrumenting metadata queries
 	using QueryCallback = std::function<void(const string &query, std::chrono::steady_clock::duration elapsed)>;
