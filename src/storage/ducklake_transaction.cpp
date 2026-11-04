@@ -2292,6 +2292,10 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpireSnapshotsNow(const strin
 	if (!expired_ids.empty()) {
 		// the transaction resolved versions it has expired since, and the gap changes what a timestamp reaches
 		lock_guard<mutex> guard(snapshot_lock);
+		if (!metadata_manager.CommitsEachStatement()) {
+			// a catalog that commits each statement deletes them when the transaction commits
+			expired_snapshot_ids.insert(expired_ids.begin(), expired_ids.end());
+		}
 		for (auto entry = snapshot_cache.begin(); entry != snapshot_cache.end();) {
 			auto &unit = StructType::GetChildName(entry->first.type(), 0);
 			if (expired_ids.find(entry->second.snapshot_id) != expired_ids.end() || unit == "timestamp") {
@@ -2455,14 +2459,26 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 	}
 	auto snapshot_value = Value::STRUCT(std::move(values));
 
+	// time travel by timestamp refuses times before expired snapshots, which the catalog records from DuckLake 2.0 on
+	bool check_expired = bound == SnapshotBound::TIME_TRAVEL && at_clause->Unit() == "timestamp" &&
+	                     ducklake_catalog.RecordsExpiredSnapshots();
 	lock_guard<mutex> guard(snapshot_lock);
 	auto entry = snapshot_cache.find(snapshot_value);
 	if (entry != snapshot_cache.end()) {
+		if (check_expired) {
+			// concurrent expiries may be visible to the next metadata read
+			metadata_manager->CheckSnapshotAfterExpiredGap(entry->second, version, newest_snapshot_id,
+			                                               expired_snapshot_ids);
+		}
 		// we already found this snapshot - return it
 		return entry->second;
 	}
 	// find the snapshot and cache it
 	auto result_snapshot = *metadata_manager->GetSnapshot(*at_clause, bound, newest_snapshot_id);
+	if (check_expired) {
+		metadata_manager->CheckSnapshotAfterExpiredGap(result_snapshot, version, newest_snapshot_id,
+		                                               expired_snapshot_ids);
+	}
 	// a change feed start after the newest snapshot is not a snapshot that AT clauses can read
 	if (result_snapshot.snapshot_id <= newest_snapshot_id) {
 		snapshot_cache.insert(make_pair(std::move(snapshot_value), result_snapshot));

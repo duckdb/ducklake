@@ -71,10 +71,36 @@ SELECT list(snapshot_id) FROM l.snapshots()
 ----
 [0, 1, 4, 5, 6]
 
+# the same instant as before the expiry, answered from the snapshot cache of the transaction
+statement error con2
+SELECT count(*) FROM l.t AT (TIMESTAMP => getvariable('t1'))
+----
+Cannot time travel to timestamp
+
+# the cached snapshot 2 itself is expired
+statement error con2
+SELECT list(a) FROM l.t AT (TIMESTAMP => getvariable('t2'))
+----
+snapshots 2 to 3 were expired
+
 statement error con2
 SELECT * FROM l.t AT (TIMESTAMP => getvariable('t2') + INTERVAL 1 MICROSECOND)
 ----
 are newer than the snapshot of this transaction
+
+# once every snapshot before the gap is expired as well, no remaining older snapshot is named
+statement ok
+CALL ducklake_expire_snapshots('l', versions => [0, 1])
+
+query I
+SELECT list(snapshot_id) FROM l.snapshots()
+----
+[4, 5, 6, 7]
+
+statement error con2
+SELECT list(a) FROM l.t AT (TIMESTAMP => getvariable('t2'))
+----
+snapshots 0 to 3 were expired
 
 statement ok con2
 ROLLBACK
