@@ -5173,9 +5173,9 @@ WHERE snapshot_id > %llu AND changes_made LIKE '%%expired_snapshot:%%';)",
 		auto changes = SnapshotChangeInformation::ParseChangesMade(row.GetValue<string>(0));
 		expired_ids.insert(changes.expired_snapshots.begin(), changes.expired_snapshots.end());
 	}
-	// the newest expired snapshot the transaction could see, which matters when newer than the resolved snapshot
+	// the newest expired snapshot the transaction could see, time travel passes when it is older than the resolved one
 	auto newest_expired = expired_ids.upper_bound(newest_snapshot_id);
-	if (newest_expired == expired_ids.begin() || *std::prev(newest_expired) <= snapshot.snapshot_id) {
+	if (newest_expired == expired_ids.begin() || *std::prev(newest_expired) < snapshot.snapshot_id) {
 		return;
 	}
 	newest_expired--;

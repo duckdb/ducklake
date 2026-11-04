@@ -77,6 +77,12 @@ SELECT count(*) FROM l.t AT (TIMESTAMP => getvariable('t1'))
 ----
 Cannot time travel to timestamp
 
+# the cached snapshot 2 itself is expired
+statement error con2
+SELECT list(a) FROM l.t AT (TIMESTAMP => getvariable('t2'))
+----
+snapshots 2 to 3 were expired
+
 statement error con2
 SELECT * FROM l.t AT (TIMESTAMP => getvariable('t2') + INTERVAL 1 MICROSECOND)
 ----
