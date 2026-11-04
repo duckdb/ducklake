@@ -22,7 +22,7 @@ CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS attach_cache_clear, attach_ca
 
 statement ok
 CREATE MACRO cache_clears() AS (
-	SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%postgres_clear_cache%'
+	SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%clear_catalog_cache = true%'
 )
 
 # postgres_scanner loads the tables of a schema with one query on pg_namespace
