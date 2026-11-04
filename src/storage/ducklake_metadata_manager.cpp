@@ -5151,41 +5151,50 @@ WHERE snapshot_id = (
 		throw InvalidInputException("No snapshot found at %s %s", StringUtil::Lower(unit.GetIdentifierName()),
 		                            val.ToString());
 	}
-	if (bound == SnapshotBound::TIME_TRAVEL && unit == "timestamp") {
-		CheckSnapshotAfterExpiredGap(*snapshot, val, newest_snapshot_id);
-	}
 	return snapshot;
 }
 
-//! Snapshot ids grow by one per commit, so a missing id is an expired snapshot whose commit time is gone. Like
-//! Iceberg's snapshot log, time travel by timestamp only reaches the snapshots after the newest such gap.
+//! An expiry deletes the rows of snapshots, whose commit times are gone, and keeps their ids in the expired_snapshot
+//! entries of its own changes. Like Iceberg's snapshot log, time travel by timestamp only reaches the snapshots after
+//! the newest expired one.
 void DuckLakeMetadataManager::CheckSnapshotAfterExpiredGap(const DuckLakeSnapshot &snapshot, const Value &timestamp,
-                                                           idx_t newest_snapshot_id) {
-	// the newest gap above the snapshot with an expired id the transaction could see: a concurrent expiry may have
-	// removed ids above the transaction's newest snapshot as well, and the first survivor may be newer than it
+                                                           idx_t newest_snapshot_id,
+                                                           const set<idx_t> &expired_in_transaction) {
+	// the expiries after the snapshot, a concurrent one may have expired snapshots above the transaction's newest
 	auto result = Query(StringUtil::Format(R"(
-SELECT first_after_gap,
-	(SELECT snapshot_time FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id = first_after_gap),
-	(SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id < first_after_gap)
-FROM (
-	SELECT MAX(s.snapshot_id) AS first_after_gap
-	FROM {METADATA_CATALOG}.ducklake_snapshot s
-	WHERE s.snapshot_id > %llu
-	AND NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_snapshot p WHERE p.snapshot_id = s.snapshot_id - 1)
-	AND (SELECT MAX(p.snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot p
-	     WHERE p.snapshot_id < s.snapshot_id) < %llu
-) gaps;)",
-	                                       snapshot.snapshot_id, newest_snapshot_id));
+SELECT changes_made
+FROM {METADATA_CATALOG}.ducklake_snapshot_changes
+WHERE snapshot_id > %llu AND changes_made LIKE '%%expired_snapshot:%%';)",
+	                                       snapshot.snapshot_id));
 	result->ThrowIfError("Failed to query the expired snapshots of DuckLake: ");
+	// the transaction's own expiries are deleted already, while only its commit records them
+	set<idx_t> expired_ids(expired_in_transaction);
 	for (auto &row : *result) {
-		if (row.IsNull(0)) {
-			return;
-		}
-		auto first_after_gap = row.GetValue<idx_t>(0);
-		auto gap_time = row.GetValue<string>(1);
-		auto last_before_gap = row.GetValue<idx_t>(2);
-		auto first_expired = last_before_gap + 1;
-		auto last_expired = first_after_gap - 1;
+		auto changes = SnapshotChangeInformation::ParseChangesMade(row.GetValue<string>(0));
+		expired_ids.insert(changes.expired_snapshots.begin(), changes.expired_snapshots.end());
+	}
+	// the newest expired snapshot the transaction could see, which matters when newer than the resolved snapshot
+	auto newest_expired = expired_ids.upper_bound(newest_snapshot_id);
+	if (newest_expired == expired_ids.begin() || *std::prev(newest_expired) <= snapshot.snapshot_id) {
+		return;
+	}
+	newest_expired--;
+	// the remaining snapshots around it bound the gap, the resolved one stands in when it was expired meanwhile
+	auto bounds = Query(StringUtil::Format(R"(
+SELECT COALESCE((SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id < %llu), %llu),
+	snapshot_id, snapshot_time
+FROM {METADATA_CATALOG}.ducklake_snapshot
+WHERE snapshot_id > %llu
+ORDER BY snapshot_id
+LIMIT 1;)",
+	                                       *newest_expired, snapshot.snapshot_id, *newest_expired));
+	bounds->ThrowIfError("Failed to query the snapshots around an expired snapshot of DuckLake: ");
+	for (auto &row : *bounds) {
+		auto last_before_gap = row.GetValue<idx_t>(0);
+		auto first_after_gap = row.GetValue<idx_t>(1);
+		auto gap_time = row.GetValue<string>(2);
+		auto first_expired = *expired_ids.upper_bound(last_before_gap);
+		auto last_expired = *std::prev(expired_ids.lower_bound(first_after_gap));
 		string expired;
 		if (first_expired == last_expired) {
 			expired = StringUtil::Format("snapshot %llu was expired and its commit time is not kept", first_expired);
@@ -5208,6 +5217,7 @@ FROM (
 		                            "snapshot was current. Use AT (VERSION => ...) to read a remaining older snapshot.",
 		                            timestamp.ToString(), expired, reach, last_before_gap);
 	}
+	throw InvalidInputException("Corrupt DuckLake - no snapshot remains after expired snapshot %llu", *newest_expired);
 }
 
 template <class T>
