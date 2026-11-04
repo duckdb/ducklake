@@ -5154,8 +5154,7 @@ WHERE snapshot_id = (
 	return snapshot;
 }
 
-//! An expiry deletes the rows of snapshots, whose commit times are gone, and lists their ids in the changes of its own
-//! snapshot, so time travel by timestamp only reaches the snapshots after the newest expired one
+//! An expiry deletes the rows of snapshots and their commit times, and lists their ids in its own snapshot changes
 void DuckLakeMetadataManager::CheckSnapshotAfterExpiredGap(const DuckLakeSnapshot &snapshot, const Value &timestamp,
                                                            idx_t newest_snapshot_id,
                                                            const set<idx_t> &expired_in_transaction) {
@@ -5172,7 +5171,7 @@ WHERE snapshot_id > %llu AND changes_made LIKE '%%expired_snapshot:%%';)",
 		auto changes = SnapshotChangeInformation::ParseChangesMade(row.GetValue<string>(0));
 		expired_ids.insert(changes.expired_snapshots.begin(), changes.expired_snapshots.end());
 	}
-	// the newest expired snapshot the transaction could see, time travel passes when it is older than the resolved one
+	// the newest expired snapshot the transaction could see
 	auto newest_expired = expired_ids.upper_bound(newest_snapshot_id);
 	if (newest_expired == expired_ids.begin() || *std::prev(newest_expired) < snapshot.snapshot_id) {
 		return;
