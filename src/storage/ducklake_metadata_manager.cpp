@@ -2382,10 +2382,13 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 		AddCTERequirement(filter_result.required_ctes, column_field_index, runtime_stats);
 	}
 	if (filter_info && file_list_type == FileListType::SCAN) {
-		// a filter the conditions do not express is checked against the file statistics per file, as far as the
-		// query holds the joins and the three statistics columns per CTE next to the file columns
+		// a filter the conditions do not express is checked against the file statistics per file, within the join
+		// and column budget of the query
 		const auto max_ctes = MinValue<idx_t>(MAX_STATS_CTES, MaxColumnCount() / 4);
 		for (auto &column_field_index : filter_result.unexpressed_columns) {
+			if (runtime_filter_stats_columns.size() >= max_ctes) {
+				break;
+			}
 			auto &column_filter = filter_info->column_filters.at(column_field_index);
 			if (!DuckLakeColumnStats::StatsFromBounds(column_filter.column_type) ||
 			    std::find(runtime_filter_stats_columns.begin(), runtime_filter_stats_columns.end(),
