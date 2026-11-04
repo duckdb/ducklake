@@ -2350,6 +2350,9 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 	return StringUtil::Format("(data.partition_id IS DISTINCT FROM %d OR (%s))", partition_data->partition_id, result);
 }
 
+//! Every column with runtime statistics adds three columns to the file list query
+static constexpr idx_t MAX_RUNTIME_STATS_COLUMNS = 500;
+
 string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot,
                                                       const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
@@ -2362,8 +2365,12 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 	if (filter_info && !filter_info->Empty()) {
 		filter_result = ConvertFilterPushdownToSQL(*filter_info);
 		if (file_list_type == FileListType::SCAN) {
-			// a filter the conditions do not express is checked against the file statistics per file
+			// a filter the conditions do not express is checked against the file statistics per file, within the
+			// column limit of the metadata catalogs
 			for (auto &column_field_index : filter_result.unexpressed_columns) {
+				if (runtime_filter_stats_columns.size() >= MAX_RUNTIME_STATS_COLUMNS) {
+					break;
+				}
 				auto &column_filter = filter_info->column_filters.at(column_field_index);
 				if (DuckLakeColumnStats::StatsFromBounds(column_filter.column_type) &&
 				    std::find(runtime_filter_stats_columns.begin(), runtime_filter_stats_columns.end(),
