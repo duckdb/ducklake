@@ -5745,26 +5745,24 @@ WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_sn
 }
 
 //! The snapshot row columns with the allocators and the watermark taken from the global maxima
-static string GlobalAllocatorSnapshotColumns(const string &schema_version_column) {
-	return StringUtil::Format(R"(snapshot_id, %s,
-(SELECT MAX(next_catalog_id) FROM {METADATA_CATALOG}.ducklake_snapshot),
-(SELECT MAX(next_file_id) FROM {METADATA_CATALOG}.ducklake_snapshot),
-(SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version'),
-(SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot))",
-	                          schema_version_column);
+//! One pass over the snapshots for the allocators, joined to the head row the predicate selects
+static string GlobalAllocatorSnapshotQuery(const string &head_predicate) {
+	return StringUtil::Format(R"(SELECT head.snapshot_id, head.schema_version, alloc.next_catalog_id,
+alloc.next_file_id, ver.version, alloc.global_max
+FROM (SELECT snapshot_id, schema_version FROM {METADATA_CATALOG}.ducklake_snapshot
+      %s ORDER BY snapshot_id DESC LIMIT 1) head,
+     (SELECT MAX(next_catalog_id) AS next_catalog_id, MAX(next_file_id) AS next_file_id,
+             MAX(snapshot_id) AS global_max FROM {METADATA_CATALOG}.ducklake_snapshot) alloc,
+     (SELECT MAX(value) AS version FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version') ver;)",
+	                          head_predicate);
 }
 
 string DuckLakeMetadataManager::MainHeadSnapshotQuery(bool branch_aware) {
 	if (!branch_aware) {
 		return LatestSnapshotQuery();
 	}
-	// commits allocate after the global maximum, with the schema of main's head
-	return StringUtil::Format(R"(SELECT %s
-FROM {METADATA_CATALOG}.ducklake_snapshot
-WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot);)",
-	                          GlobalAllocatorSnapshotColumns(R"((
-SELECT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot
-WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = 0)))"));
+	// the readable head of main, commits allocate after the global maximum
+	return GlobalAllocatorSnapshotQuery("WHERE branch_id = 0");
 }
 
 string DuckLakeMetadataManager::BranchAwareLatestSnapshotQuery() const {
@@ -5773,19 +5771,14 @@ string DuckLakeMetadataManager::BranchAwareLatestSnapshotQuery() const {
 		return LatestSnapshotQuery();
 	}
 	if (!catalog.OnBranch()) {
-		// the readable head of main, commits allocate after the global maximum through the conflict path
-		return StringUtil::Format(R"(SELECT %s
-FROM {METADATA_CATALOG}.ducklake_snapshot
-WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = 0);)",
-		                          GlobalAllocatorSnapshotColumns("schema_version"));
+		// the readable head of main, commits allocate after the global maximum
+		return GlobalAllocatorSnapshotQuery("WHERE branch_id = 0");
 	}
 	// the head of a branch without commits of its own is its fork snapshot
-	return StringUtil::Format(R"(SELECT %s
-FROM {METADATA_CATALOG}.ducklake_snapshot
-WHERE snapshot_id = (SELECT COALESCE((SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot
-WHERE branch_id = %d), %d));)",
-	                          GlobalAllocatorSnapshotColumns("schema_version"), catalog.AttachedBranchId(),
-	                          catalog.AttachedBranchFork().GetIndex());
+	return GlobalAllocatorSnapshotQuery(
+	    StringUtil::Format("WHERE snapshot_id = (SELECT COALESCE((SELECT MAX(snapshot_id) FROM "
+	                       "{METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = %d), %d))",
+	                       catalog.AttachedBranchId(), catalog.AttachedBranchFork().GetIndex()));
 }
 
 string DuckLakeMetadataManager::BranchLineageFilter() const {
