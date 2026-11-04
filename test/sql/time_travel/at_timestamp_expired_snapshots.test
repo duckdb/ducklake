@@ -39,6 +39,32 @@ SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => getvariable('t3'))
 ----
 [1, 2]
 
+# a timestamp resolved earlier in the transaction is checked again after the transaction expires snapshots
+statement ok
+BEGIN
+
+query I
+SELECT count(*) FROM l.t AT (TIMESTAMP => getvariable('t1'))
+----
+0
+
+statement ok
+CALL ducklake_expire_snapshots('l', versions => [2, 3])
+
+statement error
+SELECT count(*) FROM l.t AT (TIMESTAMP => getvariable('t1'))
+----
+Cannot time travel to timestamp
+
+# the error ended the transaction and its expiry, which took no snapshot id
+statement ok
+ROLLBACK
+
+query I
+SELECT list(snapshot_id) FROM l.snapshots()
+----
+[0, 1, 2, 3, 4]
+
 # snapshots 2 and 3 expire, snapshot 4 is the first one after the gap
 statement ok
 CALL ducklake_expire_snapshots('l', versions => [2, 3])
