@@ -1,6 +1,8 @@
 #include "storage/ducklake_partition_data.hpp"
 #include "common/ducklake_murmur3.hpp"
 #include "storage/ducklake_table_entry.hpp"
+#include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_schema_entry.hpp"
 #include "duckdb/common/hive_partitioning.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/decimal.hpp"
@@ -65,7 +67,7 @@ string DuckLakePartitionUtils::GetPartitionKeyName(DuckLakeTransformType transfo
 }
 
 vector<string> DuckLakePartitionUtils::GetPartitionKeyNames(const DuckLakePartition &partition,
-                                                            const DuckLakeFieldData &field_data) {
+                                                            const DuckLakeFieldData &field_data, bool by_field_id) {
 	vector<string> result;
 	case_insensitive_set_t used_names;
 	for (auto &field : partition.fields) {
@@ -73,7 +75,8 @@ vector<string> DuckLakePartitionUtils::GetPartitionKeyNames(const DuckLakePartit
 		if (!field_id) {
 			throw InternalException("DuckLake partition field id not found");
 		}
-		result.push_back(GetPartitionKeyName(field.transform.type, field_id->Name().GetIdentifierName(), used_names));
+		result.push_back(
+		    GetPartitionKeyName(field.transform.type, field_id->FileName(by_field_id).GetIdentifierName(), used_names));
 		used_names.insert(result.back());
 	}
 	return result;
@@ -141,7 +144,10 @@ string DuckLakePartitionUtils::BuildHivePartitionPath(DuckLakeTableEntry &table,
 		throw InternalException("DuckLake partition value count does not match partition spec");
 	}
 	string result;
-	auto key_names = GetPartitionKeyNames(*partition_data, table.GetFieldData());
+	auto &catalog = table.ParentCatalog().Cast<DuckLakeCatalog>();
+	auto by_field_id = catalog.WriteFieldIdColumnNames(table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId(),
+	                                                   table.GetTableId(), &table.GetTableOptions());
+	auto key_names = GetPartitionKeyNames(*partition_data, table.GetFieldData(), by_field_id);
 	for (idx_t field_idx = 0; field_idx < partition_data->fields.size(); field_idx++) {
 		auto &field = partition_data->fields[field_idx];
 		if (field.partition_key_index >= partition_values.size()) {

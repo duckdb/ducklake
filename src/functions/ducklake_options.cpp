@@ -42,6 +42,8 @@ static constexpr DuckLakeOptionMetadata DUCKLAKE_OPTIONS[] = {
                                "always write parquet"},
     {"sort_on_insert", "Whether to sort data on INSERT according to SET SORTED BY (default: true)"},
     {"skip_stats_columns", "Columns for which min/max bounds are not recorded (counts are still recorded)"},
+    {"parquet_column_names", "How data files name columns: 'current' (the column name when the file is written) or "
+                             "'field_id' (col-<field id>, stable across renames)"},
 };
 
 struct DuckLakeOptionsData : public TableFunctionData {

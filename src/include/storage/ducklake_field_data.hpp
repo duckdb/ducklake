@@ -62,6 +62,10 @@ public:
 	const vector<unique_ptr<DuckLakeFieldId>> &Children() const {
 		return children;
 	}
+	//! The name of this field in written data files: its name, or col-<field id> when writing by field id
+	Identifier FileName(bool by_field_id) const;
+	//! The field id a col-<field id> file name encodes
+	static optional_idx TryParseFileName(const string &file_name);
 	const DuckLakeFieldId &GetChildByIndex(idx_t index) const;
 	optional_ptr<const DuckLakeFieldId> GetChildByName(const Identifier &name) const;
 	unique_ptr<DuckLakeFieldId> Copy() const;

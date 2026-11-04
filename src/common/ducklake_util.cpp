@@ -727,6 +727,14 @@ static string ParseBoolean(ClientContext &context, const string &, const Value &
 	return DuckLakeUtil::BoolLiteral(val.CastAs(context, LogicalType::BOOLEAN).GetValue<bool>());
 }
 
+static string ParseParquetColumnNames(ClientContext &, const string &, const Value &val) {
+	auto mode = StringUtil::Lower(val.ToString());
+	if (mode != "current" && mode != "field_id") {
+		throw InvalidInputException("parquet_column_names must be 'current' or 'field_id', not \"%s\"", val.ToString());
+	}
+	return mode;
+}
+
 //! resolved against the table by the caller
 static string ParseSkippedStatsColumns(ClientContext &, const string &, const Value &) {
 	return string();
@@ -751,6 +759,7 @@ static const unordered_map<string, config_option_parser_t> &ConfigOptionParsers(
 	    {"write_deletion_vectors", ParseBoolean},
 	    {"sort_on_insert", ParseBoolean},
 	    {"skip_stats_columns", ParseSkippedStatsColumns},
+	    {"parquet_column_names", ParseParquetColumnNames},
 	};
 	return parsers;
 }

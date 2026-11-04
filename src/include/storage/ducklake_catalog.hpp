@@ -299,6 +299,13 @@ public:
 		return hive_file_pattern == "true";
 	}
 
+	//! Whether data files name their columns col-<field id> instead of the column name
+	bool WriteFieldIdColumnNames(SchemaIndex schema_id, TableIndex table_id,
+	                             optional_ptr<const map<string, string>> table_options = nullptr) const {
+		return GetConfigOption<string>("parquet_column_names", schema_id, table_id, "current", table_options) ==
+		       "field_id";
+	}
+
 	bool WriteDeletionVectors(SchemaIndex schema_id, TableIndex table_id,
 	                          optional_ptr<const map<string, string>> table_options = nullptr) const {
 		// puffin files are not encrypted, so an encrypted catalog writes parquet delete files

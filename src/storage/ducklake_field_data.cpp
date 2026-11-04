@@ -159,6 +159,30 @@ shared_ptr<DuckLakeFieldData> DuckLakeFieldData::FromColumns(const ColumnList &c
 	return field_data;
 }
 
+static constexpr const char *FIELD_ID_FILE_NAME_PREFIX = "col-";
+
+Identifier DuckLakeFieldId::FileName(bool by_field_id) const {
+	if (!by_field_id) {
+		return name;
+	}
+	return Identifier(FIELD_ID_FILE_NAME_PREFIX + to_string(GetFieldIndex().index));
+}
+
+optional_idx DuckLakeFieldId::TryParseFileName(const string &file_name) {
+	string prefix(FIELD_ID_FILE_NAME_PREFIX);
+	if (file_name.size() <= prefix.size() || !StringUtil::StartsWith(file_name, prefix)) {
+		return optional_idx();
+	}
+	idx_t result = 0;
+	for (idx_t i = prefix.size(); i < file_name.size(); i++) {
+		if (!StringUtil::CharacterIsDigit(file_name[i])) {
+			return optional_idx();
+		}
+		result = result * 10 + static_cast<idx_t>(file_name[i] - '0');
+	}
+	return result;
+}
+
 unique_ptr<DuckLakeFieldId> DuckLakeFieldId::Copy() const {
 	vector<unique_ptr<DuckLakeFieldId>> new_children;
 	for (auto &child : children) {

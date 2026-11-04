@@ -1,0 +1,225 @@
+# name: test/sql/settings/parquet_column_names_field_id.test
+# description: parquet_column_names = 'field_id' names every column col-<field id> in the data files, stable across renames
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/column_names_field_id/', METADATA_CATALOG 'metadata');
+
+statement ok
+USE dl;
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0);
+
+statement error
+CALL dl.set_option('parquet_column_names', 'physical');
+----
+parquet_column_names must be 'current' or 'field_id'
+
+statement ok
+CREATE TABLE t (id INT, b VARCHAR, s STRUCT(x INT, y VARCHAR), l STRUCT(z INT)[], m MAP(VARCHAR, INT));
+
+statement ok
+CALL dl.set_option('parquet_column_names', 'field_id', table_name => 't');
+
+statement ok
+INSERT INTO t VALUES (1, 'a', {'x': 1, 'y': 'p'}, [{'z': 1}], MAP {'k': 1}), (2, 'b', {'x': 2, 'y': 'q'}, [{'z': 2}], MAP {'k': 2});
+
+query IT
+SELECT field_id, name FROM parquet_schema('{DATA_PATH}/column_names_field_id/main/t/*.parquet') WHERE field_id IS NOT NULL ORDER BY field_id;
+----
+1	col-1
+2	col-2
+3	col-3
+4	col-4
+5	col-5
+6	col-6
+7	element
+8	col-8
+9	col-9
+10	key
+11	value
+
+query ITTTT
+SELECT id, b, s, l, m FROM t ORDER BY id;
+----
+1	a	{'x': 1, 'y': p}	[{'z': 1}]	{k=1}
+2	b	{'x': 2, 'y': q}	[{'z': 2}]	{k=2}
+
+# statistics are still recorded under the right column
+query III
+SELECT c.column_name, s.min_value, s.max_value FROM metadata.ducklake_file_column_stats s JOIN metadata.ducklake_column c USING (table_id, column_id) WHERE c.column_name IN ('id', 'b', 'x') ORDER BY 1;
+----
+b	a	b
+id	1	2
+x	1	2
+
+# a rename changes no file name
+statement ok
+ALTER TABLE t RENAME COLUMN b TO b2;
+
+statement ok
+ALTER TABLE t RENAME COLUMN s.x TO x2;
+
+statement ok
+INSERT INTO t VALUES (3, 'c', {'x2': 3, 'y': 'r'}, [{'z': 3}], MAP {'k': 3});
+
+query I
+SELECT DISTINCT name FROM parquet_schema('{DATA_PATH}/column_names_field_id/main/t/*.parquet') WHERE field_id = 2;
+----
+col-2
+
+query ITT
+SELECT id, b2, s.x2 FROM t ORDER BY id;
+----
+1	a	1
+2	b	2
+3	c	3
+
+# compaction writes the same names
+statement ok
+DELETE FROM t WHERE id = 1;
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl', 't');
+
+statement ok
+CALL ducklake_rewrite_data_files('dl', 't', delete_threshold => 0);
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true);
+
+query I
+SELECT DISTINCT name FROM parquet_schema('{DATA_PATH}/column_names_field_id/main/t/*.parquet') WHERE field_id = 2;
+----
+col-2
+
+query ITT
+SELECT id, b2, s.x2 FROM t ORDER BY id;
+----
+2	b	2
+3	c	3
+
+# inlined rows are flushed under the same names
+statement ok
+CREATE TABLE fl (id INT, v VARCHAR);
+
+statement ok
+CALL dl.set_option('parquet_column_names', 'field_id', table_name => 'fl');
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10, table_name => 'fl');
+
+statement ok
+INSERT INTO fl VALUES (1, 'x');
+
+statement ok
+CALL ducklake_flush_inlined_data('dl');
+
+query T
+SELECT list(name ORDER BY field_id) FROM parquet_schema('{DATA_PATH}/column_names_field_id/main/fl/*.parquet') WHERE field_id IS NOT NULL AND NOT starts_with(name, '_ducklake_internal');
+----
+[col-1, col-2]
+
+query IT
+SELECT * FROM fl;
+----
+1	x
+
+# hive partition directories use the same names
+statement ok
+CREATE TABLE p (id INT, region VARCHAR);
+
+statement ok
+CALL dl.set_option('parquet_column_names', 'field_id', table_name => 'p');
+
+statement ok
+ALTER TABLE p SET PARTITIONED BY (region);
+
+statement ok
+INSERT INTO p VALUES (1, 'eu'), (2, 'us');
+
+query T
+SELECT DISTINCT regexp_extract(f.path, 'col-[0-9]+=[a-z]+') FROM metadata.ducklake_data_file f JOIN metadata.ducklake_table t USING (table_id) WHERE t.table_name = 'p' ORDER BY 1;
+----
+col-2=eu
+col-2=us
+
+query IT
+SELECT * FROM p WHERE region = 'us';
+----
+2	us
+
+# compaction of a partitioned table keeps the directory names
+statement ok
+INSERT INTO p VALUES (3, 'eu');
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl', 'p');
+
+query IT
+SELECT DISTINCT regexp_extract(f.path, 'col-[0-9]+=[a-z]+'), count(*) OVER () FROM metadata.ducklake_data_file f JOIN metadata.ducklake_table t USING (table_id) WHERE t.table_name = 'p' AND f.end_snapshot IS NULL ORDER BY 1;
+----
+col-2=eu	2
+col-2=us	2
+
+query IT
+SELECT * FROM p ORDER BY id;
+----
+1	eu
+2	us
+3	eu
+
+# the default keeps the column names
+statement ok
+CREATE TABLE c (id INT, b VARCHAR);
+
+statement ok
+INSERT INTO c VALUES (1, 'a');
+
+query T
+SELECT list(name ORDER BY field_id) FROM parquet_schema('{DATA_PATH}/column_names_field_id/main/c/*.parquet') WHERE field_id IS NOT NULL;
+----
+[id, b]
+
+# the option declared at CREATE, also inside the creating transaction and with CTAS
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0);
+
+statement ok
+BEGIN;
+
+statement ok
+CREATE TABLE w (id INT, b VARCHAR) WITH (parquet_column_names = 'field_id');
+
+statement ok
+INSERT INTO w VALUES (1, 'a');
+
+statement ok
+CREATE TABLE w_ctas WITH (parquet_column_names = 'field_id') AS SELECT 1 AS id, 'a' AS b;
+
+statement ok
+COMMIT;
+
+query T
+SELECT list(name ORDER BY field_id) FROM parquet_schema('{DATA_PATH}/column_names_field_id/main/w/*.parquet') WHERE field_id IS NOT NULL;
+----
+[col-1, col-2]
+
+query T
+SELECT list(name ORDER BY field_id) FROM parquet_schema('{DATA_PATH}/column_names_field_id/main/w_ctas/*.parquet') WHERE field_id IS NOT NULL;
+----
+[col-1, col-2]
+
+query IIII
+SELECT (SELECT id FROM w), (SELECT b FROM w), (SELECT id FROM w_ctas), (SELECT b FROM w_ctas);
+----
+1	a	1	a

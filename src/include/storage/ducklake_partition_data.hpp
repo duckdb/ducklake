@@ -67,7 +67,8 @@ struct DuckLakePartitionUtils {
 	//! Get the hive partition key name for a partition field, while also resolving name collisions e.g., year_dt
 	static string GetPartitionKeyName(DuckLakeTransformType transform_type, const string &field_name,
 	                                  case_insensitive_set_t &used_names);
-	static vector<string> GetPartitionKeyNames(const DuckLakePartition &partition, const DuckLakeFieldData &field_data);
+	static vector<string> GetPartitionKeyNames(const DuckLakePartition &partition, const DuckLakeFieldData &field_data,
+	                                           bool by_field_id = false);
 
 	//! Whether the transform is an Iceberg-style epoch transform (units since 1970-01-01)
 	static bool IsEpochTransform(DuckLakeTransformType transform_type);

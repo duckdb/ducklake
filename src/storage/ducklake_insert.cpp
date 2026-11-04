@@ -157,12 +157,35 @@ static bool IsLeafColumnStats(const vector<Value> &col_stats) {
 	return false;
 }
 
+//! Replace the col-<field id> names of a stats path with the field names, up to a variant's own paths
+static void FieldNamesFromFileNames(const DuckLakeFieldData &field_data, vector<string> &column_names) {
+	for (auto &name : column_names) {
+		auto field_index = DuckLakeFieldId::TryParseFileName(name);
+		if (!field_index.IsValid()) {
+			continue;
+		}
+		auto field_id = field_data.GetByFieldIndex(FieldIndex(field_index.GetIndex()));
+		if (!field_id) {
+			continue;
+		}
+		name = field_id->Name().GetIdentifierName();
+		if (field_id->Type().id() == LogicalTypeId::VARIANT) {
+			return;
+		}
+	}
+}
+
 void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, DataChunk &chunk,
                                      const string &encryption_key, optional_idx partition_id, bool set_snapshot_id) {
 	auto skipped_fields = global_state.table.GetSkippedStatsFields();
 	auto &field_data = global_state.table.GetFieldData();
 	auto snapshot_id_name = InternalColumnName(field_data, "_ducklake_internal_snapshot_id");
 	auto row_id_name = InternalColumnName(field_data, "_ducklake_internal_row_id");
+	auto &table_entry = global_state.table;
+	auto &table_catalog = table_entry.ParentCatalog().Cast<DuckLakeCatalog>();
+	auto by_field_id =
+	    table_catalog.WriteFieldIdColumnNames(table_entry.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId(),
+	                                          table_entry.GetTableId(), &table_entry.GetTableOptions());
 	for (idx_t r = 0; r < chunk.size(); r++) {
 		DuckLakeDataFile data_file;
 		data_file.file_name = chunk.GetValue(0, r).GetValue<string>();
@@ -223,6 +246,9 @@ void DuckLakeInsert::AddWrittenFiles(DuckLakeInsertGlobalState &global_state, Da
 				continue;
 			}
 
+			if (by_field_id) {
+				FieldNamesFromFileNames(field_data, column_names);
+			}
 			optional_idx name_offset;
 			auto &field_id = table.GetFieldId(StringsToIdentifiers(column_names), &name_offset);
 			if (name_offset.IsValid()) {
@@ -368,7 +394,12 @@ CopyFunctionCatalogEntry &DuckLakeFunctions::GetCopyFunction(ClientContext &cont
 	return *entry;
 }
 
-static Value GetFieldIdValue(const DuckLakeFieldId &field_id) {
+//! The name of a nested field in the file: only struct fields are renamed, list and map entries have fixed names
+static Identifier ChildFileName(const DuckLakeFieldId &parent, const DuckLakeFieldId &child, bool by_field_id) {
+	return child.FileName(by_field_id && parent.Type().id() == LogicalTypeId::STRUCT);
+}
+
+static Value GetFieldIdValue(const DuckLakeFieldId &field_id, bool by_field_id) {
 	auto field_id_value = Value::BIGINT(NumericCast<int64_t>(field_id.GetFieldIndex().index));
 	if (!field_id.HasChildren()) {
 		// primitive type - return the field-id directly
@@ -378,9 +409,47 @@ static Value GetFieldIdValue(const DuckLakeFieldId &field_id) {
 	child_list_t<Value> values;
 	values.emplace_back("__duckdb_field_id", std::move(field_id_value));
 	for (auto &child : field_id.Children()) {
-		values.emplace_back(child->Name(), GetFieldIdValue(*child));
+		values.emplace_back(ChildFileName(field_id, *child, by_field_id), GetFieldIdValue(*child, by_field_id));
 	}
 	return Value::STRUCT(std::move(values));
+}
+
+//! The type a column is written with, its struct fields named as in the file
+static LogicalType GetFileType(const LogicalType &type, const DuckLakeFieldId &field_id) {
+	auto &children = field_id.Children();
+	switch (type.id()) {
+	case LogicalTypeId::STRUCT: {
+		child_list_t<LogicalType> child_types;
+		auto &struct_children = StructType::GetChildTypes(type);
+		for (idx_t i = 0; i < struct_children.size(); i++) {
+			auto child = field_id.GetChildByName(struct_children[i].first);
+			if (!child) {
+				child_types.push_back(struct_children[i]);
+				continue;
+			}
+			child_types.emplace_back(child->FileName(true), GetFileType(struct_children[i].second, *child));
+		}
+		return LogicalType::STRUCT(std::move(child_types));
+	}
+	case LogicalTypeId::LIST:
+		if (children.size() != 1) {
+			return type;
+		}
+		return LogicalType::LIST(GetFileType(ListType::GetChildType(type), *children[0]));
+	case LogicalTypeId::ARRAY:
+		if (children.size() != 1) {
+			return type;
+		}
+		return LogicalType::ARRAY(GetFileType(ArrayType::GetChildType(type), *children[0]), ArrayType::GetSize(type));
+	case LogicalTypeId::MAP:
+		if (children.size() != 2) {
+			return type;
+		}
+		return LogicalType::MAP(GetFileType(MapType::KeyType(type), *children[0]),
+		                        GetFileType(MapType::ValueType(type), *children[1]));
+	default:
+		return type;
+	}
 }
 
 static bool WriteRowId(InsertVirtualColumns virtual_columns) {
@@ -403,11 +472,11 @@ Identifier DuckLakeInsert::InternalColumnName(const DuckLakeFieldData &field_dat
 	return names.back();
 }
 
-static Value WrittenFieldIds(DuckLakeFieldData &field_data, InsertVirtualColumns virtual_columns) {
+static Value WrittenFieldIds(DuckLakeFieldData &field_data, InsertVirtualColumns virtual_columns, bool by_field_id) {
 	child_list_t<Value> values;
 	for (idx_t c_idx = 0; c_idx < field_data.GetColumnCount(); c_idx++) {
 		auto &field_id = field_data.GetByRootIndex(PhysicalIndex(c_idx));
-		values.emplace_back(field_id.Name(), GetFieldIdValue(field_id));
+		values.emplace_back(field_id.FileName(by_field_id), GetFieldIdValue(field_id, by_field_id));
 	}
 	if (WriteRowId(virtual_columns)) {
 		values.emplace_back(DuckLakeInsert::InternalColumnName(field_data, "_ducklake_internal_row_id"),
@@ -521,7 +590,10 @@ static void GeneratePartitionExpressions(ClientContext &context, DuckLakeCopyInp
 	}
 	// push the partition expressions
 	auto &fields = copy_input.partition_data->fields;
-	auto key_names = DuckLakePartitionUtils::GetPartitionKeyNames(*copy_input.partition_data, *copy_input.field_data);
+	auto by_field_id = copy_input.catalog.WriteFieldIdColumnNames(copy_input.schema_id, copy_input.table_id,
+	                                                              &copy_input.table_options);
+	auto key_names =
+	    DuckLakePartitionUtils::GetPartitionKeyNames(*copy_input.partition_data, *copy_input.field_data, by_field_id);
 	for (idx_t part_idx = 0; part_idx < fields.size(); part_idx++) {
 		auto expr = GetPartitionExpression(context, copy_input, fields[part_idx]);
 		copy_options.copy->names.push_back(Identifier(key_names[part_idx]));
@@ -545,12 +617,13 @@ unique_ptr<CopyInfo> DuckLakeInsert::GetParquetCopyInfo(const string &file_path,
 
 DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckLakeCopyInput &copy_input) {
 	auto &catalog = copy_input.catalog;
-	// generate the field ids to be written by the parquet writer
-	auto info =
-	    GetParquetCopyInfo(copy_input.data_path, WrittenFieldIds(*copy_input.field_data, copy_input.virtual_columns),
-	                       copy_input.encryption_key);
 	auto &schema_id = copy_input.schema_id;
 	auto &table_id = copy_input.table_id;
+	auto by_field_id = catalog.WriteFieldIdColumnNames(schema_id, table_id, &copy_input.table_options);
+	// generate the field ids to be written by the parquet writer
+	auto info = GetParquetCopyInfo(copy_input.data_path,
+	                               WrittenFieldIds(*copy_input.field_data, copy_input.virtual_columns, by_field_id),
+	                               copy_input.encryption_key);
 	static const pair<const char *, const char *> PARQUET_OPTIONS[] = {
 	    {"parquet_compression", "compression"},
 	    {"parquet_version", "parquet_version"},
@@ -588,6 +661,13 @@ DuckLakeCopyOptions DuckLakeInsert::GetCopyOptions(ClientContext &context, DuckL
 
 	auto names_to_write = StringsToIdentifiers(copy_input.columns.GetColumnNames());
 	auto types_to_write = copy_input.columns.GetColumnTypes();
+	if (by_field_id) {
+		for (idx_t c_idx = 0; c_idx < names_to_write.size(); c_idx++) {
+			auto &field_id = copy_input.field_data->GetByRootIndex(PhysicalIndex(c_idx));
+			names_to_write[c_idx] = field_id.FileName(true);
+			types_to_write[c_idx] = GetFileType(types_to_write[c_idx], field_id);
+		}
+	}
 	if (WriteRowId(copy_input.virtual_columns)) {
 		names_to_write.push_back(InternalColumnName(*copy_input.field_data, "_ducklake_internal_row_id"));
 		types_to_write.push_back(LogicalType::BIGINT);
