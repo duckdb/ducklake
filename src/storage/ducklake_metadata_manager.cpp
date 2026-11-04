@@ -2350,8 +2350,8 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 	return StringUtil::Format("(data.partition_id IS DISTINCT FROM %d OR (%s))", partition_data->partition_id, result);
 }
 
-//! Every statistics CTE adds a join to the file list query, which the expression depth limit bounds
-static constexpr idx_t MAX_STATS_CTES = 256;
+//! Every statistics CTE adds a join to the file list query, whose planning grows fast with their number
+static constexpr idx_t MAX_STATS_CTES = 32;
 
 string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot,
                                                       const FilterPushdownInfo *filter_info,
