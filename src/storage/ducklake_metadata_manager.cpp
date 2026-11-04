@@ -2394,7 +2394,7 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 			}
 			if (filter_result.required_ctes.count(column_field_index) == 0 &&
 			    filter_result.required_ctes.size() >= max_ctes) {
-				break;
+				continue;
 			}
 			runtime_filter_stats_columns.push_back(column_field_index);
 			AddCTERequirement(filter_result.required_ctes, column_field_index, runtime_stats);
