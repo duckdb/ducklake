@@ -5154,9 +5154,8 @@ WHERE snapshot_id = (
 	return snapshot;
 }
 
-//! An expiry deletes the rows of snapshots, whose commit times are gone, and keeps their ids in the expired_snapshot
-//! entries of its own changes. Like Iceberg's snapshot log, time travel by timestamp only reaches the snapshots after
-//! the newest expired one.
+//! An expiry deletes the rows of snapshots, whose commit times are gone, and lists their ids in the changes of its own
+//! snapshot, so time travel by timestamp only reaches the snapshots after the newest expired one
 void DuckLakeMetadataManager::CheckSnapshotAfterExpiredGap(const DuckLakeSnapshot &snapshot, const Value &timestamp,
                                                            idx_t newest_snapshot_id,
                                                            const set<idx_t> &expired_in_transaction) {
