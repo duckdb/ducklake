@@ -453,8 +453,7 @@ private:
 	};
 	//! Puts entries in the object cache and remembers them, under one lock so the entry kept is the one remembered
 	void PutCacheEntry(string key, shared_ptr<ObjectCacheEntry> entry);
-	//! The stats of a table from the last full load when no later commit changed it, and the changed tables to read
-	//! when this lookup read the changes; false when every table has to be read again
+	//! The kept stats of a table no later commit changed, and the tables to read when this lookup read the changes
 	bool TryGetUnchangedTableStats(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot, TableIndex table_id,
 	                               idx_t table_count, bool read_changes,
 	                               shared_ptr<DuckLakeTableStatsCacheEntry> &result, vector<TableIndex> &load_tables);
