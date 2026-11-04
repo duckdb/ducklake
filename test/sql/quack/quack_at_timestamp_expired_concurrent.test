@@ -71,6 +71,12 @@ SELECT list(snapshot_id) FROM l.snapshots()
 ----
 [0, 1, 4, 5, 6]
 
+# the same instant as before the expiry, answered from the snapshot cache of the transaction
+statement error con2
+SELECT count(*) FROM l.t AT (TIMESTAMP => getvariable('t1'))
+----
+Cannot time travel to timestamp
+
 statement error con2
 SELECT * FROM l.t AT (TIMESTAMP => getvariable('t2') + INTERVAL 1 MICROSECOND)
 ----
