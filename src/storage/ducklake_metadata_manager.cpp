@@ -5151,7 +5151,46 @@ WHERE snapshot_id = (
 		throw InvalidInputException("No snapshot found at %s %s", StringUtil::Lower(unit.GetIdentifierName()),
 		                            val.ToString());
 	}
+	if (bound == SnapshotBound::TIME_TRAVEL && unit == "timestamp") {
+		CheckSnapshotAfterExpiredGap(*snapshot, val, newest_snapshot_id);
+	}
 	return snapshot;
+}
+
+//! Snapshot ids grow by one per commit, so a missing id is an expired snapshot whose commit time is gone. Like
+//! Iceberg's snapshot log, time travel by timestamp only reaches the snapshots after the newest such gap.
+void DuckLakeMetadataManager::CheckSnapshotAfterExpiredGap(const DuckLakeSnapshot &snapshot, const Value &timestamp,
+                                                           idx_t newest_snapshot_id) {
+	auto result = Query(StringUtil::Format(R"(
+SELECT first_after_gap,
+	(SELECT snapshot_time FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id = first_after_gap),
+	(SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id < first_after_gap)
+FROM (
+	SELECT MAX(s.snapshot_id) AS first_after_gap
+	FROM {METADATA_CATALOG}.ducklake_snapshot s
+	WHERE s.snapshot_id <= %llu
+	AND s.snapshot_id > (SELECT MIN(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot)
+	AND NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_snapshot p WHERE p.snapshot_id = s.snapshot_id - 1)
+) gaps;)",
+	                                       newest_snapshot_id));
+	result->ThrowIfError("Failed to query the expired snapshots of DuckLake: ");
+	for (auto &row : *result) {
+		if (row.IsNull(0)) {
+			return;
+		}
+		auto first_after_gap = row.GetValue<idx_t>(0);
+		if (snapshot.snapshot_id >= first_after_gap) {
+			return;
+		}
+		auto gap_time = row.GetValue<string>(1);
+		auto last_before_gap = row.GetValue<idx_t>(2);
+		throw InvalidInputException(
+		    "Cannot time travel to timestamp %s: snapshots %llu to %llu were expired and their commit times are not "
+		    "kept, so the snapshot current at that time is unknown. Time travel by timestamp reaches snapshot %llu "
+		    "(%s) and later; it also refuses the earlier times at which snapshot %llu or an older snapshot was "
+		    "current. Use AT (VERSION => ...) to read a remaining older snapshot.",
+		    timestamp.ToString(), last_before_gap + 1, first_after_gap - 1, first_after_gap, gap_time, last_before_gap);
+	}
 }
 
 template <class T>
