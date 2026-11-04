@@ -2465,8 +2465,8 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 	lock_guard<mutex> guard(snapshot_lock);
 	auto entry = snapshot_cache.find(snapshot_value);
 	if (entry != snapshot_cache.end()) {
-		if (check_expired && metadata_manager->CommitsEachStatement()) {
-			// the catalog shows the expiries of other transactions, which change what the timestamp reaches
+		if (check_expired) {
+			// metadata reads on Quack or under READ COMMITTED show the expiries of other transactions meanwhile
 			metadata_manager->CheckSnapshotAfterExpiredGap(entry->second, version, newest_snapshot_id,
 			                                               expired_snapshot_ids);
 		}
