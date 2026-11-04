@@ -1072,7 +1072,7 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 	// a commit reads the changes of no further snapshot, its own lookups name the tables it needs
 	if (TryGetUnchangedTableStats(transaction, snapshot, table_id, table_map.size(), !load_tables, unchanged,
 	                              changed_tables)) {
-		if (unchanged) {
+		if (unchanged && changed_tables.empty()) {
 			return CachedTableStats(std::move(unchanged));
 		}
 		if (load_tables) {
@@ -1088,12 +1088,18 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 	}
 	if (!load_all) {
 		unordered_set<idx_t> seen;
-		cache_tables.push_back(table_id);
-		seen.insert(table_id.index);
+		if (!unchanged) {
+			cache_tables.push_back(table_id);
+			seen.insert(table_id.index);
+		}
 		for (auto &load_table : changed_tables) {
 			if (table_map.find(load_table) != table_map.end() && seen.insert(load_table.index).second) {
 				cache_tables.push_back(load_table);
 			}
+		}
+		if (cache_tables.empty()) {
+			// every changed table was dropped since, an empty list would read the whole lake
+			return CachedTableStats(std::move(unchanged));
 		}
 	}
 	auto global_stats =
@@ -1126,8 +1132,10 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 			has_stats_load_snapshot = true;
 			stats_changes_snapshot_id = snapshot.snapshot_id;
 			stats_changed_tables.clear();
-			stats_changed_tables_loaded = true;
 		}
+	}
+	if (unchanged) {
+		return CachedTableStats(std::move(unchanged));
 	}
 	if (!requested_entry) {
 		return nullptr;
@@ -1141,6 +1149,7 @@ bool DuckLakeCatalog::TryGetUnchangedTableStats(DuckLakeTransaction &transaction
                                                 vector<TableIndex> &load_tables) {
 	DuckLakeSnapshot base;
 	bool table_changed;
+	bool changes_read = false;
 	{
 		unique_lock<mutex> guard(stats_load_lock);
 		if (!has_stats_load_snapshot) {
@@ -1172,28 +1181,26 @@ bool DuckLakeCatalog::TryGetUnchangedTableStats(DuckLakeTransaction &transaction
 			}
 			stats_changes_snapshot_id = snapshot.snapshot_id;
 			stats_changed_tables = std::move(changed_tables);
-			stats_changed_tables_loaded = false;
+			changes_read = true;
 		}
 		// a commit that changed many tables reads the stats of every table again
 		if (stats_changed_tables.size() * 2 > table_count) {
 			return false;
 		}
 		table_changed = stats_changed_tables.find(table_id) != stats_changed_tables.end();
+		// the lookup that reads the changes of a snapshot reads the stats of its changed tables together with them
+		if (changes_read) {
+			load_tables.assign(stats_changed_tables.begin(), stats_changed_tables.end());
+		}
 	}
 	if (!table_changed) {
 		auto entry =
 		    GetObjectCacheInstance().Get<DuckLakeTableStatsCacheEntry>(StatsCacheKey(base.next_file_id, table_id));
 		if (entry && entry->schema_version == snapshot.schema_version) {
 			result = std::move(entry);
-			return true;
 		}
 	}
-	// the table is read again, with the changed tables when no lookup read them for this snapshot yet
-	lock_guard<mutex> guard(stats_load_lock);
-	if (stats_changes_snapshot_id == snapshot.snapshot_id && !stats_changed_tables_loaded) {
-		stats_changed_tables_loaded = true;
-		load_tables.assign(stats_changed_tables.begin(), stats_changed_tables.end());
-	}
+	// a changed table, or one whose entry of the last full load is gone, is read again
 	return true;
 }
 
