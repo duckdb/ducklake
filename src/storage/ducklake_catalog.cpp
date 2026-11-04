@@ -1114,7 +1114,7 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 	shared_ptr<DuckLakeTableStatsCacheEntry> requested_entry;
 	vector<pair<TableIndex, shared_ptr<ObjectCacheEntry>>> cache_entries_to_put;
 	cache_entries_to_put.reserve(cache_tables.size());
-	unordered_map<idx_t, shared_ptr<DuckLakeTableStatsCacheEntry>> load_entries;
+	unordered_map<idx_t, weak_ptr<DuckLakeTableStatsCacheEntry>> load_entries;
 	for (auto &current_id : cache_tables) {
 		shared_ptr<DuckLakeTableStatsCacheEntry> entry;
 		auto stats_entry = lake_stats->table_stats.find(current_id);
@@ -1142,6 +1142,9 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 			stats_load_entries = std::move(load_entries);
 			stats_changes_snapshot_id = snapshot.snapshot_id;
 			stats_changed_tables.clear();
+		} else if (stats_load_snapshot.snapshot_id == snapshot.snapshot_id) {
+			// a load at the snapshot of the kept entries renews the ones the object cache evicted
+			stats_load_entries = std::move(load_entries);
 		}
 	}
 	if (unchanged) {
@@ -1203,15 +1206,19 @@ bool DuckLakeCatalog::TryGetUnchangedTableStats(DuckLakeTransaction &transaction
 			return false;
 		}
 		table_changed = stats_changed_tables.find(table_id) != stats_changed_tables.end();
-		// the lookup that reads the changes of a snapshot reads the stats of its changed tables together with them
-		if (changes_read) {
-			load_tables.assign(stats_changed_tables.begin(), stats_changed_tables.end());
-		}
 		if (!table_changed) {
 			auto entry = stats_load_entries.find(table_id.index);
 			if (entry != stats_load_entries.end()) {
-				result = entry->second;
+				result = entry->second.lock();
+				if (!result) {
+					// the object cache evicted the entry, every table is read again
+					return false;
+				}
 			}
+		}
+		// the lookup that reads the changes of a snapshot reads the stats of its changed tables together with them
+		if (changes_read) {
+			load_tables.assign(stats_changed_tables.begin(), stats_changed_tables.end());
 		}
 	}
 	// a changed table, or one the full load did not know, is read again

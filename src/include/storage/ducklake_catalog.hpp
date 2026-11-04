@@ -506,8 +506,8 @@ private:
 	//! The latest snapshot whose stats were read for every table, later snapshots keep them for unchanged tables
 	DuckLakeSnapshot stats_load_snapshot;
 	bool has_stats_load_snapshot = false;
-	//! The entries of that load by table id, kept here since an older snapshot can share a next_file_id and its key
-	unordered_map<idx_t, shared_ptr<DuckLakeTableStatsCacheEntry>> stats_load_entries;
+	//! The entries of that load by table id, since an older snapshot can share their keys, an expired one was evicted
+	unordered_map<idx_t, weak_ptr<DuckLakeTableStatsCacheEntry>> stats_load_entries;
 	//! The latest snapshot whose changes since stats_load_snapshot are known, and the tables they changed
 	idx_t stats_changes_snapshot_id = 0;
 	set<TableIndex> stats_changed_tables;

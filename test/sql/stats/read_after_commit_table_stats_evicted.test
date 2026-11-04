@@ -1,0 +1,67 @@
+# name: test/sql/stats/read_after_commit_table_stats_evicted.test
+# description: after the object cache evicted the stats of the last full load, a read loads them again
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET temp_directory = ''
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lk (DATA_PATH '{DATA_PATH}/read_after_commit_table_stats_evicted/', DATA_INLINING_ROW_LIMIT 10000)
+
+statement ok
+CREATE TABLE lk.a AS SELECT 1 i
+
+statement ok
+CREATE TABLE lk.b AS SELECT 2 i
+
+# the first read loads the stats of every table
+query I
+SELECT max(i) FROM lk.a
+----
+1
+
+statement ok
+INSERT INTO lk.b VALUES (3)
+
+# the unchanged table keeps its stats from the full load
+query I
+SELECT max(i) FROM lk.a
+----
+1
+
+# the limit cannot be met, but the object cache is emptied trying
+statement error
+SET memory_limit = '1B'
+----
+could not free up enough memory
+
+statement ok
+SET VARIABLE accounted = (SELECT coalesce(sum(memory_usage_bytes), 0) FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+query I
+SELECT max(i) FROM lk.a
+----
+1
+
+statement ok
+CALL disable_logging()
+
+# evicted stats are read again, only accounted ones are used from the full load
+query I
+SELECT getvariable('accounted') > 0 OR count(*) > 0 FROM duckdb_logs WHERE type = 'QueryLog' AND regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count')
+----
+true
