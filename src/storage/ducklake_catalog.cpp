@@ -1224,7 +1224,7 @@ bool DuckLakeCatalog::TryGetUnchangedTableStats(DuckLakeTransaction &transaction
 			if (entry != stats_load_entries.end()) {
 				result = entry->second.lock();
 				if (!result) {
-					// the object cache evicted the entry, every table is read again
+					// the object cache no longer holds the entry, every table is read again
 					return false;
 				}
 			}
