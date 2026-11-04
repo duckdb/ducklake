@@ -179,49 +179,32 @@ snapshots 2 to 3 were expired
 statement ok
 ROLLBACK
 
-# snapshots expired at the start of the history leave no gap, times before the remaining ones find no snapshot
+# a second expiry adds a newer gap, which refuses the times that were fine before it, while the older gap stays
+statement ok
+SET VARIABLE t_before = (SELECT max(snapshot_time) FROM l.snapshots())
+
 statement ok
 INSERT INTO l.t VALUES (4)
 
 statement ok
-CALL ducklake_expire_snapshots('l', versions => [0, 1])
-
-query I
-SELECT min(snapshot_id) FROM l.snapshots()
-----
-4
-
-statement error
-SELECT * FROM l.t AT (TIMESTAMP => getvariable('t1'))
-----
-No snapshot found at timestamp
-
-query I
-SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => getvariable('t4'))
-----
-[1, 2, 3]
-
-# a later expiry adds a newer gap, which refuses the times that were fine before it
-statement ok
-SET VARIABLE t_before = (SELECT max(snapshot_time) FROM l.snapshots())
+SET VARIABLE s_insert4 = (SELECT max(snapshot_id) FROM l.snapshots())
 
 statement ok
 INSERT INTO l.t VALUES (5)
 
 statement ok
-SET VARIABLE s_insert5 = (SELECT max(snapshot_id) FROM l.snapshots())
+SET VARIABLE t_insert5 = (SELECT max(snapshot_time) FROM l.snapshots())
 
 statement ok
-INSERT INTO l.t VALUES (6)
-
-statement ok
-SET VARIABLE t_insert6 = (SELECT max(snapshot_time) FROM l.snapshots())
-
-statement ok
-CALL ducklake_expire_snapshots('l', versions => [getvariable('s_insert5')])
+CALL ducklake_expire_snapshots('l', versions => [getvariable('s_insert4')])
 
 query I
-SELECT count(*) FROM l.snapshots() WHERE snapshot_id = getvariable('s_insert5')
+SELECT list(snapshot_id) FROM l.snapshots() WHERE snapshot_id <= 4
+----
+[0, 1, 4]
+
+query I
+SELECT count(*) FROM l.snapshots() WHERE snapshot_id = getvariable('s_insert4')
 ----
 0
 
@@ -235,12 +218,55 @@ SELECT * FROM l.t AT (TIMESTAMP => getvariable('t_before'))
 ----
 was expired and its commit time is not kept
 
-query I
-SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => getvariable('t_insert6'))
+statement error
+SELECT * FROM l.t AT (TIMESTAMP => getvariable('t1'))
 ----
-[1, 2, 3, 4, 5, 6]
+was expired and its commit time is not kept
+
+query I
+SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => getvariable('t_insert5'))
+----
+[1, 2, 3, 4, 5]
+
+# snapshots expired at the start of the history leave no gap, times before the remaining ones find no snapshot
+statement ok
+CALL ducklake_expire_snapshots('l', versions => [0, 1])
+
+query I
+SELECT min(snapshot_id) FROM l.snapshots()
+----
+4
+
+statement error
+SELECT * FROM l.t AT (TIMESTAMP => getvariable('t1'))
+----
+No snapshot found at timestamp
+
+statement error
+SELECT * FROM l.t AT (TIMESTAMP => getvariable('t4'))
+----
+was expired and its commit time is not kept
+
+# once the last survivor before the newer gap is expired as well, that gap is gone too
+statement ok
+CALL ducklake_expire_snapshots('l', older_than => getvariable('t_insert5'))
+
+query I
+SELECT min(snapshot_id) = getvariable('s_insert4') + 1 FROM l.snapshots()
+----
+true
+
+statement error
+SELECT * FROM l.t AT (TIMESTAMP => getvariable('t4'))
+----
+No snapshot found at timestamp
+
+query I
+SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => getvariable('t_insert5'))
+----
+[1, 2, 3, 4, 5]
 
 query I
 SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => now())
 ----
-[1, 2, 3, 4, 5, 6]
+[1, 2, 3, 4, 5]
