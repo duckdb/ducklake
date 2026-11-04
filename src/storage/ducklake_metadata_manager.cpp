@@ -5,6 +5,7 @@
 #include "duckdb/common/exception/conversion_exception.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_transaction.hpp"
+#include "storage/ducklake_transaction_changes.hpp"
 #include "storage/ducklake_transaction_manager.hpp"
 #include "storage/ducklake_variant_stats.hpp"
 #include "duckdb/logging/logger.hpp"
@@ -5742,24 +5743,16 @@ string DuckLakeMetadataManager::WriteCompactions(const vector<DuckLakeCompactedF
 	}
 }
 
-//! Selects the files that the filter matches or whose range no remaining snapshot lies in
-static string UnusedFilesQuery(const string &file_table, const string &file_id_column, const string &filter) {
+//! Selects the files that the filter matches or whose range no remaining snapshot lies in, minus the retained ones
+static string UnusedFilesQuery(const string &file_table, const string &file_id_column, const string &filter,
+                               const string &retained_filter) {
 	// only the first remaining snapshot at or after begin_snapshot matters
-	// a file ended by a rewrite stays while the rewrite snapshot exists, the change feed reads its changes
 	return StringUtil::Format(R"(
 SELECT f.%s, f.table_id, f.path, f.path_is_relative
 FROM {METADATA_CATALOG}.%s f
 ASOF LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot s ON f.begin_snapshot <= s.snapshot_id
-WHERE %s(f.end_snapshot IS NOT NULL AND (s.snapshot_id IS NULL OR s.snapshot_id >= f.end_snapshot)
-AND NOT EXISTS (
-	SELECT 1
-	FROM {METADATA_CATALOG}.ducklake_snapshot_changes changes
-	JOIN {METADATA_CATALOG}.ducklake_snapshot snap ON snap.snapshot_id = changes.snapshot_id
-	WHERE changes.snapshot_id = f.end_snapshot
-	AND ',' || regexp_replace(changes.changes_made, '"[^"]*"', '', 'g') || ',' LIKE
-	    '%%,rewrite_delete:' || CAST(f.table_id AS VARCHAR) || ',%%'
-));)",
-	                          file_id_column, file_table, filter);
+WHERE %s(f.end_snapshot IS NOT NULL AND (s.snapshot_id IS NULL OR s.snapshot_id >= f.end_snapshot)%s);)",
+	                          file_id_column, file_table, filter, retained_filter);
 }
 
 vector<DuckLakeSnapshotTagInfo> DuckLakeMetadataManager::GetSnapshotTags(bool with_snapshot_time) {
@@ -5866,6 +5859,26 @@ void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo>
 	CleanupExpiredSnapshots(snapshots);
 }
 
+string DuckLakeMetadataManager::RewrittenFilesFilter() {
+	// the quoted names of the changes are parsed, so a table name cannot spoof the rewrite marker
+	auto result = Query(R"(
+SELECT changes.snapshot_id, changes.changes_made
+FROM {METADATA_CATALOG}.ducklake_snapshot_changes changes
+JOIN {METADATA_CATALOG}.ducklake_snapshot snap ON snap.snapshot_id = changes.snapshot_id
+WHERE changes.changes_made LIKE '%rewrite_delete:%';)");
+	result->ThrowIfError("Failed to get rewrite snapshots from DuckLake: ");
+	string filter;
+	for (auto &row : *result) {
+		auto changes = SnapshotChangeInformation::ParseChangesMade(row.GetValue<string>(1));
+		if (changes.tables_rewrite_delete.empty()) {
+			continue;
+		}
+		filter += StringUtil::Format("\nAND NOT (f.end_snapshot = %d AND f.table_id IN (%s))", row.GetValue<idx_t>(0),
+		                             GenerateIDList(changes.tables_rewrite_delete));
+	}
+	return filter;
+}
+
 void DuckLakeMetadataManager::CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
 	unique_ptr<QueryResult> result;
 
@@ -5917,8 +5930,9 @@ AND NOT EXISTS (
 	if (!deleted_table_ids.empty()) {
 		table_id_filter = StringUtil::Format("f.table_id IN (%s) OR ", deleted_table_ids);
 	}
+	auto rewritten_files_filter = RewrittenFilesFilter();
 
-	result = Query(UnusedFilesQuery("ducklake_data_file", "data_file_id", table_id_filter));
+	result = Query(UnusedFilesQuery("ducklake_data_file", "data_file_id", table_id_filter, rewritten_files_filter));
 	auto cleanup_files = read_cleanup_files(*result);
 	auto deleted_file_ids = CleanupFileIdList(cleanup_files);
 	vector<string> tables_to_delete_from;
@@ -5943,7 +5957,8 @@ WHERE data_file_id IN (%s);
 		file_id_filter = StringUtil::Format("f.data_file_id IN (%s) OR ", deleted_file_ids);
 	}
 
-	result = Query(UnusedFilesQuery("ducklake_delete_file", "delete_file_id", table_id_filter + file_id_filter));
+	result = Query(UnusedFilesQuery("ducklake_delete_file", "delete_file_id", table_id_filter + file_id_filter,
+	                                rewritten_files_filter));
 	auto cleanup_deletes = read_cleanup_files(*result);
 	if (!cleanup_deletes.empty()) {
 		// delete the delete files

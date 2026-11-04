@@ -652,6 +652,8 @@ protected:
 	virtual string GetLatestSnapshotQuery() const;
 	//! The snapshots of the range that recorded a rewrite of the table and still exist
 	virtual string GetRewriteSnapshotsQuery(TableIndex table_id, idx_t first_snapshot, idx_t last_snapshot) const;
+	//! Excludes the files a rewrite ended while the rewrite snapshot exists, the change feed reads its changes
+	string RewrittenFilesFilter();
 
 	virtual string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
 	                                              const string &metadata_table_prefix);
