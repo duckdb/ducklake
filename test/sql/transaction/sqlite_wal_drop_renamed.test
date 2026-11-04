@@ -1,0 +1,77 @@
+# name: test/sql/transaction/sqlite_wal_drop_renamed.test
+# description: on a SQLite catalog in its WAL journal mode a drop that commits after a concurrent rename conflicts
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+# the SQLite config skips errors about locks, which none of these statements may raise
+set ignore_error_messages
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_wal_drop_renamed.db' AS dl (DATA_PATH '{TEST_DIR}/sqlite_wal_drop_renamed', META_JOURNAL_MODE 'wal')
+
+statement ok
+CREATE TABLE dl.t(x INT)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+CREATE VIEW dl.v AS SELECT 42 AS i
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DROP TABLE dl.t
+
+statement ok con2
+ALTER TABLE dl.t RENAME TO u
+
+statement ok con2
+COMMIT
+
+statement error con1
+COMMIT
+----
+<REGEX>:.*attempting to drop table.*another transaction has renamed it.*
+
+query I
+SELECT x FROM dl.u
+----
+1
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DROP VIEW dl.v
+
+statement ok con2
+ALTER VIEW dl.v RENAME TO w
+
+statement ok con2
+COMMIT
+
+statement error con1
+COMMIT
+----
+<REGEX>:.*attempting to drop view.*another transaction has renamed it.*
+
+query I
+SELECT i FROM dl.w
+----
+42
