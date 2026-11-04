@@ -208,3 +208,61 @@ query II
 SELECT (SELECT count(*) FROM lk.t2), (SELECT count(*) FROM lk.t0)
 ----
 5	3
+
+# an older snapshot that shares the next_file_id of the last full load does not replace its stats
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/stale_base.db' AS sw (DATA_PATH '{TEST_DIR}/stale_base/', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE sw.a AS SELECT range::INTEGER AS i FROM range(10)
+
+statement ok
+CREATE TABLE sw.b AS SELECT 0::INTEGER AS i
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/stale_base.db' AS sr (METADATA_CATALOG '__ducklake_metadata_sw', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok con3
+BEGIN
+
+query I con3
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'sr'
+----
+1
+
+# deleting every row of the only file writes no file, so the next_file_id stays
+statement ok
+DELETE FROM sw.a
+
+query I
+SELECT count(*) FROM sr.a
+----
+0
+
+statement ok
+CALL ducklake_expire_snapshots('sr', versions => [2])
+
+# the old transaction loads the stats of the deleted rows under the same key
+query I con3
+SELECT count(*) FROM sr.a
+----
+10
+
+statement ok
+INSERT INTO sr.b VALUES (99)
+
+query I
+SELECT count(*) FROM sr.a
+----
+0
+
+statement ok
+INSERT INTO sr.a VALUES (999)
+
+query II
+SELECT record_count, next_row_id FROM __ducklake_metadata_sw.ducklake_table_stats WHERE table_id = (SELECT table_id FROM __ducklake_metadata_sw.ducklake_table WHERE table_name = 'a' AND end_snapshot IS NULL)
+----
+1	11
+
+statement ok con3
+COMMIT
