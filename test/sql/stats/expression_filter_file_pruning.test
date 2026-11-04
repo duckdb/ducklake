@@ -131,6 +131,26 @@ EXPLAIN ANALYZE SELECT count(*) FROM dl.f WHERE isnan(x)
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 
+# a Top-N query orders the files by statistics that are not bounds
+statement ok
+CREATE TABLE dl.times (t TIME_NS, z TIMETZ)
+
+statement ok
+INSERT INTO dl.times VALUES (TIME_NS '01:00:00', TIMETZ '01:00:00+01'), (TIME_NS '02:00:00', TIMETZ '02:00:00+01')
+
+statement ok
+INSERT INTO dl.times VALUES (TIME_NS '03:00:00', TIMETZ '03:00:00+01')
+
+query I
+SELECT t FROM dl.times ORDER BY t LIMIT 1
+----
+01:00:00
+
+query I
+SELECT z FROM dl.times ORDER BY z DESC LIMIT 1
+----
+03:00:00+01
+
 # a file of NULL values has no bounds to check
 statement ok
 INSERT INTO dl.t SELECT NULL, NULL, NULL FROM range(10)
