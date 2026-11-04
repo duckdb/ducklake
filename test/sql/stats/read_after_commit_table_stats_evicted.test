@@ -43,8 +43,10 @@ SET memory_limit = '1B'
 ----
 could not free up enough memory
 
-statement ok
-SET VARIABLE accounted = (SELECT coalesce(sum(memory_usage_bytes), 0) FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE')
+query I
+SELECT coalesce(sum(memory_usage_bytes), 0) FROM duckdb_memory() WHERE tag = 'OBJECT_CACHE'
+----
+0
 
 statement ok
 CALL truncate_duckdb_logs()
@@ -60,8 +62,11 @@ SELECT max(i) FROM lk.a
 statement ok
 CALL disable_logging()
 
-# evicted stats are read again, only accounted ones are used from the full load
-query I
-SELECT getvariable('accounted') > 0 OR count(*) > 0 FROM duckdb_logs WHERE type = 'QueryLog' AND regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count')
+# the evicted stats are not used, every table is read again
+query II
+SELECT count(*) FILTER (WHERE NOT regexp_matches(message, 'WHERE\s+table_id\s+IN\s+\(')),
+	count(*) FILTER (WHERE regexp_matches(message, 'WHERE\s+table_id\s+IN\s+\('))
+FROM duckdb_logs
+WHERE type = 'QueryLog' AND regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count')
 ----
-true
+1	0
