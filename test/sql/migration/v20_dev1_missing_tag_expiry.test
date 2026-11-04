@@ -61,6 +61,12 @@ SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
 2.0-dev1
 
+# the added column is a timestamp with time zone, which only a SQLite catalog stores as text
+query I
+SELECT DISTINCT CASE WHEN d.type = 'sqlite' AND c.data_type = 'VARCHAR' THEN 'TIMESTAMP WITH TIME ZONE' ELSE c.data_type END FROM duckdb_columns() c JOIN duckdb_databases() d USING (database_name) WHERE database_name = 'meta' AND table_name = 'ducklake_snapshot_tag' AND column_name = 'expires_at'
+----
+TIMESTAMP WITH TIME ZONE
+
 query II
 SELECT tag_name, expires_at IS NULL FROM ducklake_tags('dl')
 ----
