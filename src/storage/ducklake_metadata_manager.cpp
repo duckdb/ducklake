@@ -5151,7 +5151,63 @@ WHERE snapshot_id = (
 		throw InvalidInputException("No snapshot found at %s %s", StringUtil::Lower(unit.GetIdentifierName()),
 		                            val.ToString());
 	}
+	if (bound == SnapshotBound::TIME_TRAVEL && unit == "timestamp") {
+		CheckSnapshotAfterExpiredGap(*snapshot, val, newest_snapshot_id);
+	}
 	return snapshot;
+}
+
+//! Snapshot ids grow by one per commit, so a missing id is an expired snapshot whose commit time is gone. Like
+//! Iceberg's snapshot log, time travel by timestamp only reaches the snapshots after the newest such gap.
+void DuckLakeMetadataManager::CheckSnapshotAfterExpiredGap(const DuckLakeSnapshot &snapshot, const Value &timestamp,
+                                                           idx_t newest_snapshot_id) {
+	// the newest gap above the snapshot with an expired id the transaction could see: a concurrent expiry may have
+	// removed ids above the transaction's newest snapshot as well, and the first survivor may be newer than it
+	auto result = Query(StringUtil::Format(R"(
+SELECT first_after_gap,
+	(SELECT snapshot_time FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id = first_after_gap),
+	(SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id < first_after_gap)
+FROM (
+	SELECT MAX(s.snapshot_id) AS first_after_gap
+	FROM {METADATA_CATALOG}.ducklake_snapshot s
+	WHERE s.snapshot_id > %llu
+	AND NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_snapshot p WHERE p.snapshot_id = s.snapshot_id - 1)
+	AND (SELECT MAX(p.snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot p
+	     WHERE p.snapshot_id < s.snapshot_id) < %llu
+) gaps;)",
+	                                       snapshot.snapshot_id, newest_snapshot_id));
+	result->ThrowIfError("Failed to query the expired snapshots of DuckLake: ");
+	for (auto &row : *result) {
+		if (row.IsNull(0)) {
+			return;
+		}
+		auto first_after_gap = row.GetValue<idx_t>(0);
+		auto gap_time = row.GetValue<string>(1);
+		auto last_before_gap = row.GetValue<idx_t>(2);
+		auto first_expired = last_before_gap + 1;
+		auto last_expired = first_after_gap - 1;
+		string expired;
+		if (first_expired == last_expired) {
+			expired = StringUtil::Format("snapshot %llu was expired and its commit time is not kept", first_expired);
+		} else {
+			expired = StringUtil::Format("snapshots %llu to %llu were expired and their commit times are not kept",
+			                             first_expired, last_expired);
+		}
+		// a concurrent expiry can remove snapshots up to the transaction's newest one, the survivors are newer
+		string reach;
+		if (first_after_gap <= newest_snapshot_id) {
+			reach = StringUtil::Format("Time travel by timestamp reaches snapshot %llu (%s) and later", first_after_gap,
+			                           gap_time);
+		} else {
+			reach = StringUtil::Format("The snapshots after the gap, from snapshot %llu (%s) on, are newer than the "
+			                           "snapshot of this transaction",
+			                           first_after_gap, gap_time);
+		}
+		throw InvalidInputException("Cannot time travel to timestamp %s: %s, so the snapshot current at that time is "
+		                            "unknown. %s; it also refuses the earlier times at which snapshot %llu or an older "
+		                            "snapshot was current. Use AT (VERSION => ...) to read a remaining older snapshot.",
+		                            timestamp.ToString(), expired, reach, last_before_gap);
+	}
 }
 
 template <class T>

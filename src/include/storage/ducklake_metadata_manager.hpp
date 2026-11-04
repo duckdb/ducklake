@@ -45,7 +45,9 @@ class FileSystem;
 struct SnapshotAndStats;
 struct FlushedInlinedTableInfo;
 
-enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND };
+//! How an AT clause picks a snapshot: the bounds of a change feed take the nearest snapshot after or before a
+//! timestamp, time travel takes the newest snapshot at or before it and refuses times before expired snapshots
+enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND, TIME_TRAVEL };
 
 //! A check whether the live rows of an inlined data table hold a value of a column
 struct DuckLakeInlinedValueCheck {
@@ -555,6 +557,9 @@ public:
 	virtual string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const;
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
+	//! Throws when time travel by timestamp resolves to a snapshot older than the newest gap of expired snapshots
+	void CheckSnapshotAfterExpiredGap(const DuckLakeSnapshot &snapshot, const Value &timestamp,
+	                                  idx_t newest_snapshot_id);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound,
 	                                                 idx_t newest_snapshot_id);
 

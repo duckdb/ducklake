@@ -2289,13 +2289,16 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpireSnapshotsNow(const strin
 		ducklake_catalog.InvalidateSchemaCache(snapshot.schema_version);
 		expired_ids.insert(snapshot.id);
 	}
-	// the transaction resolved versions it has expired since
-	lock_guard<mutex> guard(snapshot_lock);
-	for (auto entry = snapshot_cache.begin(); entry != snapshot_cache.end();) {
-		if (expired_ids.find(entry->second.snapshot_id) != expired_ids.end()) {
-			entry = snapshot_cache.erase(entry);
-		} else {
-			entry++;
+	if (!expired_ids.empty()) {
+		// the transaction resolved versions it has expired since, and the gap changes what a timestamp reaches
+		lock_guard<mutex> guard(snapshot_lock);
+		for (auto entry = snapshot_cache.begin(); entry != snapshot_cache.end();) {
+			auto &unit = StructType::GetChildName(entry->first.type(), 0);
+			if (expired_ids.find(entry->second.snapshot_id) != expired_ids.end() || unit == "timestamp") {
+				entry = snapshot_cache.erase(entry);
+			} else {
+				entry++;
+			}
 		}
 	}
 	return expired;

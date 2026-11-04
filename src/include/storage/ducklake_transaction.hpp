@@ -220,7 +220,7 @@ public:
 
 	DuckLakeSnapshot GetSnapshot();
 	DuckLakeSnapshot GetSnapshot(optional_ptr<BoundAtClause> at_clause,
-	                             SnapshotBound bound = SnapshotBound::UPPER_BOUND);
+	                             SnapshotBound bound = SnapshotBound::TIME_TRAVEL);
 	//! The newest snapshot that the transaction sees, also when the catalog is opened at a fixed snapshot
 	idx_t GetNewestVisibleSnapshotId();
 
