@@ -10,6 +10,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/set.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/optional_idx.hpp"
@@ -95,6 +96,8 @@ struct FilterSQLResult {
 	string where_conditions;
 	//! Ordered by column field index so the generated SQL does not depend on hash iteration order
 	map<idx_t, CTERequirement> required_ctes;
+	//! The columns with a filter the conditions do not express completely
+	set<idx_t> unexpressed_columns;
 
 	FilterSQLResult() = default;
 };
@@ -667,7 +670,7 @@ protected:
 	virtual string GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                                     const FilterPushdownInfo *filter_info,
 	                                     const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
-	                                     const vector<idx_t> &runtime_filter_stats_columns,
+	                                     vector<idx_t> &runtime_filter_stats_columns,
 	                                     FileListType file_list_type = FileListType::SCAN,
 	                                     const string &metadata_table_prefix = "{METADATA_CATALOG}");
 
@@ -744,7 +747,8 @@ protected:
 	    DuckLakeTableEntry &table, const FilterPushdownInfo &filter_info,
 	    const string &partition_value_table = "{METADATA_CATALOG}.ducklake_file_partition_value");
 	//! Emit the condition for a single-column filter, registering the stats its CTE must project
-	string GenerateColumnFilterCondition(const ColumnFilterInfo &column_filter, FilterSQLResult &result);
+	string GenerateColumnFilterCondition(const ColumnFilterInfo &column_filter, FilterSQLResult &result,
+	                                     bool &complete);
 	//! Emit the condition for a filter tree, combining the per-column conditions of its leaves.
 	//! A node under a parent of the same conjunction type is spliced in without parens of its own.
 	string GenerateFilterTreeCondition(const DuckLakeFilterNode &node, FilterSQLResult &result,
@@ -762,7 +766,8 @@ protected:
 
 private:
 	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
-	                                            unordered_set<string> &referenced_stats, const string &stats_alias);
+	                                            unordered_set<string> &referenced_stats, const string &stats_alias,
+	                                            bool &complete);
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
 	virtual string CastStatsToTarget(const string &stats, const LogicalType &type,
 	                                 StatsCastType cast_type = StatsCastType::ORDERING);
@@ -773,7 +778,7 @@ private:
 	                                            const LogicalType &type, unordered_set<string> &referenced_stats,
 	                                            const string &stats_alias);
 	virtual string GenerateFilterPushdown(const ExpressionFilter &filter, unordered_set<string> &referenced_stats,
-	                                      const string &stats_alias);
+	                                      const string &stats_alias, bool &complete);
 
 public:
 	//! Read inlined file deletions for regular table scans (no snapshot info per row)
