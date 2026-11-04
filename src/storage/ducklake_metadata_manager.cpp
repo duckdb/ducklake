@@ -2365,9 +2365,7 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 			// a filter the conditions do not express is checked against the file statistics when the file is read
 			for (auto &column_field_index : filter_result.unexpressed_columns) {
 				auto &column_filter = filter_info->column_filters.at(column_field_index);
-				if (DuckLakeColumnStats::StatsFromBounds(column_filter.column_type) &&
-				    std::find(runtime_filter_stats_columns.begin(), runtime_filter_stats_columns.end(),
-				              column_field_index) == runtime_filter_stats_columns.end()) {
+				if (DuckLakeColumnStats::StatsFromBounds(column_filter.column_type)) {
 					runtime_filter_stats_columns.push_back(column_field_index);
 				}
 			}
@@ -2472,15 +2470,14 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
                                                                         bool include_local_changes) {
 	auto table_id = table.GetTableId();
 
-	// Runtime filters are evaluated against file-level min/max stats before opening the file.
+	// the files are ordered for Top-N dynamic filters, and the filters the query does not express are checked
+	// against the file statistics before a file is opened
 	vector<DuckLakeFileListDynamicFilter> dynamic_filter_columns;
 	vector<idx_t> runtime_filter_stats_columns;
 	if (filter_info) {
 		for (auto &entry : filter_info->column_filters) {
 			auto &col_filter = entry.second;
 			auto dynamic_filter_data = ExpressionFilter::GetOptionalDynamicFilterData(*col_filter.table_filter);
-			const auto has_prefix_range_filter =
-			    ExpressionFilter::ContainsInternalFunction(*col_filter.table_filter->expr, PrefixRangeScalarFun::NAME);
 			if (dynamic_filter_data) {
 				ExpressionType comparison_type;
 				{
@@ -2489,9 +2486,6 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 				}
 				dynamic_filter_columns.push_back(
 				    {col_filter.column_field_index, comparison_type, col_filter.column_type});
-			}
-			if (dynamic_filter_data || has_prefix_range_filter) {
-				runtime_filter_stats_columns.push_back(col_filter.column_field_index);
 			}
 		}
 	}

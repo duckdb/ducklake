@@ -111,7 +111,7 @@ EXPLAIN ANALYZE SELECT count(*) FROM dl.shapes WHERE vertex_extract(g, 'y') = 4
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 2.*
 
-# a filter no row of a file satisfies or passes as NULL skips the file
+# a filter that is false or NULL for every row of a file skips it
 statement ok
 CREATE TABLE dl.f (x DOUBLE)
 
