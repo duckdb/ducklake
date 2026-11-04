@@ -5507,16 +5507,41 @@ string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalSt
 	return batch_query;
 }
 
-string DuckLakeMetadataManager::RefreshTableSizesSql(const set<TableIndex> &table_ids) {
+string DuckLakeMetadataManager::AddInlinedRowCountsSql(TableIndex table_id,
+                                                       const vector<Identifier> &inlined_table_names) {
+	string batch_query;
+	// deleted inlined rows stay stored until a flush writes them to a file, one statement per table bounds the depth
+	for (auto &inlined_table_name : inlined_table_names) {
+		batch_query += StringUtil::Format(R"(
+UPDATE {METADATA_CATALOG}.ducklake_table_stats
+SET record_count = record_count + (SELECT COUNT(*) FROM {METADATA_CATALOG}.%s)
+WHERE table_id = %d AND record_count IS NOT NULL;)",
+		                                  inlined_table_name, table_id.index);
+	}
+	return batch_query;
+}
+
+string DuckLakeMetadataManager::RefreshTableSizesSql(const set<TableIndex> &table_ids,
+                                                     const set<TableIndex> &record_count_tables) {
 	string batch_query;
 	for (auto &table_id : table_ids) {
+		string record_count;
+		if (record_count_tables.find(table_id) != record_count_tables.end()) {
+			// an unknown count stays unknown
+			record_count = StringUtil::Format(R"(, record_count = CASE WHEN record_count IS NULL THEN NULL ELSE (
+	SELECT COALESCE(SUM(data.record_count), 0)
+	FROM {METADATA_CATALOG}.ducklake_data_file data
+	WHERE data.table_id = %d AND data.end_snapshot IS NULL
+) END)",
+			                                  table_id.index);
+		}
 		batch_query += StringUtil::Format(R"(
 UPDATE {METADATA_CATALOG}.ducklake_table_stats SET file_size_bytes = (
 	SELECT COALESCE(SUM(data.file_size_bytes), 0)
 	FROM {METADATA_CATALOG}.ducklake_data_file data
 	WHERE data.table_id = %d AND data.end_snapshot IS NULL
-) WHERE table_id = %d;)",
-		                                  table_id.index, table_id.index);
+)%s WHERE table_id = %d;)",
+		                                  table_id.index, record_count, table_id.index);
 	}
 	return batch_query;
 }
