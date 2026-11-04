@@ -1114,7 +1114,7 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 	shared_ptr<DuckLakeTableStatsCacheEntry> requested_entry;
 	vector<pair<TableIndex, shared_ptr<ObjectCacheEntry>>> cache_entries_to_put;
 	cache_entries_to_put.reserve(cache_tables.size());
-	unordered_map<idx_t, shared_ptr<DuckLakeTableStatsCacheEntry>> load_entries;
+	unordered_map<idx_t, weak_ptr<DuckLakeTableStatsCacheEntry>> load_entries;
 	for (auto &current_id : cache_tables) {
 		shared_ptr<DuckLakeTableStatsCacheEntry> entry;
 		auto stats_entry = lake_stats->table_stats.find(current_id);
@@ -1133,15 +1133,21 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 		}
 		cache_entries_to_put.emplace_back(current_id, std::move(entry));
 	}
-	PutStatsCacheEntries(snapshot.next_file_id, std::move(cache_entries_to_put));
-	if (load_all) {
+	if (!load_all) {
+		PutStatsCacheEntries(snapshot.next_file_id, std::move(cache_entries_to_put));
+	} else {
+		// put and kept under one lock, so the entries kept are the ones in the object cache
 		lock_guard<mutex> guard(stats_load_lock);
+		PutStatsCacheEntries(snapshot.next_file_id, std::move(cache_entries_to_put));
 		if (!has_stats_load_snapshot || stats_load_snapshot.snapshot_id < snapshot.snapshot_id) {
 			stats_load_snapshot = snapshot;
 			has_stats_load_snapshot = true;
 			stats_load_entries = std::move(load_entries);
 			stats_changes_snapshot_id = snapshot.snapshot_id;
 			stats_changed_tables.clear();
+		} else if (stats_load_snapshot.snapshot_id == snapshot.snapshot_id) {
+			// a load at the snapshot of the kept entries renews the ones the object cache evicted
+			stats_load_entries = std::move(load_entries);
 		}
 	}
 	if (unchanged) {
@@ -1161,6 +1167,7 @@ bool DuckLakeCatalog::TryGetUnchangedTableStats(DuckLakeTransaction &transaction
 	bool table_changed;
 	bool changes_read = false;
 	{
+		unique_lock<mutex> read_guard(stats_changes_read_lock, std::defer_lock);
 		unique_lock<mutex> guard(stats_load_lock);
 		while (true) {
 			if (!has_stats_load_snapshot) {
@@ -1178,6 +1185,13 @@ bool DuckLakeCatalog::TryGetUnchangedTableStats(DuckLakeTransaction &transaction
 			if (!read_changes) {
 				return false;
 			}
+			if (!read_guard.owns_lock()) {
+				// one lookup reads the changes of a snapshot, the others wait for it and judge the state again
+				guard.unlock();
+				read_guard.lock();
+				guard.lock();
+				continue;
+			}
 			// only the commits after the snapshot whose changes are known are read
 			auto changes_snapshot_id = stats_changes_snapshot_id;
 			auto changed_tables = stats_changed_tables;
@@ -1191,6 +1205,8 @@ bool DuckLakeCatalog::TryGetUnchangedTableStats(DuckLakeTransaction &transaction
 				continue;
 			}
 			if (!changes_known) {
+				// no later snapshot can use the kept load without these changes, every table is read again
+				ForgetStatsLoad();
 				return false;
 			}
 			stats_changes_snapshot_id = snapshot.snapshot_id;
@@ -1203,19 +1219,29 @@ bool DuckLakeCatalog::TryGetUnchangedTableStats(DuckLakeTransaction &transaction
 			return false;
 		}
 		table_changed = stats_changed_tables.find(table_id) != stats_changed_tables.end();
+		if (!table_changed) {
+			auto entry = stats_load_entries.find(table_id.index);
+			if (entry != stats_load_entries.end()) {
+				result = entry->second.lock();
+				if (!result) {
+					// the object cache no longer holds the entry, every table is read again
+					return false;
+				}
+			}
+		}
 		// the lookup that reads the changes of a snapshot reads the stats of its changed tables together with them
 		if (changes_read) {
 			load_tables.assign(stats_changed_tables.begin(), stats_changed_tables.end());
 		}
-		if (!table_changed) {
-			auto entry = stats_load_entries.find(table_id.index);
-			if (entry != stats_load_entries.end()) {
-				result = entry->second;
-			}
-		}
 	}
 	// a changed table, or one the full load did not know, is read again
 	return true;
+}
+
+void DuckLakeCatalog::ForgetStatsLoad() {
+	has_stats_load_snapshot = false;
+	stats_load_entries.clear();
+	stats_changed_tables.clear();
 }
 
 idx_t DuckLakeCatalog::GetTableRecordCount(DuckLakeTransaction &transaction, TableIndex table_id) {
@@ -1768,6 +1794,7 @@ void DuckLakeCatalog::PutStatsCacheEntries(idx_t next_file_id,
 
 void DuckLakeCatalog::EvictCacheEntries() {
 	auto &cache = GetObjectCacheInstance();
+	lock_guard<mutex> stats_guard(stats_load_lock);
 	lock_guard<mutex> guard(cache_entries_lock);
 	for (auto &entry : cache_entries) {
 		if (!entry.second.expired()) {
@@ -1781,10 +1808,7 @@ void DuckLakeCatalog::EvictCacheEntries() {
 	}
 	cache_entries.clear();
 	stats_cache_entries.clear();
-	lock_guard<mutex> stats_guard(stats_load_lock);
-	has_stats_load_snapshot = false;
-	stats_load_entries.clear();
-	stats_changed_tables.clear();
+	ForgetStatsLoad();
 }
 
 void DuckLakeCatalog::RegisterCatalog() {
