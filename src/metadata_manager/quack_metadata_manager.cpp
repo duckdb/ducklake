@@ -147,14 +147,7 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
                                                   DuckLakeSnapshot transaction_snapshot,
                                                   const TransactionChangeInformation &transaction_changes,
                                                   const DuckLakeRetryConfig &retry_config) {
-	// the staged header anchors the server at the read snapshot, which hides the snapshots of
-	// other branches past the lineage head, so a read with a branch gap commits through the client loop
-	bool branch_gap = false;
-	if (transaction.GetCatalog().SupportsBranching() && transaction_snapshot.snapshot_id != DConstants::INVALID_INDEX) {
-		auto global_max = GetGlobalSnapshotMax();
-		branch_gap = !global_max.IsValid() || global_max.GetIndex() != transaction_snapshot.snapshot_id;
-	}
-	if (!IsDataOnlyCommit(transaction_changes) || RequiresClientSideCommit(flush_transaction) || branch_gap) {
+	if (!IsDataOnlyCommit(transaction_changes) || RequiresClientSideCommit(flush_transaction)) {
 		flush_transaction.RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
 		return;
 	}

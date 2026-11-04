@@ -666,6 +666,23 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.get_snapshot = [this]() {
 		return transaction_snapshot;
 	};
+	ctx.get_snapshot_maxima = [this]() {
+		// read in the commit transaction, so a branch snapshot after the staged anchor is seen
+		DuckLakeSnapshotMaxima maxima;
+		string sql = StringUtil::Replace("SELECT MAX(snapshot_id), MAX(CASE WHEN branch_id = 0 THEN snapshot_id END) "
+		                                 "FROM {METADATA_CATALOG}.ducklake_snapshot",
+		                                 "{METADATA_CATALOG}", schema_id);
+		auto result = RunQuery(sql, "read the newest snapshot ids");
+		for (auto &row : *result) {
+			if (!row.IsNull(0)) {
+				maxima.global_max = row.GetValue<uint64_t>(0);
+			}
+			if (!row.IsNull(1)) {
+				maxima.lineage_head = row.GetValue<uint64_t>(1);
+			}
+		}
+		return maxima;
+	};
 	ctx.execute_commit_batch = [this](DuckLakeSnapshot snapshot, string &query) -> unique_ptr<QueryResult> {
 		query = SubstitutePlaceholders(query, snapshot);
 		return fresh_conn.Query(query);

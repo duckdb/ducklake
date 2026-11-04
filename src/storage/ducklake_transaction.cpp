@@ -1653,8 +1653,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.get_snapshot = [&]() {
 		return GetSnapshot();
 	};
-	context.get_global_snapshot_max = [&]() {
-		return metadata_manager->GetGlobalSnapshotMax();
+	context.get_snapshot_maxima = [&]() {
+		return metadata_manager->GetSnapshotMaxima();
 	};
 	vector<DuckLakeSnapshotInfo> committed_expiry;
 	bool expired_by_statements = false;

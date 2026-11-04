@@ -5820,6 +5820,24 @@ idx_t DuckLakeMetadataManager::ReadBranchId(DuckLakeSnapshot snapshot) const {
 	return catalog.AttachedBranchId();
 }
 
+DuckLakeSnapshotMaxima DuckLakeMetadataManager::GetSnapshotMaxima() {
+	DuckLakeSnapshotMaxima maxima;
+	auto result = Query("SELECT MAX(snapshot_id), MAX(CASE WHEN branch_id = 0 THEN snapshot_id END) "
+	                    "FROM {METADATA_CATALOG}.ducklake_snapshot");
+	if (result->HasError()) {
+		return maxima;
+	}
+	for (auto &row : *result) {
+		if (!row.IsNull(0)) {
+			maxima.global_max = row.GetValue<idx_t>(0);
+		}
+		if (!row.IsNull(1)) {
+			maxima.lineage_head = row.GetValue<idx_t>(1);
+		}
+	}
+	return maxima;
+}
+
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
 	auto result = Query(GetLatestSnapshotQuery());
 	result->ThrowIfError("Failed to query most recent snapshot for DuckLake: ");

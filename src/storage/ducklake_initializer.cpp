@@ -376,6 +376,9 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			           manager.HasVisibilityMigrationTable("ducklake_delete_file_visibility")) {
 				throw InvalidInputException("This DuckLake catalog holds the visibility rows of an older dev build "
 				                            "or an unfinished rewrite of them, attach it writable once to heal it");
+			} else if (!manager.HasBranchZeroVisibility()) {
+				throw InvalidInputException("Cannot read this DuckLake catalog: the visibility events that "
+				                            "replaced the inline file ranges are missing");
 			}
 		} else {
 			try {

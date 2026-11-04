@@ -2789,18 +2789,24 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		try {
 			can_retry = false;
 			bool check_conflicts = i > 0 || attempt_changes.HasRefChanges();
-			if (!check_conflicts && context.supports_v2_0_metadata && context.get_global_snapshot_max) {
-				// snapshots of other branches hide behind the lineage head, so a global maximum past
-				// it refreshes the schema and the allocators through the conflict path
-				auto read_snapshot = context.get_snapshot();
-				auto global_max = context.get_global_snapshot_max();
-				check_conflicts = !global_max.IsValid() || global_max.GetIndex() != read_snapshot.snapshot_id;
-			}
 			if (check_conflicts) {
 				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);
 				stats = &commit_stats_snapshot.stats;
 			} else {
 				commit_stats_snapshot.snapshot = context.get_snapshot();
+				if (context.supports_v2_0_metadata && context.get_snapshot_maxima) {
+					// snapshots of other branches hide behind the lineage head, so read both maxima
+					// in the commit transaction and allocate past them while the lineage is unchanged,
+					// a moved lineage keeps the read snapshot and collides on the snapshot insert
+					auto maxima = context.get_snapshot_maxima();
+					if (!maxima.global_max.IsValid() || !maxima.lineage_head.IsValid()) {
+						commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);
+						stats = &commit_stats_snapshot.stats;
+					} else if (maxima.lineage_head.GetIndex() == commit_stats_snapshot.snapshot.snapshot_id &&
+					           maxima.global_max.GetIndex() > maxima.lineage_head.GetIndex()) {
+						commit_stats_snapshot.snapshot.snapshot_id = maxima.global_max.GetIndex();
+					}
+				}
 			}
 			commit_snapshot.snapshot_id++;
 			if (SchemaChangesMade()) {

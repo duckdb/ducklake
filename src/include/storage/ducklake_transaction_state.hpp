@@ -32,9 +32,9 @@ struct DuckLakeCommitContext {
 	std::function<bool(TableIndex)> inlined_file_deletion_table_exists;
 	//! Returns the latest snapshot for the first commit attempt.
 	std::function<DuckLakeSnapshot()> get_snapshot;
-	//! The newest snapshot of any branch as of the snapshot read, a commit past the lineage head
-	//! takes the conflict path, unset on the server side where the staged header is the anchor
-	std::function<optional_idx()> get_global_snapshot_max;
+	//! Reads the newest snapshot of any branch and of the lineage in the commit transaction,
+	//! so a first attempt allocates past the branches, unset on catalogs without branches
+	std::function<DuckLakeSnapshotMaxima()> get_snapshot_maxima;
 	//! What the expiries of the transaction delete in the commit attempt, read after the latest snapshot
 	std::function<DuckLakeExpiry(idx_t, idx_t)> get_expired_snapshots = [](idx_t, idx_t) {
 		return DuckLakeExpiry();

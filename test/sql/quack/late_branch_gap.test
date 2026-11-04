@@ -1,0 +1,42 @@
+# name: test/sql/quack/late_branch_gap.test
+# description: a branch snapshot created after the transaction read still moves the allocation past it
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/late_branch_gap', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT id FROM dl.current_snapshot()
+----
+1
+
+statement ok con1
+INSERT INTO dl.t VALUES (42)
+
+statement ok con2
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 1, 1, NULL)
+
+statement ok con2
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) VALUES (100, NOW(), 1, 2, 0, 1)
+
+statement ok con1
+COMMIT
+
+query I
+SELECT MAX(snapshot_id) FROM meta.ducklake_snapshot WHERE branch_id = 0
+----
+101
