@@ -159,7 +159,8 @@ void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &t
 			return;
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
-			if (PermanentLoadError(error)) {
+			// another attach migrating at the same time can make a migration fail with any error
+			if (PermanentLoadError(error) && !migrating) {
 				error.Throw();
 			}
 			if (attempt == 0) {
@@ -259,6 +260,7 @@ void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction
 }
 
 void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction) {
+	migrating = false;
 	// load the data path from the existing duck lake
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto metadata = metadata_manager.LoadDuckLake();
@@ -283,6 +285,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			if (catalog_version < target_version) {
 				catalog.VerifyWritable();
 			}
+			migrating = catalog_version < target_version;
 			if (catalog_version == DuckLakeVersion::V0_1) {
 				metadata_manager.MigrateV01();
 				catalog_version = DuckLakeVersion::V0_2;
@@ -308,6 +311,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				catalog_version = DuckLakeVersion::V1_0;
 			}
 			if (catalog_version >= target_version) {
+				migrating = false;
 				resolved_version = catalog_version;
 				continue;
 			}
@@ -319,6 +323,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				metadata_manager.MigrateV11();
 				catalog_version = DuckLakeVersion::V2_0_DEV1;
 			}
+			migrating = false;
 			if (catalog_version != target_version) {
 				// LCOV_EXCL_START
 				throw NotImplementedException("Unsupported DuckLake version '%s'",

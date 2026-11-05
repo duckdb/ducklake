@@ -17,6 +17,7 @@
 #include "common/ducklake_options.hpp"
 #include "common/ducklake_name_map.hpp"
 #include "duckdb/catalog/catalog.hpp"
+#include "duckdb/common/atomic.hpp"
 #include "duckdb/main/client_context_state.hpp"
 #include "duckdb/storage/object_cache.hpp"
 #include "storage/ducklake_catalog_set.hpp"
@@ -382,6 +383,13 @@ public:
 	void SetRetrialsServerSide(bool value) {
 		retrials_server_side = value;
 	}
+	//! Whether the metadata backend clears the cache of the metadata catalog alone
+	bool ScopedCacheClear() const {
+		return scoped_cache_clear;
+	}
+	void SetScopedCacheClear(bool value) {
+		scoped_cache_clear = value;
+	}
 
 	Value GetLastCommittedSnapshotId() const {
 		lock_guard<mutex> guard(commit_lock);
@@ -526,6 +534,7 @@ private:
 	bool initialized = false;
 	//! Whether or not the metadata server can execute the commit retry loop server-side.
 	bool retrials_server_side = false;
+	atomic<bool> scoped_cache_clear {true};
 	//! Cache for inlined deletion table existence checks
 	mutex inlined_deletion_cache_lock;
 	//! Table IDs where the inlined deletion table is known to exist (permanent - never invalidated)
