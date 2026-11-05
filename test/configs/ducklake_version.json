@@ -173,6 +173,14 @@
       ]
     },
     {
+      "reason": "Inserts branch rows into the 2.0 branch table, which a 1.0 catalog does not have",
+      "paths": [
+        "test/sql/branches/branch_gap_late_snapshot.test",
+        "test/sql/branches/branch_gap_moved_lineage.test",
+        "test/sql/branches/branch_only_file_attach.test"
+      ]
+    },
+    {
       "reason": "Queries the 2.0 visibility tables, which a 1.0 catalog does not have",
       "paths": [
         "test/sql/add_files/add_files_after_reset_partitioned_by.test",

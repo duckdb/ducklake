@@ -5817,9 +5817,15 @@ string DuckLakeMetadataManager::GetSnapshotMaximaQuery() const {
 
 DuckLakeSnapshotMaxima DuckLakeMetadataManager::GetSnapshotMaxima() {
 	DuckLakeSnapshotMaxima maxima;
-	// a fresh connection sees the snapshots committed after the metadata transaction began
-	Connection fresh_connection(*transaction.GetConnection().context->db);
-	auto result = fresh_connection.Query(GetSnapshotMaximaQuery());
+	unique_ptr<QueryResult> result;
+	if (GetMetadataProfile().concurrent_reads_block_commits) {
+		// the metadata transaction already blocks concurrent commits, so its view of the maxima is current
+		result = Query(GetSnapshotMaximaQuery());
+	} else {
+		// a fresh connection sees the snapshots committed after the metadata transaction began
+		Connection fresh_connection(*transaction.GetConnection().context->db);
+		result = fresh_connection.Query(GetSnapshotMaximaQuery());
+	}
 	if (result->HasError()) {
 		return maxima;
 	}
