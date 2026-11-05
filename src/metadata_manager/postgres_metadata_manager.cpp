@@ -230,6 +230,14 @@ PostgresMetadataManager::PostgresMetadataManager(DuckLakeTransaction &transactio
     : DuckLakeMetadataManager(transaction) {
 }
 
+bool PostgresMetadataManager::ShowsConcurrentCommits() const {
+	// READ COMMITTED metadata reads see the commits of other transactions
+	auto &parameters = transaction.GetCatalog().MetadataParameters();
+	auto isolation_level = parameters.find("isolation_level");
+	return isolation_level != parameters.end() &&
+	       StringUtil::CIEquals(isolation_level->second.ToString(), "READ COMMITTED");
+}
+
 bool PostgresMetadataManager::InsertsInlinedRowsAfterBatch(idx_t row_count) const {
 	// the copy of a separate insert costs more round trips than parsing the VALUES text of a few rows
 	static constexpr idx_t MAX_INLINED_ROWS_IN_BATCH = 100;
