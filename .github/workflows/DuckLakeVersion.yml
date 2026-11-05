@@ -15,7 +15,7 @@ jobs:
   ducklake-version-tests:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: DuckLake 1.0 Backwards Compatibility
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         arch: ['linux_amd64']
