@@ -223,3 +223,34 @@ query IIII
 SELECT (SELECT id FROM w), (SELECT b FROM w), (SELECT id FROM w_ctas), (SELECT b FROM w_ctas);
 ----
 1	a	1	a
+
+# lake-wide: tables without a table option follow the lake's setting, a table option overrides it
+statement ok
+CALL dl.set_option('parquet_column_names', 'field_id');
+
+statement ok
+CREATE TABLE lw (id INT, b VARCHAR);
+
+statement ok
+INSERT INTO lw VALUES (1, 'a');
+
+statement ok
+CREATE TABLE lw_current (id INT, b VARCHAR) WITH (parquet_column_names = 'current');
+
+statement ok
+INSERT INTO lw_current VALUES (1, 'a');
+
+query T
+SELECT list(name ORDER BY field_id) FROM parquet_schema('{DATA_PATH}/column_names_field_id/main/lw/*.parquet') WHERE field_id IS NOT NULL;
+----
+[col-1, col-2]
+
+query T
+SELECT list(name ORDER BY field_id) FROM parquet_schema('{DATA_PATH}/column_names_field_id/main/lw_current/*.parquet') WHERE field_id IS NOT NULL;
+----
+[id, b]
+
+query IIII
+SELECT (SELECT id FROM lw), (SELECT b FROM lw), (SELECT id FROM lw_current), (SELECT b FROM lw_current);
+----
+1	a	1	a
