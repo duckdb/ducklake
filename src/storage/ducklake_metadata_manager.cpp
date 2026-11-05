@@ -5830,8 +5830,9 @@ DuckLakeSnapshotMaxima DuckLakeMetadataManager::GetSnapshotMaxima() {
 	auto query = GetSnapshotMaximaQuery();
 	SubstituteCatalogPlaceholders(query);
 	unique_ptr<QueryResult> result;
-	if (ConcurrentReadsBlockCommits()) {
-		// the metadata transaction already blocks concurrent commits, so its view of the maxima is current
+	if (ConcurrentReadsBlockCommits() || CommitsEachStatement()) {
+		// the metadata transaction blocks concurrent commits or runs each statement on the server,
+		// so its view of the maxima is current and a second connection is not needed
 		result = Query(query);
 	} else {
 		// a fresh connection sees the snapshots committed after the metadata transaction began
