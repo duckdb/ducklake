@@ -177,7 +177,9 @@
       "paths": [
         "test/sql/branches/branch_gap_late_snapshot.test",
         "test/sql/branches/branch_gap_moved_lineage.test",
-        "test/sql/branches/branch_only_file_attach.test"
+        "test/sql/branches/branch_gap_tag_commit.test",
+        "test/sql/branches/branch_only_file_attach.test",
+        "test/sql/cleanup/expire_restarted_commit_cleanup.test"
       ]
     },
     {

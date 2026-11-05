@@ -2565,7 +2565,7 @@ string DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const map<idx
 	}
 
 	// a single stats join is planned well either way
-	auto cte_keyword = requirements.size() > 1 && MaterializeStatsCTEs() ? " AS (\n" : " AS (\n";
+	auto cte_keyword = requirements.size() > 1 && MaterializeStatsCTEs() ? " AS MATERIALIZED (\n" : " AS (\n";
 	vector<string> ctes;
 	for (const auto &entry : requirements) {
 		const auto &req = entry.second;
@@ -5817,14 +5817,16 @@ string DuckLakeMetadataManager::GetSnapshotMaximaQuery() const {
 
 DuckLakeSnapshotMaxima DuckLakeMetadataManager::GetSnapshotMaxima() {
 	DuckLakeSnapshotMaxima maxima;
+	auto query = GetSnapshotMaximaQuery();
+	SubstituteCatalogPlaceholders(query);
 	unique_ptr<QueryResult> result;
 	if (GetMetadataProfile().concurrent_reads_block_commits) {
 		// the metadata transaction already blocks concurrent commits, so its view of the maxima is current
-		result = Query(GetSnapshotMaximaQuery());
+		result = Query(query);
 	} else {
 		// a fresh connection sees the snapshots committed after the metadata transaction began
 		Connection fresh_connection(*transaction.GetConnection().context->db);
-		result = fresh_connection.Query(GetSnapshotMaximaQuery());
+		result = fresh_connection.Query(query);
 	}
 	if (result->HasError()) {
 		return maxima;

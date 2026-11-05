@@ -2791,31 +2791,39 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		try {
 			can_retry = false;
 			bool check_conflicts = i > 0 || attempt_changes.HasRefChanges();
-			if (check_conflicts) {
+			// set when the gate restarts the metadata transaction, so the expiry reselects as on a retry
+			bool refreshed_transaction = false;
+			if (i == 0 && context.supports_v2_0_metadata && context.get_snapshot_maxima) {
+				// snapshots of other branches hide behind the lineage head and leave id gaps,
+				// so read the maxima fresh and allocate past them while the lineage is unchanged
+				commit_stats_snapshot.snapshot = context.get_snapshot();
+				auto maxima = context.get_snapshot_maxima();
+				bool unreadable = !maxima.global_max.IsValid() || !maxima.lineage_head.IsValid();
+				bool lineage_moved =
+				    !unreadable && maxima.lineage_head.GetIndex() != commit_stats_snapshot.snapshot.snapshot_id;
+				bool branch_gap = !unreadable && maxima.global_max.GetIndex() > maxima.lineage_head.GetIndex();
+				if (unreadable || (lineage_moved && maxima.branch_max.IsValid()) ||
+				    (check_conflicts && (lineage_moved || branch_gap))) {
+					// with branch snapshots an id below the gap is free, so a moved lineage cannot
+					// rely on the snapshot insert colliding, restart the metadata transaction like
+					// a retry and refresh through the conflict path instead
+					context.try_rollback();
+					context.prepare_retry();
+					context.rewrite_before_retry();
+					refreshed_transaction = true;
+					commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);
+					stats = &commit_stats_snapshot.stats;
+				} else if (check_conflicts) {
+					commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);
+					stats = &commit_stats_snapshot.stats;
+				} else if (!lineage_moved && branch_gap) {
+					commit_stats_snapshot.snapshot.snapshot_id = maxima.global_max.GetIndex();
+				}
+			} else if (check_conflicts) {
 				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);
 				stats = &commit_stats_snapshot.stats;
 			} else {
 				commit_stats_snapshot.snapshot = context.get_snapshot();
-				if (context.supports_v2_0_metadata && context.get_snapshot_maxima) {
-					// snapshots of other branches hide behind the lineage head and leave id gaps,
-					// so read the maxima fresh and allocate past them while the lineage is unchanged
-					auto maxima = context.get_snapshot_maxima();
-					bool unreadable = !maxima.global_max.IsValid() || !maxima.lineage_head.IsValid();
-					bool lineage_moved =
-					    !unreadable && maxima.lineage_head.GetIndex() != commit_stats_snapshot.snapshot.snapshot_id;
-					if (unreadable || (lineage_moved && maxima.branch_max.IsValid())) {
-						// with branch snapshots an id below the gap is free, so a moved lineage cannot
-						// rely on the snapshot insert colliding, restart the metadata transaction like
-						// a retry and refresh through the conflict path instead
-						context.try_rollback();
-						context.prepare_retry();
-						context.rewrite_before_retry();
-						commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);
-						stats = &commit_stats_snapshot.stats;
-					} else if (!lineage_moved && maxima.global_max.GetIndex() > maxima.lineage_head.GetIndex()) {
-						commit_stats_snapshot.snapshot.snapshot_id = maxima.global_max.GetIndex();
-					}
-				}
 			}
 			commit_snapshot.snapshot_id++;
 			if (SchemaChangesMade()) {
@@ -2828,7 +2836,9 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				context.rewrite_before_retry();
 			}
 			// read after the latest snapshot, so a commit the expiry does not see takes the id of the new snapshot
-			auto expiry = context.get_expired_snapshots(i, commit_snapshot.snapshot_id - 1);
+			// a restarted metadata transaction undid the statement expiry, so reselect and clean up as on a retry
+			auto expiry =
+			    context.get_expired_snapshots(refreshed_transaction ? i + 1 : i, commit_snapshot.snapshot_id - 1);
 			auto &expired_snapshots = expiry.snapshots;
 			// a commit of options alone, or of an expiry with nothing left to expire, writes no snapshot
 			wrote_snapshot = context.write_snapshot &&
