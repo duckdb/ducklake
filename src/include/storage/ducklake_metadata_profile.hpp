@@ -45,6 +45,9 @@ struct DuckLakeMetadataProfile {
 	bool rename_inlined_columns_by_copy = false;
 	//! The first rule whose pattern is found in the message of a commit error applies
 	vector<DuckLakeCommitErrorRule> commit_errors;
+	//! Settings that change the values read from the metadata database, which DuckLake's connections keep at their
+	//! defaults
+	vector<string> reset_settings;
 
 	optional_ptr<const DuckLakeCommitErrorRule> FindCommitErrorRule(const string &message) const;
 
@@ -55,12 +58,11 @@ struct DuckLakeMetadataProfile {
 //! The profiles registered in a database, by the catalog type of the metadata database they describe
 class DuckLakeMetadataProfiles {
 public:
-	DuckLakeMetadataProfiles();
-
 	static DuckLakeMetadataProfiles &Get(DatabaseInstance &db);
 
-	//! Registers a profile from its JSON, whose fields replace those of its "base" profile
-	void Register(const string &name, const string &json);
+	//! Registers a profile from its JSON, whose fields replace those of its "base" profile. Without replace, a
+	//! profile already registered under the name is kept
+	void Register(const string &name, const string &json, bool replace = true);
 	shared_ptr<const DuckLakeMetadataProfile> Find(const string &name);
 
 private:

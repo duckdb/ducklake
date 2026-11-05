@@ -111,6 +111,8 @@ public:
 	//! Copy extension-registered settings from one context onto another. Core engine settings
 	//! are not copied, and settings that change the types read are turned off.
 	static void CopyExtensionSettings(ClientContext &from, ClientContext &to);
+	//! Reset the given extension settings of a context to their defaults, skipping those that are not registered
+	static void ResetExtensionSettings(ClientContext &context, const vector<string> &names);
 
 	static string ParseConfigOptionValue(ClientContext &context, const string &option, const Value &val);
 	static void ValidateConfigOptionScope(const string &option, bool has_schema, bool has_table);
