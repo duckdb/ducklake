@@ -4,6 +4,7 @@
 #include "duckdb/common/array.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/type_visitor.hpp"
+#include "duckdb/common/types/decimal.hpp"
 #include "duckdb/parser/expression/type_expression.hpp"
 #include "storage/ducklake_metadata_info.hpp"
 
@@ -120,9 +121,20 @@ LogicalType DuckLakeTypes::FromString(const string &type) {
 		if (decimal_members_vect.size() != 2) {
 			throw NotImplementedException("Invalid DECIMAL type - expected width and scale");
 		}
-		auto width = std::stoull(decimal_members_vect[0]);
-		auto scale = std::stoull(decimal_members_vect[1]);
-		return LogicalType::DECIMAL(width, scale);
+		uint64_t width;
+		uint64_t scale;
+		try {
+			width = std::stoull(decimal_members_vect[0]);
+			scale = std::stoull(decimal_members_vect[1]);
+		} catch (std::exception &) {
+			throw InvalidInputException("Invalid DECIMAL type \"%s\" - width and scale must be numbers", type);
+		}
+		if (width < 1 || width > Decimal::MAX_WIDTH_DECIMAL || scale > width) {
+			throw InvalidInputException("Invalid DECIMAL type \"%s\" - width must be between 1 and %d and scale must "
+			                            "not exceed the width",
+			                            type, Decimal::MAX_WIDTH_DECIMAL);
+		}
+		return LogicalType::DECIMAL(NumericCast<uint8_t>(width), NumericCast<uint8_t>(scale));
 	}
 	return ParseBaseType(type);
 }
