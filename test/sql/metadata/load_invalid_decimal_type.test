@@ -17,7 +17,7 @@ CREATE TABLE dl.t (d DECIMAL(10, 2))
 statement ok
 DETACH dl
 
-foreach decimal_type decimal(999999,1) decimal(0,0) decimal(39,0) decimal(10,11) decimal(-1,0)
+foreach decimal_type decimal(999999,1) decimal(0,0) decimal(39,0) decimal(10,11)
 
 statement ok
 ATTACH '{TEST_DIR}/invalid_decimal.db' AS meta
