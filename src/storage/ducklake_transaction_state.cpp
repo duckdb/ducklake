@@ -2457,9 +2457,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 				                                     deleted_rows_remain)) {
 					continue;
 				}
-				// The rewritten files took their deleted rows along, which the stored count still holds. The count
-				// is refreshed only while deleted rows remain: the column bounds were not recomputed, and a count
-				// equal to the live rows would present them as exact (DuckLakeGetPartitionStats).
+				// keep the overcount while deleted rows remain, so the bounds stay inexact
 				if (deleted_rows_remain) {
 					refreshed_record_counts.insert(table_entry.first);
 				}
