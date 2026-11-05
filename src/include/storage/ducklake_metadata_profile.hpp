@@ -48,6 +48,8 @@ struct DuckLakeMetadataProfile {
 	//! Settings that change the values read from the metadata database, which DuckLake's connections keep at their
 	//! defaults
 	vector<string> reset_settings;
+	//! The catalog type that ducklake_settings reports instead of the one of the metadata database
+	string reported_catalog_type;
 
 	optional_ptr<const DuckLakeCommitErrorRule> FindCommitErrorRule(const string &message) const;
 

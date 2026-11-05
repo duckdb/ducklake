@@ -8,6 +8,10 @@ require parquet
 
 require sqlite_scanner
 
+# with autoloading, require does not load the extension, which registers the base profile when it loads
+statement ok
+LOAD sqlite_scanner
+
 statement ok
 CALL ducklake_register_metadata_profile('sqlite', '{"base": "sqlite", "system_column_names": ["rowid", "oid", "_rowid_", "reserved"], "reset_settings": ["sqlite_all_varchar", "not_a_setting"]}')
 
