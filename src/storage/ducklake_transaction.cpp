@@ -860,8 +860,8 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
 DuckLakeTransaction::~DuckLakeTransaction() {
 }
 
-shared_ptr<DuckLakeSchemaCacheEntry> DuckLakeTransaction::PinSchemaCacheEntry(const string &key,
-                                                                              shared_ptr<DuckLakeSchemaCacheEntry> entry) {
+shared_ptr<DuckLakeSchemaCacheEntry>
+DuckLakeTransaction::PinSchemaCacheEntry(const string &key, shared_ptr<DuckLakeSchemaCacheEntry> entry) {
 	if (!entry) {
 		// LCOV_EXCL_START
 		return entry;
