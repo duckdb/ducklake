@@ -194,7 +194,7 @@ def main(argv=None):
 
         initial = directory / f"{suite}.csv"
         initial.write_text("\n".join(benchmarks) + "\n", encoding="utf-8")
-        code, regressed = run(COMPARE, root, passthrough, initial)
+        code, regressed = run(RUNNER, root, [*passthrough, "--samples", "10"], initial)
     if code != 0:
         return code
     for benchmark in sorted(regressed):
