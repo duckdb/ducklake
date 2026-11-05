@@ -219,6 +219,10 @@ public:
 	virtual bool CommitsEachStatement() const {
 		return false;
 	}
+	//! Whether metadata reads inside a transaction can show commits of other transactions
+	virtual bool ShowsConcurrentCommits() const {
+		return CommitsEachStatement();
+	}
 	//! Whether transactions that started before a metadata table was dropped still read it
 	virtual bool DroppedTablesStayReadable() const;
 	//! Whether a commit inserts inlined rows after its batch instead of sending them as VALUES text in it

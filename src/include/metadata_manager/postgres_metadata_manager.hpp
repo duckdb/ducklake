@@ -28,6 +28,7 @@ public:
 	bool DroppedTablesStayReadable() const override {
 		return false;
 	}
+	bool ShowsConcurrentCommits() const override;
 	bool InsertsInlinedRowsAfterBatch(idx_t row_count) const override;
 	idx_t MaxIdentifierLength() const override {
 		return 63;

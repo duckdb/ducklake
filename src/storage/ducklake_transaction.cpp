@@ -2465,8 +2465,8 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 	lock_guard<mutex> guard(snapshot_lock);
 	auto entry = snapshot_cache.find(snapshot_value);
 	if (entry != snapshot_cache.end()) {
-		if (check_expired) {
-			// concurrent expiries may be visible to the next metadata read
+		if (check_expired && metadata_manager->ShowsConcurrentCommits()) {
+			// a concurrent expiry may be visible to the next metadata read
 			metadata_manager->CheckSnapshotAfterExpiredGap(entry->second, version, newest_snapshot_id,
 			                                               expired_snapshot_ids);
 		}
