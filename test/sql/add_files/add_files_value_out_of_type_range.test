@@ -19,15 +19,15 @@ COPY (SELECT TIMESTAMP '294247-01-10 04:00:54.775806' AS t) TO '{DATA_PATH}/add_
 foreach type TIMESTAMP_MS TIMESTAMP_S
 
 statement ok
-CREATE TABLE dl.t_${type} (t ${type})
+CREATE TABLE dl.t_{type} (t {type})
 
 statement error
-CALL ducklake_add_data_files('dl', 't_${type}', '{DATA_PATH}/add_files_max_timestamp.parquet')
+CALL ducklake_add_data_files('dl', 't_{type}', '{DATA_PATH}/add_files_max_timestamp.parquet')
 ----
 of type TIMESTAMP in the file does not fit type TIMESTAMP_
 
 query I
-SELECT count(*) FROM dl.t_${type}
+SELECT count(*) FROM dl.t_{type}
 ----
 0
 

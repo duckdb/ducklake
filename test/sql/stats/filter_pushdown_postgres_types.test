@@ -41,19 +41,19 @@ analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 foreach type TIME TIME_NS
 
 statement ok
-CREATE TABLE dl.t_${type} (id INTEGER, v ${type})
+CREATE TABLE dl.t_{type} (id INTEGER, v {type})
 
 statement ok
-INSERT INTO dl.t_${type} VALUES (1, '01:00:00')
+INSERT INTO dl.t_{type} VALUES (1, '01:00:00')
 
 statement ok
-INSERT INTO dl.t_${type} VALUES (2, '12:00:00')
+INSERT INTO dl.t_{type} VALUES (2, '12:00:00')
 
 statement ok
-INSERT INTO dl.t_${type} VALUES (3, '24:00:00')
+INSERT INTO dl.t_{type} VALUES (3, '24:00:00')
 
 query II
-EXPLAIN ANALYZE SELECT id FROM dl.t_${type} WHERE v > '18:00:00'
+EXPLAIN ANALYZE SELECT id FROM dl.t_{type} WHERE v > '18:00:00'
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 
@@ -62,19 +62,19 @@ endloop
 foreach type DATE TIMESTAMP_NS
 
 statement ok
-CREATE TABLE dl.inf_${type} (id INTEGER, v ${type})
+CREATE TABLE dl.inf_{type} (id INTEGER, v {type})
 
 statement ok
-INSERT INTO dl.inf_${type} VALUES (1, '-infinity')
+INSERT INTO dl.inf_{type} VALUES (1, '-infinity')
 
 statement ok
-INSERT INTO dl.inf_${type} VALUES (2, '2024-01-01')
+INSERT INTO dl.inf_{type} VALUES (2, '2024-01-01')
 
 statement ok
-INSERT INTO dl.inf_${type} VALUES (3, 'infinity')
+INSERT INTO dl.inf_{type} VALUES (3, 'infinity')
 
 query II
-EXPLAIN ANALYZE SELECT id FROM dl.inf_${type} WHERE v > '2024-03-01'
+EXPLAIN ANALYZE SELECT id FROM dl.inf_{type} WHERE v > '2024-03-01'
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 
