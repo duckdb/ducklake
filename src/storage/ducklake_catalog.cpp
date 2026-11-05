@@ -543,6 +543,10 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(const DuckLakeColumnInfo 
 	col_data.id = col.id;
 	if (col.children.empty()) {
 		auto col_type = DuckLakeTypes::FromString(col.type);
+		if (DuckLakeTypes::IsNested(col_type)) {
+			throw InvalidInputException("Column %s has the nested type \"%s\" but no child columns", col.name,
+			                            col.type);
+		}
 		col_data.initial_default = col.initial_default.DefaultCastAs(col_type);
 		if (!col.default_value.IsNull()) {
 			if (col.default_value_type == "literal") {
