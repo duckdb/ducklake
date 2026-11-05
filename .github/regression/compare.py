@@ -30,7 +30,7 @@ class RecordedRunner:
 
 
 def run_adaptive_benchmark(old_runner, new_runner, benchmark, early_stop, verbose):
-    """Reports the initial pairs as the verdict, accepting false negatives over confirmation runs"""
+    """Reports the initial pairs as the verdict, accepting false positives over confirmation runs"""
     old_runner, new_runner = RecordedRunner(old_runner), RecordedRunner(new_runner)
     old, new, old_failure, new_failure, _, _ = test_runner.run_paired_samples(
         old_runner, new_runner, benchmark, test_runner.INITIAL_RUNS, 0
