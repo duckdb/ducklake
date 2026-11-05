@@ -8,7 +8,7 @@ cache_file snap100k_ready.marker
 load
 @create snap100k
 @attach snap100k AS lake (DATA_PATH '${BENCHMARK_DIR}/snap100k_files')
-INSERT INTO __ducklake_metadata_lake.ducklake_snapshot
+INSERT INTO __ducklake_metadata_lake.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id)
 SELECT i, to_timestamp(i), schema_version, next_catalog_id, next_file_id
 FROM range(1, 100001) r(i), __ducklake_metadata_lake.ducklake_snapshot
 WHERE snapshot_id = 0;

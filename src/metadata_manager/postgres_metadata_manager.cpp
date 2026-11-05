@@ -502,8 +502,17 @@ static string PostgresQuery(const string &remote_query) {
 	                          SQLString(remote_query));
 }
 
+string PostgresMetadataManager::GetSnapshotMaximaQuery() const {
+	string remote_query = "SELECT MAX(snapshot_id), MAX(CASE WHEN branch_id = 0 THEN snapshot_id END), "
+	                      "MAX(CASE WHEN branch_id <> 0 THEN snapshot_id END) "
+	                      "FROM {METADATA_CATALOG}.ducklake_snapshot";
+	SubstituteCatalogPlaceholders(remote_query,
+	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
+	return PostgresQuery(remote_query);
+}
+
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
-	auto remote_query = LatestSnapshotQuery();
+	auto remote_query = BranchAwareLatestSnapshotQuery();
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	return PostgresQuery(remote_query);
@@ -512,7 +521,8 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot,
                                                                    bool include_exactness) const {
 	// one statement reads the latest snapshot and the table stats from the same state at any isolation level
-	auto remote_query = SnapshotAndStatsAndChangesQuery(include_exactness);
+	auto remote_query =
+	    SnapshotAndStatsAndChangesQuery(include_exactness, transaction.GetCatalog().SupportsBranching());
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	SubstituteSnapshotPlaceholders(snapshot, remote_query);

@@ -233,6 +233,8 @@ public:
 	virtual bool IsRetryableCommitError(const string &message) const;
 	//! Advice added to the error of a commit that failed for good
 	virtual string CommitErrorHint(const string &message) const;
+	//! Whether a read on a second connection can block a concurrent commit of the metadata catalog
+	bool ConcurrentReadsBlockCommits() const;
 	//! SQL that the commit of a transaction that changed options runs, so two commits cannot both insert an option
 	virtual string ConfigOptionLockSql() const {
 		return string();
@@ -292,6 +294,10 @@ public:
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
 	//! Get the CREATE TABLE statements for all metadata tables
 	virtual string GetCreateTableStatements();
+	static string GetSnapshotTableColumns();
+	virtual string GetSnapshotTableStatement();
+	//! Rows inserted after the metadata tables are created
+	virtual string GetInitialDataStatements();
 	virtual string GetSchemaTableStatement();
 	virtual string GetDataFileTableStatement();
 	virtual string GetDeleteFileTableStatement();
@@ -335,11 +341,20 @@ public:
 	static string GlobalTableStatsQuery(bool include_exactness, const vector<TableIndex> &table_ids = {});
 	//! Pure parsers for the results of the above queries.
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
-	                                                  optional_ptr<string> catalog_version = nullptr);
+	                                                  optional_ptr<string> catalog_version = nullptr,
+	                                                  optional_ptr<optional_idx> global_snapshot_max = nullptr);
+	//! The newest snapshot of any branch as of the last snapshot read, commits allocate past it
+	optional_idx GetGlobalSnapshotMax() const {
+		return global_snapshot_max;
+	}
+	//! The newest snapshot of any branch and of the main lineage, read on a fresh connection
+	DuckLakeSnapshotMaxima GetSnapshotMaxima();
+	virtual string GetSnapshotMaximaQuery() const;
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
 	//! Take the table sizes that stats rows lack from the live data files
 	static void FillMissingTableSizes(vector<DuckLakeGlobalStatsInfo> &stats,
-	                                  const std::function<unique_ptr<QueryResult>(string)> &executor);
+	                                  const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                                  bool branch_aware);
 	//! Whether the result contains a column with the given name
 	static bool ResultHasColumn(QueryResult &result, const string &name);
 
@@ -389,7 +404,8 @@ public:
 	//! With require_exact, the count is NULL if any visible file is only partially visible to the snapshot.
 	//! With exclude_new_files, the files of the commit, which can already be in the catalog, are not counted.
 	static string GetNetDataFileRowCountSql(TableIndex table_id, const Identifier &inlined_deletion_table,
-	                                        bool require_exact = false, bool exclude_new_files = false);
+	                                        bool branch_aware, bool require_exact = false,
+	                                        bool exclude_new_files = false);
 	static string GetNetInlinedRowCountSql(const Identifier &inlined_table_name,
 	                                       const DuckLakeInlinedColNames &col_names);
 	//! The rows that are stored, deleted ones included, and the rows that are live
@@ -411,7 +427,9 @@ public:
 
 	virtual void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files);
 	static string DropSchemas(const set<SchemaIndex> &ids);
-	static string DropTables(const set<TableIndex> &ids, bool renamed);
+	static string DropTables(const set<TableIndex> &ids, bool renamed, bool write_visibility);
+	static string VisibilityFlushDrop(const string &visibility_table, const string &file_id_column,
+	                                  const string &filter_column, const string &id_list);
 	static string DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags = false);
 	static string DropMacros(const set<MacroIndex> &ids);
 
@@ -457,7 +475,8 @@ public:
 	//! {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders. Caller supplies resolved paths (one per file,
 	//! same order) since path policy differs across callers (schema-relative vs. always-absolute).
 	static string WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
-	                                        const vector<DuckLakePath> &resolved_paths, bool supports_v1_1_metadata);
+	                                        const vector<DuckLakePath> &resolved_paths, bool supports_v1_1_metadata,
+	                                        bool write_visibility);
 	//! Opt-in fast-path: if this backend supports the DuckDB Appender API, write the files directly
 	bool TryAppendDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
 	                        const vector<DuckLakeTableInfo> &new_tables,
@@ -503,14 +522,15 @@ public:
 	DuckLakeInlinedColNames InlinedColNames() const;
 	static string InlinedTableRegistrationTuple(idx_t table_id, const Identifier &table_name, idx_t schema_version);
 	static string LatestInlinedTableQuery(idx_t table_id);
-	static string DropDataFiles(const set<DataFileIndex> &dropped_files);
+	static string DropDataFiles(const set<DataFileIndex> &dropped_files, bool write_visibility);
 	//! Selects the given data files that are still in the metadata
 	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
 	//! Selects the given columns that a live data file of the table records values of, or holds the default of
-	static string GetColumnsWithRecordedValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids);
+	static string GetColumnsWithRecordedValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
+	                                              bool branch_aware);
 	//! Selects the given columns that may hold values other than NULL in a live data file of the table
 	static string GetColumnsWithFileValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
-	                                          const map<FieldIndex, idx_t> &null_default_columns);
+	                                          const map<FieldIndex, idx_t> &null_default_columns, bool branch_aware);
 	//! Selects the versions of the given columns with their begin snapshot, whether their initial default is NULL and
 	//! whether they are top level columns
 	static string GetColumnDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids);
@@ -525,32 +545,34 @@ public:
 	                                           const vector<DuckLakePath> &resolved_paths);
 	//! Caller supplies one resolved path per new delete file, in the same order.
 	static string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
-	                                  const vector<DuckLakePath> &resolved_paths, bool write_row_group_count);
+	                                  const vector<DuckLakePath> &resolved_paths, bool write_row_group_count,
+	                                  bool write_visibility);
 	static string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros);
 
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
 	static string WriteNewColumnMappings(const vector<DuckLakeColumnMappingInfo> &new_column_mappings);
 	//! Caller supplies one resolved path per compaction, in the same order.
 	static string WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions,
-	                                 const vector<DuckLakePath> &resolved_paths);
-	static string WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions);
+	                                 const vector<DuckLakePath> &resolved_paths, bool write_visibility);
+	static string WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions, bool write_visibility);
 	//! For MERGE_ADJACENT_TABLES, resolved_paths is one path per compaction; for REWRITE_DELETES it
 	//! is ignored.
 	static string WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions, CompactionType type,
-	                               const vector<DuckLakePath> &resolved_paths);
+	                               const vector<DuckLakePath> &resolved_paths, bool write_visibility);
 	//! SQL templates with {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders, shared with the
 	//! server-side commit path.
-	static string InsertSnapshotSql();
+	static string InsertSnapshotSql(bool write_branch_id);
 	static string WriteSnapshotChangesSql(const SnapshotChangeInfo &change_info,
 	                                      const DuckLakeSnapshotCommit &commit_info);
 	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
 	static string InsertTableColumnStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
 	//! Set the stored table sizes to the size of the live data files
-	static string RefreshTableSizesSql(const set<TableIndex> &table_ids);
+	static string RefreshTableSizesSql(const set<TableIndex> &table_ids, bool branch_aware);
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
-	                              const std::function<unique_ptr<QueryResult>(string)> &executor, const string &query);
-	static string SnapshotAndStatsAndChangesQuery(bool include_exactness);
+	                              const std::function<unique_ptr<QueryResult>(string)> &executor, const string &query,
+	                              bool branch_aware);
+	static string SnapshotAndStatsAndChangesQuery(bool include_exactness, bool branch_aware);
 	//! The query of the conflict check, which must read the latest snapshot and the table stats consistently
 	virtual string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const;
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
@@ -579,7 +601,7 @@ public:
 	static string ReadInlinedDataAggregatesSql(const Identifier &inlined_table_name, const string &select_list,
 	                                           const DuckLakeInlinedColNames &col_names);
 	//! The column stats of the data files committed before the snapshot's next file id
-	static string ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness);
+	static string ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness, bool branch_aware);
 	//! Throws on a failed inlined data read, hinting at the migration for legacy named catalogs
 	void CheckInlinedDataReadError(QueryResult &result, const Identifier &inlined_table_name);
 	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types,
@@ -620,7 +642,80 @@ public:
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool from_dev1 = false);
 	virtual void MigrateV11();
+	//! The live branch with the given name, invalid when none exists
+	DuckLakeBranchInfo FindBranch(const string &name);
+	//! The latest snapshot of the attached branch, with the global allocator state
+	string BranchAwareLatestSnapshotQuery() const;
+	//! The snapshots that live branches depend on, their fork points and their own snapshots
+	set<idx_t> GetBranchProtectedSnapshots();
+	string FileVisibilityGuard(const string &visibility_table, const string &file_id_column, const string &alias = "f",
+	                           bool include_inherited = true);
+	static string MainHeadSnapshotQuery(bool branch_aware);
+	string BranchLineageFilter() const;
+	//! The branch whose visibility rows a read at the given snapshot resolves through
+	idx_t ReadBranchId(DuckLakeSnapshot snapshot) const;
+	void ThrowIfPastBranchFork(DuckLakeSnapshot snapshot) const;
+	bool HasBranchTable();
+	bool HasSnapshotRemapTable();
+	bool HasSnapshotBranchColumn();
+	bool HasFileVisibilityTable();
+	bool HasDeleteFileVisibilityTable();
+	bool HasMainBranchRow();
+	//! The predicate selecting the visibility events a read of the branch resolves through
+	static string VisibilityChainPredicate(idx_t branch_id, optional_idx fork_snapshot);
+	//! The per file ranges a branch derives from its visibility events
+	static string VisibilityEventRanges(const string &visibility_table, const string &file_id_column,
+	                                    const string &chain_predicate, const string &prefix);
+	static string DataFileSource(bool branch_aware, idx_t branch_id, optional_idx fork_snapshot, const string &prefix);
+	static string DeleteFileSource(bool branch_aware, idx_t branch_id, optional_idx fork_snapshot,
+	                               const string &prefix);
+	string DataFiles() const;
+	string DeleteFiles() const;
+	bool HasMetadataColumn(const string &table, const string &column);
+	bool HasAnyFileRangeColumns();
+	bool HasAllFileRangeColumns();
+	bool HasBranchZeroFileVisibility(const string &file_table, const string &file_column, bool has_visibility_table,
+	                                 const string &visibility_table);
+	bool HasBranchZeroDataVisibility();
+	bool HasBranchZeroDeleteVisibility();
+	bool HasBranchZeroVisibility();
+	bool HasVisibilityEventShape(const string &visibility_table);
+	bool HasVisibilityMigrationTable(const string &visibility_table);
+	bool HasV2_0Dev1Additions();
+	virtual void AddV2_0Dev1Additions();
+	//! The branch additions a dev catalog is missing, all of them for the 1.1 migration
+	struct V2_0Dev1Additions {
+		bool branch_table = true;
+		bool remap_table = true;
+		bool branch_column = true;
+		bool file_visibility_table = true;
+		bool delete_file_visibility_table = true;
+		//! The inline range columns still present, read into visibility and then dropped
+		bool drop_data_begin = true;
+		bool drop_data_end = true;
+		bool drop_delete_begin = true;
+		bool drop_delete_end = true;
+		//! Visibility tables of an older dev build with range rows, rewritten into events
+		bool file_visibility_ranges = false;
+		bool delete_file_visibility_ranges = false;
+		//! Backup tables of an interrupted rewrite, consumed and dropped
+		bool file_visibility_migration = false;
+		bool delete_file_visibility_migration = false;
+	};
+	V2_0Dev1Additions ProbeV2_0Dev1Additions();
+	void VerifyHealableV2_0Dev1(const V2_0Dev1Additions &missing);
+	static string V2_0Dev1AdditionsSql(const V2_0Dev1Additions &add);
+	static string VisibilityEventBackfillSql(const string &visibility_table, const string &file_table,
+	                                         const string &file_id_column);
+	static string VisibilityEventRewriteSql(bool table_missing, bool has_ranges, bool has_migration,
+	                                        const string &visibility_table, const string &file_id_column,
+	                                        const string &create_statement);
 	static string GetSnapshotTagTableStatement();
+	static string GetFileVisibilityTableStatement();
+	static string GetDeleteFileVisibilityTableStatement();
+	static string GetBranchTableStatement();
+	static string GetSnapshotRemapTableStatement();
+	static string GetMainBranchRowStatement();
 	//! Whether the catalog already has every metadata table and column of v1.1
 	bool HasV1_1Additions();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
@@ -777,6 +872,8 @@ public:
 private:
 	static unordered_map<string /* name */, create_t> metadata_managers;
 	static mutex metadata_managers_lock;
+	//! The global snapshot maximum read along with the latest snapshot
+	optional_idx global_snapshot_max;
 
 	unordered_set<idx_t> GetFileIdsWithInlinedDeletions(TableIndex table_id, DuckLakeSnapshot snapshot);
 	unique_ptr<QueryResult> ReadInlinedDataChanges(DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot,

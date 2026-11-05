@@ -1,0 +1,58 @@
+# name: test/sql/branches/branch_attach_inlined.test
+# description: inherited inlined data on a branch reads as the parent at the fork
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_attach_inlined_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2, 2, NULL)
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_attach_inlined_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+# the inlined row of the second insert came after the fork
+query I
+SELECT * FROM dl.t
+----
+1
+
+query I
+SELECT COUNT(*) FROM dl.t
+----
+1
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_attach_inlined_files', METADATA_CATALOG 'meta')
+
+query I
+SELECT * FROM dl.t ORDER BY i
+----
+1
+2
+
+statement ok
+DETACH dl

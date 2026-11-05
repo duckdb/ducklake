@@ -23,7 +23,7 @@ SELECT sum(rows_flushed) AS flushed FROM ducklake_flush_inlined_data('lake');
 result_query IIIII
 SELECT flushed,
 (SELECT count(*) FROM ducklake_list_files('lake', 'part')),
-(SELECT sum(delete_count) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL),
+(SELECT sum(delete_count) FROM __ducklake_metadata_lake.ducklake_delete_file),
 (SELECT count(*) FROM lake.part),
 (SELECT count(*) || ' ' || sum(id) FROM lake.flat)
 FROM __answer

@@ -12,7 +12,7 @@ load
 @attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
 CALL lake.set_option('data_inlining_row_limit', 10);
 CREATE TABLE lake.t (id BIGINT, v VARCHAR);
-INSERT INTO __ducklake_metadata_lake.ducklake_snapshot
+INSERT INTO __ducklake_metadata_lake.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id)
 SELECT i, to_timestamp(i), schema_version, next_catalog_id, next_file_id
 FROM range(2, 20001) r(i), __ducklake_metadata_lake.ducklake_snapshot
 WHERE snapshot_id = 1;

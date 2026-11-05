@@ -1,0 +1,40 @@
+# name: test/sql/branches/branch_only_file_attach.test
+# description: a branch attach reads a file whose only add event lives on the branch
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (42)
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 1, 1, NULL)
+
+statement ok
+UPDATE meta.ducklake_snapshot SET branch_id = 1 WHERE snapshot_id = 2
+
+statement ok
+UPDATE meta.ducklake_file_visibility SET branch_id = 1 WHERE snapshot_id = 2
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT i FROM dl.t
+----
+42

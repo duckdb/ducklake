@@ -115,6 +115,20 @@ void DuckLakeInitializer::Initialize() {
 	// probe the metadata server for optional capabilities (e.g. server-side commit retries) once per attach
 	current_metadata_manager.ProbeServerCapabilities();
 	current_metadata_manager.ClearCache();
+	if (!options.branch_name.empty() && !catalog.SupportsBranching()) {
+		ThrowUnsupportedByVersion(catalog.GetDuckLakeVersion(), "branches");
+	}
+	if (!options.branch_name.empty() && !StringUtil::CIEquals(options.branch_name, "main")) {
+		auto branch = current_metadata_manager.FindBranch(options.branch_name);
+		if (!branch.IsValid()) {
+			throw InvalidInputException("No branch with the name \"%s\" exists", options.branch_name);
+		}
+		if (!branch.fork_branch_id.IsValid() || branch.fork_branch_id.GetIndex() != 0 ||
+		    !branch.fork_snapshot_id.IsValid()) {
+			throw NotImplementedException("Only branches that fork from main can be attached");
+		}
+		catalog.SetAttachedBranch(branch.branch_id, branch.fork_snapshot_id);
+	}
 	if (options.at_clause) {
 		// if the user specified a snapshot try to load it to trigger an error if it does not exist
 		transaction.GetSnapshot();
@@ -352,6 +366,37 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	// set correct version metadata manager
 	if (resolved_version != DuckLakeVersion::UNSET) {
 		SetVersionedMetadataManager(transaction, resolved_version);
+	}
+	if (resolved_version == DuckLakeVersion::V2_0_DEV1 && !transaction.GetMetadataManager().HasV2_0Dev1Additions()) {
+		if (catalog.GetAttached().IsReadOnly()) {
+			// once the inline range columns are gone the visibility events are the only readable ranges
+			auto &manager = transaction.GetMetadataManager();
+			if (manager.HasAllFileRangeColumns()) {
+				catalog.SetBranchMetadataMissing();
+			} else if ((manager.HasFileVisibilityTable() &&
+			            !manager.HasVisibilityEventShape("ducklake_file_visibility")) ||
+			           (manager.HasDeleteFileVisibilityTable() &&
+			            !manager.HasVisibilityEventShape("ducklake_delete_file_visibility")) ||
+			           manager.HasVisibilityMigrationTable("ducklake_file_visibility") ||
+			           manager.HasVisibilityMigrationTable("ducklake_delete_file_visibility")) {
+				throw InvalidInputException("This DuckLake catalog holds the visibility rows of an older dev build "
+				                            "or an unfinished rewrite of them, attach it writable once to heal it");
+			} else if (!manager.HasBranchZeroVisibility()) {
+				throw InvalidInputException("Cannot read this DuckLake catalog: the visibility events that "
+				                            "replaced the inline file ranges are missing");
+			}
+		} else {
+			try {
+				transaction.GetMetadataManager().AddV2_0Dev1Additions();
+				// commit now so a concurrent heal surfaces inside the attach retry scope
+				transaction.ReleaseMetadataTransaction();
+			} catch (std::exception &ex) {
+				// a concurrent attach may have added them first
+				if (!transaction.GetMetadataManager().HasV2_0Dev1Additions()) {
+					throw;
+				}
+			}
+		}
 	}
 }
 

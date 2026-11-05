@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/optional_idx.hpp"
 
 namespace duckdb {
 
@@ -33,6 +34,14 @@ struct DuckLakeSnapshot {
 
 	void Serialize(Serializer &serializer) const;
 	static DuckLakeSnapshot Deserialize(Deserializer &deserializer);
+};
+
+//! The newest snapshot of any branch and of the commit lineage, read when a commit allocates
+struct DuckLakeSnapshotMaxima {
+	optional_idx global_max;
+	optional_idx lineage_head;
+	//! The newest snapshot of a branch, set when any branch committed, so id gaps can exist
+	optional_idx branch_max;
 };
 
 } // namespace duckdb

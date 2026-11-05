@@ -48,9 +48,37 @@ SELECT count(*) FROM postgres_query('pg', 'SELECT 1 FROM information_schema.colu
 ----
 1
 
-# a dev catalog has no table of the versions after 1.1
+# a dev catalog has no table or column of the versions after 1.1
 statement ok
 CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_snapshot_tag')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_branch')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_snapshot_remap')
+
+# an old dev catalog carried the inline ranges, restore them before dropping the visibility rows
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_data_file ADD COLUMN begin_snapshot BIGINT')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_data_file ADD COLUMN end_snapshot BIGINT')
+
+statement ok
+CALL postgres_execute('pg', 'UPDATE dev1_skips_present_ddl.ducklake_data_file f SET begin_snapshot = v.snapshot_id FROM dev1_skips_present_ddl.ducklake_file_visibility v WHERE v.branch_id = 0 AND v.is_delete = FALSE AND v.data_file_id = f.data_file_id')
+
+statement ok
+CALL postgres_execute('pg', 'UPDATE dev1_skips_present_ddl.ducklake_data_file f SET end_snapshot = v.snapshot_id FROM dev1_skips_present_ddl.ducklake_file_visibility v WHERE v.branch_id = 0 AND v.is_delete = TRUE AND v.data_file_id = f.data_file_id')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_file_visibility')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_delete_file_visibility')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_snapshot DROP COLUMN branch_id')
 
 statement ok
 CALL postgres_execute('pg', 'UPDATE dev1_skips_present_ddl.ducklake_metadata SET value = ''1.1-dev1'' WHERE key = ''version''')

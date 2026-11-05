@@ -126,6 +126,16 @@ string DuckLakeMetadataManager::CommitErrorHint(const string &message) const {
 	return rule->hint;
 }
 
+bool DuckLakeMetadataManager::ConcurrentReadsBlockCommits() const {
+	if (!GetMetadataProfile().concurrent_reads_block_commits) {
+		return false;
+	}
+	// WAL readers do not block commits, and a write transaction fails on a stale snapshot instead
+	auto &parameters = transaction.GetCatalog().MetadataParameters();
+	auto parameter = parameters.find("journal_mode");
+	return parameter == parameters.end() || !StringUtil::CIEquals(parameter->second.ToString(), "wal");
+}
+
 bool DuckLakeMetadataManager::ExecuteRetrialsServerSide() const {
 	return transaction.GetCatalog().RetrialsServerSide();
 }
@@ -295,15 +305,31 @@ void DuckLakeMetadataManager::InitializeDuckLake(bool has_explicit_schema, DuckL
 	string encryption_str = DuckLakeUtil::BoolLiteral(encryption == DuckLakeEncryption::ENCRYPTED);
 	string initial_schema_uuid = transaction.GenerateUUID();
 	initialize_query += StringUtil::Format(R"(
-INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (0, NOW(), 0, 1, 0);
+INSERT INTO {METADATA_CATALOG}.ducklake_snapshot
+(snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id)
+VALUES (0, NOW(), 0, 1, 0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"',  NULL, NULL, NULL);
 INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '%s'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
 INSERT INTO {METADATA_CATALOG}.ducklake_schema (schema_id, schema_uuid, begin_snapshot, end_snapshot, schema_name, path, path_is_relative) VALUES (0, '%s'::UUID, 0, NULL, 'main', 'main/', true);
 	)",
 	                                       GetVersionString(), DuckDB::SourceID(), SQLString(data_path), encryption_str,
 	                                       initial_schema_uuid);
+	initialize_query += GetInitialDataStatements();
 	auto result = Execute(initialize_query);
 	result->ThrowIfError("Failed to initialize DuckLake: ");
+}
+
+string DuckLakeMetadataManager::GetSnapshotTableColumns() {
+	return "snapshot_id BIGINT PRIMARY KEY, snapshot_time TIMESTAMPTZ, schema_version BIGINT, "
+	       "next_catalog_id BIGINT, next_file_id BIGINT";
+}
+
+string DuckLakeMetadataManager::GetSnapshotTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(" + GetSnapshotTableColumns() + ");";
+}
+
+string DuckLakeMetadataManager::GetInitialDataStatements() {
+	return string();
 }
 
 string DuckLakeMetadataManager::GetSchemaTableStatement() {
@@ -325,6 +351,82 @@ string DuckLakeMetadataManager::GetDeleteFileTableStatement() {
 	       "partial_max BIGINT);";
 }
 
+string DuckLakeMetadataManager::VisibilityChainPredicate(idx_t branch_id, optional_idx fork_snapshot) {
+	if (branch_id == 0) {
+		return "v.branch_id = 0";
+	}
+	// a branch reads the events of its fork lineage up to the fork, and its own without a cap
+	return StringUtil::Format("(v.branch_id = 0 AND v.snapshot_id <= %llu) OR v.branch_id = %llu",
+	                          fork_snapshot.GetIndex(), branch_id);
+}
+
+string DuckLakeMetadataManager::VisibilityEventRanges(const string &visibility_table, const string &file_id_column,
+                                                      const string &chain_predicate, const string &prefix) {
+	// within one chain a file has at most one add and one delete event, so the aggregates are the range
+	return StringUtil::Format(
+	    "SELECT v.table_id, v.%s, MAX(CASE WHEN v.is_delete = FALSE THEN v.snapshot_id END) AS begin_snapshot, "
+	    "MAX(CASE WHEN v.is_delete = TRUE THEN v.snapshot_id END) AS end_snapshot "
+	    "FROM %s.%s v WHERE %s GROUP BY v.table_id, v.%s "
+	    "HAVING MAX(CASE WHEN v.is_delete = FALSE THEN v.snapshot_id END) IS NOT NULL",
+	    file_id_column, prefix, visibility_table, chain_predicate, file_id_column);
+}
+
+string DuckLakeMetadataManager::DataFileSource(bool branch_aware, idx_t branch_id, optional_idx fork_snapshot,
+                                               const string &prefix) {
+	if (!branch_aware) {
+		return prefix + ".ducklake_data_file";
+	}
+	if (branch_id == 0) {
+		// the main lineage has at most one add and one delete event per file, so plain joins suffice
+		return StringUtil::Format(
+		    "(SELECT f.*, va.snapshot_id AS begin_snapshot, vd.snapshot_id AS end_snapshot "
+		    "FROM %s.ducklake_data_file f "
+		    "JOIN %s.ducklake_file_visibility va ON va.branch_id = 0 AND va.is_delete = FALSE "
+		    "AND va.data_file_id = f.data_file_id AND va.table_id = f.table_id "
+		    "LEFT JOIN %s.ducklake_file_visibility vd ON vd.branch_id = 0 AND vd.is_delete = TRUE "
+		    "AND vd.data_file_id = f.data_file_id AND vd.table_id = f.table_id)",
+		    prefix, prefix, prefix);
+	}
+	// the range of a file comes from the visibility events of the branch chain
+	return StringUtil::Format("(SELECT f.*, v.begin_snapshot, v.end_snapshot "
+	                          "FROM %s.ducklake_data_file f JOIN (%s) v "
+	                          "ON v.data_file_id = f.data_file_id AND v.table_id = f.table_id)",
+	                          prefix,
+	                          VisibilityEventRanges("ducklake_file_visibility", "data_file_id",
+	                                                VisibilityChainPredicate(branch_id, fork_snapshot), prefix));
+}
+
+string DuckLakeMetadataManager::DeleteFileSource(bool branch_aware, idx_t branch_id, optional_idx fork_snapshot,
+                                                 const string &prefix) {
+	if (!branch_aware) {
+		return prefix + ".ducklake_delete_file";
+	}
+	if (branch_id == 0) {
+		return StringUtil::Format(
+		    "(SELECT f.*, va.snapshot_id AS begin_snapshot, vd.snapshot_id AS end_snapshot "
+		    "FROM %s.ducklake_delete_file f "
+		    "JOIN %s.ducklake_delete_file_visibility va ON va.branch_id = 0 AND va.is_delete = FALSE "
+		    "AND va.delete_file_id = f.delete_file_id AND va.table_id = f.table_id "
+		    "LEFT JOIN %s.ducklake_delete_file_visibility vd ON vd.branch_id = 0 AND vd.is_delete = TRUE "
+		    "AND vd.delete_file_id = f.delete_file_id AND vd.table_id = f.table_id)",
+		    prefix, prefix, prefix);
+	}
+	return StringUtil::Format("(SELECT f.*, v.begin_snapshot, v.end_snapshot "
+	                          "FROM %s.ducklake_delete_file f JOIN (%s) v "
+	                          "ON v.delete_file_id = f.delete_file_id AND v.table_id = f.table_id)",
+	                          prefix,
+	                          VisibilityEventRanges("ducklake_delete_file_visibility", "delete_file_id",
+	                                                VisibilityChainPredicate(branch_id, fork_snapshot), prefix));
+}
+
+string DuckLakeMetadataManager::DataFiles() const {
+	return DataFileSource(transaction.GetCatalog().SupportsBranching(), 0, optional_idx(), "{METADATA_CATALOG}");
+}
+
+string DuckLakeMetadataManager::DeleteFiles() const {
+	return DeleteFileSource(transaction.GetCatalog().SupportsBranching(), 0, optional_idx(), "{METADATA_CATALOG}");
+}
+
 string DuckLakeMetadataManager::GetFileColumnStatsTableStatement() {
 	return "CREATE TABLE {METADATA_CATALOG}.ducklake_file_column_stats(data_file_id BIGINT, table_id "
 	       "BIGINT, column_id BIGINT, column_size_bytes BIGINT, value_count BIGINT, null_count BIGINT, "
@@ -340,9 +442,7 @@ string DuckLakeMetadataManager::GetCreateTableStatements() {
 	vector<string> statements;
 	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_metadata(key VARCHAR NOT NULL, value VARCHAR NOT "
 	                     "NULL, scope VARCHAR, scope_id BIGINT);");
-	statements.push_back(
-	    "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(snapshot_id BIGINT PRIMARY KEY, snapshot_time TIMESTAMPTZ, "
-	    "schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT);");
+	statements.push_back(GetSnapshotTableStatement());
 	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_changes(snapshot_id BIGINT PRIMARY KEY, "
 	                     "changes_made VARCHAR, author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR);");
 	statements.push_back(GetSchemaTableStatement());
@@ -695,10 +795,344 @@ string DuckLakeMetadataManager::GetSnapshotTagTableStatement() {
 }
 
 void DuckLakeMetadataManager::MigrateV11() {
-	auto migrate_query = GetSnapshotTagTableStatement() + R"(
+	// a catalog can hold some of the additions already, from an older dev build or an interrupted heal
+	auto missing = ProbeV2_0Dev1Additions();
+	VerifyHealableV2_0Dev1(missing);
+	auto migrate_query = GetSnapshotTagTableStatement() + "\n" + V2_0Dev1AdditionsSql(missing) + R"(
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version';
 )";
 	ExecuteMigration(migrate_query, false, "1.1", "2.0-dev1");
+}
+
+string DuckLakeMetadataManager::V2_0Dev1AdditionsSql(const V2_0Dev1Additions &add) {
+	string result;
+	if (add.branch_table) {
+		result += GetBranchTableStatement() + "\n";
+	}
+	if (add.remap_table) {
+		result += GetSnapshotRemapTableStatement() + "\n";
+	}
+	if (add.branch_column) {
+		result += "ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot ADD COLUMN branch_id BIGINT DEFAULT 0;\n";
+	}
+	result +=
+	    VisibilityEventRewriteSql(add.file_visibility_table, add.file_visibility_ranges, add.file_visibility_migration,
+	                              "ducklake_file_visibility", "data_file_id", GetFileVisibilityTableStatement());
+	result += VisibilityEventRewriteSql(add.delete_file_visibility_table, add.delete_file_visibility_ranges,
+	                                    add.delete_file_visibility_migration, "ducklake_delete_file_visibility",
+	                                    "delete_file_id", GetDeleteFileVisibilityTableStatement());
+	if (add.file_visibility_table && !add.file_visibility_ranges && !add.file_visibility_migration) {
+		result += GetFileVisibilityTableStatement() + "\n";
+	}
+	if (add.delete_file_visibility_table && !add.delete_file_visibility_ranges &&
+	    !add.delete_file_visibility_migration) {
+		result += GetDeleteFileVisibilityTableStatement() + "\n";
+	}
+	result += "UPDATE {METADATA_CATALOG}.ducklake_snapshot SET branch_id = 0 WHERE branch_id IS NULL;\n";
+	result += GetMainBranchRowStatement() + "\n";
+	if (add.drop_data_begin && add.drop_data_end) {
+		// the inline ranges become the main branch events before the columns go away below
+		result += VisibilityEventBackfillSql("ducklake_file_visibility", "ducklake_data_file", "data_file_id");
+	}
+	if (add.drop_delete_begin && add.drop_delete_end) {
+		result +=
+		    VisibilityEventBackfillSql("ducklake_delete_file_visibility", "ducklake_delete_file", "delete_file_id");
+	}
+	if (add.drop_data_begin) {
+		result += "ALTER TABLE {METADATA_CATALOG}.ducklake_data_file DROP COLUMN begin_snapshot;\n";
+	}
+	if (add.drop_data_end) {
+		result += "ALTER TABLE {METADATA_CATALOG}.ducklake_data_file DROP COLUMN end_snapshot;\n";
+	}
+	if (add.drop_delete_begin) {
+		result += "ALTER TABLE {METADATA_CATALOG}.ducklake_delete_file DROP COLUMN begin_snapshot;\n";
+	}
+	if (add.drop_delete_end) {
+		result += "ALTER TABLE {METADATA_CATALOG}.ducklake_delete_file DROP COLUMN end_snapshot;\n";
+	}
+	return result;
+}
+
+string DuckLakeMetadataManager::GetFileVisibilityTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_file_visibility(branch_id BIGINT, table_id BIGINT, "
+	       "data_file_id BIGINT, snapshot_id BIGINT, is_delete BOOLEAN, "
+	       "PRIMARY KEY(branch_id, data_file_id, is_delete));";
+}
+
+string DuckLakeMetadataManager::GetDeleteFileVisibilityTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_delete_file_visibility(branch_id BIGINT, table_id BIGINT, "
+	       "delete_file_id BIGINT, snapshot_id BIGINT, is_delete BOOLEAN, "
+	       "PRIMARY KEY(branch_id, delete_file_id, is_delete));";
+}
+
+string DuckLakeMetadataManager::VisibilityEventBackfillSql(const string &visibility_table, const string &file_table,
+                                                           const string &file_id_column) {
+	return StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.%s
+SELECT 0, f.table_id, f.%s, f.begin_snapshot, FALSE
+FROM {METADATA_CATALOG}.%s f
+WHERE NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.%s v
+    WHERE v.branch_id = 0 AND v.%s = f.%s AND v.is_delete = FALSE);
+INSERT INTO {METADATA_CATALOG}.%s
+SELECT 0, f.table_id, f.%s, f.end_snapshot, TRUE
+FROM {METADATA_CATALOG}.%s f
+WHERE f.end_snapshot IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.%s v
+    WHERE v.branch_id = 0 AND v.%s = f.%s AND v.is_delete = TRUE);
+)",
+	                          visibility_table, file_id_column, file_table, visibility_table, file_id_column,
+	                          file_id_column, visibility_table, file_id_column, file_table, visibility_table,
+	                          file_id_column, file_id_column);
+}
+
+string DuckLakeMetadataManager::VisibilityEventRewriteSql(bool table_missing, bool has_ranges, bool has_migration,
+                                                          const string &visibility_table, const string &file_id_column,
+                                                          const string &create_statement) {
+	if (!has_ranges && !has_migration) {
+		return string();
+	}
+	string result;
+	auto migration_table = visibility_table + "_migration";
+	if (has_ranges) {
+		// the range rows move aside first so an interrupted rewrite can resume from the backup
+		if (!has_migration) {
+			result += StringUtil::Format("CREATE TABLE {METADATA_CATALOG}.%s(branch_id BIGINT, table_id BIGINT, "
+			                             "%s BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);\n",
+			                             migration_table, file_id_column);
+		}
+		result += StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.%s
+SELECT branch_id, table_id, %s, begin_snapshot, end_snapshot FROM {METADATA_CATALOG}.%s r
+WHERE NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.%s m WHERE m.branch_id = r.branch_id AND m.%s = r.%s);
+)",
+		                             migration_table, file_id_column, visibility_table, migration_table, file_id_column,
+		                             file_id_column);
+		result += StringUtil::Format("DROP TABLE {METADATA_CATALOG}.%s;\n", visibility_table);
+	}
+	if (has_ranges || table_missing) {
+		result += create_statement + "\n";
+	}
+	result += StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.%s
+SELECT branch_id, table_id, %s, begin_snapshot, FALSE FROM {METADATA_CATALOG}.%s m
+WHERE NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.%s v
+    WHERE v.branch_id = m.branch_id AND v.%s = m.%s AND v.is_delete = FALSE);
+INSERT INTO {METADATA_CATALOG}.%s
+SELECT branch_id, table_id, %s, end_snapshot, TRUE FROM {METADATA_CATALOG}.%s m
+WHERE m.end_snapshot IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.%s v
+    WHERE v.branch_id = m.branch_id AND v.%s = m.%s AND v.is_delete = TRUE);
+)",
+	                             visibility_table, file_id_column, migration_table, visibility_table, file_id_column,
+	                             file_id_column, visibility_table, file_id_column, migration_table, visibility_table,
+	                             file_id_column, file_id_column);
+	result += StringUtil::Format("DROP TABLE {METADATA_CATALOG}.%s;\n", migration_table);
+	return result;
+}
+
+string DuckLakeMetadataManager::GetBranchTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_branch(branch_id BIGINT PRIMARY KEY, branch_name VARCHAR, "
+	       "fork_branch_id BIGINT, fork_snapshot_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT);";
+}
+
+string DuckLakeMetadataManager::GetSnapshotRemapTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_remap(merge_snapshot_id BIGINT, "
+	       "old_snapshot_id BIGINT, new_snapshot_id BIGINT);";
+}
+
+string DuckLakeMetadataManager::GetMainBranchRowStatement() {
+	return "INSERT INTO {METADATA_CATALOG}.ducklake_branch SELECT 0, 'main', NULL, NULL, 0, NULL "
+	       "WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_id = 0);";
+}
+
+DuckLakeBranchInfo DuckLakeMetadataManager::FindBranch(const string &name) {
+	auto result = Query(R"(
+SELECT branch_id, branch_name, fork_branch_id, fork_snapshot_id
+FROM {METADATA_CATALOG}.ducklake_branch
+WHERE end_snapshot IS NULL;)");
+	result->ThrowIfError("Failed to get branches from DuckLake: ");
+	for (auto &row : *result) {
+		if (!StringUtil::CIEquals(row.GetValue<string>(1), name)) {
+			continue;
+		}
+		DuckLakeBranchInfo branch;
+		branch.branch_id = row.GetValue<idx_t>(0);
+		branch.name = row.GetValue<string>(1);
+		branch.fork_branch_id = OptIdx(row, 2);
+		branch.fork_snapshot_id = OptIdx(row, 3);
+		return branch;
+	}
+	return DuckLakeBranchInfo();
+}
+
+bool DuckLakeMetadataManager::HasBranchTable() {
+	return !Query("SELECT branch_id FROM {METADATA_CATALOG}.ducklake_branch LIMIT 0")->HasError();
+}
+
+bool DuckLakeMetadataManager::HasSnapshotRemapTable() {
+	return !Query("SELECT merge_snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot_remap LIMIT 0")->HasError();
+}
+
+bool DuckLakeMetadataManager::HasSnapshotBranchColumn() {
+	return !Query("SELECT branch_id FROM {METADATA_CATALOG}.ducklake_snapshot LIMIT 0")->HasError();
+}
+
+bool DuckLakeMetadataManager::HasMainBranchRow() {
+	auto probe = Query("SELECT COUNT(*) FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_id = 0");
+	if (probe->HasError()) {
+		return false;
+	}
+	for (auto &row : *probe) {
+		return row.GetValue<int64_t>(0) > 0;
+	}
+	return false;
+}
+
+set<idx_t> DuckLakeMetadataManager::GetBranchProtectedSnapshots() {
+	set<idx_t> result;
+	if (!transaction.GetCatalog().SupportsBranching()) {
+		return result;
+	}
+	auto query = Query(R"(
+SELECT fork_snapshot_id FROM {METADATA_CATALOG}.ducklake_branch
+WHERE end_snapshot IS NULL AND fork_snapshot_id IS NOT NULL
+UNION
+SELECT snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id IN (
+	SELECT branch_id FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_id <> 0 AND end_snapshot IS NULL)
+UNION
+SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = 0;)");
+	query->ThrowIfError("Failed to get branch protected snapshots from DuckLake: ");
+	for (auto &row : *query) {
+		if (!row.IsNull(0)) {
+			result.insert(row.GetValue<idx_t>(0));
+		}
+	}
+	return result;
+}
+
+bool DuckLakeMetadataManager::HasFileVisibilityTable() {
+	return !Query("SELECT branch_id FROM {METADATA_CATALOG}.ducklake_file_visibility LIMIT 0")->HasError();
+}
+
+bool DuckLakeMetadataManager::HasDeleteFileVisibilityTable() {
+	return !Query("SELECT branch_id FROM {METADATA_CATALOG}.ducklake_delete_file_visibility LIMIT 0")->HasError();
+}
+
+bool DuckLakeMetadataManager::HasMetadataColumn(const string &table, const string &column) {
+	return !Query(StringUtil::Format("SELECT %s FROM {METADATA_CATALOG}.%s LIMIT 0", column, table))->HasError();
+}
+
+bool DuckLakeMetadataManager::HasAnyFileRangeColumns() {
+	return HasMetadataColumn("ducklake_data_file", "begin_snapshot") ||
+	       HasMetadataColumn("ducklake_data_file", "end_snapshot") ||
+	       HasMetadataColumn("ducklake_delete_file", "begin_snapshot") ||
+	       HasMetadataColumn("ducklake_delete_file", "end_snapshot");
+}
+
+bool DuckLakeMetadataManager::HasAllFileRangeColumns() {
+	return HasMetadataColumn("ducklake_data_file", "begin_snapshot") &&
+	       HasMetadataColumn("ducklake_data_file", "end_snapshot") &&
+	       HasMetadataColumn("ducklake_delete_file", "begin_snapshot") &&
+	       HasMetadataColumn("ducklake_delete_file", "end_snapshot");
+}
+
+bool DuckLakeMetadataManager::HasVisibilityEventShape(const string &visibility_table) {
+	return HasMetadataColumn(visibility_table, "snapshot_id") && !HasMetadataColumn(visibility_table, "end_snapshot");
+}
+
+bool DuckLakeMetadataManager::HasVisibilityMigrationTable(const string &visibility_table) {
+	return !Query("SELECT branch_id FROM {METADATA_CATALOG}." + visibility_table + "_migration LIMIT 0")->HasError();
+}
+
+bool DuckLakeMetadataManager::HasBranchZeroFileVisibility(const string &file_table, const string &file_column,
+                                                          bool has_visibility_table, const string &visibility_table) {
+	// a file table without rows needs no visibility events
+	string files_without_rows = "SELECT 1 FROM {METADATA_CATALOG}." + file_table + " f";
+	bool has_old_shape = has_visibility_table && !HasVisibilityEventShape(visibility_table);
+	if (has_old_shape) {
+		// range rows of an older dev build count as the add events
+		files_without_rows += " WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}." + visibility_table +
+		                      " v WHERE v." + file_column + " = f." + file_column + ")";
+	} else if (HasVisibilityMigrationTable(visibility_table)) {
+		// the backup of an interrupted rewrite is the source until it is consumed
+		files_without_rows += " WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}." + visibility_table +
+		                      "_migration v WHERE v." + file_column + " = f." + file_column + ")";
+	} else if (has_visibility_table) {
+		// a file added only on a branch is coherent too, any add event counts
+		files_without_rows += " WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}." + visibility_table +
+		                      " v WHERE v." + file_column + " = f." + file_column + " AND v.is_delete = FALSE)";
+	}
+	auto probe = Query("SELECT COUNT(*) FROM (" + files_without_rows + " LIMIT 1);");
+	if (probe->HasError()) {
+		return false;
+	}
+	for (auto &row : *probe) {
+		return row.GetValue<int64_t>(0) == 0;
+	}
+	return false;
+}
+
+bool DuckLakeMetadataManager::HasBranchZeroDataVisibility() {
+	return HasBranchZeroFileVisibility("ducklake_data_file", "data_file_id", HasFileVisibilityTable(),
+	                                   "ducklake_file_visibility");
+}
+
+bool DuckLakeMetadataManager::HasBranchZeroDeleteVisibility() {
+	return HasBranchZeroFileVisibility("ducklake_delete_file", "delete_file_id", HasDeleteFileVisibilityTable(),
+	                                   "ducklake_delete_file_visibility");
+}
+
+bool DuckLakeMetadataManager::HasBranchZeroVisibility() {
+	return HasBranchZeroDataVisibility() && HasBranchZeroDeleteVisibility();
+}
+
+bool DuckLakeMetadataManager::HasV2_0Dev1Additions() {
+	return HasBranchTable() && HasSnapshotRemapTable() && HasSnapshotBranchColumn() && HasFileVisibilityTable() &&
+	       HasDeleteFileVisibilityTable() && HasVisibilityEventShape("ducklake_file_visibility") &&
+	       HasVisibilityEventShape("ducklake_delete_file_visibility") &&
+	       !HasVisibilityMigrationTable("ducklake_file_visibility") &&
+	       !HasVisibilityMigrationTable("ducklake_delete_file_visibility") && HasMainBranchRow() &&
+	       HasBranchZeroVisibility() && !HasAnyFileRangeColumns();
+}
+
+DuckLakeMetadataManager::V2_0Dev1Additions DuckLakeMetadataManager::ProbeV2_0Dev1Additions() {
+	V2_0Dev1Additions missing;
+	missing.branch_table = !HasBranchTable();
+	missing.remap_table = !HasSnapshotRemapTable();
+	missing.branch_column = !HasSnapshotBranchColumn();
+	missing.file_visibility_table = !HasFileVisibilityTable();
+	missing.delete_file_visibility_table = !HasDeleteFileVisibilityTable();
+	missing.drop_data_begin = HasMetadataColumn("ducklake_data_file", "begin_snapshot");
+	missing.drop_data_end = HasMetadataColumn("ducklake_data_file", "end_snapshot");
+	missing.drop_delete_begin = HasMetadataColumn("ducklake_delete_file", "begin_snapshot");
+	missing.drop_delete_end = HasMetadataColumn("ducklake_delete_file", "end_snapshot");
+	missing.file_visibility_ranges =
+	    !missing.file_visibility_table && !HasVisibilityEventShape("ducklake_file_visibility");
+	missing.delete_file_visibility_ranges =
+	    !missing.delete_file_visibility_table && !HasVisibilityEventShape("ducklake_delete_file_visibility");
+	missing.file_visibility_migration = HasVisibilityMigrationTable("ducklake_file_visibility");
+	missing.delete_file_visibility_migration = HasVisibilityMigrationTable("ducklake_delete_file_visibility");
+	return missing;
+}
+
+void DuckLakeMetadataManager::VerifyHealableV2_0Dev1(const V2_0Dev1Additions &missing) {
+	// each file table heals from its own preserved ranges, so check them separately
+	bool data_ranges_present = missing.drop_data_begin && missing.drop_data_end;
+	bool delete_ranges_present = missing.drop_delete_begin && missing.drop_delete_end;
+	if ((!data_ranges_present && !HasBranchZeroDataVisibility()) ||
+	    (!delete_ranges_present && !HasBranchZeroDeleteVisibility())) {
+		throw InvalidInputException("Cannot heal this DuckLake catalog: the inline file ranges were dropped and the "
+		                            "visibility rows that replaced them are missing");
+	}
+}
+
+void DuckLakeMetadataManager::AddV2_0Dev1Additions() {
+	auto missing = ProbeV2_0Dev1Additions();
+	VerifyHealableV2_0Dev1(missing);
+	ExecuteMigration(V2_0Dev1AdditionsSql(missing), false, "2.0-dev1", "2.0-dev1");
 }
 
 void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {
@@ -1011,7 +1445,8 @@ WHERE table_id = {TABLE_ID} AND schema_version = {SCHEMA_VERSION})";
 }
 
 string DuckLakeMetadataManager::GetNetDataFileRowCountSql(TableIndex table_id, const Identifier &inlined_deletion_table,
-                                                          bool require_exact, bool exclude_new_files) {
+                                                          bool branch_aware, bool require_exact,
+                                                          bool exclude_new_files) {
 	// Compute sum(record_count) - sum(delete_count) - inlined_deletions in a single query.
 	// Delete files are only counted if their corresponding data file is still visible.
 	// (When a data file's end_snapshot is set — e.g. TRUNCATE — associated deletes don't count.)
@@ -1026,25 +1461,26 @@ string DuckLakeMetadataManager::GetNetDataFileRowCountSql(TableIndex table_id, c
 	};
 	string inlined_deletion_subquery = "0";
 	if (!inlined_deletion_table.empty()) {
-		inlined_deletion_subquery = StringUtil::Format(R"(
+		inlined_deletion_subquery = StringUtil::Format(
+		    R"(
 COALESCE((SELECT COUNT(*) FROM {METADATA_CATALOG}.%s del
-          JOIN {METADATA_CATALOG}.ducklake_data_file data ON del.file_id = data.data_file_id
+          JOIN %s data ON del.file_id = data.data_file_id
           WHERE del.begin_snapshot <= {SNAPSHOT_ID}
             AND data.table_id = {TABLE_ID}
             AND {SNAPSHOT_ID} >= data.begin_snapshot
             AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)), 0))",
-		                                               inlined_deletion_table);
+		    inlined_deletion_table, DataFileSource(branch_aware, 0, optional_idx(), "{METADATA_CATALOG}"));
 	}
-	string query =
-	    StringUtil::Format(R"(
+	string query = StringUtil::Format(
+	    R"(
 SELECT
-  (SELECT %s FROM {METADATA_CATALOG}.ducklake_data_file
+  (SELECT %s FROM %s
             WHERE table_id = {TABLE_ID}%s
               AND {SNAPSHOT_ID} >= begin_snapshot
               AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL))
   -
-  (SELECT %s FROM {METADATA_CATALOG}.ducklake_delete_file del
-            JOIN {METADATA_CATALOG}.ducklake_data_file data ON del.data_file_id = data.data_file_id
+  (SELECT %s FROM %s del
+            JOIN %s data ON del.data_file_id = data.data_file_id
             WHERE del.table_id = {TABLE_ID}
               AND {SNAPSHOT_ID} >= del.begin_snapshot
               AND ({SNAPSHOT_ID} < del.end_snapshot OR del.end_snapshot IS NULL)
@@ -1052,14 +1488,18 @@ SELECT
               AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL))
   -
   %s)",
-	                       count_aggregate("record_count", "partial_max"),
-	                       exclude_new_files ? "\n              AND data_file_id < {NEXT_FILE_ID}" : "",
-	                       count_aggregate("del.delete_count", "del.partial_max"), inlined_deletion_subquery);
+	    count_aggregate("record_count", "partial_max"),
+	    DataFileSource(branch_aware, 0, optional_idx(), "{METADATA_CATALOG}"),
+	    exclude_new_files ? "\n              AND data_file_id < {NEXT_FILE_ID}" : "",
+	    count_aggregate("del.delete_count", "del.partial_max"),
+	    DeleteFileSource(branch_aware, 0, optional_idx(), "{METADATA_CATALOG}"),
+	    DataFileSource(branch_aware, 0, optional_idx(), "{METADATA_CATALOG}"), inlined_deletion_subquery);
 	return StringUtil::Replace(query, "{TABLE_ID}", to_string(table_id.index));
 }
 
 idx_t DuckLakeMetadataManager::GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot) {
-	auto query = GetNetDataFileRowCountSql(table_id, GetInlinedDeletionTableName(table_id, snapshot), false, true);
+	auto query = GetNetDataFileRowCountSql(table_id, GetInlinedDeletionTableName(table_id, snapshot),
+	                                       transaction.GetCatalog().SupportsBranching(), false, true);
 	auto result = Query(snapshot, query);
 	for (auto &row : *result) {
 		return row.GetValue<idx_t>(0);
@@ -1070,7 +1510,8 @@ idx_t DuckLakeMetadataManager::GetNetDataFileRowCount(TableIndex table_id, DuckL
 }
 
 optional_idx DuckLakeMetadataManager::GetNetDataFileRowCountForStats(TableIndex table_id, DuckLakeSnapshot snapshot) {
-	auto query = GetNetDataFileRowCountSql(table_id, GetInlinedDeletionTableName(table_id, snapshot), true);
+	auto query = GetNetDataFileRowCountSql(table_id, GetInlinedDeletionTableName(table_id, snapshot),
+	                                       transaction.GetCatalog().SupportsBranching(), true);
 	auto result = Query(snapshot, query);
 	result->ThrowIfError("Failed to get exact data file row count from DuckLake: ");
 	for (auto &row : *result) {
@@ -1589,7 +2030,8 @@ vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::ParseGlobalTableStats(Q
 }
 
 void DuckLakeMetadataManager::FillMissingTableSizes(vector<DuckLakeGlobalStatsInfo> &stats,
-                                                    const std::function<unique_ptr<QueryResult>(string)> &executor) {
+                                                    const std::function<unique_ptr<QueryResult>(string)> &executor,
+                                                    bool branch_aware) {
 	vector<TableIndex> table_ids;
 	for (auto &entry : stats) {
 		if (entry.missing_table_size) {
@@ -1601,9 +2043,10 @@ void DuckLakeMetadataManager::FillMissingTableSizes(vector<DuckLakeGlobalStatsIn
 	}
 	auto result = executor(StringUtil::Format(R"(
 SELECT table_id, SUM(file_size_bytes)
-FROM {METADATA_CATALOG}.ducklake_data_file
+FROM %s
 WHERE end_snapshot IS NULL AND table_id IN (%s)
 GROUP BY table_id;)",
+	                                          DataFileSource(branch_aware, 0, optional_idx(), "{METADATA_CATALOG}"),
 	                                          GenerateIDList(table_ids)));
 	result->ThrowIfError("Failed to get the table sizes from DuckLake: ");
 	map<TableIndex, idx_t> table_sizes;
@@ -1622,7 +2065,9 @@ vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(Duc
                                                                              const vector<TableIndex> &table_ids) {
 	auto result = Query(snapshot, GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata(), table_ids));
 	auto global_stats = ParseGlobalTableStats(*result);
-	FillMissingTableSizes(global_stats, [&](string query) { return Query(snapshot, query); });
+	FillMissingTableSizes(
+	    global_stats, [&](string query) { return Query(snapshot, query); },
+	    transaction.GetCatalog().SupportsBranching());
 	return global_stats;
 }
 
@@ -2342,7 +2787,7 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 	return StringUtil::Format("(data.partition_id IS DISTINCT FROM %d OR (%s))", partition_data->partition_id, result);
 }
 
-string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot,
+string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                                                       const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
                                                       const vector<idx_t> &runtime_filter_stats_columns,
@@ -2423,23 +2868,38 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 		select_list = "data.data_file_id, " + GetDataFileSelectList("data") +
 		              ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
 		              GetDeleteFileSelectList("del") + stats_select_list;
+		if (transaction.GetCatalog().SupportsBranching()) {
+			select_list += ", del.begin_snapshot";
+		}
 	}
 
 	// Add base query
-	query += StringUtil::Format(R"(
+	auto branch_aware = transaction.GetCatalog().SupportsBranching();
+	// a branch read uses literal snapshots so nothing is clipped
+	auto branch_id = ReadBranchId(snapshot);
+	string at_snapshot = branch_aware ? to_string(snapshot.snapshot_id) : "{SNAPSHOT_ID}";
+	query += StringUtil::Format(
+	    R"(
 SELECT %s
-FROM %s.ducklake_data_file data
+FROM %s data
 %s
 LEFT JOIN (
     SELECT *
-    FROM %s.ducklake_delete_file
-    WHERE table_id=%d  AND {SNAPSHOT_ID} >= begin_snapshot
-          AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
+    FROM %s del_src
+    WHERE table_id=%d  AND %s >= begin_snapshot
+          AND (%s < end_snapshot OR end_snapshot IS NULL)
     ) del ON del.data_file_id = data.data_file_id
-WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
+WHERE data.table_id=%d AND %s >= data.begin_snapshot AND (%s < data.end_snapshot OR data.end_snapshot IS NULL)
 		)",
-	                            select_list, metadata_table_prefix, stats_join_list, metadata_table_prefix,
-	                            table_id.index, table_id.index);
+	    select_list,
+	    DataFileSource(branch_aware, branch_id, transaction.GetCatalog().AttachedBranchFork(), metadata_table_prefix),
+	    stats_join_list,
+	    DeleteFileSource(branch_aware, branch_id, transaction.GetCatalog().AttachedBranchFork(), metadata_table_prefix),
+	    table_id.index, at_snapshot, at_snapshot, table_id.index, at_snapshot, at_snapshot);
+	if (branch_aware && order_by_clause.empty()) {
+		// the join loses the insertion order a scan of the file table has
+		order_by_clause = "\nORDER BY data.data_file_id";
+	}
 
 	if (!filter_result.where_conditions.empty()) {
 		query += "\nAND " + filter_result.where_conditions;
@@ -2493,9 +2953,15 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 		file_entry.file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		file_entry.row_id_start = OptIdx(row, col_idx++);
 		file_entry.snapshot_id = row.GetValue<idx_t>(col_idx++);
+		auto &catalog = transaction.GetCatalog();
 		if (!row.IsNull(col_idx)) {
 			auto partial_max = row.GetValue<idx_t>(col_idx);
-			SetSnapshotFilter(snapshot, partial_max, file_entry);
+			auto row_snapshot = snapshot;
+			if (catalog.OnBranch() && file_entry.snapshot_id.GetIndex() <= catalog.AttachedBranchFork().GetIndex()) {
+				// rows main wrote into an inherited file after the fork stay invisible
+				row_snapshot.snapshot_id = catalog.ClipToBranchFork(snapshot.snapshot_id);
+			}
+			SetSnapshotFilter(row_snapshot, partial_max, file_entry);
 		}
 		col_idx++;
 		if (!row.IsNull(col_idx)) {
@@ -2509,6 +2975,14 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 			column_stats.has_max = TryReadValue(row, col_idx++, column_stats.max);
 			column_stats.has_contains_nan = TryReadValue(row, col_idx++, column_stats.contains_nan);
 			file_entry.column_min_max.emplace(column_field_index, std::move(column_stats));
+		}
+		if (catalog.SupportsBranching()) {
+			if (catalog.OnBranch() && !row.IsNull(col_idx) &&
+			    row.GetValue<idx_t>(col_idx) <= catalog.AttachedBranchFork().GetIndex()) {
+				// an inherited delete file only applies deletes dated up to the fork
+				file_entry.delete_snapshot_filter_max = catalog.AttachedBranchFork().GetIndex();
+			}
+			col_idx++;
 		}
 
 		// Populate inlined file deletions for this file
@@ -2525,6 +2999,7 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetTableInsertions(DuckLakeTableEntry &table,
                                                                           DuckLakeSnapshot start_snapshot,
                                                                           DuckLakeSnapshot end_snapshot) {
+	ThrowIfPastBranchFork(end_snapshot);
 	auto table_id = table.GetTableId();
 	string select_list = GetDataFileSelectList("data") +
 	                     ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
@@ -2535,10 +3010,10 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetTableInsertions(DuckLa
 	// Rows deleted in the snapshot that inserted them were never visible
 	auto query = StringUtil::Format(R"(
 SELECT %s
-FROM {METADATA_CATALOG}.ducklake_data_file data
+FROM %s data
 LEFT JOIN (
 	SELECT *
-	FROM {METADATA_CATALOG}.ducklake_delete_file
+	FROM %s
 	WHERE table_id=%d AND begin_snapshot >= %d AND begin_snapshot <= {SNAPSHOT_ID}
 ) del ON del.data_file_id = data.data_file_id AND del.begin_snapshot = data.begin_snapshot AND data.partial_max IS NULL
 WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
@@ -2546,8 +3021,8 @@ WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 	(data.partial_max IS NOT NULL AND data.partial_max >= %d)
 );
 		)",
-	                                select_list, table_id.index, start_snapshot.snapshot_id, table_id.index,
-	                                start_snapshot.snapshot_id, start_snapshot.snapshot_id);
+	                                select_list, DataFiles(), DeleteFiles(), table_id.index, start_snapshot.snapshot_id,
+	                                table_id.index, start_snapshot.snapshot_id, start_snapshot.snapshot_id);
 
 	auto result = Query(end_snapshot, query);
 	result->ThrowIfError("Failed to get table insertion file list from DuckLake: ");
@@ -2593,6 +3068,7 @@ vector<DuckLakeDeleteScanEntry> DuckLakeMetadataManager::GetTableDeletions(DuckL
                                                                            DuckLakeSnapshot start_snapshot,
                                                                            DuckLakeSnapshot end_snapshot,
                                                                            bool include_local_changes) {
+	ThrowIfPastBranchFork(end_snapshot);
 	auto table_id = table.GetTableId();
 	string insert_snapshot = "CASE WHEN data.partial_max IS NULL THEN data.begin_snapshot END";
 	string select_list = "data.data_file_id, " + GetDataFileSelectList("data") +
@@ -2652,7 +3128,7 @@ main_results AS (
 SELECT %s, current_delete.begin_snapshot, false AS file_deleted FROM (
 	SELECT data_file_id, begin_snapshot, path, path_is_relative, file_size_bytes, footer_size, encryption_key, format,
 		partial_max
-	FROM {METADATA_CATALOG}.ducklake_delete_file
+	FROM %s
 	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
 ) AS current_delete
 LEFT JOIN LATERAL (
@@ -2664,14 +3140,14 @@ LEFT JOIN LATERAL (
 		footer_size,
 		encryption_key,
 		format
-	FROM {METADATA_CATALOG}.ducklake_delete_file
+	FROM %s
 	WHERE table_id = %d AND begin_snapshot < %d
 	ORDER BY data_file_id ASC, begin_snapshot DESC
 ) AS previous_delete
 USING (data_file_id)
 JOIN (
 	SELECT *
-	FROM {METADATA_CATALOG}.ducklake_data_file data
+	FROM %s data
 	WHERE table_id = %d
 ) AS data
 USING (data_file_id)
@@ -2681,7 +3157,7 @@ UNION ALL
 
 SELECT %s, data.end_snapshot, true FROM (
 	SELECT *
-	FROM {METADATA_CATALOG}.ducklake_data_file
+	FROM %s
 	WHERE table_id = %d AND end_snapshot >= %d AND end_snapshot <= {SNAPSHOT_ID}%s
 ) AS data
 LEFT JOIN LATERAL (
@@ -2693,7 +3169,7 @@ LEFT JOIN LATERAL (
 		footer_size,
 		encryption_key,
 		format
-	FROM {METADATA_CATALOG}.ducklake_delete_file
+	FROM %s
 	WHERE table_id = %d AND begin_snapshot <= data.end_snapshot
 	ORDER BY data_file_id ASC, begin_snapshot DESC
 ) AS previous_delete
@@ -2706,9 +3182,10 @@ USING (data_file_id), (
 		CAST(NULL AS VARCHAR) format
 ) current_delete
 )",
-	                            select_list, table_id.index, table_id.index, start_snapshot.snapshot_id, table_id.index,
-	                            delete_file_in_range, select_list, table_id.index, start_snapshot.snapshot_id,
-	                            rewrite_end_filter, table_id.index);
+	                            select_list, DeleteFiles(), table_id.index, DeleteFiles(), table_id.index,
+	                            start_snapshot.snapshot_id, DataFiles(), table_id.index, delete_file_in_range,
+	                            select_list, DataFiles(), table_id.index, start_snapshot.snapshot_id,
+	                            rewrite_end_filter, DeleteFiles(), table_id.index);
 
 	if (has_inlined_table) {
 		string null_file_cols = "CAST(NULL AS VARCHAR) AS path, CAST(NULL AS BOOLEAN) AS path_is_relative, CAST(NULL "
@@ -2724,17 +3201,18 @@ SELECT data.data_file_id, %s, data.row_id_start, data.record_count, data.mapping
        %s,
        %s,
        inlined_dels.min_snapshot, false
-FROM {METADATA_CATALOG}.ducklake_data_file data
+FROM %s data
 JOIN inlined_dels ON data.data_file_id = inlined_dels.file_id
 WHERE data.table_id = %d
   AND data.data_file_id NOT IN (
-      SELECT data_file_id FROM {METADATA_CATALOG}.ducklake_delete_file
+      SELECT data_file_id FROM %s
       WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
   )
   AND (data.end_snapshot IS NULL OR data.end_snapshot < %d OR data.end_snapshot > {SNAPSHOT_ID}%s)
 )",
 		                            GetDataFileSelectList("data"), insert_snapshot, null_file_cols, null_file_cols,
-		                            table_id.index, table_id.index, start_snapshot.snapshot_id, rewrite_end_condition);
+		                            DataFiles(), table_id.index, DeleteFiles(), table_id.index,
+		                            start_snapshot.snapshot_id, rewrite_end_condition);
 	}
 
 	// Close the main_results CTE and do the final SELECT with LEFT JOIN on inlined_dels
@@ -2921,7 +3399,7 @@ WITH snapshot_ranges AS (
 	WHERE table_id=%d
 )
 SELECT data.data_file_id, partition_sr.schema_version
-FROM {METADATA_CATALOG}.ducklake_data_file data
+FROM %s data
 JOIN {METADATA_CATALOG}.ducklake_partition_info partition_spec
 	ON data.partition_id = partition_spec.partition_id AND data.table_id = partition_spec.table_id
 JOIN snapshot_ranges partition_sr
@@ -2930,7 +3408,7 @@ JOIN snapshot_ranges partition_sr
 	AND COALESCE(partition_spec.end_snapshot - 1, data.begin_snapshot) < partition_sr.end_snapshot
 WHERE data.data_file_id IN (%s)
 )",
-	                                       table.GetTableId().index, GenerateIDList(file_ids)));
+	                                       table.GetTableId().index, DataFiles(), GenerateIDList(file_ids)));
 	result->ThrowIfError("Failed to get the partition schema versions of compaction files from DuckLake: ");
 	for (auto &row : *result) {
 		auto entry = file_indexes.find(row.GetValue<idx_t>(0));
@@ -2963,9 +3441,14 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	string select_list = data_select_list + ", " + delete_select_list;
 
 	string candidate_files_cte;
-	string data_file_source = "{METADATA_CATALOG}.ducklake_data_file data";
+	string data_file_source = DataFiles() + " data";
+	string delete_join_source = DeleteFiles();
 	string delete_file_filter;
 	string file_filter_clause = " AND data.end_snapshot IS NULL";
+	if (transaction.GetCatalog().SupportsBranching()) {
+		// a file a branch event references keeps its identity, inherited files move into the rewrite
+		file_filter_clause += " AND " + FileVisibilityGuard("ducklake_file_visibility", "data_file_id", "data", false);
+	}
 	auto partition_value_filter = StringUtil::Format("\n\tWHERE table_id=%d", table_id.index);
 
 	map<idx_t, set<idx_t>> inlined_deletions;
@@ -3007,18 +3490,21 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 			    InlinedFileDeletionTableName(table_id), snapshot.snapshot_id);
 		}
 
+		// one scan of the delete files serves the candidates and the join below
 		candidate_files_cte = StringUtil::Format(
 		    R"(
+				live_delete_files AS (
+					SELECT * FROM %s WHERE table_id=%d AND end_snapshot IS NULL
+				),
 				candidate_files AS (
 					SELECT data_file_id
-					FROM {METADATA_CATALOG}.ducklake_delete_file
-					WHERE table_id=%d AND end_snapshot IS NULL%s
+					FROM live_delete_files%s
 				),
 			)",
-		    table_id.index, inlined_candidates);
+		    DeleteFiles(), table_id.index, inlined_candidates);
 
-		data_file_source = R"(candidate_files
-JOIN {METADATA_CATALOG}.ducklake_data_file data USING (data_file_id))";
+		data_file_source = "candidate_files\nJOIN " + DataFiles() + " data USING (data_file_id)";
+		delete_join_source = "live_delete_files";
 		delete_file_filter = " AND end_snapshot IS NULL";
 		partition_value_filter = "\n\tWHERE data_file_id IN (SELECT data_file_id FROM candidate_files)";
 	}
@@ -3043,7 +3529,7 @@ LEFT JOIN snapshot_ranges sr
 	AND COALESCE(data.partial_max, data.begin_snapshot) < sr.end_snapshot
 LEFT JOIN (
 	SELECT *
-	FROM {METADATA_CATALOG}.ducklake_delete_file
+	FROM %s
 	WHERE table_id=%d%s
 ) del USING (data_file_id)
 LEFT JOIN (
@@ -3054,8 +3540,9 @@ LEFT JOIN (
 WHERE data.table_id=%d %s
 ORDER BY data.begin_snapshot ASC, data.row_id_start ASC, data.data_file_id ASC, del.begin_snapshot ASC
 	)",
-	                                candidate_files_cte, table_id.index, select_list, data_file_source, table_id.index,
-	                                delete_file_filter, partition_value_filter, table_id.index, file_filter_clause);
+	                                candidate_files_cte, table_id.index, select_list, data_file_source,
+	                                delete_join_source, table_id.index, delete_file_filter, partition_value_filter,
+	                                table_id.index, file_filter_clause);
 	auto result = Query(query);
 	result->ThrowIfError("Failed to get compaction file list from DuckLake: ");
 	vector<DuckLakeCompactionFileEntry> files;
@@ -3162,18 +3649,39 @@ string DuckLakeMetadataManager::DropSchemas(const set<SchemaIndex> &ids) {
 	return FlushDrop("ducklake_schema", "schema_id", ids);
 }
 
-string DuckLakeMetadataManager::DropTables(const set<TableIndex> &ids, bool renamed) {
+string DuckLakeMetadataManager::DropTables(const set<TableIndex> &ids, bool renamed, bool write_visibility) {
 	string batch_query = FlushDrop("ducklake_table", "table_id", ids);
 	if (renamed == false) {
 		batch_query += FlushDrop("ducklake_partition_info", "table_id", ids);
 		batch_query += FlushDrop("ducklake_column", "table_id", ids);
 		batch_query += FlushDrop("ducklake_column_tag", "table_id", ids);
-		batch_query += FlushDrop("ducklake_data_file", "table_id", ids);
-		batch_query += FlushDrop("ducklake_delete_file", "table_id", ids);
 		batch_query += FlushDrop("ducklake_tag", "object_id", ids);
 		batch_query += FlushDrop("ducklake_sort_info", "table_id", ids);
+		if (write_visibility) {
+			batch_query +=
+			    VisibilityFlushDrop("ducklake_file_visibility", "data_file_id", "table_id", GenerateIDList(ids));
+			batch_query += VisibilityFlushDrop("ducklake_delete_file_visibility", "delete_file_id", "table_id",
+			                                   GenerateIDList(ids));
+		} else {
+			batch_query += FlushDrop("ducklake_data_file", "table_id", ids);
+			batch_query += FlushDrop("ducklake_delete_file", "table_id", ids);
+		}
 	}
 	return batch_query;
+}
+
+string DuckLakeMetadataManager::VisibilityFlushDrop(const string &visibility_table, const string &file_id_column,
+                                                    const string &filter_column, const string &id_list) {
+	// ending a file is a delete event next to its add event
+	return StringUtil::Format(R"(INSERT INTO {METADATA_CATALOG}.%s
+SELECT v.branch_id, v.table_id, v.%s, {SNAPSHOT_ID}, TRUE
+FROM {METADATA_CATALOG}.%s v
+WHERE v.branch_id = 0 AND v.is_delete = FALSE AND v.%s IN (%s) AND NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.%s d
+    WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.%s = v.%s);)",
+	                          visibility_table, file_id_column, visibility_table, filter_column, id_list,
+	                          visibility_table, file_id_column, file_id_column) +
+	       "\n";
 }
 
 string DuckLakeMetadataManager::DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags) {
@@ -3268,6 +3776,8 @@ unique_ptr<QueryResult> DuckLakeMetadataManager::ExecuteInTransaction(string &qu
 }
 
 unique_ptr<QueryResult> DuckLakeMetadataManager::Query(DuckLakeSnapshot snapshot, string &query) {
+	// inherited metadata on a branch reads as the parent at the fork
+	snapshot.snapshot_id = transaction.GetCatalog().ClipToBranchFork(snapshot.snapshot_id);
 	SubstituteTransactionPlaceholders(snapshot, query);
 	return Query(query);
 }
@@ -4275,7 +4785,8 @@ WHERE {SNAPSHOT_ID} >= %s AND ({SNAPSHOT_ID} < %s OR %s IS NULL);
 	                          col_names.end_snapshot);
 }
 
-string DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness) {
+string DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness,
+                                                               bool branch_aware) {
 	string select_list = "data.data_file_id, data.record_count, data.file_size_bytes,\n"
 	                     "       stats.column_id, stats.value_count, stats.null_count, stats.min_value, "
 	                     "stats.max_value,\n"
@@ -4284,7 +4795,7 @@ string DuckLakeMetadataManager::ReadFileColumnStatsForTableSql(TableIndex table_
 		select_list += ", stats.min_is_exact, stats.max_is_exact";
 	}
 	return StringUtil::Format("\nSELECT " + select_list + R"(
-FROM {METADATA_CATALOG}.ducklake_data_file data
+FROM %s data
 LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats stats ON stats.data_file_id = data.data_file_id
 WHERE data.table_id = %d
   AND data.data_file_id < {NEXT_FILE_ID}
@@ -4292,7 +4803,7 @@ WHERE data.table_id = %d
   AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
 ORDER BY data.data_file_id ASC;
 )",
-	                          table_id.index);
+	                          DataFileSource(branch_aware, 0, optional_idx(), "{METADATA_CATALOG}"), table_id.index);
 }
 
 string DuckLakeMetadataManager::GetPath(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
@@ -4507,6 +5018,30 @@ static void AppendFileStats(Appender &appender, const DuckLakeColumnStats &stats
 }
 
 // Optimized version using DuckDB Appender API for much faster inserts
+//! A flushed delete file starts in the past so branches inherit it, except where a branch already
+//! wrote its own delete file for the data file, which suppresses the inherited one from its first own file
+static string RetroactiveDeleteSuppressionSql(const vector<string> &retro_values) {
+	if (retro_values.empty()) {
+		return string();
+	}
+	return StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_delete_file_visibility
+SELECT own.branch_id, t.table_id, t.delete_file_id, MIN(own.snapshot_id), TRUE
+FROM (VALUES %s) t(table_id, delete_file_id, data_file_id, begin_snapshot)
+JOIN {METADATA_CATALOG}.ducklake_branch b
+ON b.branch_id <> 0 AND b.end_snapshot IS NULL AND b.fork_snapshot_id >= t.begin_snapshot
+JOIN {METADATA_CATALOG}.ducklake_delete_file_visibility own
+ON own.branch_id = b.branch_id AND own.is_delete = FALSE AND own.delete_file_id <> t.delete_file_id
+JOIN {METADATA_CATALOG}.ducklake_delete_file df
+ON df.delete_file_id = own.delete_file_id AND df.data_file_id = t.data_file_id
+WHERE NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.ducklake_delete_file_visibility e
+    WHERE e.branch_id = own.branch_id AND e.delete_file_id = t.delete_file_id)
+GROUP BY own.branch_id, t.table_id, t.delete_file_id;
+)",
+	                          StringUtil::Join(retro_values, ", "));
+}
+
 string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &commit_snapshot,
                                                               const vector<DuckLakeFileInfo> &new_files,
                                                               const vector<DuckLakeTableInfo> &new_tables,
@@ -4528,6 +5063,10 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 	Appender variant_stats_appender(connection, db_name, schema_name, "ducklake_file_variant_stats");
 
 	bool supports_v1_1_metadata = catalog.SupportsV1_1Metadata();
+	unique_ptr<Appender> visibility_appender;
+	if (catalog.SupportsBranching()) {
+		visibility_appender = make_uniq<Appender>(connection, db_name, schema_name, "ducklake_file_visibility");
+	}
 	for (auto &file : new_files) {
 		auto data_file_index = static_cast<int64_t>(file.id.index);
 		auto table_id = static_cast<int64_t>(file.table_id.index);
@@ -4541,10 +5080,12 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 		// file_format, record_count, file_size_bytes, footer_size, row_id_start, partition_id,
 		// encryption_key, mapping_id, partial_max, row_group_count (>= 1.1)
 		data_file_appender.BeginRow();
-		data_file_appender.Append<int64_t>(data_file_index);                            // data_file_id
-		data_file_appender.Append<int64_t>(table_id);                                   // table_id
-		data_file_appender.Append<int64_t>(begin_snapshot_val);                         // begin_snapshot
-		data_file_appender.Append(Value());                                             // end_snapshot (NULL)
+		data_file_appender.Append<int64_t>(data_file_index); // data_file_id
+		data_file_appender.Append<int64_t>(table_id);        // table_id
+		if (!visibility_appender) {
+			data_file_appender.Append<int64_t>(begin_snapshot_val); // begin_snapshot
+			data_file_appender.Append(Value());                     // end_snapshot (NULL)
+		}
 		data_file_appender.Append(Value());                                             // file_order (NULL)
 		data_file_appender.Append<string_t>(string_t(path.path));                       // path
 		data_file_appender.Append<bool>(path.path_is_relative);                         // path_is_relative
@@ -4566,6 +5107,17 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 			AppendBigintOrNull(data_file_appender, file.row_group_count);
 		}
 		data_file_appender.EndRow();
+
+		if (visibility_appender) {
+			// branch_id, table_id, data_file_id, snapshot_id, is_delete
+			visibility_appender->BeginRow();
+			visibility_appender->Append<int64_t>(0);
+			visibility_appender->Append<int64_t>(table_id);
+			visibility_appender->Append<int64_t>(data_file_index);
+			visibility_appender->Append<int64_t>(begin_snapshot_val);
+			visibility_appender->Append<bool>(false);
+			visibility_appender->EndRow();
+		}
 
 		// Column stats - using typed values directly
 		for (auto &column_stats_entry : file.column_stats) {
@@ -4641,6 +5193,9 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 	column_stats_appender.Close();
 	partition_value_appender.Close();
 	variant_stats_appender.Close();
+	if (visibility_appender) {
+		visibility_appender->Close();
+	}
 
 	return "";
 }
@@ -4658,13 +5213,14 @@ bool DuckLakeMetadataManager::TryAppendDataFiles(DuckLakeSnapshot &commit_snapsh
 
 string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeFileInfo> &new_files,
                                                           const vector<DuckLakePath> &resolved_paths,
-                                                          bool supports_v1_1_metadata) {
+                                                          bool supports_v1_1_metadata, bool write_visibility) {
 	if (new_files.empty()) {
 		// LCOV_EXCL_START
 		return string();
 		// LCOV_EXCL_STOP
 	}
 	D_ASSERT(new_files.size() == resolved_paths.size());
+	vector<string> visibility_values;
 	vector<string> data_file_values;
 	vector<string> column_stats_values;
 	vector<string> variant_stats_values;
@@ -4677,16 +5233,28 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 		auto partition_id = DuckLakeUtil::OptionalIdxOrNull(file.partition_id);
 		auto begin_snapshot =
 		    file.begin_snapshot.IsValid() ? to_string(file.begin_snapshot.GetIndex()) : "{SNAPSHOT_ID}";
+		if (write_visibility) {
+			visibility_values.push_back(
+			    StringUtil::Format("(0, %d, %d, %s, FALSE)", file.table_id.index, file.id.index, begin_snapshot));
+		}
 		auto data_file_index = file.id.index;
 		auto table_id = file.table_id.index;
 		auto encryption_key = DuckLakeUtil::EncryptionKeyLiteral(file.encryption_key);
 		string partial_max = DuckLakeUtil::OptionalIdxOrNull(file.max_partial_file_snapshot);
 		string footer_size = DuckLakeUtil::OptionalIdxOrNull(file.footer_size);
 		string mapping = DuckLakeUtil::MappingIdOrNull(file.mapping_id);
-		auto data_file_value = StringUtil::Format(
-		    "(%d, %d, %s, NULL, NULL, %s, %s, 'parquet', %d, %d, %s, %s, %s, %s, %s, %s", data_file_index, table_id,
-		    begin_snapshot, SQLString(path.path), DuckLakeUtil::BoolLiteral(path.path_is_relative), file.row_count,
-		    file.file_size_bytes, footer_size, row_id, partition_id, encryption_key, mapping, partial_max);
+		string data_file_value;
+		if (write_visibility) {
+			data_file_value = StringUtil::Format(
+			    "(%d, %d, NULL, %s, %s, 'parquet', %d, %d, %s, %s, %s, %s, %s, %s", data_file_index, table_id,
+			    SQLString(path.path), DuckLakeUtil::BoolLiteral(path.path_is_relative), file.row_count,
+			    file.file_size_bytes, footer_size, row_id, partition_id, encryption_key, mapping, partial_max);
+		} else {
+			data_file_value = StringUtil::Format(
+			    "(%d, %d, %s, NULL, NULL, %s, %s, 'parquet', %d, %d, %s, %s, %s, %s, %s, %s", data_file_index, table_id,
+			    begin_snapshot, SQLString(path.path), DuckLakeUtil::BoolLiteral(path.path_is_relative), file.row_count,
+			    file.file_size_bytes, footer_size, row_id, partition_id, encryption_key, mapping, partial_max);
+		}
 		if (supports_v1_1_metadata) {
 			data_file_value += ", " + DuckLakeUtil::OptionalIdxOrNull(file.row_group_count);
 		}
@@ -4722,6 +5290,7 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 		}
 	}
 	return InsertValuesSql("ducklake_data_file", data_file_values) +
+	       InsertValuesSql("ducklake_file_visibility", visibility_values) +
 	       InsertValuesSql("ducklake_file_column_stats", column_stats_values) +
 	       InsertValuesSql("ducklake_file_partition_value", partition_values) +
 	       InsertValuesSql("ducklake_file_variant_stats", variant_stats_values);
@@ -4740,23 +5309,25 @@ string DuckLakeMetadataManager::GetRenamedAfterSnapshotSql(const string &metadat
 	    metadata_table_name, id_name, GenerateIDList(ids));
 }
 
-string DuckLakeMetadataManager::GetColumnsWithRecordedValuesSql(TableIndex table_id,
-                                                                const set<FieldIndex> &column_ids) {
+string DuckLakeMetadataManager::GetColumnsWithRecordedValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
+                                                                bool branch_aware) {
 	// a live file written before a column with a default other than NULL holds the default
 	auto ids = GenerateIDList(column_ids);
-	auto sql = StringUtil::Format(R"(
+	auto sql =
+	    StringUtil::Format(R"(
 SELECT s.column_id
 FROM {METADATA_CATALOG}.ducklake_file_column_stats s
-JOIN {METADATA_CATALOG}.ducklake_data_file f ON f.data_file_id = s.data_file_id AND f.end_snapshot IS NULL
+JOIN %s f ON f.data_file_id = s.data_file_id AND f.end_snapshot IS NULL
 WHERE s.table_id = %d AND s.column_id IN (%s) AND (s.value_count IS NULL OR s.value_count > 0)
 UNION ALL
 SELECT c.column_id
 FROM {METADATA_CATALOG}.ducklake_column c
-JOIN {METADATA_CATALOG}.ducklake_data_file f
+JOIN %s f
     ON f.table_id = c.table_id AND f.end_snapshot IS NULL
     AND COALESCE(f.partial_max, f.begin_snapshot) < c.begin_snapshot
 WHERE c.table_id = %d AND c.column_id IN (%s) AND c.initial_default IS NOT NULL)",
-	                              table_id.index, ids, table_id.index, ids);
+	                       DataFileSource(branch_aware, 0, optional_idx(), "{METADATA_CATALOG}"), table_id.index, ids,
+	                       DataFileSource(branch_aware, 0, optional_idx(), "{METADATA_CATALOG}"), table_id.index, ids);
 	if (column_ids.size() == 1) {
 		return sql + "\nLIMIT 1";
 	}
@@ -4764,7 +5335,8 @@ WHERE c.table_id = %d AND c.column_id IN (%s) AND c.initial_default IS NOT NULL)
 }
 
 string DuckLakeMetadataManager::GetColumnsWithFileValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
-                                                            const map<FieldIndex, idx_t> &null_default_columns) {
+                                                            const map<FieldIndex, idx_t> &null_default_columns,
+                                                            bool branch_aware) {
 	// a file without statistics of a column holds values of it unless it was written before a NULL default column
 	vector<string> column_values;
 	for (auto &column_id : column_ids) {
@@ -4775,14 +5347,15 @@ string DuckLakeMetadataManager::GetColumnsWithFileValuesSql(TableIndex table_id,
 	return StringUtil::Format(R"(
 SELECT DISTINCT c.column_id
 FROM (VALUES %s) c(column_id, values_from)
-CROSS JOIN {METADATA_CATALOG}.ducklake_data_file f
+CROSS JOIN %s f
 LEFT JOIN {METADATA_CATALOG}.ducklake_file_column_stats s
     ON s.data_file_id = f.data_file_id AND s.column_id = c.column_id
 WHERE f.table_id = %d AND f.end_snapshot IS NULL AND CASE
     WHEN s.data_file_id IS NULL THEN COALESCE(f.partial_max, f.begin_snapshot) >= c.values_from
     ELSE s.value_count IS NULL OR s.value_count > 0
 END)",
-	                          StringUtil::Join(column_values, ", "), table_id.index);
+	                          StringUtil::Join(column_values, ", "),
+	                          DataFileSource(branch_aware, 0, optional_idx(), "{METADATA_CATALOG}"), table_id.index);
 }
 
 string DuckLakeMetadataManager::GetColumnDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids) {
@@ -4821,7 +5394,14 @@ string DuckLakeMetadataManager::GetInlinedValuesSql(const vector<DuckLakeInlined
 	return "SELECT * FROM " + StringUtil::Join(tables, ", ");
 }
 
-string DuckLakeMetadataManager::DropDataFiles(const set<DataFileIndex> &dropped_files) {
+string DuckLakeMetadataManager::DropDataFiles(const set<DataFileIndex> &dropped_files, bool write_visibility) {
+	if (dropped_files.empty()) {
+		return {};
+	}
+	if (write_visibility) {
+		return VisibilityFlushDrop("ducklake_file_visibility", "data_file_id", "data_file_id",
+		                           GenerateIDList(dropped_files));
+	}
 	return FlushDrop("ducklake_data_file", "data_file_id", dropped_files);
 }
 
@@ -4846,23 +5426,28 @@ DuckLakeMetadataManager::DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverw
 		deleted_file_ids.push_back(file.delete_file_id);
 		scheduled_deletions.push_back(ScheduledDeletionTuple(file.delete_file_id.index, resolved_paths[i]));
 	}
+	auto id_list = GenerateIDList(deleted_file_ids);
 	auto batch_query = StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_delete_file
 WHERE delete_file_id IN (%s);
 )",
-	                                      GenerateIDList(deleted_file_ids));
+	                                      id_list);
 	return batch_query + InsertValuesSql("ducklake_files_scheduled_for_deletion", scheduled_deletions);
 }
 
 string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_files,
                                                     const vector<DuckLakePath> &resolved_paths,
-                                                    bool write_row_group_count) {
+                                                    bool write_row_group_count, bool write_visibility) {
 	if (new_files.empty()) {
 		return {};
 	}
 	if (resolved_paths.size() != new_files.size()) {
 		throw InternalException("WriteNewDeleteFiles: resolved_paths size mismatch");
 	}
+	vector<string> visibility_values;
+	vector<string> retro_visibility_values;
+	vector<string> swap_values;
+	vector<DataFileIndex> overwritten_ids;
 	vector<string> delete_file_values;
 	for (idx_t i = 0; i < new_files.size(); ++i) {
 		auto &file = new_files[i];
@@ -4874,18 +5459,75 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 		// Use explicit begin_snapshot if set (for flush operations), otherwise use commit snapshot
 		string begin_snapshot_str =
 		    file.begin_snapshot.IsValid() ? std::to_string(file.begin_snapshot.GetIndex()) : "{SNAPSHOT_ID}";
+		if (write_visibility) {
+			visibility_values.push_back(
+			    StringUtil::Format("(0, %d, %d, %s, FALSE)", table_id, delete_file_index, begin_snapshot_str));
+			if (file.overwritten_delete_file_id.IsValid()) {
+				// branch events move to the replacement, which carries every dated delete of the old file
+				swap_values.push_back(StringUtil::Format("(%d, %d, %d, %d)", delete_file_index,
+				                                         file.overwritten_delete_file_id.index, data_file_index,
+				                                         table_id));
+				overwritten_ids.push_back(file.overwritten_delete_file_id);
+			}
+			if (file.begin_snapshot.IsValid()) {
+				retro_visibility_values.push_back(StringUtil::Format("(%d, %d, %d, %s)", table_id, delete_file_index,
+				                                                     data_file_index, begin_snapshot_str));
+			}
+		}
 		string partial_max = DuckLakeUtil::OptionalIdxOrNull(file.max_snapshot);
-		auto delete_file_value = StringUtil::Format(
-		    "(%d, %d, %s, NULL,  %d, %s, %s, %s, %d, %d, %d, %s, %s", delete_file_index, table_id, begin_snapshot_str,
-		    data_file_index, SQLString(path.path), DuckLakeUtil::BoolLiteral(path.path_is_relative),
-		    SQLString(DeleteFileFormatToString(file.format)), file.delete_count, file.file_size_bytes, file.footer_size,
-		    encryption_key, partial_max);
+		string delete_file_value;
+		if (write_visibility) {
+			delete_file_value = StringUtil::Format("(%d, %d, %d, %s, %s, %s, %d, %d, %d, %s, %s", delete_file_index,
+			                                       table_id, data_file_index, SQLString(path.path),
+			                                       DuckLakeUtil::BoolLiteral(path.path_is_relative),
+			                                       SQLString(DeleteFileFormatToString(file.format)), file.delete_count,
+			                                       file.file_size_bytes, file.footer_size, encryption_key, partial_max);
+		} else {
+			delete_file_value = StringUtil::Format(
+			    "(%d, %d, %s, NULL,  %d, %s, %s, %s, %d, %d, %d, %s, %s", delete_file_index, table_id,
+			    begin_snapshot_str, data_file_index, SQLString(path.path),
+			    DuckLakeUtil::BoolLiteral(path.path_is_relative), SQLString(DeleteFileFormatToString(file.format)),
+			    file.delete_count, file.file_size_bytes, file.footer_size, encryption_key, partial_max);
+		}
 		if (write_row_group_count) {
 			delete_file_value += ", " + DuckLakeUtil::OptionalIdxOrNull(file.row_group_count);
 		}
 		delete_file_values.push_back(delete_file_value + ")");
 	}
-	return InsertValuesSql("ducklake_delete_file", delete_file_values);
+	auto result = InsertValuesSql("ducklake_delete_file", delete_file_values) +
+	              InsertValuesSql("ducklake_delete_file_visibility", visibility_values);
+	if (!swap_values.empty()) {
+		// the rows of the old file go away, so the explicit branch events move to the replacement and
+		// branches that read it through inheritance get an add event at the old begin for their dated deletes
+		result += StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_delete_file_visibility
+SELECT v.branch_id, v.table_id, t.new_delete_file_id, v.snapshot_id, v.is_delete
+FROM (VALUES %s) t(new_delete_file_id, old_delete_file_id, data_file_id, table_id)
+JOIN {METADATA_CATALOG}.ducklake_delete_file_visibility v ON v.delete_file_id = t.old_delete_file_id
+WHERE v.branch_id <> 0
+UNION ALL
+SELECT b.branch_id, t.table_id, t.new_delete_file_id, v.snapshot_id, FALSE
+FROM (VALUES %s) t(new_delete_file_id, old_delete_file_id, data_file_id, table_id)
+JOIN {METADATA_CATALOG}.ducklake_delete_file_visibility v
+ON v.delete_file_id = t.old_delete_file_id AND v.branch_id = 0 AND v.is_delete = FALSE
+JOIN {METADATA_CATALOG}.ducklake_branch b
+ON b.branch_id <> 0 AND b.end_snapshot IS NULL AND b.fork_snapshot_id >= v.snapshot_id
+WHERE NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.ducklake_delete_file_visibility e
+    WHERE e.branch_id = b.branch_id AND e.delete_file_id = t.old_delete_file_id)
+AND NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.ducklake_delete_file_visibility own
+    JOIN {METADATA_CATALOG}.ducklake_delete_file df ON df.delete_file_id = own.delete_file_id
+    WHERE own.branch_id = b.branch_id AND own.is_delete = FALSE AND df.data_file_id = t.data_file_id);
+DELETE FROM {METADATA_CATALOG}.ducklake_delete_file_visibility
+WHERE delete_file_id IN (%s);
+)",
+		                             StringUtil::Join(swap_values, ", "), StringUtil::Join(swap_values, ", "),
+		                             GenerateIDList(overwritten_ids));
+	}
+	// after the swap, so a flushed replacement suppresses only where a branch has its own delete file
+	result += RetroactiveDeleteSuppressionSql(retro_visibility_values);
+	return result;
 }
 
 vector<DuckLakeColumnMappingInfo> DuckLakeMetadataManager::GetColumnMappings(optional_idx start_from) {
@@ -4942,8 +5584,11 @@ string DuckLakeMetadataManager::WriteNewColumnMappings(const vector<DuckLakeColu
 	       InsertValuesSql("ducklake_name_mapping", name_map_values);
 }
 
-string DuckLakeMetadataManager::InsertSnapshotSql() {
-	return R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES ({SNAPSHOT_ID}, {SNAPSHOT_TIME}, {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID});)";
+string DuckLakeMetadataManager::InsertSnapshotSql(bool write_branch_id) {
+	return StringUtil::Format(
+	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id%s)
+VALUES ({SNAPSHOT_ID}, {SNAPSHOT_TIME}, {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID}%s);)",
+	    write_branch_id ? ", branch_id" : "", write_branch_id ? ", 0" : "");
 }
 
 static string SQLStringOrNull(const string &str) {
@@ -4962,7 +5607,7 @@ string DuckLakeMetadataManager::WriteSnapshotChangesSql(const SnapshotChangeInfo
 	    DuckLakeUtil::TextLiteralOrNull(commit_info.commit_extra_info));
 }
 
-string DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(bool include_exactness) {
+string DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(bool include_exactness, bool branch_aware) {
 	// both UNION arms must stay column-aligned - extend them together
 	string snapshot_arm_padding;
 	string stats_arm_columns;
@@ -4970,12 +5615,30 @@ string DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(bool include_exa
 		snapshot_arm_padding = ",\n    NULL AS min_is_exact,\n    NULL AS max_is_exact";
 		stats_arm_columns = ",\n    min_is_exact,\n    max_is_exact";
 	}
+	// commits allocate after the global maximum, but the schema belongs to the head of main
+	string schema_version_column = "schema_version";
+	string catalog_id_column = "next_catalog_id";
+	string file_id_column = "next_file_id";
+	if (branch_aware) {
+		schema_version_column = R"((
+        SELECT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot
+        WHERE snapshot_id = (
+            SELECT MAX(snapshot_id)
+            FROM {METADATA_CATALOG}.ducklake_snapshot
+            WHERE branch_id = 0)) AS schema_version)";
+		catalog_id_column =
+		    "(SELECT MAX(next_catalog_id) FROM {METADATA_CATALOG}.ducklake_snapshot) AS next_catalog_id";
+		file_id_column = "(SELECT MAX(next_file_id) FROM {METADATA_CATALOG}.ducklake_snapshot) AS next_file_id";
+	}
 	return R"(
 SELECT
     snapshot_id,
-    schema_version,
-    next_catalog_id,
-    next_file_id,
+    )" + schema_version_column +
+	       R"(,
+    )" + catalog_id_column +
+	       R"(,
+    )" + file_id_column +
+	       R"(,
     COALESCE((
             SELECT STRING_AGG(changes_made, ',')
             FROM {METADATA_CATALOG}.ducklake_snapshot_changes c
@@ -5042,21 +5705,22 @@ SnapshotChangeInfo DuckLakeMetadataManager::ParseSnapshotAndStatsAndChanges(Quer
 }
 
 string DuckLakeMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot, bool include_exactness) const {
-	return SnapshotAndStatsAndChangesQuery(include_exactness);
+	return SnapshotAndStatsAndChangesQuery(include_exactness, transaction.GetCatalog().SupportsBranching());
 }
 
 SnapshotChangeInfo
 DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
                                                        const std::function<unique_ptr<QueryResult>(string)> &executor,
-                                                       const string &query) {
+                                                       const string &query, bool branch_aware) {
 	auto result = executor(query);
 	auto change_info = ParseSnapshotAndStatsAndChanges(*result, current_snapshot);
-	FillMissingTableSizes(current_snapshot.stats, executor);
+	FillMissingTableSizes(current_snapshot.stats, executor, branch_aware);
 	return change_info;
 }
 
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult &result,
-                                                                    optional_ptr<string> catalog_version) {
+                                                                    optional_ptr<string> catalog_version,
+                                                                    optional_ptr<optional_idx> global_snapshot_max) {
 	unique_ptr<DuckLakeSnapshot> snapshot;
 	for (auto &row : result) {
 		if (snapshot) {
@@ -5070,6 +5734,9 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult 
 		if (catalog_version && result.ColumnCount() > 4 && !row.IsNull(4)) {
 			*catalog_version = row.GetValue<string>(4);
 		}
+		if (global_snapshot_max && result.ColumnCount() > 5 && !row.IsNull(5)) {
+			*global_snapshot_max = row.GetValue<idx_t>(5);
+		}
 	}
 	return snapshot;
 }
@@ -5081,15 +5748,118 @@ FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot);)";
 }
 
+//! The snapshot row columns with the allocators and the watermark taken from the global maxima
+//! One pass over the snapshots for the allocators, joined to the head row the predicate selects
+static string GlobalAllocatorSnapshotQuery(const string &head_predicate) {
+	return StringUtil::Format(R"(SELECT head.snapshot_id, head.schema_version, alloc.next_catalog_id,
+alloc.next_file_id, ver.version, alloc.global_max
+FROM (SELECT snapshot_id, schema_version FROM {METADATA_CATALOG}.ducklake_snapshot
+      %s ORDER BY snapshot_id DESC LIMIT 1) head,
+     (SELECT MAX(next_catalog_id) AS next_catalog_id, MAX(next_file_id) AS next_file_id,
+             MAX(snapshot_id) AS global_max FROM {METADATA_CATALOG}.ducklake_snapshot) alloc,
+     (SELECT MAX(value) AS version FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version') ver;)",
+	                          head_predicate);
+}
+
+string DuckLakeMetadataManager::MainHeadSnapshotQuery(bool branch_aware) {
+	if (!branch_aware) {
+		return LatestSnapshotQuery();
+	}
+	// the readable head of main, commits allocate after the global maximum
+	return GlobalAllocatorSnapshotQuery("WHERE branch_id = 0");
+}
+
+string DuckLakeMetadataManager::BranchAwareLatestSnapshotQuery() const {
+	auto &catalog = transaction.GetCatalog();
+	if (!catalog.SupportsBranching()) {
+		return LatestSnapshotQuery();
+	}
+	if (!catalog.OnBranch()) {
+		// the readable head of main, commits allocate after the global maximum
+		return GlobalAllocatorSnapshotQuery("WHERE branch_id = 0");
+	}
+	// the head of a branch without commits of its own is its fork snapshot
+	return GlobalAllocatorSnapshotQuery(
+	    StringUtil::Format("WHERE snapshot_id = (SELECT COALESCE((SELECT MAX(snapshot_id) FROM "
+	                       "{METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = %d), %d))",
+	                       catalog.AttachedBranchId(), catalog.AttachedBranchFork().GetIndex()));
+}
+
+string DuckLakeMetadataManager::BranchLineageFilter() const {
+	auto &catalog = transaction.GetCatalog();
+	if (!catalog.SupportsBranching()) {
+		return string();
+	}
+	if (!catalog.OnBranch()) {
+		return " AND branch_id = 0";
+	}
+	return StringUtil::Format(" AND (branch_id = %d OR (branch_id = 0 AND snapshot_id <= %d))",
+	                          catalog.AttachedBranchId(), catalog.AttachedBranchFork().GetIndex());
+}
+
 string DuckLakeMetadataManager::GetLatestSnapshotQuery() const {
-	return LatestSnapshotQuery();
+	return BranchAwareLatestSnapshotQuery();
+}
+
+void DuckLakeMetadataManager::ThrowIfPastBranchFork(DuckLakeSnapshot snapshot) const {
+	auto &catalog = transaction.GetCatalog();
+	if (catalog.OnBranch() && snapshot.snapshot_id > catalog.AttachedBranchFork().GetIndex()) {
+		throw NotImplementedException("Change feeds past the fork of a branch are not supported yet");
+	}
+}
+
+idx_t DuckLakeMetadataManager::ReadBranchId(DuckLakeSnapshot snapshot) const {
+	auto &catalog = transaction.GetCatalog();
+	if (!catalog.OnBranch() || snapshot.snapshot_id <= catalog.AttachedBranchFork().GetIndex()) {
+		// reads at or before the fork resolve through the parent
+		return 0;
+	}
+	return catalog.AttachedBranchId();
+}
+
+string DuckLakeMetadataManager::GetSnapshotMaximaQuery() const {
+	return "SELECT MAX(snapshot_id), MAX(CASE WHEN branch_id = 0 THEN snapshot_id END), "
+	       "MAX(CASE WHEN branch_id <> 0 THEN snapshot_id END) "
+	       "FROM {METADATA_CATALOG}.ducklake_snapshot";
+}
+
+DuckLakeSnapshotMaxima DuckLakeMetadataManager::GetSnapshotMaxima() {
+	DuckLakeSnapshotMaxima maxima;
+	auto query = GetSnapshotMaximaQuery();
+	unique_ptr<QueryResult> result;
+	if (ConcurrentReadsBlockCommits() || CommitsEachStatement()) {
+		// the metadata transaction blocks concurrent commits or runs each statement on the server,
+		// so its view of the maxima is current and Query substitutes the catalog of the backend
+		result = Query(query);
+	} else {
+		// a fresh connection sees the snapshots committed after the metadata transaction began
+		SubstituteCatalogPlaceholders(query);
+		Connection fresh_connection(*transaction.GetConnection().context->db);
+		result = fresh_connection.Query(query);
+	}
+	if (result->HasError()) {
+		return maxima;
+	}
+	for (auto &row : *result) {
+		if (!row.IsNull(0)) {
+			maxima.global_max = row.GetValue<idx_t>(0);
+		}
+		if (!row.IsNull(1)) {
+			maxima.lineage_head = row.GetValue<idx_t>(1);
+		}
+		if (!row.IsNull(2)) {
+			maxima.branch_max = row.GetValue<idx_t>(2);
+		}
+	}
+	return maxima;
 }
 
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
 	auto result = Query(GetLatestSnapshotQuery());
 	result->ThrowIfError("Failed to query most recent snapshot for DuckLake: ");
 	string catalog_version;
-	auto snapshot = ParseSnapshot(*result, &catalog_version);
+	global_snapshot_max = optional_idx();
+	auto snapshot = ParseSnapshot(*result, &catalog_version, &global_snapshot_max);
 	if (!snapshot) {
 		throw InvalidInputException("No snapshot found in DuckLake");
 	}
@@ -5111,12 +5881,13 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot(BoundAtClause 
 	const string timestamp_order = bound == SnapshotBound::LOWER_BOUND ? "ASC" : "DESC";
 	const string timestamp_condition = bound == SnapshotBound::LOWER_BOUND ? ">" : "<";
 	const string visible_condition = StringUtil::Format(" AND snapshot_id <= %llu", newest_snapshot_id);
+	auto lineage_condition = BranchLineageFilter();
 	if (unit == "version") {
 		result = Query(StringUtil::Format(R"(
 SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
 FROM {METADATA_CATALOG}.ducklake_snapshot
-WHERE snapshot_id = %llu%s;)",
-		                                  ResolveSnapshotVersion(val), visible_condition));
+WHERE snapshot_id = %llu%s%s;)",
+		                                  ResolveSnapshotVersion(val), visible_condition, lineage_condition));
 	} else if (unit == "timestamp") {
 		auto timestamp = val.CastAs(*transaction.GetConnection().context, LogicalType::TIMESTAMP_TZ);
 		auto current_time = timestamp_tz_t(Timestamp::GetCurrentTimestamp());
@@ -5130,11 +5901,11 @@ FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = (
 	SELECT snapshot_id
 	FROM {METADATA_CATALOG}.ducklake_snapshot
-	WHERE snapshot_time::TIMESTAMPTZ %s= %s%s
+	WHERE snapshot_time::TIMESTAMPTZ %s= %s%s%s
 	ORDER BY snapshot_time::TIMESTAMPTZ %s
 	LIMIT 1);)",
 		    timestamp_condition, timestamp.DefaultCastAs(LogicalType::VARCHAR).ToSQLString(), visible_condition,
-		    timestamp_order));
+		    lineage_condition, timestamp_order));
 	} else {
 		throw InvalidInputException("Unsupported AT clause unit - %s", unit);
 	}
@@ -5451,15 +6222,16 @@ string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalSt
 	return batch_query;
 }
 
-string DuckLakeMetadataManager::RefreshTableSizesSql(const set<TableIndex> &table_ids) {
+string DuckLakeMetadataManager::RefreshTableSizesSql(const set<TableIndex> &table_ids, bool branch_aware) {
 	string batch_query;
 	for (auto &table_id : table_ids) {
 		batch_query += StringUtil::Format(R"(
 UPDATE {METADATA_CATALOG}.ducklake_table_stats SET file_size_bytes = (
 	SELECT COALESCE(SUM(data.file_size_bytes), 0)
-	FROM {METADATA_CATALOG}.ducklake_data_file data
+	FROM %s data
 	WHERE data.table_id = %d AND data.end_snapshot IS NULL
 ) WHERE table_id = %d;)",
+		                                  DataFileSource(branch_aware, 0, optional_idx(), "{METADATA_CATALOG}"),
 		                                  table_id.index, table_id.index);
 	}
 	return batch_query;
@@ -5655,7 +6427,7 @@ idx_t DuckLakeMetadataManager::GetNextColumnId(TableIndex table_id) {
 }
 
 string DuckLakeMetadataManager::WriteMergeAdjacent(const vector<DuckLakeCompactedFileInfo> &compactions,
-                                                   const vector<DuckLakePath> &resolved_paths) {
+                                                   const vector<DuckLakePath> &resolved_paths, bool write_visibility) {
 	if (compactions.empty()) {
 		return {};
 	}
@@ -5675,7 +6447,18 @@ string DuckLakeMetadataManager::WriteMergeAdjacent(const vector<DuckLakeCompacte
 	// including all other info (stats, delete files, partition values, etc)
 	vector<string> tables_to_delete_from {"ducklake_data_file", "ducklake_file_column_stats", "ducklake_delete_file",
 	                                      "ducklake_file_partition_value", "ducklake_file_variant_stats"};
+	if (write_visibility) {
+		tables_to_delete_from.push_back("ducklake_file_visibility");
+	}
 	string batch_query;
+	if (write_visibility) {
+		// the delete file rows go away below, so resolve their visibility rows first
+		batch_query += StringUtil::Format(R"(
+DELETE FROM {METADATA_CATALOG}.ducklake_delete_file_visibility
+WHERE delete_file_id IN (SELECT delete_file_id FROM {METADATA_CATALOG}.ducklake_delete_file WHERE data_file_id IN (%s));
+)",
+		                                  deleted_file_ids);
+	}
 	for (auto &delete_from_tbl : tables_to_delete_from) {
 		batch_query += StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
@@ -5686,7 +6469,37 @@ WHERE data_file_id IN (%s);
 	// add the files we cleared to the deletion schedule
 	return batch_query + InsertValuesSql("ducklake_files_scheduled_for_deletion", scheduled_deletions);
 }
-string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions) {
+//! The data and delete file end and begin updates of a compaction, mirrored into the visibility events
+static string CompactionSnapshotUpdates(const string &file_table, const string &visibility_table,
+                                        const string &id_column, const string &snapshot_column, idx_t snapshot_id,
+                                        const vector<idx_t> &file_ids, bool write_visibility) {
+	if (file_ids.empty()) {
+		return string();
+	}
+	auto id_list = StringUtil::Join(file_ids, file_ids.size(), ", ", [](idx_t id) { return to_string(id); });
+	if (!write_visibility) {
+		return StringUtil::Format("UPDATE {METADATA_CATALOG}.%s SET %s = %llu WHERE %s IN (%s);\n", file_table,
+		                          snapshot_column, snapshot_id, id_column, id_list);
+	}
+	if (snapshot_column == "begin_snapshot") {
+		return StringUtil::Format(
+		    "UPDATE {METADATA_CATALOG}.%s SET snapshot_id = %llu WHERE branch_id = 0 AND is_delete = FALSE AND %s IN "
+		    "(%s);\n",
+		    visibility_table, snapshot_id, id_column, id_list);
+	}
+	// ending a file moves its delete event, or writes one when the file had none yet
+	return StringUtil::Format(
+	    "UPDATE {METADATA_CATALOG}.%s SET snapshot_id = %llu WHERE branch_id = 0 AND is_delete = TRUE AND %s IN "
+	    "(%s);\n"
+	    "INSERT INTO {METADATA_CATALOG}.%s SELECT 0, v.table_id, v.%s, %llu, TRUE FROM {METADATA_CATALOG}.%s v "
+	    "WHERE v.branch_id = 0 AND v.is_delete = FALSE AND v.%s IN (%s) AND NOT EXISTS (SELECT 1 FROM "
+	    "{METADATA_CATALOG}.%s d WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.%s = v.%s);\n",
+	    visibility_table, snapshot_id, id_column, id_list, visibility_table, id_column, snapshot_id, visibility_table,
+	    id_column, id_list, visibility_table, id_column, id_column);
+}
+
+string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions,
+                                                    bool write_visibility) {
 	if (compactions.empty()) {
 		return {};
 	}
@@ -5698,59 +6511,83 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 		}
 	}
 
-	string batch_query;
+	// one statement per rewrite snapshot and file kind instead of one per file
+	map<idx_t, vector<idx_t>> ended_delete_files;
+	map<idx_t, vector<idx_t>> ended_data_files;
+	map<idx_t, vector<idx_t>> new_data_files;
 	for (idx_t i = 0; i < compactions.size(); ++i) {
 		auto &compaction = compactions[i];
 		D_ASSERT(!compaction.path.empty());
+		auto last_snapshot = table_idx_last_snapshot[compaction.table_index.index];
 		if (compaction.delete_file_id.IsValid() && !compaction.delete_file_end_snapshot.IsValid()) {
-			batch_query += StringUtil::Format(R"(
-				UPDATE {METADATA_CATALOG}.ducklake_delete_file SET end_snapshot = %llu
-				WHERE delete_file_id = %llu;
-				)",
-			                                  table_idx_last_snapshot[compaction.table_index.index],
-			                                  compaction.delete_file_id.index);
+			ended_delete_files[last_snapshot].push_back(compaction.delete_file_id.index);
 		}
-		// We must update the data file table
-		batch_query +=
-		    StringUtil::Format(R"(
-		UPDATE {METADATA_CATALOG}.ducklake_data_file SET end_snapshot = %llu
-		WHERE data_file_id = %llu;
-		)",
-		                       table_idx_last_snapshot[compaction.table_index.index], compaction.source_id.index);
-		// update the snapshot of our newly added file (if it was created)
+		ended_data_files[last_snapshot].push_back(compaction.source_id.index);
 		if (compaction.new_id.IsValid()) {
-			batch_query +=
-			    StringUtil::Format(R"(
-				UPDATE {METADATA_CATALOG}.ducklake_data_file SET begin_snapshot = %llu
-				WHERE data_file_id = %llu;
-				)",
-			                       table_idx_last_snapshot[compaction.table_index.index], compaction.new_id.index);
+			new_data_files[last_snapshot].push_back(compaction.new_id.index);
 		}
+	}
+	string batch_query;
+	for (auto &entry : ended_delete_files) {
+		batch_query +=
+		    CompactionSnapshotUpdates("ducklake_delete_file", "ducklake_delete_file_visibility", "delete_file_id",
+		                              "end_snapshot", entry.first, entry.second, write_visibility);
+	}
+	for (auto &entry : ended_data_files) {
+		batch_query += CompactionSnapshotUpdates("ducklake_data_file", "ducklake_file_visibility", "data_file_id",
+		                                         "end_snapshot", entry.first, entry.second, write_visibility);
+	}
+	for (auto &entry : new_data_files) {
+		batch_query += CompactionSnapshotUpdates("ducklake_data_file", "ducklake_file_visibility", "data_file_id",
+		                                         "begin_snapshot", entry.first, entry.second, write_visibility);
 	}
 	return batch_query;
 }
 
 string DuckLakeMetadataManager::WriteCompactions(const vector<DuckLakeCompactedFileInfo> &compactions,
-                                                 CompactionType type, const vector<DuckLakePath> &resolved_paths) {
+                                                 CompactionType type, const vector<DuckLakePath> &resolved_paths,
+                                                 bool write_visibility) {
 	switch (type) {
 	case CompactionType::MERGE_ADJACENT_TABLES:
-		return WriteMergeAdjacent(compactions, resolved_paths);
+		return WriteMergeAdjacent(compactions, resolved_paths, write_visibility);
 	case CompactionType::REWRITE_DELETES:
-		return WriteDeleteRewrites(compactions);
+		return WriteDeleteRewrites(compactions, write_visibility);
 	default:
 		throw InternalException("DuckLakeMetadataManager::WriteCompactions: CompactionType is not accepted");
 	}
 }
 
 //! Selects the files that the filter matches or whose range no remaining snapshot lies in
-static string UnusedFilesQuery(const string &file_table, const string &file_id_column, const string &filter) {
+static string UnusedFilesQuery(const string &file_table, const string &file_id_column, const string &filter,
+                               const string &visibility_guard) {
+	string guard = visibility_guard.empty() ? string() : visibility_guard + " AND ";
 	// only the first remaining snapshot at or after begin_snapshot matters
 	return StringUtil::Format(R"(
 SELECT f.%s, f.table_id, f.path, f.path_is_relative
-FROM {METADATA_CATALOG}.%s f
+FROM %s f
 ASOF LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot s ON f.begin_snapshot <= s.snapshot_id
-WHERE %s(f.end_snapshot IS NOT NULL AND (s.snapshot_id IS NULL OR s.snapshot_id >= f.end_snapshot));)",
-	                          file_id_column, file_table, filter);
+WHERE %s(%s(f.end_snapshot IS NOT NULL AND (s.snapshot_id IS NULL OR s.snapshot_id >= f.end_snapshot)));)",
+	                          file_id_column, file_table, guard, filter);
+}
+
+//! Keeps files a live branch still references, through its own events or, when a fork can still
+//! read them, through inheritance
+string DuckLakeMetadataManager::FileVisibilityGuard(const string &visibility_table, const string &file_id_column,
+                                                    const string &alias, bool include_inherited) {
+	if (!transaction.GetCatalog().SupportsBranching()) {
+		return string();
+	}
+	string inherited;
+	if (include_inherited) {
+		inherited = StringUtil::Format(" OR (b.fork_snapshot_id >= %s.begin_snapshot AND "
+		                               "(%s.end_snapshot IS NULL OR b.fork_snapshot_id < %s.end_snapshot))",
+		                               alias, alias, alias);
+	}
+	return StringUtil::Format("NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch b "
+	                          "WHERE b.branch_id <> 0 AND b.end_snapshot IS NULL "
+	                          "AND (EXISTS (SELECT 1 FROM {METADATA_CATALOG}.%s v "
+	                          "WHERE v.branch_id = b.branch_id AND v.%s = %s.%s)%s))",
+	                          visibility_table, file_id_column, alias, file_id_column, inherited);
 }
 
 vector<DuckLakeSnapshotTagInfo> DuckLakeMetadataManager::GetSnapshotTags(bool with_snapshot_time) {
@@ -5909,7 +6746,8 @@ AND NOT EXISTS (
 		table_id_filter = StringUtil::Format("f.table_id IN (%s) OR ", deleted_table_ids);
 	}
 
-	result = Query(UnusedFilesQuery("ducklake_data_file", "data_file_id", table_id_filter));
+	result = Query(UnusedFilesQuery(DataFiles(), "data_file_id", table_id_filter,
+	                                FileVisibilityGuard("ducklake_file_visibility", "data_file_id")));
 	auto cleanup_files = read_cleanup_files(*result);
 	auto deleted_file_ids = CleanupFileIdList(cleanup_files);
 	vector<string> tables_to_delete_from;
@@ -5917,6 +6755,9 @@ AND NOT EXISTS (
 		// delete the data files
 		tables_to_delete_from = {"ducklake_data_file", "ducklake_file_column_stats", "ducklake_file_variant_stats",
 		                         "ducklake_file_partition_value"};
+		if (transaction.GetCatalog().SupportsBranching()) {
+			tables_to_delete_from.push_back("ducklake_file_visibility");
+		}
 		for (auto &delete_tbl : tables_to_delete_from) {
 			result = Execute(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
@@ -5934,16 +6775,26 @@ WHERE data_file_id IN (%s);
 		file_id_filter = StringUtil::Format("f.data_file_id IN (%s) OR ", deleted_file_ids);
 	}
 
-	result = Query(UnusedFilesQuery("ducklake_delete_file", "delete_file_id", table_id_filter + file_id_filter));
+	result = Query(UnusedFilesQuery(DeleteFiles(), "delete_file_id", table_id_filter + file_id_filter,
+	                                FileVisibilityGuard("ducklake_delete_file_visibility", "delete_file_id")));
 	auto cleanup_deletes = read_cleanup_files(*result);
 	if (!cleanup_deletes.empty()) {
 		// delete the delete files
+		auto delete_file_ids = CleanupFileIdList(cleanup_deletes);
 		result = Execute(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_delete_file
 WHERE delete_file_id IN (%s);
 )",
-		                                    CleanupFileIdList(cleanup_deletes)));
+		                                    delete_file_ids));
 		result->ThrowIfError("Failed to delete old delete file information in DuckLake: ");
+		if (transaction.GetCatalog().SupportsBranching()) {
+			result = Execute(StringUtil::Format(R"(
+DELETE FROM {METADATA_CATALOG}.ducklake_delete_file_visibility
+WHERE delete_file_id IN (%s);
+)",
+			                                    delete_file_ids));
+			result->ThrowIfError("Failed to delete old delete file visibility in DuckLake: ");
+		}
 		schedule_for_cleanup(cleanup_deletes);
 	}
 
@@ -5971,6 +6822,10 @@ WHERE table_id IN (%s);)",
 		    "ducklake_partition_info",  "ducklake_partition_column",    "ducklake_column",
 		    "ducklake_column_tag",      "ducklake_sort_info",           "ducklake_sort_expression",
 		    "ducklake_schema_versions", "ducklake_inlined_data_tables", "ducklake_column_mapping"};
+		if (transaction.GetCatalog().SupportsBranching()) {
+			tables_to_delete_from.push_back("ducklake_file_visibility");
+			tables_to_delete_from.push_back("ducklake_delete_file_visibility");
+		}
 		for (auto &delete_tbl : tables_to_delete_from) {
 			auto result = Execute(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
@@ -5999,6 +6854,9 @@ WHERE scope = 'table' AND scope_id IN (%s);)",
 	}
 	if (transaction.GetCatalog().SupportsSnapshotTags()) {
 		tables_to_delete_from.push_back("ducklake_snapshot_tag");
+	}
+	if (transaction.GetCatalog().SupportsBranching()) {
+		tables_to_delete_from.push_back("ducklake_branch");
 	}
 	bool deleted_schemas = false;
 	for (auto &delete_tbl : tables_to_delete_from) {
@@ -6133,8 +6991,7 @@ string DuckLakeMetadataManager::InsertNewSchema(const DuckLakeSnapshot &snapshot
 }
 
 unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithLiveDataFiles() {
-	auto result =
-	    Query("SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_data_file WHERE end_snapshot IS NULL");
+	auto result = Query("SELECT DISTINCT table_id FROM " + DataFiles() + " WHERE end_snapshot IS NULL");
 	result->ThrowIfError("Failed to get the tables with data files from DuckLake: ");
 	unordered_set<idx_t> table_ids;
 	for (auto &row : *result) {
@@ -6145,7 +7002,12 @@ unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithLiveDataFiles() {
 
 vector<DuckLakeTableSizeInfo> DuckLakeMetadataManager::GetTableSizes(DuckLakeSnapshot snapshot) {
 	vector<DuckLakeTableSizeInfo> table_sizes;
-	auto result = Query(snapshot, R"(
+	auto branch_aware = transaction.GetCatalog().SupportsBranching();
+	string at_snapshot = branch_aware ? to_string(snapshot.snapshot_id) : "{SNAPSHOT_ID}";
+	auto branch_id = ReadBranchId(snapshot);
+	auto result =
+	    Query(snapshot,
+	          StringUtil::Format(R"(
 SELECT
 	schema_id, table_id, table_name, table_uuid,
 	data_file_info.file_count AS data_file_count,
@@ -6154,15 +7016,21 @@ SELECT
 	delete_file_info.total_file_size AS delete_total_size
 FROM {METADATA_CATALOG}.ducklake_table tbl, LATERAL (
 	SELECT COUNT(*) file_count, SUM(file_size_bytes) total_file_size
-	FROM {METADATA_CATALOG}.ducklake_data_file df
-	WHERE df.table_id = tbl.table_id AND {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
+	FROM %s df
+	WHERE df.table_id = tbl.table_id AND %s >= begin_snapshot AND (%s < end_snapshot OR end_snapshot IS NULL)
 ) data_file_info, LATERAL (
 	SELECT COUNT(*) file_count, SUM(file_size_bytes) total_file_size
-	FROM {METADATA_CATALOG}.ducklake_delete_file df
-	WHERE df.table_id = tbl.table_id AND {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
+	FROM %s df
+	WHERE df.table_id = tbl.table_id AND %s >= begin_snapshot AND (%s < end_snapshot OR end_snapshot IS NULL)
 ) delete_file_info
 WHERE {SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
-)");
+)",
+	                             DataFileSource(branch_aware, branch_id, transaction.GetCatalog().AttachedBranchFork(),
+	                                            "{METADATA_CATALOG}"),
+	                             at_snapshot, at_snapshot,
+	                             DeleteFileSource(branch_aware, branch_id,
+	                                              transaction.GetCatalog().AttachedBranchFork(), "{METADATA_CATALOG}"),
+	                             at_snapshot, at_snapshot));
 	for (auto &row : *result) {
 		DuckLakeTableSizeInfo table_size;
 		table_size.schema_id = SchemaIndex(row.GetValue<idx_t>(0));

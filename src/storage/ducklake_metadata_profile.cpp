@@ -51,6 +51,8 @@ public:
 				profile.dropped_tables_stay_readable = GetBoolean(key, value);
 			} else if (key == "rename_inlined_columns_by_copy") {
 				profile.rename_inlined_columns_by_copy = GetBoolean(key, value);
+			} else if (key == "concurrent_reads_block_commits") {
+				profile.concurrent_reads_block_commits = GetBoolean(key, value);
 			} else if (key == "commit_errors") {
 				ParseCommitErrors(value);
 			} else {
@@ -181,6 +183,7 @@ const char *const SQLITE_PROFILE =
 	"system_column_names": ["rowid", "oid", "_rowid_"],
 	"dropped_tables_stay_readable": false,
 	"rename_inlined_columns_by_copy": true,
+	"concurrent_reads_block_commits": true,
 	"commit_errors": [
 		{
 			"pattern": "failed to execute query \"commit\": database is locked",

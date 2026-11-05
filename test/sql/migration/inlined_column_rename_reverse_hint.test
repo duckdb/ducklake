@@ -19,7 +19,7 @@ statement ok
 DETACH dl
 
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/reverse_hint.db' AS dl (DATA_PATH '{TEST_DIR}/reverse_hint_files', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{TEST_DIR}/reverse_hint.db' AS dl (DATA_PATH '{TEST_DIR}/reverse_hint_files', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 statement ok
 DETACH dl

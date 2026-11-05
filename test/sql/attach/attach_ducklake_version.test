@@ -115,7 +115,7 @@ SELECT * FROM ducklake.t1
 statement ok
 DETACH ducklake
 
-# cannot downgrade: attach a 2.0-dev1 catalog with DUCKLAKE_VERSION '1.0'
+# a 2.0-dev1 catalog cannot be downgraded to 1.0
 statement error
 ATTACH 'ducklake:{TEST_DIR}/ducklake_version_10.db' AS ducklake(DATA_PATH '{TEST_DIR}/ducklake_version_10_files', DUCKLAKE_VERSION '1.0')
 ----
