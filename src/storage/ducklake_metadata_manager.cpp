@@ -5818,24 +5818,22 @@ idx_t DuckLakeMetadataManager::ReadBranchId(DuckLakeSnapshot snapshot) const {
 }
 
 string DuckLakeMetadataManager::GetSnapshotMaximaQuery() const {
-	string query = "SELECT MAX(snapshot_id), MAX(CASE WHEN branch_id = 0 THEN snapshot_id END), "
-	               "MAX(CASE WHEN branch_id <> 0 THEN snapshot_id END) "
-	               "FROM {METADATA_CATALOG}.ducklake_snapshot";
-	SubstituteCatalogPlaceholders(query);
-	return query;
+	return "SELECT MAX(snapshot_id), MAX(CASE WHEN branch_id = 0 THEN snapshot_id END), "
+	       "MAX(CASE WHEN branch_id <> 0 THEN snapshot_id END) "
+	       "FROM {METADATA_CATALOG}.ducklake_snapshot";
 }
 
 DuckLakeSnapshotMaxima DuckLakeMetadataManager::GetSnapshotMaxima() {
 	DuckLakeSnapshotMaxima maxima;
 	auto query = GetSnapshotMaximaQuery();
-	SubstituteCatalogPlaceholders(query);
 	unique_ptr<QueryResult> result;
 	if (ConcurrentReadsBlockCommits() || CommitsEachStatement()) {
 		// the metadata transaction blocks concurrent commits or runs each statement on the server,
-		// so its view of the maxima is current and a second connection is not needed
+		// so its view of the maxima is current and Query substitutes the catalog of the backend
 		result = Query(query);
 	} else {
 		// a fresh connection sees the snapshots committed after the metadata transaction began
+		SubstituteCatalogPlaceholders(query);
 		Connection fresh_connection(*transaction.GetConnection().context->db);
 		result = fresh_connection.Query(query);
 	}
