@@ -126,6 +126,16 @@ string DuckLakeMetadataManager::CommitErrorHint(const string &message) const {
 	return rule->hint;
 }
 
+bool DuckLakeMetadataManager::ConcurrentReadsBlockCommits() const {
+	if (!GetMetadataProfile().concurrent_reads_block_commits) {
+		return false;
+	}
+	// WAL readers do not block commits, and a write transaction fails on a stale snapshot instead
+	auto &parameters = transaction.GetCatalog().MetadataParameters();
+	auto parameter = parameters.find("journal_mode");
+	return parameter == parameters.end() || !StringUtil::CIEquals(parameter->second.ToString(), "wal");
+}
+
 bool DuckLakeMetadataManager::ExecuteRetrialsServerSide() const {
 	return transaction.GetCatalog().RetrialsServerSide();
 }
@@ -5820,7 +5830,7 @@ DuckLakeSnapshotMaxima DuckLakeMetadataManager::GetSnapshotMaxima() {
 	auto query = GetSnapshotMaximaQuery();
 	SubstituteCatalogPlaceholders(query);
 	unique_ptr<QueryResult> result;
-	if (GetMetadataProfile().concurrent_reads_block_commits) {
+	if (ConcurrentReadsBlockCommits()) {
 		// the metadata transaction already blocks concurrent commits, so its view of the maxima is current
 		result = Query(query);
 	} else {

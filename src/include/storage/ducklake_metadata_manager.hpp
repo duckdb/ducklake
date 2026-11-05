@@ -233,6 +233,8 @@ public:
 	virtual bool IsRetryableCommitError(const string &message) const;
 	//! Advice added to the error of a commit that failed for good
 	virtual string CommitErrorHint(const string &message) const;
+	//! Whether a read on a second connection can block a concurrent commit of the metadata catalog
+	bool ConcurrentReadsBlockCommits() const;
 	//! SQL that the commit of a transaction that changed options runs, so two commits cannot both insert an option
 	virtual string ConfigOptionLockSql() const {
 		return string();
