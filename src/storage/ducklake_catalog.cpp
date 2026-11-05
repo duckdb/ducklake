@@ -538,14 +538,16 @@ DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &t
 	return catalog_set;
 }
 
-static unique_ptr<DuckLakeFieldId> TransformColumnType(const DuckLakeColumnInfo &col) {
+//! `parent_path` is the quoted path of the enclosing column (e.g. "s"), empty for a top-level column
+static unique_ptr<DuckLakeFieldId> TransformColumnType(const DuckLakeColumnInfo &col, const string &parent_path = "") {
 	DuckLakeColumnData col_data;
 	col_data.id = col.id;
+	const auto quoted_name = "\"" + col.name.GetIdentifierName() + "\"";
+	const auto path = parent_path.empty() ? quoted_name : parent_path + "." + quoted_name;
 	if (col.children.empty()) {
 		auto col_type = DuckLakeTypes::FromString(col.type);
 		if (DuckLakeTypes::IsNested(col_type)) {
-			throw InvalidInputException("Column %s has the nested type \"%s\" but no child columns", col.name,
-			                            col.type);
+			throw InvalidInputException("Column %s has the nested type \"%s\" but no child columns", path, col.type);
 		}
 		col_data.initial_default = col.initial_default.DefaultCastAs(col_type);
 		if (!col.default_value.IsNull()) {
@@ -563,7 +565,7 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(const DuckLakeColumnInfo 
 	auto type = DuckLakeTypes::FromColumnInfo(col);
 	vector<unique_ptr<DuckLakeFieldId>> child_fields;
 	for (auto &child_col : col.children) {
-		child_fields.push_back(TransformColumnType(child_col));
+		child_fields.push_back(TransformColumnType(child_col, path));
 	}
 	return make_uniq<DuckLakeFieldId>(std::move(col_data), col.name, std::move(type), std::move(child_fields));
 }
