@@ -130,7 +130,7 @@ static bool TryParseDecimalMember(string member, uint64_t &result) {
 }
 
 LogicalType DuckLakeTypes::FromString(const string &type) {
-	if (type == "decimal") {
+	if (StringUtil::CIEquals(type, "decimal")) {
 		throw InvalidInputException("Invalid DECIMAL type \"%s\" - expected width and scale", type);
 	}
 	if (StringUtil::StartsWith(type, "decimal(") && StringUtil::EndsWith(type, ")")) {
