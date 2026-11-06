@@ -1,0 +1,87 @@
+# name: test/sql/compaction/expire_snapshots_replaced_tables_queries.test
+# description: expiring snapshots with many dropped table versions resolves their paths in one query and does not drop inlined deletion tables that do not exist
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/expire_snapshots_replaced_tables_queries', DATA_INLINING_ROW_LIMIT 0)
+
+# every CREATE OR REPLACE gives the table a new id, so the expiry cleans up 15 dropped table versions
+loop i 0 5
+
+statement ok
+CREATE TABLE lake.t${i} AS SELECT range AS v FROM range(10)
+
+endloop
+
+loop r 0 3
+
+statement ok
+BEGIN
+
+loop i 0 5
+
+statement ok
+CREATE OR REPLACE TABLE lake.t${i} AS SELECT range + ${r} AS v FROM range(10)
+
+endloop
+
+statement ok
+COMMIT
+
+endloop
+
+query I
+SELECT count(*) FROM __ducklake_metadata_lake.ducklake_table WHERE end_snapshot IS NOT NULL
+----
+15
+
+statement ok
+SET VARIABLE expired = (SELECT list(snapshot_id ORDER BY snapshot_id) FROM lake.snapshots() WHERE snapshot_id < (SELECT max(snapshot_id) FROM lake.snapshots()))
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+statement ok
+CALL ducklake_expire_snapshots('lake', versions => getvariable('expired'))
+
+statement ok
+CALL disable_logging()
+
+# the latest snapshot and the one the expiry writes remain
+query I
+SELECT count(*) FROM lake.snapshots()
+----
+2
+
+query I
+SELECT count(*) FROM __ducklake_metadata_lake.ducklake_files_scheduled_for_deletion
+----
+15
+
+# the paths of the dropped tables are read at once, not one table at a time
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%ducklake_schema s%JOIN%ducklake_table t%WHERE table_id = %'
+----
+0
+
+# no inlined deletion table exists, so none is dropped
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE 'DROP TABLE IF EXISTS%ducklake_inlined_delete_%'
+----
+0
+
+query I
+SELECT count(*) FROM lake.t0
+----
+10
