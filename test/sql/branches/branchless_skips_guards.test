@@ -1,0 +1,77 @@
+# name: test/sql/branches/branchless_skips_guards.test
+# description: expiry on a lake without branches runs no visibility guard and keeps it once a branch exists
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DELETE FROM dl.t
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+statement ok
+CALL disable_logging()
+
+# without branches the unused file queries carry no branch guard
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%NOT EXISTS (SELECT 1 FROM%ducklake_branch b%'
+----
+0
+
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+1
+
+statement ok
+CREATE TABLE dl.u AS SELECT 7 AS i
+
+statement ok
+DELETE FROM dl.u
+
+statement ok
+CALL ducklake_create_branch('dl', 'dev')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [4])
+
+statement ok
+CALL disable_logging()
+
+# with a live branch the guard protects the files it still references
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%NOT EXISTS (SELECT 1 FROM%ducklake_branch b%'
+----
+true
+
+query I
+SELECT count(*) FROM dl.u
+----
+0

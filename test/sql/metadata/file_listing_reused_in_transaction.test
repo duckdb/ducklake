@@ -1,0 +1,80 @@
+# name: test/sql/metadata/file_listing_reused_in_transaction.test
+# description: identical file listings inside one transaction run the metadata query once and writes drop the cache
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT range AS i FROM range(100)
+
+statement ok
+CREATE TABLE dl.gone AS SELECT 1 AS i
+
+statement ok
+DELETE FROM dl.gone
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+statement ok
+BEGIN
+
+query I
+SELECT sum(i) FROM dl.t
+----
+4950
+
+query I
+SELECT sum(i) FROM dl.t
+----
+4950
+
+statement ok
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+# the second identical listing reuses the parsed rows of the first
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%ducklake^_data^_file%' ESCAPE '^' AND query LIKE '%ducklake^_file^_visibility%' ESCAPE '^'
+----
+1
+
+# a metadata write between listings drops the cache so the expiry result is read fresh
+statement ok
+BEGIN
+
+query I
+SELECT count(*) FROM dl.gone
+----
+0
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [2])
+
+query I
+SELECT count(*) FROM dl.gone
+----
+0
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM meta.ducklake_snapshot WHERE snapshot_id = 2
+----
+0

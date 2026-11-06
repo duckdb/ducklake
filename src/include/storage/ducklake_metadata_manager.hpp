@@ -39,6 +39,7 @@ struct DuckLakeRetryConfig;
 struct DuckLakeMetadataProfile;
 struct TransactionChangeInformation;
 class BoundAtClause;
+class Connection;
 class SQLStatement;
 class FileSystem;
 
@@ -235,6 +236,16 @@ public:
 	virtual string CommitErrorHint(const string &message) const;
 	//! Whether a read on a second connection can block a concurrent commit of the metadata catalog
 	bool ConcurrentReadsBlockCommits() const;
+	//! Whether the catalog holds any branch besides main, read once per transaction
+	bool HasBranches();
+	//! Drops the cached file listings, called when the transaction writes metadata
+	void InvalidateFileListCache();
+	//! Reads the transaction scoped inlined deletions and attaches them to the listed files
+	void AttachInlinedFileDeletions(TableIndex table_id, DuckLakeSnapshot snapshot, bool include_local_changes,
+	                                vector<DuckLakeFileListEntry> &files);
+	//! Runs the deletion scan of GetTableDeletions, which caches it
+	vector<DuckLakeDeleteScanEntry> ReadTableDeletions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot,
+	                                                   DuckLakeSnapshot end_snapshot, bool include_local_changes);
 	//! SQL that the commit of a transaction that changed options runs, so two commits cannot both insert an option
 	virtual string ConfigOptionLockSql() const {
 		return string();
@@ -546,7 +557,7 @@ public:
 	//! Caller supplies one resolved path per new delete file, in the same order.
 	static string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
 	                                  const vector<DuckLakePath> &resolved_paths, bool write_row_group_count,
-	                                  bool write_visibility);
+	                                  bool write_visibility, bool include_retro_suppression = true);
 	static string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros);
 
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
@@ -874,6 +885,14 @@ private:
 	static mutex metadata_managers_lock;
 	//! The global snapshot maximum read along with the latest snapshot
 	optional_idx global_snapshot_max;
+	//! The connection the maxima are read on, kept so retried commits do not construct one each
+	unique_ptr<Connection> maxima_connection;
+	//! Whether the catalog holds any branch besides main, read once per transaction
+	optional_idx catalog_has_branches;
+	//! Parsed file listings keyed by their query, statements repeat identical listings several times
+	unordered_map<string, shared_ptr<vector<DuckLakeFileListEntry>>> file_list_cache;
+	//! Parsed deletion scans of table_changes, which executes its queries twice per call
+	unordered_map<string, shared_ptr<vector<DuckLakeDeleteScanEntry>>> delete_scan_cache;
 
 	unordered_set<idx_t> GetFileIdsWithInlinedDeletions(TableIndex table_id, DuckLakeSnapshot snapshot);
 	unique_ptr<QueryResult> ReadInlinedDataChanges(DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot,

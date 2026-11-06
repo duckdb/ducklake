@@ -1656,6 +1656,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.get_snapshot_maxima = [&]() {
 		return metadata_manager->GetSnapshotMaxima();
 	};
+	context.has_branches = [&]() {
+		return metadata_manager->HasBranches();
+	};
 	vector<DuckLakeSnapshotInfo> committed_expiry;
 	bool expired_by_statements = false;
 	if (ExpiresSnapshotsOnCommit()) {
@@ -2364,8 +2367,26 @@ bool DuckLakeTransaction::InlinedFileDeletionsFlushed(TableIndex table_id) {
 	return state->flushed_inlined_file_deletions.count(table_id) > 0;
 }
 
+static bool QueryOnlyReads(const string &query) {
+	auto start = query.find_first_not_of(" \t\n\r");
+	if (start == string::npos) {
+		return true;
+	}
+	for (const char *prefix : {"SELECT", "WITH", "EXPLAIN", "FROM"}) {
+		idx_t len = strlen(prefix);
+		if (StringUtil::CIEquals(query.substr(start, len), prefix)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 unique_ptr<QueryResult> DuckLakeTransaction::ExecuteRaw(string query) {
 	auto &connection = GetConnection();
+	if (metadata_manager && !QueryOnlyReads(query)) {
+		// the write can change what a repeated listing returns
+		metadata_manager->InvalidateFileListCache();
+	}
 	auto start = std::chrono::steady_clock::now();
 	auto result = connection.Query(query);
 	ReportMetadataQuery(query, std::chrono::steady_clock::now() - start);
@@ -2374,6 +2395,9 @@ unique_ptr<QueryResult> DuckLakeTransaction::ExecuteRaw(string query) {
 
 unique_ptr<QueryResult> DuckLakeTransaction::ExecuteStatement(unique_ptr<SQLStatement> statement) {
 	auto &connection = GetConnection();
+	if (metadata_manager) {
+		metadata_manager->InvalidateFileListCache();
+	}
 	auto query = statement->query;
 	auto start = std::chrono::steady_clock::now();
 	auto result = connection.Query(std::move(statement));
