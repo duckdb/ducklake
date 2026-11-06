@@ -5374,9 +5374,9 @@ UPDATE {METADATA_CATALOG}.ducklake_table_stats SET file_size_bytes = (
 	return batch_query;
 }
 
-vector<DuckLakeSnapshotInfo> DuckLakeMetadataManager::GetAllSnapshots(const string &filter) {
+unique_ptr<QueryResult> DuckLakeMetadataManager::ReadSnapshots(const string &filter) {
 	auto res = Query(StringUtil::Format(R"(
-SELECT snapshot_id, snapshot_time, schema_version, next_file_id, changes_made, author, commit_message, commit_extra_info
+SELECT snapshot_id, snapshot_time, schema_version, changes_made, author, commit_message, commit_extra_info, next_file_id
 FROM {METADATA_CATALOG}.ducklake_snapshot
 LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot_changes USING (snapshot_id)
 %s %s
@@ -5384,6 +5384,11 @@ ORDER BY snapshot_id ASC
 )",
 	                                    filter.empty() ? "" : "WHERE", filter));
 	res->ThrowIfError("Failed to get snapshot information from DuckLake: ");
+	return res;
+}
+
+vector<DuckLakeSnapshotInfo> DuckLakeMetadataManager::GetAllSnapshots(const string &filter) {
+	auto res = ReadSnapshots(filter);
 	auto context = transaction.context.lock();
 	vector<DuckLakeSnapshotInfo> snapshots;
 
@@ -5392,11 +5397,11 @@ ORDER BY snapshot_id ASC
 		snapshot_info.id = row.GetValue<idx_t>(0);
 		snapshot_info.time = row.GetBaseValue(1).CastAs(*context, LogicalType::TIMESTAMP_TZ).GetValue<timestamp_tz_t>();
 		snapshot_info.schema_version = row.GetValue<idx_t>(2);
-		snapshot_info.next_file_id = row.GetValue<idx_t>(3);
-		snapshot_info.change_info.changes_made = row.IsNull(4) ? string() : row.GetValue<string>(4);
-		snapshot_info.author = row.GetBaseValue(5);
-		snapshot_info.commit_message = row.GetBaseValue(6);
-		snapshot_info.commit_extra_info = row.GetBaseValue(7);
+		snapshot_info.change_info.changes_made = row.IsNull(3) ? string() : row.GetValue<string>(3);
+		snapshot_info.author = row.GetBaseValue(4);
+		snapshot_info.commit_message = row.GetBaseValue(5);
+		snapshot_info.commit_extra_info = row.GetBaseValue(6);
+		snapshot_info.next_file_id = row.GetValue<idx_t>(7);
 		snapshots.push_back(std::move(snapshot_info));
 	}
 	return snapshots;

@@ -593,6 +593,8 @@ public:
 	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
+	//! The snapshots in the column order of ducklake_snapshots, then next_file_id
+	unique_ptr<QueryResult> ReadSnapshots(const string &filter);
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	//! The tables with data files that are not dropped
