@@ -939,7 +939,8 @@ void DuckLakeTransaction::ReloadConfigOptions() {
 			}
 		}
 	} catch (std::exception &) { // NOLINT
-		// without the catalog's answer the undo restores the earlier values
+		// without the catalog's answer the cache keeps what the commit wrote, as its files are kept
+		config_option_undo.clear();
 		return;
 	}
 	for (auto &reload : reloads) {
