@@ -239,6 +239,10 @@ public:
 	virtual bool IsRemote() const {
 		return false;
 	}
+	//! Whether the file lists read the row counts and the row group counts of the files, which REST responses hold
+	void SetReadFileCounts(bool read_file_counts_p) {
+		read_file_counts = read_file_counts_p;
+	}
 	//! Whether the backend has changes of the transaction that are only written when the transaction commits
 	virtual bool HasPendingChanges() const {
 		return false;
@@ -819,7 +823,7 @@ private:
 protected:
 	string GetFileSelectList(const string &prefix);
 	string GetFileCountsSelectList(const string &prefix, const string &row_count_column);
-	static void ReadFileCounts(const QueryResultRow &row, idx_t &col_idx, DuckLakeFileData &data);
+	void ReadFileCounts(const QueryResultRow &row, idx_t &col_idx, DuckLakeFileData &data);
 	string GetDataFileSelectList(const string &prefix);
 	string GetDeleteFileSelectList(const string &prefix);
 	//! Build an additional WHERE fragment that prunes files by bucket() partition value.
@@ -893,6 +897,7 @@ protected:
 	mutex paths_lock;
 	map<TableIndex, string> table_paths;
 	bool pending_cache_clear = false;
+	bool read_file_counts = false;
 };
 
 } // namespace duckdb

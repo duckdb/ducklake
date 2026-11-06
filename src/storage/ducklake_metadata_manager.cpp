@@ -1691,6 +1691,9 @@ string DuckLakeMetadataManager::GetFileSelectList(const string &prefix) {
 
 //! The row count and the row group count of a file, the row group count only exists in the metadata of DuckLake 1.1
 string DuckLakeMetadataManager::GetFileCountsSelectList(const string &prefix, const string &row_count_column) {
+	if (!read_file_counts) {
+		return string();
+	}
 	auto row_group_count =
 	    transaction.GetCatalog().SupportsV1_1Metadata() ? prefix + ".row_group_count" : string("CAST(NULL AS BIGINT)");
 	return StringUtil::Format(", %s.%s AS %s_row_count, %s AS %s_row_group_count", prefix, row_count_column, prefix,
@@ -1737,6 +1740,9 @@ DuckLakeFileData DuckLakeMetadataManager::ReadFile(DuckLakeTableEntry &table, co
 }
 
 void DuckLakeMetadataManager::ReadFileCounts(const QueryResultRow &row, idx_t &col_idx, DuckLakeFileData &data) {
+	if (!read_file_counts) {
+		return;
+	}
 	data.row_count = OptIdx(row, col_idx++);
 	data.row_group_count = OptIdx(row, col_idx++);
 }
@@ -2737,7 +2743,7 @@ main_results AS (
 	query += StringUtil::Format(R"(
 SELECT %s, current_delete.begin_snapshot, false AS file_deleted FROM (
 	SELECT data_file_id, begin_snapshot, path, path_is_relative, file_size_bytes, footer_size, encryption_key, format,
-		partial_max, delete_count, {ROW_GROUP_COUNT}
+		partial_max{FILE_COUNTS}
 	FROM {METADATA_CATALOG}.ducklake_delete_file
 	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
 ) AS current_delete
@@ -2749,9 +2755,7 @@ LEFT JOIN LATERAL (
 		file_size_bytes,
 		footer_size,
 		encryption_key,
-		format,
-		delete_count,
-		{ROW_GROUP_COUNT}
+		format{FILE_COUNTS}
 	FROM {METADATA_CATALOG}.ducklake_delete_file
 	WHERE table_id = %d AND begin_snapshot < %d
 	ORDER BY data_file_id ASC, begin_snapshot DESC
@@ -2780,9 +2784,7 @@ LEFT JOIN LATERAL (
 		file_size_bytes,
 		footer_size,
 		encryption_key,
-		format,
-		delete_count,
-		{ROW_GROUP_COUNT}
+		format{FILE_COUNTS}
 	FROM {METADATA_CATALOG}.ducklake_delete_file
 	WHERE table_id = %d AND begin_snapshot <= data.end_snapshot
 	ORDER BY data_file_id ASC, begin_snapshot DESC
@@ -2793,19 +2795,20 @@ USING (data_file_id), (
 		CAST(NULL AS BIGINT) AS file_size_bytes,
 		CAST(NULL AS BIGINT) AS footer_size,
 		CAST(NULL AS VARCHAR) AS encryption_key,
-		CAST(NULL AS VARCHAR) format,
-		CAST(NULL AS BIGINT) AS delete_count,
-		CAST(NULL AS BIGINT) AS row_group_count
+		CAST(NULL AS VARCHAR) format{NULL_FILE_COUNTS}
 ) current_delete
 )",
 	                            select_list, table_id.index, table_id.index, start_snapshot.snapshot_id, table_id.index,
 	                            delete_file_in_range, select_list, table_id.index, start_snapshot.snapshot_id,
 	                            rewrite_end_filter, table_id.index);
 	// the row group count only exists in the metadata of DuckLake 1.1
-	query = StringUtil::Replace(query, "{ROW_GROUP_COUNT}",
-	                            transaction.GetCatalog().SupportsV1_1Metadata()
-	                                ? "row_group_count"
-	                                : "CAST(NULL AS BIGINT) AS row_group_count");
+	string row_group_count =
+	    transaction.GetCatalog().SupportsV1_1Metadata() ? "row_group_count" : "CAST(NULL AS BIGINT) AS row_group_count";
+	query =
+	    StringUtil::Replace(query, "{FILE_COUNTS}", read_file_counts ? ", delete_count, " + row_group_count : string());
+	query = StringUtil::Replace(
+	    query, "{NULL_FILE_COUNTS}",
+	    read_file_counts ? ", CAST(NULL AS BIGINT) AS delete_count, CAST(NULL AS BIGINT) AS row_group_count" : "");
 
 	if (has_inlined_table) {
 		string null_file_cols = "CAST(NULL AS VARCHAR) AS path, CAST(NULL AS BOOLEAN) AS path_is_relative, CAST(NULL "
@@ -2813,7 +2816,10 @@ USING (data_file_id), (
 		if (IsEncrypted()) {
 			null_file_cols += ", CAST(NULL AS VARCHAR) AS encryption_key";
 		}
-		null_file_cols += ", NULL format, CAST(NULL AS BIGINT) AS row_count, CAST(NULL AS BIGINT) AS row_group_count";
+		null_file_cols += ", NULL format";
+		if (read_file_counts) {
+			null_file_cols += ", CAST(NULL AS BIGINT) AS row_count, CAST(NULL AS BIGINT) AS row_group_count";
+		}
 		query += StringUtil::Format(R"(
 UNION ALL
 
