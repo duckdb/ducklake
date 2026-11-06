@@ -230,6 +230,14 @@ PostgresMetadataManager::PostgresMetadataManager(DuckLakeTransaction &transactio
     : DuckLakeMetadataManager(transaction) {
 }
 
+bool PostgresMetadataManager::ShowsConcurrentCommits() const {
+	// READ COMMITTED metadata reads see the commits of other transactions
+	auto &parameters = transaction.GetCatalog().MetadataParameters();
+	auto isolation_level = parameters.find("isolation_level");
+	return isolation_level != parameters.end() &&
+	       StringUtil::CIEquals(isolation_level->second.ToString(), "READ COMMITTED");
+}
+
 bool PostgresMetadataManager::InsertsInlinedRowsAfterBatch(idx_t row_count) const {
 	// the copy of a separate insert costs more round trips than parsing the VALUES text of a few rows
 	static constexpr idx_t MAX_INLINED_ROWS_IN_BATCH = 100;
@@ -349,9 +357,30 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	}
 }
 
+optional_idx PostgresMetadataManager::BatchServerErrorStart(const string &message) const {
+	// the batch and the server error can contain any text, so the batch is found by its size
+	const string failed_batch = "Failed to execute query \"";
+	auto batch_start = message.find(failed_batch);
+	if (batch_start == string::npos) {
+		return optional_idx();
+	}
+	auto batch_end = batch_start + failed_batch.size() + executed_query_size;
+	if (batch_end + 3 > message.size() || message.compare(batch_end, 3, "\": ") != 0) {
+		return optional_idx();
+	}
+	return batch_end;
+}
+
+string PostgresMetadataManager::CommitErrorWithoutQuery(const string &message) const {
+	auto server_error_start = BatchServerErrorStart(message);
+	return server_error_start.IsValid() ? message.substr(server_error_start.GetIndex()) : message;
+}
+
 bool PostgresMetadataManager::IsRetryableCommitError(const string &message) const {
-	// the server error follows the failed query, which can contain any text
-	auto server_error_start = message.rfind("\": ");
+	auto batch_server_error_start = BatchServerErrorStart(message);
+	// for another failed query, the server error is guessed to follow the last quote and colon
+	auto server_error_start =
+	    batch_server_error_start.IsValid() ? batch_server_error_start.GetIndex() : message.rfind("\": ");
 	auto server_error = server_error_start == string::npos ? message : message.substr(server_error_start);
 	// constraint names are not translated, so a conflict on a metadata primary key is found in any language
 	for (auto end = server_error.find("_pkey"); end != string::npos; end = server_error.find("_pkey", end + 1)) {
@@ -466,6 +495,9 @@ unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapsh
 	auto catalog_literal = SQLString::ToString(ducklake_catalog.MetadataDatabaseName().GetIdentifierName());
 	// casts of float bounds to text keep their exact value
 	query = "SET LOCAL extra_float_digits = 3;" + query;
+	// the scanner drops trailing semicolons before it repeats the query in an error
+	StringUtil::RTrim(query, "; \t\n\v\f\r");
+	executed_query_size = query.size();
 	return transaction.ExecuteRaw(
 	    StringUtil::Format("CALL postgres_execute(%s, %s, prepare=FALSE)", catalog_literal, SQLString(query)));
 }
@@ -527,7 +559,7 @@ bool PostgresMetadataManager::MaterializeStatsCTEs() const {
 string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                                                       const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
-                                                      const vector<idx_t> &runtime_filter_stats_columns,
+                                                      vector<idx_t> &runtime_filter_stats_columns,
                                                       FileListType file_list_type, const string &) {
 	auto schema = SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName());
 	auto remote_query = DuckLakeMetadataManager::GenerateFileListQuery(

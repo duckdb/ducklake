@@ -6,12 +6,13 @@
 namespace duckdb {
 
 struct DuckLakeRegisterMetadataProfileData final : public TableFunctionData {
-	DuckLakeRegisterMetadataProfileData(string name_p, string profile_p)
-	    : name(std::move(name_p)), profile(std::move(profile_p)) {
+	DuckLakeRegisterMetadataProfileData(string name_p, string profile_p, bool replace_p)
+	    : name(std::move(name_p)), profile(std::move(profile_p)), replace(replace_p) {
 	}
 
 	string name;
 	string profile;
+	bool replace;
 };
 
 static unique_ptr<FunctionData> DuckLakeRegisterMetadataProfileBind(ClientContext &context,
@@ -23,16 +24,21 @@ static unique_ptr<FunctionData> DuckLakeRegisterMetadataProfileBind(ClientContex
 			throw InvalidInputException("ducklake_register_metadata_profile does not accept NULL arguments");
 		}
 	}
+	bool replace = true;
+	Value replace_value;
+	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "replace", "boolean", replace_value)) {
+		replace = BooleanValue::Get(replace_value);
+	}
 	return_types.push_back(LogicalType::BOOLEAN);
 	names.push_back("Success");
 	return make_uniq<DuckLakeRegisterMetadataProfileData>(StringValue::Get(input.inputs[0]),
-	                                                      StringValue::Get(input.inputs[1]));
+	                                                      StringValue::Get(input.inputs[1]), replace);
 }
 
 static void DuckLakeRegisterMetadataProfileExecute(ClientContext &context, TableFunctionInput &data_p,
                                                    DataChunk &output) {
 	auto &bind_data = data_p.bind_data->Cast<DuckLakeRegisterMetadataProfileData>();
-	DuckLakeMetadataProfiles::Get(*context.db).Register(bind_data.name, bind_data.profile);
+	DuckLakeMetadataProfiles::Get(*context.db).Register(bind_data.name, bind_data.profile, bind_data.replace);
 }
 
 DuckLakeRegisterMetadataProfileFunction::DuckLakeRegisterMetadataProfileFunction()
@@ -41,6 +47,8 @@ DuckLakeRegisterMetadataProfileFunction::DuckLakeRegisterMetadataProfileFunction
                         .AddPositionalOnly("name", LogicalType::VARCHAR)
                         .AddPositionalOnly("profile", LogicalType::VARCHAR),
                     DuckLakeRegisterMetadataProfileExecute, DuckLakeRegisterMetadataProfileBind) {
+	GetSignature().WithTypedKwargs("options",
+	                               [&](TypedKwargs &options) { options.Add("replace", LogicalType::BOOLEAN); });
 }
 
 } // namespace duckdb

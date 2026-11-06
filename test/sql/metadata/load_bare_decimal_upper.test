@@ -1,0 +1,35 @@
+# name: test/sql/metadata/load_bare_decimal_upper.test
+# description: a DECIMAL column type without width and scale is rejected whatever its case
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/bare_decimal_upper.db' AS dl (DATA_PATH '{DATA_PATH}/bare_decimal_upper')
+
+statement ok
+CREATE TABLE dl.t (d DECIMAL(10, 2))
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH '{TEST_DIR}/bare_decimal_upper.db' AS meta
+
+statement ok
+UPDATE meta.ducklake_column SET column_type = 'DECIMAL'
+
+statement ok
+DETACH meta
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/bare_decimal_upper.db' AS dl
+
+statement error
+SELECT * FROM dl.t
+----
+Invalid DECIMAL type

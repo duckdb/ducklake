@@ -1,0 +1,41 @@
+# name: test/sql/time_travel/at_timestamp_gap_without_expiry.test
+# description: an id gap that no expiry created must not refuse time travel by timestamp
+# group: [time_travel]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{TEST_DIR}/gap_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+SET VARIABLE t2 = (SELECT snapshot_time FROM meta.ducklake_snapshot WHERE snapshot_id = 2)
+
+# another writer leaves an id gap without expiring a snapshot
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 100, now(), schema_version, next_catalog_id, next_file_id FROM meta.ducklake_snapshot WHERE snapshot_id = 2
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes (snapshot_id, changes_made) VALUES (100, NULL)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+query I
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
+----
+[0, 1, 2, 100, 101]
+
+query I
+SELECT i FROM dl.t AT (TIMESTAMP => getvariable('t2'))
+----
+1

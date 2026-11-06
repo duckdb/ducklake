@@ -1,0 +1,42 @@
+# name: test/sql/metadata/load_decimal_numeric_prefix.test
+# description: a DECIMAL width or scale with a numeric prefix and trailing characters is not a number
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/decimal_prefix.db' AS dl (DATA_PATH '{DATA_PATH}/decimal_prefix')
+
+statement ok
+CREATE TABLE dl.t (d DECIMAL(10, 2))
+
+statement ok
+DETACH dl
+
+foreach decimal_type decimal(10x,2) decimal(10,2x) decimal(-1,0) decimal(-18446744073709551615,0)
+
+statement ok
+ATTACH '{TEST_DIR}/decimal_prefix.db' AS meta
+
+statement ok
+UPDATE meta.ducklake_column SET column_type = '{decimal_type}'
+
+statement ok
+DETACH meta
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/decimal_prefix.db' AS dl
+
+statement error
+SELECT * FROM dl.t
+----
+Invalid DECIMAL type
+
+statement ok
+DETACH dl
+
+endloop

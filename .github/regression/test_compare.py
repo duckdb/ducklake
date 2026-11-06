@@ -41,24 +41,30 @@ def compare_benchmark(function, change, early_stop=True, old_failure=None, new_f
 
 
 class AdaptiveBenchmarkTest(unittest.TestCase):
-    def test_faster_changes_end_after_the_initial_pairs(self):
-        for change in (0.8, 0.95):
-            with self.subTest(change=change):
+    def test_every_change_ends_after_the_initial_pairs(self):
+        cases = {
+            "faster": (0.8, test_runner.BUCKET_FASTER, "faster"),
+            "near faster": (0.95, test_runner.BUCKET_FASTER, "faster"),
+            "unchanged": (1.0, test_runner.BUCKET_UNCHANGED, r"within ±3%; no change"),
+            "slower": (1.05, test_runner.BUCKET_SLOWER, "slower"),
+            "regression": (1.12, test_runner.BUCKET_REGRESSION, "regression"),
+        }
+        for name, (change, bucket, status) in cases.items():
+            with self.subTest(name, change=change):
                 result, output, runs = compare_benchmark(compare.run_adaptive_benchmark, change)
                 self.assertEqual((result.initial_runs, result.confirmation_runs), (test_runner.INITIAL_RUNS, 0))
-                self.assertEqual(test_runner.classify_result(result), test_runner.BUCKET_FASTER)
+                self.assertEqual(test_runner.classify_result(result), bucket)
                 self.assertEqual(runs, ([5, 5], [5, 5]))
-                self.assertRegex(output, r"^initial: benchmark/example\.benchmark: 10 pairs \| .* \| faster; done$")
+                self.assertRegex(
+                    output, r"^samples: benchmark/example\.benchmark: 10 pairs \| .* \| " + status + "$"
+                )
 
     def test_duckdb_confirms_faster_changes(self):
         result, _, _ = compare_benchmark(compare.DUCKDB_ADAPTIVE_BENCHMARK, 0.8)
         self.assertEqual(result.confirmation_runs, test_runner.MIN_CONFIRMATION_RUNS)
 
-    def test_other_changes_are_compared_as_by_duckdb(self):
+    def test_failures_are_compared_as_by_duckdb(self):
         cases = {
-            "unchanged": (dict(change=1.0), test_runner.BUCKET_UNCHANGED),
-            "slower": (dict(change=1.05), test_runner.BUCKET_SLOWER),
-            "regression": (dict(change=1.12), test_runner.BUCKET_REGRESSION),
             "failure": (dict(change=0.8, new_failure="PR crashed"), test_runner.BUCKET_FAILURE),
             "missing base": (dict(change=0.8, old_failure=BENCHMARK_NOT_FOUND_MESSAGE), None),
         }
@@ -70,8 +76,6 @@ class AdaptiveBenchmarkTest(unittest.TestCase):
                     self.assertEqual(actual, expected)
                     if bucket:
                         self.assertEqual(test_runner.classify_result(actual[0]), bucket)
-        _, output, _ = compare_benchmark(compare.run_adaptive_benchmark, 1.12)
-        self.assertIn("confirm: benchmark/example.benchmark: 30 pairs | median change +1", output)
 
 
 def fake_runner(path, seconds):
@@ -91,7 +95,7 @@ def fake_runner(path, seconds):
 
 
 class RegressionJobTest(unittest.TestCase):
-    def test_only_a_repeated_regression_fails_and_faster_changes_are_not_confirmed(self):
+    def test_a_regression_on_the_initial_pairs_fails_without_confirmation_runs(self):
         changes = {
             "benchmark/faster.benchmark": 0.8,
             "benchmark/slower.benchmark": 1.05,
@@ -109,14 +113,12 @@ class RegressionJobTest(unittest.TestCase):
                 with mock.patch.object(run.sys, "stdout", new_callable=io.StringIO) as stdout:
                     self.assertEqual(run.main(arguments), 1)
         output = stdout.getvalue()
-        self.assertIn("initial: benchmark/faster.benchmark: 10 pairs | median change -20.0% | faster; done\n", output)
-        self.assertNotIn("confirm: benchmark/faster.benchmark", output)
-        self.assertIn("confirm: benchmark/slower.benchmark: 30 pairs | median change +5.0% | slower\n", output)
-        self.assertIn("Rerunning the regressed benchmarks benchmark/regressed.benchmark\n", output)
-        self.assertEqual(output.count("confirm: benchmark/regressed.benchmark: 30 pairs | median change +12.0%"), 2)
-        self.assertIn(
-            "::error::benchmark/regressed.benchmark (micro) is 10% or more slower in two runs in a row", output
-        )
+        self.assertIn("samples: benchmark/faster.benchmark: 10 pairs | median change -20.0% | faster\n", output)
+        self.assertIn("samples: benchmark/slower.benchmark: 10 pairs | median change +5.0% | slower\n", output)
+        self.assertIn("samples: benchmark/regressed.benchmark: 10 pairs | median change +12.0% | regression\n", output)
+        self.assertNotIn("confirm:", output)
+        self.assertNotIn("Rerunning", output)
+        self.assertIn("::error::benchmark/regressed.benchmark (micro) is 10% or more slower", output)
 
 
 if __name__ == "__main__":
