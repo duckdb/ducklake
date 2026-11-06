@@ -939,7 +939,7 @@ void DuckLakeTransaction::ReloadConfigOptions() {
 			}
 		}
 	} catch (std::exception &) { // NOLINT
-		// without the catalog's answer the cache keeps what the commit wrote, as its files are kept
+		// without the catalog's answer the cache stays as it is, like the files the commit wrote
 		config_option_undo.clear();
 		return;
 	}
@@ -1877,7 +1877,6 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		}
 		auto outcome = CommitOutcome(commit_state);
 		if (outcome == DuckLakeCommitOutcome::UNKNOWN) {
-			// the catalog can hold the options of the commit, so the cache takes what the catalog holds
 			ReloadConfigOptions();
 		}
 		return outcome;
