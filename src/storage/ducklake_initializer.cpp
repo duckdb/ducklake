@@ -185,7 +185,11 @@ void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction) {
 	                     catalog.MetadataPath() + "\"");
 	// the extension of the metadata database registers its profile when the ATTACH loads it
 	auto catalog_type = transaction.GetMetadataCatalog().GetCatalogType();
+	catalog.SetMetadataCatalogType(catalog_type);
 	catalog.SetMetadataProfile(DuckLakeMetadataProfiles::Get(*context.db).Find(catalog_type));
+	// the connection was opened before the profile was known
+	DuckLakeUtil::ResetExtensionSettings(*transaction.GetConnection().context,
+	                                     catalog.MetadataProfile().reset_settings);
 	// a rollback of the transaction can undo the attach and the creation or migration of the catalog
 	transaction.MarkMetadataWritten();
 }

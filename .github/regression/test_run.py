@@ -229,7 +229,9 @@ class RegressionRunTest(unittest.TestCase):
 
     def test_other_arguments_reach_the_comparison(self):
         self.assertEqual(self.main("--threads", "2", "--benchmark-argument", "sf=1"), 0)
-        self.assertEqual(self.compare.call_args.args[2][4:], ["--threads", "2", "--benchmark-argument", "sf=1"])
+        self.assertEqual(
+            self.compare.call_args.args[2][4:], ["--threads", "2", "--benchmark-argument", "sf=1", "--samples", "10"]
+        )
 
     def test_interrupt_drops_databases(self):
         self.compare.side_effect = KeyboardInterrupt
@@ -246,7 +248,7 @@ class RegressionRunTest(unittest.TestCase):
         self.assertEqual(self.dropped(), self.created()[::-1])
         self.assertIs(signal.getsignal(signal.SIGTERM), handler)
 
-    def test_databases_survive_until_confirmation_finishes(self):
+    def test_a_regression_fails_after_one_comparison(self):
         def compare(script, root, passthrough, benchmarks):
             self.mocks["drop_database"].assert_not_called()
             self.assertEqual(len(self.created()), 2)
@@ -254,12 +256,11 @@ class RegressionRunTest(unittest.TestCase):
 
         self.compare.side_effect = compare
         self.assertEqual(self.main(), 1)
-        self.assertEqual(self.compare.call_count, 2)
-        self.assertEqual(self.compare.call_args_list[0].args[2], self.compare.call_args_list[1].args[2])
-        self.assertEqual([call.args[0] for call in self.compare.call_args_list], [run.COMPARE, run.RUNNER])
+        self.assertEqual(self.compare.call_count, 1)
+        self.assertEqual(self.compare.call_args.args[0], run.RUNNER)
         self.assertEqual(self.dropped(), self.created()[::-1])
         self.assertIn(
-            "::error::benchmark/example.benchmark (micro_postgres) is 10% or more slower in two runs in a row",
+            "::error::benchmark/example.benchmark (micro_postgres) is 10% or more slower",
             self.stdout.getvalue(),
         )
 

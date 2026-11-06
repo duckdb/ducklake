@@ -57,6 +57,13 @@
       ]
     },
     {
+      "reason": "Time travel by timestamp checks the expired_snapshot changes that expiries write from DuckLake 2.0 on, a catalog pinned to 1.0 writes none",
+      "paths": [
+        "test/sql/time_travel/at_timestamp_expired_snapshots.test",
+        "test/sql/time_travel/at_timestamp_expired_in_transaction.test"
+      ]
+    },
+    {
       "reason": "Inlining VARIANT values into a SQLite or Postgres catalog needs 1.1 and is disabled when ducklake_default_version is pinned to 1.0",
       "paths": [
         "test/sql/data_inlining/data_inlining_variant_sql_rollback.test"

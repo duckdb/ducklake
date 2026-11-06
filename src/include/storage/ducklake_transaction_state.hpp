@@ -51,6 +51,10 @@ struct DuckLakeCommitContext {
 	std::function<bool(const string &)> is_retryable_metadata_error = [](const string &) {
 		return false;
 	};
+	//! The commit error without the failed query text that it repeats.
+	std::function<string(const string &)> commit_error_without_query = [](const string &message) {
+		return message;
+	};
 	//! Advice for a commit error that is not retried.
 	std::function<string(const string &)> commit_error_hint = [](const string &) {
 		return string();
@@ -258,7 +262,7 @@ public:
 	bool RecomputeGlobalStatsAfterRewrite(string &batch_query, TableIndex table_id, DuckLakeSnapshot snapshot,
 	                                      const CompactionInformation &rewrite_changes,
 	                                      const set<DataFileIndex> &removed_source_ids,
-	                                      const DuckLakeCommitContext &context);
+	                                      const DuckLakeCommitContext &context, bool &deleted_rows_remain);
 	//! Merge committed inlined data's per-column min/max into `target` via typed SQL aggregates. Returns false if the
 	//! inlined data cannot be accounted for exactly (e.g. a non-scalar column), in which case the caller must not
 	//! claim the recomputed stats are exact.

@@ -19,8 +19,12 @@ static unique_ptr<FunctionData> DuckLakeTableChangesBind(ClientContext &context,
 	auto end_at_clause = DuckLakeTableFunctionUtil::AtClauseFromValue(input.inputs[4]);
 
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
+	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	auto table_name = DuckLakeTableFunctionUtil::GetTableName(input.inputs[2]);
-	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, QualifiedName(Identifier(table_name)), end_at_clause,
+	// the end of a change feed is the newest snapshot at or before its timestamp, also before expired snapshots
+	auto end_snapshot = transaction.GetSnapshot(end_at_clause, SnapshotBound::UPPER_BOUND);
+	BoundAtClause end_version_clause("version", Value::BIGINT(NumericCast<int64_t>(end_snapshot.snapshot_id)));
+	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, QualifiedName(Identifier(table_name)), end_version_clause,
 	                       QueryErrorContext());
 	if (input.inputs[1].IsNull()) {
 		throw BinderException("Schema cannot be NULL");
@@ -28,7 +32,6 @@ static unique_ptr<FunctionData> DuckLakeTableChangesBind(ClientContext &context,
 	auto &table =
 	    DuckLakeBaseMetadataFunction::GetTableEntry(context, catalog, input.inputs[1].GetValue<string>(), lookup,
 	                                                "Data change feed functions only support tables.");
-	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 
 	unique_ptr<FunctionData> bind_data;
 	input.table_function = BoundTableFunction(table.GetScanFunction(context, bind_data, lookup));
