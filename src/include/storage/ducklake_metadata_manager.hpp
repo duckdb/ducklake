@@ -246,6 +246,10 @@ public:
 	//! Whether the client can skip the snapshot fetch and let the server read it.
 	virtual bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const;
 	virtual bool IsRetryableCommitError(const string &message) const;
+	//! Whether a failed COMMIT can still have been carried out by the catalog, as when only its reply was lost
+	virtual bool IsCommitOutcomeUnknown(const string &message) const {
+		return false;
+	}
 	//! The error of a failed commit without the text of the failed query that it repeats
 	virtual string CommitErrorWithoutQuery(const string &message) const {
 		return message;

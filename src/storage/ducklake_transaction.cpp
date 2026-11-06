@@ -13,6 +13,7 @@
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/common/thread.hpp"
+#include <chrono>
 #include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/catalog/catalog_entry/scalar_macro_catalog_entry.hpp"
@@ -100,6 +101,13 @@ void LocalTableChanges::Clear() {
 bool LocalTableChanges::HasChanges() const {
 	lock_guard<mutex> guard(lock);
 	return !changes.empty();
+}
+
+void LocalTableChanges::GetCreatedFiles(vector<string> &result) const {
+	lock_guard<mutex> guard(lock);
+	for (auto &entry : changes) {
+		entry.second.AddWrittenFiles(result, result, false);
+	}
 }
 
 void LocalTableChanges::CleanupFiles(DatabaseInstance &db) {
@@ -1593,6 +1601,54 @@ void DuckLakeTransaction::CleanupFiles() {
 	state->CleanupFiles();
 }
 
+DuckLakeCommitOutcome DuckLakeTransaction::CommitOutcome() {
+	vector<string> created_files;
+	state->local_changes.GetCreatedFiles(created_files);
+	if (created_files.empty()) {
+		// without a file of its own the commit cannot be recognized, and there is no file to keep or to remove
+		return DuckLakeCommitOutcome::UNKNOWN;
+	}
+	// committed files stay referenced or get scheduled for deletion, their names are unique
+	static constexpr idx_t MAX_FILES_CHECKED = 8;
+	vector<string> conditions;
+	for (idx_t i = 0; i < created_files.size() && i < MAX_FILES_CHECKED; i++) {
+		auto &path = created_files[i];
+		auto name_start = path.find_last_of("/\\");
+		conditions.push_back(
+		    "path LIKE " +
+		    SQLString::ToString("%" + (name_start == string::npos ? path : path.substr(name_start + 1))));
+	}
+	auto condition = StringUtil::Join(conditions, " OR ");
+	auto query =
+	    StringUtil::Format("SELECT count(*) FROM (SELECT path FROM {METADATA_CATALOG}.ducklake_data_file WHERE %s "
+	                       "UNION ALL SELECT path FROM {METADATA_CATALOG}.ducklake_delete_file WHERE %s "
+	                       "UNION ALL SELECT path FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion "
+	                       "WHERE %s)",
+	                       condition, condition, condition);
+	// the catalog finishes a COMMIT whose reply was lost on its own, so the files show up within moments
+	static constexpr int64_t WAIT_MS = 3000;
+	static constexpr int64_t STEP_MS = 100;
+	auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(WAIT_MS);
+	// the deadline bounds the start of a probe, a probe that blocks runs to its end
+	while (std::chrono::steady_clock::now() < deadline) {
+		try {
+			auto result = metadata_manager->Query(query);
+			if (!result->HasError()) {
+				auto chunk = result->Fetch();
+				if (chunk && chunk->size() > 0 && chunk->GetValue(0, 0).GetValue<int64_t>() > 0) {
+					return DuckLakeCommitOutcome::COMMITTED;
+				}
+			}
+		} catch (std::exception &) { // NOLINT
+		}
+#ifndef DUCKDB_NO_THREADS
+		std::this_thread::sleep_for(std::chrono::milliseconds(STEP_MS));
+#endif
+	}
+	// an absent file does not prove a rollback, the server can still be committing
+	return DuckLakeCommitOutcome::UNKNOWN;
+}
+
 void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version) {
 	if (snapshot) {
 		for (auto &entry : state->dropped_file_stats) {
@@ -1728,8 +1784,28 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 			metadata_manager->ClearCache();
 		}
 	};
+	bool lost_reply_debug = false;
 	context.commit_connection = [&]() {
-		connection->Commit();
+		string lose_reply;
+		auto client_context = this->context.lock();
+		if (client_context) {
+			client_context->TryGetCurrentSetting("ducklake_debug_lose_commit_reply", lose_reply);
+		}
+		if (lose_reply != "before") {
+			connection->Commit();
+		}
+		if (lose_reply == "before" || lose_reply == "after") {
+			lost_reply_debug = true;
+			throw IOException("The connection to the metadata catalog was lost at its COMMIT "
+			                  "(ducklake_debug_lose_commit_reply)");
+		}
+	};
+	context.commit_outcome = [&](const ErrorData &error) {
+		// a COMMIT the catalog refused was rolled back, only a lost connection leaves the outcome open
+		if (!lost_reply_debug && !metadata_manager->IsCommitOutcomeUnknown(error.RawMessage())) {
+			return DuckLakeCommitOutcome::NOT_COMMITTED;
+		}
+		return CommitOutcome();
 	};
 	context.try_rollback = [&]() {
 		if (connection->context->transaction.HasActiveTransaction()) {

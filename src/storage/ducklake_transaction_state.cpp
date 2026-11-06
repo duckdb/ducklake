@@ -2801,6 +2801,8 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		bool retryable_metadata_error = false;
 		auto attempt_changes = transaction_changes;
 		auto attempt_dropped_file_stats = dropped_file_stats;
+		ducklake_entry_oids_t attempt_entry_oids;
+		bool committing = false;
 		try {
 			can_retry = false;
 			if (i > 0 || attempt_changes.HasRefChanges()) {
@@ -2827,6 +2829,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			wrote_snapshot = context.write_snapshot &&
 			                 (!expired_snapshots.empty() || !expiry.tags.empty() || !context.only_expires_snapshots);
 			if (!wrote_snapshot && !context.locks_config_options) {
+				committing = true;
 				context.commit_connection();
 				break;
 			}
@@ -2863,12 +2866,28 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			}
 			flushed_inlined = !flushed_inlined_tables.empty();
 			context.flush_cache_if_pending();
+			attempt_entry_oids = std::move(commit_state.new_entry_oids);
+			committing = true;
 			context.commit_connection();
-			new_entry_oids = std::move(commit_state.new_entry_oids);
+			new_entry_oids = std::move(attempt_entry_oids);
 			break;
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
 			RollbackKeepingError(context);
+			if (committing) {
+				// the COMMIT itself failed, which the catalog can have carried out anyway
+				auto outcome = context.commit_outcome(error);
+				if (outcome == DuckLakeCommitOutcome::COMMITTED) {
+					new_entry_oids = std::move(attempt_entry_oids);
+					break;
+				}
+				if (outcome == DuckLakeCommitOutcome::UNKNOWN) {
+					error.Throw(
+					    "Failed to commit DuckLake transaction: the metadata catalog did not answer the COMMIT, "
+					    "and whether it carried the commit out is unknown. The files the transaction wrote are "
+					    "kept for ducklake_delete_orphaned_files.\n");
+				}
+			}
 			retryable_metadata_error =
 			    retryable_metadata_error || context.is_retryable_metadata_error(error.RawMessage());
 			auto error_without_query = context.commit_error_without_query(error.RawMessage());
