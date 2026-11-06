@@ -58,11 +58,11 @@ CALL ducklake_expire_snapshots('lake', versions => getvariable('expired'))
 statement ok
 CALL disable_logging()
 
-# the latest snapshot and the one the expiry writes remain
+# the latest data snapshot remains (a 1.1 catalog adds the snapshot of the expiry itself)
 query I
-SELECT count(*) FROM lake.snapshots()
+SELECT min(snapshot_id) FROM lake.snapshots()
 ----
-2
+8
 
 query I
 SELECT count(*) FROM __ducklake_metadata_lake.ducklake_files_scheduled_for_deletion
