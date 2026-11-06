@@ -111,11 +111,13 @@ struct DuckLakeTableRecordCountCacheEntry : public ObjectCacheEntry {
 
 //! Cache entry for a DuckLake schema version
 struct DuckLakeSchemaCacheEntry : public ObjectCacheEntry {
-	explicit DuckLakeSchemaCacheEntry(unique_ptr<DuckLakeCatalogSet> catalog_set_p)
-	    : catalog_set(std::move(*catalog_set_p)) {
+	DuckLakeSchemaCacheEntry(unique_ptr<DuckLakeCatalogSet> catalog_set_p, idx_t catalog_version_p)
+	    : catalog_set(std::move(*catalog_set_p)), catalog_version(catalog_version_p) {
 	}
 
 	DuckLakeCatalogSet catalog_set;
+	//! Unique per load, so plans bound to an evicted and reloaded schema version are re-bound
+	const idx_t catalog_version;
 
 	static string ObjectType() {
 		return "ducklake_schema";
@@ -145,14 +147,17 @@ struct DuckLakeAttachedCatalogs : public ObjectCacheEntry {
 //! Holds pins on DuckLake schema cache entries, keeping them alive while they are still referenced.
 class DuckLakeSchemaPinState {
 public:
-	void Pin(shared_ptr<DuckLakeSchemaCacheEntry> entry);
+	//! The entry pinned for the cache key, if any
+	shared_ptr<DuckLakeSchemaCacheEntry> Get(const string &key);
+	//! Pins the entry for the cache key, returning the entry that was already pinned for it if there is one
+	shared_ptr<DuckLakeSchemaCacheEntry> Pin(const string &key, shared_ptr<DuckLakeSchemaCacheEntry> entry);
 	//! Clear all pinned schema cache entries for this pin state.
 	void Clear();
 
 private:
 	mutex lock;
-	// Maps from address of the schema cache entry to the schema cache entry.
-	unordered_map<DuckLakeSchemaCacheEntry *, shared_ptr<DuckLakeSchemaCacheEntry>> pins;
+	// Maps from the schema cache key to the schema cache entry.
+	unordered_map<string, shared_ptr<DuckLakeSchemaCacheEntry>> pins;
 };
 
 enum class InlinedDeletionCacheResult { EXISTS, DOES_NOT_EXIST, UNKNOWN };
@@ -417,6 +422,8 @@ public:
 	                                                   DuckLakeCatalogSet &schema);
 	//! Return the schema for the given snapshot - loading it if it is not yet loaded
 	DuckLakeCatalogSet &GetSchemaForSnapshot(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
+	//! The catalog version of the loaded schema for the snapshot
+	idx_t GetSchemaCatalogVersion(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 
 	//! Callback type for instrumenting metadata queries
 	using QueryCallback = std::function<void(const string &query, std::chrono::steady_clock::duration elapsed)>;

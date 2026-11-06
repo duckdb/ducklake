@@ -1,0 +1,42 @@
+# name: test/sql/catalog/schema_cache_prepare_reloaded_version.test
+# description: A prepared statement is re-bound when the schema version it was bound to is reloaded
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/schema_cache_prepare_reloaded_version')
+
+statement ok
+CREATE TABLE lake.t1(i INTEGER)
+
+statement ok con1
+PREPARE p AS INSERT INTO lake.t1 VALUES (42)
+
+# take a snapshot at the version p was bound to, without loading its schema
+statement ok con1
+BEGIN
+
+statement ok con1
+FROM ducklake_current_snapshot('lake')
+
+# evicts the cached schema of the version p was bound to
+statement ok con2
+CREATE TABLE lake.t2(i INTEGER)
+
+statement ok con1
+EXECUTE p
+
+statement ok con1
+COMMIT
+
+query I
+FROM lake.t1
+----
+42
