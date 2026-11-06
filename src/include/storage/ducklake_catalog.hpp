@@ -171,6 +171,13 @@ public:
 	const string &MetadataType() const {
 		return metadata_type;
 	}
+	//! The catalog type of the attached metadata database, set when it is attached
+	const string &MetadataCatalogType() const {
+		return metadata_catalog_type;
+	}
+	void SetMetadataCatalogType(string catalog_type) {
+		metadata_catalog_type = std::move(catalog_type);
+	}
 	const DuckLakeMetadataProfile &MetadataProfile() const;
 	//! Set once the metadata database is attached, when its extension has had the chance to register the profile
 	void SetMetadataProfile(shared_ptr<const DuckLakeMetadataProfile> profile);
@@ -484,6 +491,7 @@ private:
 	atomic<idx_t> last_uncommitted_catalog_version;
 	//! The metadata server type
 	string metadata_type;
+	string metadata_catalog_type;
 	//! The profile of the metadata database, nullptr if it has none
 	shared_ptr<const DuckLakeMetadataProfile> metadata_profile;
 	//! The resolved DuckLake spec version of the attached catalog
