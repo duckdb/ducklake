@@ -1,0 +1,36 @@
+# name: test/sql/attach/attach_replace_shared_metadata_catalog.test
+# description: ATTACH OR REPLACE in a transaction reads the metadata catalog that replaces the one it reuses
+# group: [attach]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/replacement_b.db' AS prep
+
+statement ok
+CREATE TABLE prep.new_table(i INTEGER)
+
+statement ok
+DETACH prep
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/replacement_a.db' AS lake (METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE lake.old_table(i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+ATTACH OR REPLACE 'ducklake:{TEST_DIR}/replacement_b.db' AS lake (METADATA_CATALOG 'meta')
+
+query I
+SELECT count(*) FROM meta.ducklake_table WHERE table_name = 'old_table'
+----
+0
+
+statement ok
+COMMIT

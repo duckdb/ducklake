@@ -27,6 +27,7 @@
 #include "duckdb/transaction/meta_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_macro_entry.hpp"
+#include "storage/ducklake_metadata_profile.hpp"
 #include "storage/ducklake_multi_file_list.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
@@ -991,6 +992,7 @@ Connection &DuckLakeTransaction::GetConnection() {
 		if (caller_context) {
 			DuckLakeUtil::CopyExtensionSettings(*caller_context, *connection->context);
 		}
+		DuckLakeUtil::ResetExtensionSettings(*connection->context, ducklake_catalog.MetadataProfile().reset_settings);
 		// set the search path to the metadata catalog
 		auto &client_data = ClientData::Get(*connection->context);
 		// ensure we are only looking in the ducklake catalog schema during querying
@@ -1766,6 +1768,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.skip_retry = [&]() {
 		return option_lock_failed && metadata_written;
 	};
+	context.commit_error_without_query = [&](const string &message) {
+		return metadata_manager->CommitErrorWithoutQuery(message);
+	};
 	context.commit_error_hint = [&](const string &message) {
 		if (context.skip_retry()) {
 			return string("Another transaction changed options at the same time, and a retry would undo what the "
@@ -1924,7 +1929,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		return table ? table->GetNetDataFileRowCount(*this) : 0;
 	};
 	context.build_stats_map = [&](vector<DuckLakeGlobalStatsInfo> &stats) {
-		auto &schema = ducklake_catalog.GetSchemaForSnapshot(*this, GetSnapshot());
+		// flushed data commits across a concurrent alter, so its stats take the latest schema
+		auto stats_snapshot = transaction_changes.tables_flushed_inlined.empty() ? transaction_snapshot : GetSnapshot();
+		auto &schema = ducklake_catalog.GetSchemaForSnapshot(*this, stats_snapshot);
 		return DuckLakeCatalog::ConstructStatsMap(stats, schema);
 	};
 	context.invalidate_schema_cache = [&](idx_t schema_version) {
@@ -2365,13 +2372,20 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpireSnapshotsNow(const strin
 		ducklake_catalog.InvalidateSchemaCache(snapshot.schema_version);
 		expired_ids.insert(snapshot.id);
 	}
-	// the transaction resolved versions it has expired since
-	lock_guard<mutex> guard(snapshot_lock);
-	for (auto entry = snapshot_cache.begin(); entry != snapshot_cache.end();) {
-		if (expired_ids.find(entry->second.snapshot_id) != expired_ids.end()) {
-			entry = snapshot_cache.erase(entry);
-		} else {
-			entry++;
+	if (!expired_ids.empty()) {
+		// the transaction resolved versions it has expired since, and the gap changes what a timestamp reaches
+		lock_guard<mutex> guard(snapshot_lock);
+		if (!metadata_manager.CommitsEachStatement()) {
+			// a catalog that commits each statement deletes them when the transaction commits
+			expired_snapshot_ids.insert(expired_ids.begin(), expired_ids.end());
+		}
+		for (auto entry = snapshot_cache.begin(); entry != snapshot_cache.end();) {
+			auto &unit = StructType::GetChildName(entry->first.type(), 0);
+			if (expired_ids.find(entry->second.snapshot_id) != expired_ids.end() || unit == "timestamp") {
+				entry = snapshot_cache.erase(entry);
+			} else {
+				entry++;
+			}
 		}
 	}
 	return expired;
@@ -2528,14 +2542,26 @@ DuckLakeSnapshot DuckLakeTransaction::GetSnapshot(optional_ptr<BoundAtClause> at
 	}
 	auto snapshot_value = Value::STRUCT(std::move(values));
 
+	// time travel by timestamp refuses times before expired snapshots, which the catalog records from DuckLake 2.0 on
+	bool check_expired = bound == SnapshotBound::TIME_TRAVEL && at_clause->Unit() == "timestamp" &&
+	                     ducklake_catalog.RecordsExpiredSnapshots();
 	lock_guard<mutex> guard(snapshot_lock);
 	auto entry = snapshot_cache.find(snapshot_value);
 	if (entry != snapshot_cache.end()) {
+		if (check_expired && metadata_manager->ShowsConcurrentCommits()) {
+			// a concurrent expiry may be visible to the next metadata read
+			metadata_manager->CheckSnapshotAfterExpiredGap(entry->second, version, newest_snapshot_id,
+			                                               expired_snapshot_ids);
+		}
 		// we already found this snapshot - return it
 		return entry->second;
 	}
 	// find the snapshot and cache it
 	auto result_snapshot = *metadata_manager->GetSnapshot(*at_clause, bound, newest_snapshot_id);
+	if (check_expired) {
+		metadata_manager->CheckSnapshotAfterExpiredGap(result_snapshot, version, newest_snapshot_id,
+		                                               expired_snapshot_ids);
+	}
 	// a change feed start after the newest snapshot is not a snapshot that AT clauses can read
 	if (result_snapshot.snapshot_id <= newest_snapshot_id) {
 		snapshot_cache.insert(make_pair(std::move(snapshot_value), result_snapshot));
