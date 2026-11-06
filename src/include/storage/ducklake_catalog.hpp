@@ -338,6 +338,10 @@ public:
 	bool SupportsSnapshotTags() const {
 		return ducklake_version >= DuckLakeVersion::V2_0_DEV1;
 	}
+	//! Whether an expiry commits a snapshot whose changes list the expired snapshots
+	bool RecordsExpiredSnapshots() const {
+		return SupportsSnapshotTags();
+	}
 
 	void OnDetach(ClientContext &context) override;
 

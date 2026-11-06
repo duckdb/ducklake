@@ -28,6 +28,7 @@ public:
 	bool DroppedTablesStayReadable() const override {
 		return false;
 	}
+	bool ShowsConcurrentCommits() const override;
 	bool InsertsInlinedRowsAfterBatch(idx_t row_count) const override;
 	idx_t MaxIdentifierLength() const override {
 		return 63;
@@ -64,7 +65,7 @@ protected:
 	string GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                             const FilterPushdownInfo *filter_info,
 	                             const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
-	                             const vector<idx_t> &runtime_filter_stats_columns, FileListType file_list_type,
+	                             vector<idx_t> &runtime_filter_stats_columns, FileListType file_list_type,
 	                             const string &metadata_table_prefix) override;
 	bool MaterializeStatsCTEs() const override;
 	string CastValueToTarget(const Value &value, const LogicalType &type) override;

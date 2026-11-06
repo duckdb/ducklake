@@ -220,7 +220,7 @@ public:
 
 	DuckLakeSnapshot GetSnapshot();
 	DuckLakeSnapshot GetSnapshot(optional_ptr<BoundAtClause> at_clause,
-	                             SnapshotBound bound = SnapshotBound::UPPER_BOUND);
+	                             SnapshotBound bound = SnapshotBound::TIME_TRAVEL);
 	//! The newest snapshot that the transaction sees, also when the catalog is opened at a fixed snapshot
 	idx_t GetNewestVisibleSnapshotId();
 
@@ -485,6 +485,8 @@ private:
 	unique_ptr<DuckLakeTransactionState> state;
 	//! Snapshot cache for the AT (...) conditions that are referenced in the transaction
 	value_map_t<DuckLakeSnapshot> snapshot_cache;
+	//! The snapshots the transaction expired, which its commit records in the snapshot changes
+	set<idx_t> expired_snapshot_ids;
 	//! New set of transaction-local name maps
 	DuckLakeNameMapSet new_name_maps;
 	//! Name maps deleted by direct metadata operations, applied to the catalog cache on commit

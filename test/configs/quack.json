@@ -26,6 +26,18 @@
       ]
     },
     {
+      "reason": "Quack deletes expired snapshots when the transaction commits, so the gap is not visible inside the transaction",
+      "paths": [
+        "test/sql/time_travel/at_timestamp_expired_in_transaction.test"
+      ]
+    },
+    {
+      "reason": "Quack commits each statement, so a cached timestamp is checked again for concurrent expiries",
+      "paths": [
+        "test/sql/time_travel/at_timestamp_cached_no_rescan.test"
+      ]
+    },
+    {
       "reason": "Bespoke test starts and stops its own quack server",
       "paths": [
         "test/sql/quack/quack_basic.test"
@@ -69,7 +81,8 @@
         "test/sql/tags/postgres_tags_read_committed.test",
         "test/sql/general/postgres_nul_byte_text.test",
         "test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test",
-        "test/sql/transaction/postgres_failed_rollback_releases_transaction.test"
+        "test/sql/transaction/postgres_failed_rollback_releases_transaction.test",
+        "test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test"
       ]
     },
     {
