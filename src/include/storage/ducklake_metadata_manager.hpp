@@ -369,6 +369,8 @@ public:
 	//! The snapshots of the range that rewrote data files of the table and still exist, memoized per transaction
 	set<idx_t> GetTableRewriteSnapshots(TableIndex table_id, DuckLakeSnapshot start_snapshot,
 	                                    DuckLakeSnapshot snapshot);
+	//! Forgets the memoized rewrite snapshots, as an expiry of the transaction removes some of them
+	void ClearRewriteSnapshotsMemo();
 	virtual vector<DuckLakeFileListExtendedEntry>
 	GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                         const FilterPushdownInfo *filter_info = nullptr);

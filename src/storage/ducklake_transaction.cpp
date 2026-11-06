@@ -2289,6 +2289,8 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpireSnapshotsNow(const strin
 		ducklake_catalog.InvalidateSchemaCache(snapshot.schema_version);
 		expired_ids.insert(snapshot.id);
 	}
+	// the change feed skips a rewrite only while its snapshot exists
+	metadata_manager.ClearRewriteSnapshotsMemo();
 	// the transaction resolved versions it has expired since
 	lock_guard<mutex> guard(snapshot_lock);
 	for (auto entry = snapshot_cache.begin(); entry != snapshot_cache.end();) {

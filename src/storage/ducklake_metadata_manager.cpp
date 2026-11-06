@@ -2849,6 +2849,10 @@ set<idx_t> DuckLakeMetadataManager::GetTableRewriteSnapshots(TableIndex table_id
 	return rewrite_snapshots;
 }
 
+void DuckLakeMetadataManager::ClearRewriteSnapshotsMemo() {
+	rewrite_snapshots_memo.clear();
+}
+
 string DuckLakeMetadataManager::GetRewriteSnapshotsQuery(TableIndex table_id, idx_t first_snapshot,
                                                          idx_t last_snapshot) const {
 	// a rewrite stays out of the change feed while its snapshot exists, since the files it ended stay until then
