@@ -230,6 +230,10 @@ public:
 	virtual bool IsRetryableCommitError(const string &) const {
 		return false;
 	}
+	//! The error of a failed commit without the text of the failed query that it repeats
+	virtual string CommitErrorWithoutQuery(const string &message) const {
+		return message;
+	}
 	//! Advice added to the error of a commit that failed for good
 	virtual string CommitErrorHint(const string &) const {
 		return string();
