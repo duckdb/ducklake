@@ -1,0 +1,13 @@
+# Starts a DuckLake REST server in a database of its own and exposes its address as {rest_server}
+
+require ducklake
+
+require parquet
+
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_rest_server.db' AS rest_lake (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_rest_files')
+
+statement ok rest_db:rest_server_con
+SET VARIABLE rest_listen_uri = (SELECT listen_uri FROM ducklake_rest_serve('rest_lake'))
+
+set variable rest_server <variable:rest_server_con:rest_listen_uri>

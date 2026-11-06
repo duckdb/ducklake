@@ -1,0 +1,41 @@
+# name: test/sql/rest/rest_token.test
+# description: A DuckLake REST server that requires a token
+# group: [rest]
+
+require ducklake
+
+require parquet
+
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_rest_server.db' AS rest_lake (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_rest_files')
+
+statement ok rest_db:rest_server_con
+SET VARIABLE rest_listen_uri = (SELECT listen_uri FROM ducklake_rest_serve('rest_lake', token := 'secret-token'))
+
+set variable rest_server <variable:rest_server_con:rest_listen_uri>
+
+statement error
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+----
+Missing or invalid token
+
+statement error
+ATTACH 'ducklake:rest:{rest_server}' AS dl (META_TOKEN 'wrong-token')
+----
+Missing or invalid token
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (META_TOKEN 'secret-token')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 i
+
+query I
+FROM dl.t
+----
+42
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

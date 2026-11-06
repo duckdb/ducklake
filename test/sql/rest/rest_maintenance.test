@@ -1,0 +1,148 @@
+# name: test/sql/rest/rest_maintenance.test
+# description: Compaction through the DuckLake REST API, snapshot expiration and file cleanup are left to the server
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 't')
+----
+3
+
+# merge the files
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 't')
+----
+1
+
+query I
+FROM dl.t ORDER BY ALL
+----
+1
+2
+3
+
+# rewrite files with many deletes
+statement ok
+INSERT INTO dl.t SELECT range FROM range(4, 100)
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+statement ok
+DELETE FROM dl.t WHERE i > 10
+
+statement ok
+CALL ducklake_rewrite_data_files('dl', delete_threshold := 0.5)
+
+query II
+SELECT count(*), sum(i) FROM dl.t
+----
+10	55
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 't') WHERE delete_file IS NOT NULL
+----
+0
+
+# the server compacts in a transaction of its own, which does not see the changes of the client
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t VALUES (1000)
+
+statement error
+CALL ducklake_merge_adjacent_files('dl')
+----
+which does not see the changes of the open transaction
+
+statement ok
+ROLLBACK
+
+# the compaction can be requested directly
+query II
+SELECT status, response->>'$.results' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/compactions', '{"type": "merge_adjacent", "table_name": "t", "min_file_size": 1}')
+----
+200	[]
+
+query II
+SELECT status, response->>'$.error.type' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/compactions', '{"type": "merge_adjacent", "schema_name": "main"}')
+----
+400	Invalid Input
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/compactions', '{"type": "everything"}')
+----
+400
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/compactions', '{"type": "rewrite_delete", "delete_threshold": 2}')
+----
+400
+
+# expiring snapshots and deleting files is maintenance of the server
+statement error
+CALL ducklake_expire_snapshots('dl', older_than => now())
+----
+DuckLake REST catalogs do not support expiring snapshots
+
+statement error
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+DuckLake REST catalogs do not support cleaning up files
+
+statement error
+CALL ducklake_delete_orphaned_files('dl', cleanup_all => true)
+----
+DuckLake REST catalogs do not support deleting orphaned files
+
+# a checkpoint leaves the maintenance to the server
+statement ok
+CHECKPOINT dl
+
+query II
+SELECT count(*), sum(i) FROM dl.t
+----
+10	55
+
+# the server runs the maintenance on its DuckLake
+query I rest_db:rest_server_con
+SELECT count(*) > 0 FROM ducklake_expire_snapshots('rest_lake', older_than => now())
+----
+true
+
+query I rest_db:rest_server_con
+SELECT count(*) > 0 FROM ducklake_cleanup_old_files('rest_lake', cleanup_all => true)
+----
+true
+
+query II
+SELECT count(*), sum(i) FROM dl.t
+----
+10	55
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

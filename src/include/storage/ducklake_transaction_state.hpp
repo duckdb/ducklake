@@ -13,6 +13,7 @@
 
 namespace duckdb {
 struct DuckLakeAddedFields;
+class MacroCatalogEntry;
 
 struct DuckLakeColumnSchemaEntry {
 	FieldIndex field_index;
@@ -42,6 +43,8 @@ struct DuckLakeCommitContext {
 	    };
 	//! Whether expiring snapshots is the only change of the transaction
 	bool only_expires_snapshots = false;
+	//! The commit snapshot can be older than the metadata it reads, so even the first attempt checks conflicts
+	bool check_conflicts_first = false;
 	//! Rewrites the delete files whose new deletes are not dated to the commit snapshot.
 	std::function<void(idx_t)> set_delete_commit_snapshot = [](idx_t) {
 	};
@@ -279,6 +282,8 @@ public:
 	                                       TableIndex table_id, optional_idx row_id_start);
 
 	static void DropEmptySupersededInlinedTables(const DuckLakeCommitContext &context);
+	//! The definition of a macro, without its ids
+	static DuckLakeMacroInfo GetMacroInfo(const MacroCatalogEntry &macro_entry);
 
 	void CleanupFiles();
 
@@ -329,6 +334,10 @@ public:
 	case_insensitive_map_t<DuckLakeSnapshotTagInfo> dropped_snapshot_tags;
 	//! The committed snapshot tags past their expiry time that an expiry in the statements of this transaction drops
 	case_insensitive_map_t<DuckLakeSnapshotTagInfo> expired_snapshot_tags;
+	//! The ids that the commit gave the tables and views the transaction created, by their transaction-local id
+	map<TableIndex, TableIndex> committed_tables;
+	//! The oids of the entries the commit created, by their committed id
+	ducklake_entry_oids_t committed_entry_oids;
 };
 
 } // namespace duckdb
