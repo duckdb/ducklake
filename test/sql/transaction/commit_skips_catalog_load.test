@@ -1,0 +1,62 @@
+# name: test/sql/transaction/commit_skips_catalog_load.test
+# description: A commit that creates a table does not load the catalog, unlike a commit that changes a partition spec
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/commit_skips_catalog_load')
+
+statement ok
+CREATE TABLE ducklake.t (i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.created (i INTEGER)
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+# the commit queried the metadata without loading the catalog, whose load reads the macros
+query II
+SELECT count(*) > 0, count(*) FILTER (WHERE query LIKE '%ducklake_macro%') FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+true	0
+
+statement ok
+CALL truncate_duckdb_logs()
+
+# a commit that sets a partition spec compares it with the committed ones
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (i)
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FILTER (WHERE query LIKE '%ducklake_macro%') > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+true
