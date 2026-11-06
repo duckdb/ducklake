@@ -72,9 +72,10 @@ struct DuckLakeCommitContext {
 	std::function<void()> try_rollback = []() {
 	};
 	//! What became of the commit whose COMMIT failed with the error, a catalog can have carried it out anyway
-	std::function<DuckLakeCommitOutcome(const ErrorData &)> commit_outcome = [](const ErrorData &) {
-		return DuckLakeCommitOutcome::NOT_COMMITTED;
-	};
+	std::function<DuckLakeCommitOutcome(const ErrorData &, const DuckLakeCommitState &)> commit_outcome =
+	    [](const ErrorData &, const DuckLakeCommitState &) {
+		    return DuckLakeCommitOutcome::NOT_COMMITTED;
+	    };
 	//! Resets per-attempt state before a retry.
 	std::function<void()> prepare_retry = []() {
 	};
