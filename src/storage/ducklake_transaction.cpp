@@ -944,7 +944,18 @@ void DuckLakeTransaction::ReloadConfigOptions() {
 		return;
 	}
 	for (auto &reload : reloads) {
-		ducklake_catalog.UndoConfigOption(reload);
+		if (!rewrote_config_options) {
+			ducklake_catalog.UndoConfigOption(reload);
+			continue;
+		}
+		// the retried commit wrote its options last, so the cache takes the catalog's value as on success
+		auto option = reload.option;
+		option.option.value = reload.previous_value;
+		if (reload.was_set) {
+			ducklake_catalog.SetConfigOption(option);
+		} else {
+			ducklake_catalog.ResetConfigOption(option);
+		}
 	}
 	for (auto &option : table_options) {
 		ducklake_catalog.SetConfigOption(option);
