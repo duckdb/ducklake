@@ -13,7 +13,6 @@
 #include "functions/ducklake_table_functions.hpp"
 #include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/common/thread.hpp"
-#include <chrono>
 #include "duckdb/common/sql_identifier.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
 #include "duckdb/catalog/catalog_entry/scalar_macro_catalog_entry.hpp"
@@ -39,6 +38,8 @@
 #include "storage/ducklake_log_type.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/settings.hpp"
+
+#include <chrono>
 
 namespace duckdb {
 
