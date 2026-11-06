@@ -110,6 +110,8 @@ public:
 	LocalTableChangeIterationHelper Changes() const;
 	void CleanupFiles(DatabaseInstance &db);
 	void CleanupFiles(ClientContext &context, TableIndex table_id);
+	//! Forgets the changes of a table, the files stay
+	void Forget(TableIndex table_id);
 	void GetWrittenFiles(vector<string> &result) const;
 	bool HasTransactionLocalInserts(TableIndex table_id) const;
 	bool HasTransactionInlinedData(TableIndex table_id) const;
@@ -219,6 +221,14 @@ public:
 	void PinSchemaCacheEntry(shared_ptr<DuckLakeSchemaCacheEntry> entry);
 
 	DuckLakeSnapshot GetSnapshot();
+	//! Pins the snapshot that the transaction operates on
+	void SetSnapshot(DuckLakeSnapshot new_snapshot);
+	//! The snapshot written by the commit of this transaction, invalid if it did not write one
+	DuckLakeSnapshot GetCommittedSnapshot() const;
+	//! The ids that the commit gave the tables and views the transaction created, by their transaction-local id
+	const ducklake_entry_oids_t &GetCommittedEntryOids() const;
+	//! The options that the commit gave the tables the transaction created or altered
+	const vector<DuckLakeConfigOption> &GetCommittedTableOptions() const;
 	DuckLakeSnapshot GetSnapshot(optional_ptr<BoundAtClause> at_clause,
 	                             SnapshotBound bound = SnapshotBound::TIME_TRAVEL);
 	//! The newest snapshot that the transaction sees, also when the catalog is opened at a fixed snapshot
@@ -285,9 +295,9 @@ public:
 	void MarkDeleteAttempted(TableIndex table_id);
 
 	//! The snapshots the criterion selects that no tag protects, as the transaction sees them
-	vector<DuckLakeSnapshotInfo> ExpirableSnapshots(const string &filter);
+	vector<DuckLakeSnapshotInfo> ExpirableSnapshots(const DuckLakeSnapshotFilter &filter);
 	//! Expires the snapshots the criterion selects and returns them
-	vector<DuckLakeSnapshotInfo> ExpireSnapshots(const string &filter);
+	vector<DuckLakeSnapshotInfo> ExpireSnapshots(const DuckLakeSnapshotFilter &filter);
 	//! Whether the commit writes a snapshot for the expiry of the transaction
 	bool ExpiresSnapshotsOnCommit() const;
 	void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &files);
@@ -302,6 +312,10 @@ public:
 	bool InlinedFileDeletionsFlushed(TableIndex table_id);
 
 	bool ChangesMade() const;
+	//! The files of the transaction were written by a client of a REST server, which cleans them up itself
+	void SetFilesOwnedByClient() {
+		files_owned_by_client = true;
+	}
 	bool SchemaChangesMade() const;
 	idx_t GetLocalCatalogId();
 	static bool IsTransactionLocal(idx_t id) {
@@ -424,8 +438,8 @@ private:
 	//! Makes the changed tag the one the transaction commits for the live tag
 	void ChangeSnapshotTag(const DuckLakeSnapshotTagInfo &tag, DuckLakeSnapshotTagInfo changed);
 	set<idx_t> TaggedSnapshotsInternal();
-	vector<DuckLakeSnapshotInfo> ExpirableSnapshotsInternal(const string &filter);
-	vector<DuckLakeSnapshotInfo> ExpireSnapshotsNow(const string &filter);
+	vector<DuckLakeSnapshotInfo> ExpirableSnapshotsInternal(const DuckLakeSnapshotFilter &filter);
+	vector<DuckLakeSnapshotInfo> ExpireSnapshotsNow(const DuckLakeSnapshotFilter &filter);
 	//! Whether the expiry time of the tag has passed at the start of the transaction
 	bool SnapshotTagExpired(const DuckLakeSnapshotTagInfo &tag) const;
 	//! Fails when the expiry time has passed at the start of the transaction
@@ -458,7 +472,7 @@ private:
 	//! The tag functions of one statement execute in parallel
 	mutex snapshot_tag_lock;
 	//! The expiry criteria of this transaction, applied by its commit
-	vector<string> expiry_filters;
+	vector<DuckLakeSnapshotFilter> expiry_filters;
 	//! The snapshots the statements of this transaction expired, and the latest snapshot the first expiry saw
 	vector<DuckLakeSnapshotInfo> expired_in_transaction;
 	optional_idx expiry_snapshot_id;
@@ -474,6 +488,8 @@ private:
 	//! catalog is opened at a fixed snapshot
 	mutex snapshot_lock;
 	unique_ptr<DuckLakeSnapshot> snapshot;
+	//! The snapshot written by the commit of this transaction
+	DuckLakeSnapshot committed_snapshot;
 	idx_t local_catalog_id;
 	//! Set when this transaction inlines into a table that does not yet have an inlined-data table
 	atomic<bool> requires_new_inlined_table {false};
@@ -509,6 +525,9 @@ private:
 	unordered_map<const DuckLakeViewEntry *, unique_ptr<DuckLakeViewEntry>> transaction_views;
 	//! Copies of an earlier catalog version, kept alive for the references to them
 	vector<unique_ptr<DuckLakeViewEntry>> outdated_transaction_views;
+
+private:
+	bool files_owned_by_client = false;
 };
 
 } // namespace duckdb

@@ -167,6 +167,18 @@
         "test/sql/delete/deletion_vector_replaced_twice.test",
         "test/sql/rewrite_data_files/rewrite_deletion_vectors.test"
       ]
+    },
+    {
+      "reason": "Requests to the REST API that inspect what DuckLake 1.0 does not have: nested schemas, exact string statistics, row group counts, prefixed inlined columns or snapshot tags",
+      "paths": [
+        "test/sql/rest/rest_aggregates.test",
+        "test/sql/rest/rest_api_requests.test",
+        "test/sql/rest/rest_ddl.test",
+        "test/sql/rest/rest_entry_ids.test",
+        "test/sql/rest/rest_file_counts.test",
+        "test/sql/rest/rest_snapshot_tags.test",
+        "test/sql/rest/rest_struct_projection.test"
+      ]
     }
   ]
 }

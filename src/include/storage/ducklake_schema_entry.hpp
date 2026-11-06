@@ -59,6 +59,9 @@ public:
 	optional_ptr<CatalogEntry> CreateIndex(CatalogTransaction transaction, CreateIndexInfo &info,
 	                                       TableCatalogEntry &table) override;
 	optional_ptr<CatalogEntry> CreateView(CatalogTransaction transaction, CreateViewInfo &info) override;
+	//! Creates a view with the given uuid, a new one if it is empty
+	optional_ptr<CatalogEntry> CreateViewExtended(CatalogTransaction transaction, CreateViewInfo &info,
+	                                              string view_uuid);
 	optional_ptr<CatalogEntry> CreateSequence(CatalogTransaction transaction, CreateSequenceInfo &info) override;
 	optional_ptr<CatalogEntry> CreateType(CatalogTransaction transaction, CreateTypeInfo &info) override;
 	void Alter(CatalogTransaction transaction, AlterInfo &info) override;
@@ -67,6 +70,8 @@ public:
 	void DropEntry(ClientContext &context, DropInfo &info) override;
 	//! Drops an entry, a replaced one without checking for tables that call it
 	void DropEntry(ClientContext &context, DropInfo &info, bool replacing);
+	//! Throws if a table calls one of the macros in its defaults or sort key
+	static void ThrowIfTablesCallMacros(ClientContext &context, Catalog &catalog, const identifier_set_t &macro_names);
 	optional_ptr<CatalogEntry> LookupEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
 
 	void AddEntry(CatalogType type, unique_ptr<CatalogEntry> entry);

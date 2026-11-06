@@ -1,0 +1,85 @@
+# name: test/sql/rest/rest_connect.test
+# description: ducklake:rest: connects to a running DuckLake REST server, it never starts one
+# group: [rest]
+
+require ducklake
+
+require parquet
+
+require json
+
+statement error
+ATTACH 'ducklake:rest:{TEST_DIR}/not_a_server.db' AS dl
+----
+requires the URL of a DuckLake REST server
+
+statement error
+ATTACH 'ducklake:rest:ftp://localhost:1' AS dl
+----
+requires the URL of a DuckLake REST server
+
+# nothing is listening
+statement error
+ATTACH 'ducklake:rest:http://localhost:1' AS dl
+----
+Failed to send DuckLake REST request
+
+query I
+SELECT count(*) FROM duckdb_databases() WHERE database_name LIKE '%ducklake_rest%'
+----
+0
+
+include test/template/rest_setup.test_template
+
+# a client can have another DATA_PATH than the server: the paths are mapped between the two
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_PATH '{TEST_DIR}/rest_connect_client_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+query I
+SELECT i FROM dl.t
+----
+42
+
+# the data file is in the data path of the client, the server knows it by its own data path
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/rest_connect_client_files/**/*.parquet')
+----
+1
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/{BASE_TEST_NAME}_rest_files/**/*.parquet')
+----
+0
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 't') WHERE data_file LIKE '%rest_connect_client_files%'
+----
+1
+
+query I
+SELECT response->>'$.files[0].file.path' LIKE '%{BASE_TEST_NAME}_rest_files%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{}')
+----
+true
+
+# rows can be deleted, the server expires the snapshots and cleans up the files
+statement ok
+DELETE FROM dl.t
+
+statement ok rest_db:rest_server_con
+CALL ducklake_expire_snapshots('rest_lake', versions => [1])
+
+statement ok rest_db:rest_server_con
+CALL ducklake_cleanup_old_files('rest_lake', cleanup_all => true)
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/{BASE_TEST_NAME}_rest_files/**/*.parquet')
+----
+0
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

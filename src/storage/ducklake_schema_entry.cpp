@@ -151,6 +151,7 @@ DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction, BoundCr
 	}
 	DuckLakeUtil::ValidateNoInlinedSystemColumns(catalog.Cast<DuckLakeCatalog>(), transaction.GetContext(), schema_id,
 	                                             table_entry->GetColumns(), &table_entry->GetTableOptions());
+	duck_transaction.GetMetadataManager().OnCreateTable(*this, base_info, *table_entry);
 	auto result = table_entry.get();
 	duck_transaction.CreateEntry(std::move(table_entry));
 	return result;
@@ -220,6 +221,7 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateFunction(CatalogTransactio
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	auto result = macro_entry.get();
 	duck_transaction.CreateEntry(std::move(macro_entry));
+	duck_transaction.GetMetadataManager().OnCreateMacro(result->Cast<MacroCatalogEntry>());
 	return result;
 }
 
@@ -302,6 +304,11 @@ static bool IsIdenticalView(DuckLakeViewEntry &view, const CreateViewInfo &info,
 }
 
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction transaction, CreateViewInfo &info) {
+	return CreateViewExtended(transaction, info, string());
+}
+
+optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateViewExtended(CatalogTransaction transaction, CreateViewInfo &info,
+                                                                   string view_uuid) {
 	if (info.security_type == ViewSecurityType::SECURE_VIEW) {
 		throw NotImplementedException("DuckLake does not support secure views");
 	}
@@ -329,12 +336,15 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction tr
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	// get a local view-id
 	auto view_id = TableIndex(duck_transaction.GetLocalCatalogId());
-	auto view_uuid = UUID::ToString(UUID::GenerateRandomUUID());
+	if (view_uuid.empty()) {
+		view_uuid = UUID::ToString(UUID::GenerateRandomUUID());
+	}
 
 	auto view_entry = make_uniq<DuckLakeViewEntry>(ParentCatalog(), *this, info, view_id, std::move(view_uuid),
 	                                               query_sql, LocalChangeType::CREATED);
 	auto result = view_entry.get();
 	duck_transaction.CreateEntry(std::move(view_entry));
+	duck_transaction.GetMetadataManager().OnCreateView(*result);
 	return result;
 }
 
@@ -401,11 +411,51 @@ void ApplySetColumnCommentToView(DuckLakeTransaction &transaction, CatalogTransa
 	transaction.AlterEntry(view, std::move(new_view));
 }
 
+//! The table or view that an alter changes, null if there is none
+optional_ptr<CatalogEntry> GetAlterTarget(DuckLakeSchemaEntry &schema, CatalogTransaction catalog_transaction,
+                                          const AlterInfo &info) {
+	CatalogType type = CatalogType::INVALID;
+	switch (info.type) {
+	case AlterType::ALTER_TABLE:
+		type = CatalogType::TABLE_ENTRY;
+		break;
+	case AlterType::ALTER_VIEW:
+		type = CatalogType::VIEW_ENTRY;
+		break;
+	case AlterType::SET_COMMENT:
+		type = info.Cast<SetCommentInfo>().entry_catalog_type;
+		break;
+	case AlterType::SET_COLUMN_COMMENT:
+		type = info.Cast<SetColumnCommentInfo>().catalog_entry_type;
+		break;
+	default:
+		return nullptr;
+	}
+	if (type == CatalogType::TABLE_ENTRY || type == CatalogType::INVALID) {
+		auto table = TryGetAlterEntry<DuckLakeTableEntry>(schema, catalog_transaction, info);
+		if (table) {
+			return table.get();
+		}
+		if (type == CatalogType::TABLE_ENTRY) {
+			return nullptr;
+		}
+	}
+	if (type == CatalogType::VIEW_ENTRY || type == CatalogType::INVALID) {
+		return TryGetAlterEntry<DuckLakeViewEntry>(schema, catalog_transaction, info).get();
+	}
+	return nullptr;
+}
+
 } // namespace
 
 void DuckLakeSchemaEntry::Alter(CatalogTransaction catalog_transaction, AlterInfo &info) {
 	auto &context = catalog_transaction.GetContext();
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
+	// recorded before the alter is applied, applying it can move expressions out of the info
+	auto alter_target = GetAlterTarget(*this, catalog_transaction, info);
+	if (alter_target) {
+		transaction.GetMetadataManager().OnAlterEntry(*alter_target, info);
+	}
 	switch (info.type) {
 	case AlterType::ALTER_TABLE: {
 		auto &alter = info.Cast<AlterTableInfo>();
@@ -589,6 +639,11 @@ static void ThrowIfTableCallsMacro(ClientContext &context, Catalog &catalog, con
 			}
 		});
 	});
+}
+
+void DuckLakeSchemaEntry::ThrowIfTablesCallMacros(ClientContext &context, Catalog &catalog,
+                                                  const identifier_set_t &macro_names) {
+	ThrowIfTableCallsMacro(context, catalog, macro_names);
 }
 
 void DuckLakeSchemaEntry::DropEntry(ClientContext &context, DropInfo &info) {

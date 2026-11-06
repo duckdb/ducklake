@@ -28,6 +28,7 @@
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/parser/parsed_data/copy_info.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/execution/operator/helper/physical_set.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/common/types/interval.hpp"
 #include "duckdb/common/unordered_map.hpp"
@@ -85,6 +86,15 @@ ParsedCatalogEntry DuckLakeUtil::ParseCatalogEntry(const string &input) {
 	parts.pop_back();
 	result_data.schema_path = std::move(parts);
 	return result_data;
+}
+
+string DuckLakeUtil::UnquoteSQLString(const string &str) {
+	idx_t pos = 0;
+	string result;
+	if (StringUtil::TryParseQuotedString(str, pos, result, '\'') && pos == str.size()) {
+		return result;
+	}
+	return str;
 }
 
 string DuckLakeUtil::StatsToString(const string &text) {
@@ -643,6 +653,14 @@ void DuckLakeUtil::ResetExtensionSettings(ClientContext &context, const vector<s
 		}
 		context.config.user_settings.SetUserSetting(option.setting_index.GetIndex(), option.default_value);
 	}
+}
+
+void DuckLakeUtil::SetExtensionSetting(ClientContext &context, const string &name, const Value &value) {
+	ExtensionOption option;
+	if (!DBConfig::GetConfig(context).TryGetExtensionOption(Identifier(name), option)) {
+		return;
+	}
+	PhysicalSet::SetExtensionVariable(context, option, SetScope::SESSION, value);
 }
 
 using config_option_parser_t = string (*)(ClientContext &context, const string &option, const Value &val);

@@ -141,6 +141,7 @@ public:
 	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction);
 	idx_t GetNetDataFileRowCount(DuckLakeTransaction &transaction);
 	idx_t GetNetInlinedRowCount(DuckLakeTransaction &transaction);
+	idx_t GetNetInlinedRowCount(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 
 	//! Gets the top-level not-null fields
 	identifier_set_t GetNotNullFields() const;
