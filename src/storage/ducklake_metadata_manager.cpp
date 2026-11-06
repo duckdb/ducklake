@@ -4102,6 +4102,17 @@ bool DuckLakeMetadataManager::InlinedDeletionTableExists(const Identifier &table
 	                                             table_name) != nullptr;
 }
 
+vector<Identifier> DuckLakeMetadataManager::ExistingMetadataTables(const vector<Identifier> &table_names) {
+	// a local catalog answers from its own catalog, without a query per table
+	vector<Identifier> result;
+	for (auto &table_name : table_names) {
+		if (InlinedDeletionTableExists(table_name)) {
+			result.push_back(table_name);
+		}
+	}
+	return result;
+}
+
 Identifier DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
                                                                 bool include_local_changes) {
 	// The table name is always deterministic
@@ -4363,6 +4374,47 @@ string DuckLakeMetadataManager::FromRelativePath(const DuckLakePath &path) {
 
 string DuckLakeMetadataManager::FromRelativePath(TableIndex table_id, const DuckLakePath &path) {
 	return FromRelativePath(path, GetPath(table_id, {}, {}));
+}
+
+void DuckLakeMetadataManager::CacheTablePaths(const set<TableIndex> &table_ids) {
+	auto &catalog = transaction.GetCatalog();
+	vector<TableIndex> outside_snapshot;
+	{
+		lock_guard<mutex> guard(paths_lock);
+		for (auto &table_id : table_ids) {
+			if (table_paths.find(table_id) != table_paths.end()) {
+				continue;
+			}
+			auto table = catalog.GetEntryById(transaction, transaction.GetSnapshot(), table_id);
+			if (table) {
+				table_paths.emplace(table_id, table->Cast<DuckLakeTableEntry>().DataPath());
+			} else {
+				outside_snapshot.push_back(table_id);
+			}
+		}
+	}
+	if (outside_snapshot.empty()) {
+		return;
+	}
+	// dropped tables are not in the snapshot, their paths come from the metadata in one query
+	auto &data_path = catalog.DataPath();
+	auto separator = GetPathSeparator(data_path);
+	auto query = StringUtil::Format(R"(
+SELECT t.table_id, s.path, s.path_is_relative, t.path, t.path_is_relative
+FROM {METADATA_CATALOG}.ducklake_table t
+JOIN {METADATA_CATALOG}.ducklake_schema s USING (schema_id)
+WHERE t.table_id IN (%s)
+ORDER BY t.table_id, t.begin_snapshot DESC;)",
+	                                GenerateIDList(outside_snapshot));
+	auto result = Query(query);
+	result->ThrowIfError("Failed to get the paths of tables from DuckLake: ");
+	lock_guard<mutex> guard(paths_lock);
+	for (auto &row : *result) {
+		TableIndex table_id(row.GetValue<idx_t>(0));
+		auto resolved_schema_path = ReadPathOrParent(row, 1, data_path, separator);
+		// the latest version of a table comes first
+		table_paths.emplace(table_id, ReadPathOrParent(row, 3, resolved_schema_path, separator));
+	}
 }
 
 string DuckLakeMetadataManager::StorePath(string path, const string &separator) {
@@ -5885,11 +5937,26 @@ AND NOT EXISTS (
 	auto deleted_table_ids = GenerateIDList(cleanup_tables);
 
 	auto read_cleanup_files = [&](QueryResult &files) {
-		vector<DuckLakeFileForCleanup> cleanup_files;
+		// every dropped table version has an id of its own, so their paths are read together, not one by one
+		struct UnusedFile {
+			DataFileIndex id;
+			TableIndex table_id;
+			DuckLakePath path;
+		};
+		vector<UnusedFile> unused_files;
+		set<TableIndex> table_ids;
 		for (auto &row : files) {
+			UnusedFile file {DataFileIndex(row.GetValue<idx_t>(0)), TableIndex(row.GetValue<idx_t>(1)),
+			                 ReadPath(row, 2)};
+			table_ids.insert(file.table_id);
+			unused_files.push_back(std::move(file));
+		}
+		CacheTablePaths(table_ids);
+		vector<DuckLakeFileForCleanup> cleanup_files;
+		for (auto &file : unused_files) {
 			DuckLakeFileForCleanup info;
-			info.id = DataFileIndex(row.GetValue<idx_t>(0));
-			info.path = FromRelativePath(TableIndex(row.GetValue<idx_t>(1)), ReadPath(row, 2));
+			info.id = file.id;
+			info.path = FromRelativePath(file.table_id, file.path);
 			cleanup_files.push_back(std::move(info));
 		}
 		return cleanup_files;
@@ -5962,8 +6029,13 @@ WHERE table_id IN (%s);)",
 				inlined_tables_to_drop.push_back(row.GetValue<Identifier>(0));
 			}
 		}
+		// most tables never had inlined deletions, so only the deletion tables that exist are dropped
+		vector<Identifier> inlined_deletion_tables;
 		for (auto &table_id : cleanup_tables) {
-			inlined_tables_to_drop.push_back(InlinedFileDeletionTableName(table_id));
+			inlined_deletion_tables.push_back(InlinedFileDeletionTableName(table_id));
+		}
+		for (auto &table_name : ExistingMetadataTables(inlined_deletion_tables)) {
+			inlined_tables_to_drop.push_back(table_name);
 		}
 
 		tables_to_delete_from = {

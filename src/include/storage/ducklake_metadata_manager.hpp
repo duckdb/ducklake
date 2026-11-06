@@ -487,6 +487,8 @@ public:
 	                                               bool include_local_changes = true);
 	//! Probe for the physical inlined-deletion table without aborting the active metadata transaction.
 	virtual bool InlinedDeletionTableExists(const Identifier &table_name);
+	//! The given metadata tables that exist, looked up at once where the catalog allows it
+	virtual vector<Identifier> ExistingMetadataTables(const vector<Identifier> &table_names);
 	//! Also drops the empty inlined data tables of the replaced tables
 	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables,
 	                                     const set<TableIndex> &replaced_tables);
@@ -709,6 +711,8 @@ protected:
 	string FromRelativePath(const DuckLakePath &path, const string &base_path);
 	string FromRelativePath(const DuckLakePath &path);
 	string FromRelativePath(TableIndex table_id, const DuckLakePath &path);
+	//! Caches the paths of the given tables, reading those outside the snapshot in one query
+	void CacheTablePaths(const set<TableIndex> &table_ids);
 	string GetPath(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
 	               const vector<DuckLakeSchemaInfo> &new_schemas_result);
 	FileSystem &GetFileSystem();
