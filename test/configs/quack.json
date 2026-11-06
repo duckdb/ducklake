@@ -83,7 +83,7 @@
         "test/sql/general/postgres_nul_byte_text.test",
         "test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test",
-        "test/sql/metadata/postgres_attach_cache_clear.test"
+        "test/sql/metadata/postgres_attach_cache_clear.test",
         "test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test"
       ]
     },
@@ -164,6 +164,12 @@
       "reason": "Snapshots expire when the transaction commits on quack so a rollback keeps them, so a cleanup in the same transaction does not see their files yet.",
       "paths": [
         "test/sql/transaction/expire_cleanup_same_transaction.test"
+      ]
+    },
+    {
+      "reason": "Snapshots expire when the transaction commits on quack, so the change feed of the same transaction still reads the snapshots it expired.",
+      "paths": [
+        "test/sql/table_changes/table_changes_rewrite_memo_expiry.test"
       ]
     },
     {

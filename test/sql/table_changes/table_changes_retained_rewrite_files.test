@@ -1,0 +1,82 @@
+# name: test/sql/table_changes/table_changes_retained_rewrite_files.test
+# description: the files a rewrite ended stay, on disk too, until the rewrite snapshot is expired
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+# the test reattaches, so the catalog path is fixed
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/table_changes_retained_rewrite_files.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/table_changes_retained_rewrite_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+# snapshot 2 inserts, 3 deletes, 4 rewrites and 5 inserts again
+statement ok
+CREATE TABLE ducklake.t(a INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1), (2)
+
+statement ok
+DELETE FROM ducklake.t WHERE a = 1
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
+
+statement ok
+INSERT INTO ducklake.t VALUES (4)
+
+# the rewritten file stays while the rewrite snapshot exists, although no remaining snapshot lies in its range
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [2, 3])
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_data_file
+----
+3
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true)
+
+statement ok
+DETACH ducklake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/table_changes_retained_rewrite_files', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0)
+
+# the feed reads the retained file after the cleanup
+query III
+SELECT snapshot_id, change_type, a FROM ducklake.table_changes('t', 1, 5) ORDER BY ALL
+----
+2	insert	1
+2	insert	2
+3	delete	1
+5	insert	4
+
+# once the rewrite snapshot is expired the file goes and the rewrite reports its output
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [4])
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_data_file
+----
+2
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true)
+
+query III
+SELECT snapshot_id, change_type, a FROM ducklake.table_changes('t', 1, 5) ORDER BY ALL
+----
+4	insert	2
+5	insert	4
+
+query I
+SELECT a FROM ducklake.t ORDER BY ALL
+----
+2
+4
