@@ -6354,6 +6354,26 @@ WHERE key = %s AND %s
 	return result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
 }
 
+bool DuckLakeMetadataManager::TryGetConfigOption(DuckLakeConfigOption &option) {
+	string scope;
+	string scope_id;
+	string scope_filter;
+	ConfigOptionScope(option, scope, scope_id, scope_filter);
+	auto result = Query(StringUtil::Format(R"(
+SELECT value
+FROM {METADATA_CATALOG}.ducklake_metadata
+WHERE key = %s AND %s
+)",
+	                                       SQLString(option.option.key), scope_filter));
+	result->ThrowIfError("Failed to read config option from DuckLake: ");
+	auto chunk = result->Fetch();
+	if (!chunk || chunk->size() == 0) {
+		return false;
+	}
+	option.option.value = chunk->GetValue(0, 0).ToString();
+	return true;
+}
+
 idx_t DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option) {
 	auto &option_key = option.option.key;
 	auto &option_value = option.option.value;

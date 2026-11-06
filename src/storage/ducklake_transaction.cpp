@@ -918,6 +918,35 @@ void DuckLakeTransaction::UndoConfigOptions() {
 	config_option_undo.clear();
 }
 
+void DuckLakeTransaction::ReloadConfigOptions() {
+	vector<pair<DuckLakeConfigOption, bool>> catalog_options;
+	try {
+		for (auto &change : config_option_undo) {
+			auto option = change.option;
+			bool set = metadata_manager->TryGetConfigOption(option);
+			catalog_options.emplace_back(std::move(option), set);
+		}
+		// the table options of the commit reach the cache on success alone
+		for (auto &table_option : state->committed_table_options) {
+			auto option = table_option;
+			if (metadata_manager->TryGetConfigOption(option)) {
+				catalog_options.emplace_back(std::move(option), true);
+			}
+		}
+	} catch (std::exception &) { // NOLINT
+		// without the catalog's answer the undo restores the earlier values
+		return;
+	}
+	for (auto &entry : catalog_options) {
+		if (entry.second) {
+			ducklake_catalog.SetConfigOption(entry.first);
+		} else {
+			ducklake_catalog.ResetConfigOption(entry.first);
+		}
+	}
+	config_option_undo.clear();
+}
+
 void DuckLakeTransaction::Commit() {
 	if (connection) {
 		GetConnection();
@@ -1830,7 +1859,12 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		if (!lost_reply_debug && !metadata_manager->IsCommitOutcomeUnknown(error.RawMessage())) {
 			return DuckLakeCommitOutcome::NOT_COMMITTED;
 		}
-		return CommitOutcome(commit_state);
+		auto outcome = CommitOutcome(commit_state);
+		if (outcome == DuckLakeCommitOutcome::UNKNOWN) {
+			// the catalog can hold the options of the commit, so the cache takes what the catalog holds
+			ReloadConfigOptions();
+		}
+		return outcome;
 	};
 	context.try_rollback = [&]() {
 		if (connection->context->transaction.HasActiveTransaction()) {
