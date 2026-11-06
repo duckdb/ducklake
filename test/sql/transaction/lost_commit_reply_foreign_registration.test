@@ -1,0 +1,60 @@
+# name: test/sql/transaction/lost_commit_reply_foreign_registration.test
+# description: A file of a rolled back commit that another table registered does not make the commit look carried out
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/lost_commit_reply_foreign_registration', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+CREATE TABLE ducklake.u(i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.t VALUES (1), (2), (3)
+
+# the file of the open transaction is on disk, another connection registers it in u
+statement ok con2
+SET VARIABLE f = (SELECT file FROM glob('{DATA_PATH}/lost_commit_reply_foreign_registration/main/t/*.parquet') LIMIT 1)
+
+statement ok con2
+CALL ducklake_add_data_files('ducklake', 'u', getvariable('f'))
+
+query I con2
+SELECT count(*) FROM ducklake.u
+----
+3
+
+# the catalog never carries con1's COMMIT out
+statement ok con1
+SET ducklake_debug_lose_commit_reply = 'before'
+
+statement error con1
+COMMIT
+----
+whether it carried the commit out is unknown
+
+statement ok con1
+RESET ducklake_debug_lose_commit_reply
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+0
+
+query I
+SELECT count(*) FROM ducklake.u
+----
+3
