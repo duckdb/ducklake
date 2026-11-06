@@ -411,8 +411,7 @@ public:
 	                                                            const vector<TableIndex> &table_ids = {});
 	//! Get the record count of every table that has global stats
 	virtual map<TableIndex, idx_t> GetTableRecordCounts(DuckLakeSnapshot snapshot);
-	//! The projection are the columns (field ids of top-level columns) that the scan reads, all columns if it is not
-	//! set: metadata managers that return the inlined rows with the files only have to return these columns
+	//! The projection lists the top-level columns that the scan reads, all of them if it is not set
 	virtual vector<DuckLakeFileListEntry>
 	GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                 const FilterPushdownInfo *filter_info = nullptr, bool include_local_changes = true,

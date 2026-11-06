@@ -304,6 +304,11 @@ static bool IsIdenticalView(DuckLakeViewEntry &view, const CreateViewInfo &info,
 }
 
 optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction transaction, CreateViewInfo &info) {
+	return CreateViewExtended(transaction, info, string());
+}
+
+optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateViewExtended(CatalogTransaction transaction, CreateViewInfo &info,
+                                                                   string view_uuid) {
 	if (info.security_type == ViewSecurityType::SECURE_VIEW) {
 		throw NotImplementedException("DuckLake does not support secure views");
 	}
@@ -331,7 +336,9 @@ optional_ptr<CatalogEntry> DuckLakeSchemaEntry::CreateView(CatalogTransaction tr
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	// get a local view-id
 	auto view_id = TableIndex(duck_transaction.GetLocalCatalogId());
-	auto view_uuid = UUID::ToString(UUID::GenerateRandomUUID());
+	if (view_uuid.empty()) {
+		view_uuid = UUID::ToString(UUID::GenerateRandomUUID());
+	}
 
 	auto view_entry = make_uniq<DuckLakeViewEntry>(ParentCatalog(), *this, info, view_id, std::move(view_uuid),
 	                                               query_sql, LocalChangeType::CREATED);

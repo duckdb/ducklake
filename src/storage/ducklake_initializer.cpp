@@ -74,7 +74,7 @@ void DuckLakeInitializer::Initialize() {
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	if (transaction.GetMetadataManager().IsRemote()) {
 		catalog.ConnectREST();
-		// the metadata is served remotely - there is no metadata database to attach or migrate
+		// a remote metadata server has no metadata database to attach or migrate
 		LoadExistingDuckLake(transaction);
 		if (options.at_clause) {
 			transaction.GetSnapshot();

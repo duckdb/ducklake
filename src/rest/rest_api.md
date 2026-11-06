@@ -1021,6 +1021,7 @@ A data file of a table that is visible in a snapshot, together with its deletes.
 | `snapshot_id` | `uint64` (optional) | The snapshot that added the file. |
 | `snapshot_filter_max` | `uint64` (optional) | Only read rows that were inserted up to this snapshot. |
 | `snapshot_filter_min` | `uint64` (optional) | Only read rows that were inserted from this snapshot. |
+| `snapshot_filter_excluded` | list of `uint64` (default `[]`) | Skip the rows that these snapshots wrote, which rewrote rows that other files hold as well. |
 | `mapping_id` | `uint64` (optional) | The name map of the file. |
 | `partition_id` | `uint64` (optional) | The partitioning that the file was written with, absent if the table was not partitioned then. The partition keys of the values are those of this partitioning, which is not necessarily the current one. |
 | `partition_values` | list of [`FilePartitionValue`](#filepartitionvalue) (default `[]`) | The values of the partition keys of the file, as text. |
@@ -1202,7 +1203,7 @@ An option of the DuckLake.
 | `key` | `string` | The option, e.g. `data_inlining_row_limit`. |
 | `value` | `string` (default `""`) | The value of the option. |
 | `schema_id` | `uint64` (optional) | The schema, for options of a schema. |
-| `table_id` | `int64` (optional) | The table, for options of a table. Can be a placeholder. |
+| `table_id` | `int64` (optional) | The table, for options of a table. A table created in the transaction takes its options from `create_table`. |
 
 ### `PartitionField`
 

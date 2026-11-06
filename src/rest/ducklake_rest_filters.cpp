@@ -307,6 +307,28 @@ static Value FoldConstant(ClientContext &context, const ParsedExpression &expr) 
 	}
 }
 
+//! The constant as a value of the field, if comparing it in the type of the field gives the same result
+static bool TryCastToField(const Value &value, const LogicalType &type, Value &result) {
+	if (value.type() == type) {
+		result = value;
+		return true;
+	}
+	// comparisons of other types cast to a common type, which only the exact casts of numbers preserve
+	if (!value.type().IsNumeric() || !type.IsNumeric()) {
+		return false;
+	}
+	auto casted = value.DefaultTryCastAs(type, nullptr, true);
+	if (!casted) {
+		return false;
+	}
+	auto back = casted->DefaultTryCastAs(value.type());
+	if (!back || !Value::NotDistinctFrom(*back, value)) {
+		return false;
+	}
+	result = std::move(*casted);
+	return true;
+}
+
 class DuckLakeRESTFilterBinder {
 public:
 	DuckLakeRESTFilterBinder(ClientContext &context, const DuckLakeTableEntry &table) : context(context), table(table) {
@@ -328,12 +350,13 @@ public:
 				value = FoldConstant(context, comparison.Left());
 				comparison_type = FlipComparisonExpression(comparison_type);
 			}
-			if (value.IsNull()) {
+			Value field_value;
+			if (value.IsNull() || !TryCastToField(value, field.Type(), field_value)) {
 				return nullptr;
 			}
-			auto column = make_uniq<BoundReferenceExpression>(value.type(), 0ULL);
+			auto column = make_uniq<BoundReferenceExpression>(field.Type(), 0ULL);
 			return BoundComparisonExpression::Create(comparison_type, std::move(column),
-			                                         make_uniq<BoundConstantExpression>(std::move(value)));
+			                                         make_uniq<BoundConstantExpression>(std::move(field_value)));
 		}
 		case ExpressionClass::OPERATOR: {
 			auto &children = expr.Cast<OperatorExpression>().GetChildren();
@@ -347,27 +370,24 @@ public:
 				    make_uniq<BoundReferenceExpression>(field.Type(), 0ULL), expr.GetExpressionType());
 			case ExpressionType::COMPARE_IN: {
 				vector<Value> values;
-				LogicalType type;
 				for (idx_t i = 1; i < children.size(); i++) {
-					auto value = FoldConstant(context, *children[i]);
-					if (value.IsNull()) {
-						values.emplace_back();
+					// a NULL never matches, but an element that is not a constant can match any row
+					if (children[i]->GetExpressionClass() == ExpressionClass::CONSTANT &&
+					    children[i]->Cast<ConstantExpression>().GetLiteral().ToValue().IsNull()) {
+						values.emplace_back(field.Type());
 						continue;
 					}
-					if (type.id() == LogicalTypeId::INVALID) {
-						type = value.type();
+					auto value = FoldConstant(context, *children[i]);
+					Value field_value;
+					if (value.IsNull() || !TryCastToField(value, field.Type(), field_value)) {
+						return nullptr;
 					}
-					values.push_back(value.DefaultCastAs(type));
+					values.push_back(std::move(field_value));
 				}
-				if (type.id() == LogicalTypeId::INVALID) {
+				if (values.empty()) {
 					return nullptr;
 				}
-				for (auto &value : values) {
-					if (value.IsNull()) {
-						value = Value(type);
-					}
-				}
-				auto column = make_uniq<BoundReferenceExpression>(type, 0ULL);
+				auto column = make_uniq<BoundReferenceExpression>(field.Type(), 0ULL);
 				return ExpressionFilter::CreateInExpression(std::move(column), std::move(values));
 			}
 			default:

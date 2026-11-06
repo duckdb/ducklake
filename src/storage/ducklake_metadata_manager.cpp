@@ -6052,9 +6052,14 @@ idx_t DuckLakeMetadataManager::GetNextColumnId(TableIndex table_id) {
 }
 
 unordered_map<idx_t, idx_t> DuckLakeMetadataManager::GetNextColumnIds() {
+	// the ids of the data files count as well, as in GetNextColumnId
 	auto result = Query(R"(
 	SELECT table_id, MAX(column_id) + 1
-	FROM {METADATA_CATALOG}.ducklake_column
+	FROM (
+		SELECT table_id, column_id FROM {METADATA_CATALOG}.ducklake_column
+		UNION ALL
+		SELECT table_id, column_id FROM {METADATA_CATALOG}.ducklake_file_column_stats
+	) AS column_ids
 	GROUP BY table_id
 )");
 	result->ThrowIfError("Failed to get the next column ids in DuckLake: ");
