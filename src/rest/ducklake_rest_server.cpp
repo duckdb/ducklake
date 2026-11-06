@@ -32,10 +32,14 @@ DuckLakeRESTRequest::DuckLakeRESTRequest(DatabaseInstance &db, const string &cat
 	}
 	catalog = &entry.Cast<DuckLakeCatalog>();
 	transaction = &DuckLakeTransaction::Get(context, *catalog);
+	GetMetadataManager();
 }
 
 DuckLakeMetadataManager &DuckLakeRESTRequest::GetMetadataManager() {
-	return transaction->GetMetadataManager();
+	auto &metadata_manager = transaction->GetMetadataManager();
+	// the files of REST responses hold their row counts
+	metadata_manager.SetReadFileCounts(true);
+	return metadata_manager;
 }
 
 DuckLakeSnapshot DuckLakeRESTRequest::GetSnapshotById(idx_t snapshot_id) {
