@@ -395,15 +395,17 @@ string DuckLakeMetadataManager::DataFileSource(bool branch_aware, idx_t branch_i
 		return prefix + ".ducklake_data_file";
 	}
 	if (branch_id == 0) {
-		// the main lineage has at most one add and one delete event per file, so plain joins suffice
-		return StringUtil::Format(
-		    "(SELECT f.*, va.snapshot_id AS begin_snapshot, vd.snapshot_id AS end_snapshot "
-		    "FROM %s.ducklake_data_file f "
-		    "JOIN %s.ducklake_file_visibility va ON va.branch_id = 0 AND va.is_delete = FALSE "
-		    "AND va.data_file_id = f.data_file_id AND va.table_id = f.table_id "
-		    "LEFT JOIN %s.ducklake_file_visibility vd ON vd.branch_id = 0 AND vd.is_delete = TRUE "
-		    "AND vd.data_file_id = f.data_file_id AND vd.table_id = f.table_id)",
-		    prefix, prefix, prefix);
+		// the main lineage has at most one add and one delete event per file, one scan derives both
+		return StringUtil::Format("(SELECT f.*, v.begin_snapshot, v.end_snapshot "
+		                          "FROM %s.ducklake_data_file f "
+		                          "JOIN (SELECT data_file_id, table_id, "
+		                          "MAX(CASE WHEN NOT is_delete THEN snapshot_id END) AS begin_snapshot, "
+		                          "MAX(CASE WHEN is_delete THEN snapshot_id END) AS end_snapshot "
+		                          "FROM %s.ducklake_file_visibility WHERE branch_id = 0 "
+		                          "GROUP BY data_file_id, table_id "
+		                          "HAVING MAX(CASE WHEN NOT is_delete THEN snapshot_id END) IS NOT NULL) v "
+		                          "ON v.data_file_id = f.data_file_id AND v.table_id = f.table_id)",
+		                          prefix, prefix);
 	}
 	// the range of a file comes from the visibility events of the branch chain
 	return StringUtil::Format("(SELECT f.*, v.begin_snapshot, v.end_snapshot "
@@ -420,14 +422,16 @@ string DuckLakeMetadataManager::DeleteFileSource(bool branch_aware, idx_t branch
 		return prefix + ".ducklake_delete_file";
 	}
 	if (branch_id == 0) {
-		return StringUtil::Format(
-		    "(SELECT f.*, va.snapshot_id AS begin_snapshot, vd.snapshot_id AS end_snapshot "
-		    "FROM %s.ducklake_delete_file f "
-		    "JOIN %s.ducklake_delete_file_visibility va ON va.branch_id = 0 AND va.is_delete = FALSE "
-		    "AND va.delete_file_id = f.delete_file_id AND va.table_id = f.table_id "
-		    "LEFT JOIN %s.ducklake_delete_file_visibility vd ON vd.branch_id = 0 AND vd.is_delete = TRUE "
-		    "AND vd.delete_file_id = f.delete_file_id AND vd.table_id = f.table_id)",
-		    prefix, prefix, prefix);
+		return StringUtil::Format("(SELECT f.*, v.begin_snapshot, v.end_snapshot "
+		                          "FROM %s.ducklake_delete_file f "
+		                          "JOIN (SELECT delete_file_id, table_id, "
+		                          "MAX(CASE WHEN NOT is_delete THEN snapshot_id END) AS begin_snapshot, "
+		                          "MAX(CASE WHEN is_delete THEN snapshot_id END) AS end_snapshot "
+		                          "FROM %s.ducklake_delete_file_visibility WHERE branch_id = 0 "
+		                          "GROUP BY delete_file_id, table_id "
+		                          "HAVING MAX(CASE WHEN NOT is_delete THEN snapshot_id END) IS NOT NULL) v "
+		                          "ON v.delete_file_id = f.delete_file_id AND v.table_id = f.table_id)",
+		                          prefix, prefix);
 	}
 	return StringUtil::Format("(SELECT f.*, v.begin_snapshot, v.end_snapshot "
 	                          "FROM %s.ducklake_delete_file f JOIN (%s) v "
@@ -5827,6 +5831,7 @@ WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_sn
 
 //! The snapshot row columns with the allocators and the watermark taken from the global maxima
 //! One pass over the snapshots for the allocators, joined to the head row the predicate selects
+//! This form holds standard SQL so Postgres can run it on the server
 static string GlobalAllocatorSnapshotQuery(const string &head_predicate) {
 	return StringUtil::Format(R"(SELECT head.snapshot_id, head.schema_version, alloc.next_catalog_id,
 alloc.next_file_id, ver.version, alloc.global_max
@@ -5838,28 +5843,56 @@ FROM (SELECT snapshot_id, schema_version FROM {METADATA_CATALOG}.ducklake_snapsh
 	                          head_predicate);
 }
 
+//! The same columns in a single pass over the snapshots, the head taken with filtered aggregates
+static string SinglePassAllocatorSnapshotQuery(const string &head_expression, const string &schema_expression) {
+	return StringUtil::Format(R"(SELECT %s AS snapshot_id, %s AS schema_version,
+MAX(next_catalog_id) AS next_catalog_id, MAX(next_file_id) AS next_file_id,
+(SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version') AS version,
+MAX(snapshot_id) AS global_max
+FROM {METADATA_CATALOG}.ducklake_snapshot
+HAVING %s IS NOT NULL;)",
+	                          head_expression, schema_expression, head_expression);
+}
+
+static string MainSinglePassSnapshotQuery() {
+	return SinglePassAllocatorSnapshotQuery("MAX(CASE WHEN branch_id = 0 THEN snapshot_id END)",
+	                                        "arg_max(schema_version, CASE WHEN branch_id = 0 THEN snapshot_id END)");
+}
+
 string DuckLakeMetadataManager::MainHeadSnapshotQuery(bool branch_aware) {
 	if (!branch_aware) {
 		return LatestSnapshotQuery();
 	}
 	// the readable head of main, commits allocate after the global maximum
-	return GlobalAllocatorSnapshotQuery("WHERE branch_id = 0");
+	return MainSinglePassSnapshotQuery();
 }
 
-string DuckLakeMetadataManager::BranchAwareLatestSnapshotQuery() const {
+string DuckLakeMetadataManager::BranchAwareLatestSnapshotQuery(bool portable) const {
 	auto &catalog = transaction.GetCatalog();
 	if (!catalog.SupportsBranching()) {
 		return LatestSnapshotQuery();
 	}
 	if (!catalog.OnBranch()) {
 		// the readable head of main, commits allocate after the global maximum
-		return GlobalAllocatorSnapshotQuery("WHERE branch_id = 0");
+		if (portable) {
+			return GlobalAllocatorSnapshotQuery("WHERE branch_id = 0");
+		}
+		return MainSinglePassSnapshotQuery();
 	}
 	// the head of a branch without commits of its own is its fork snapshot
-	return GlobalAllocatorSnapshotQuery(
-	    StringUtil::Format("WHERE snapshot_id = (SELECT COALESCE((SELECT MAX(snapshot_id) FROM "
-	                       "{METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = %d), %d))",
-	                       catalog.AttachedBranchId(), catalog.AttachedBranchFork().GetIndex()));
+	if (portable) {
+		return GlobalAllocatorSnapshotQuery(
+		    StringUtil::Format("WHERE snapshot_id = (SELECT COALESCE((SELECT MAX(snapshot_id) FROM "
+		                       "{METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = %d), %d))",
+		                       catalog.AttachedBranchId(), catalog.AttachedBranchFork().GetIndex()));
+	}
+	auto branch_id = catalog.AttachedBranchId();
+	auto fork_id = catalog.AttachedBranchFork().GetIndex();
+	return SinglePassAllocatorSnapshotQuery(
+	    StringUtil::Format("COALESCE(MAX(CASE WHEN branch_id = %d THEN snapshot_id END), %d)", branch_id, fork_id),
+	    StringUtil::Format("COALESCE(arg_max(schema_version, CASE WHEN branch_id = %d THEN snapshot_id END), "
+	                       "MAX(CASE WHEN snapshot_id = %d THEN schema_version END))",
+	                       branch_id, fork_id));
 }
 
 string DuckLakeMetadataManager::BranchLineageFilter() const {

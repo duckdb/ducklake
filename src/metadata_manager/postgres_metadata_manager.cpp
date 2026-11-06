@@ -512,7 +512,7 @@ string PostgresMetadataManager::GetSnapshotMaximaQuery() const {
 }
 
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
-	auto remote_query = BranchAwareLatestSnapshotQuery();
+	auto remote_query = BranchAwareLatestSnapshotQuery(true);
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	return PostgresQuery(remote_query);

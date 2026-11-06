@@ -656,7 +656,8 @@ public:
 	//! The live branch with the given name, invalid when none exists
 	DuckLakeBranchInfo FindBranch(const string &name);
 	//! The latest snapshot of the attached branch, with the global allocator state
-	string BranchAwareLatestSnapshotQuery() const;
+	//! Portable keeps standard SQL for metadata servers that run the query themselves
+	string BranchAwareLatestSnapshotQuery(bool portable = false) const;
 	//! The snapshots that live branches depend on, their fork points and their own snapshots
 	set<idx_t> GetBranchProtectedSnapshots();
 	string FileVisibilityGuard(const string &visibility_table, const string &file_id_column, const string &alias = "f",
