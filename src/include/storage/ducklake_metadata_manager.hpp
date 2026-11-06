@@ -60,6 +60,12 @@ struct DuckLakeInlinedValueCheck {
 	Identifier column_name;
 };
 
+struct DuckLakeAddedColumn {
+	const char *table;
+	const char *column;
+	const char *type;
+};
+
 //! Metadata column names inside ducklake_inlined_data_<table_id>_<schema_version> tables.
 struct DuckLakeInlinedColNames {
 	//! Column name prefix reserved for DuckLake internal use
@@ -635,6 +641,13 @@ public:
 	virtual idx_t SetConfigOption(const DuckLakeConfigOption &option);
 	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);
 	idx_t ConfigOptionRowCount(const DuckLakeConfigOption &option, optional_ptr<const string> value = nullptr);
+	//! Runs a migration in one metadata transaction on a catalog where each statement commits on its own
+	virtual void BeginMigration() {
+	}
+	virtual void CommitMigration() {
+	}
+	virtual void RollbackMigration() {
+	}
 	virtual void MigrateV01();
 	virtual void MigrateV02(bool allow_failures = false);
 	virtual void MigrateV03(bool allow_failures = false);
@@ -642,8 +655,10 @@ public:
 	virtual void MigrateV10(bool from_dev1 = false);
 	virtual void MigrateV11();
 	static string GetSnapshotTagTableStatement();
+	//! The columns that v1.1 added to the metadata tables
+	static const vector<DuckLakeAddedColumn> &V1_1AddedColumns();
 	//! Whether the catalog already has every metadata table and column of v1.1
-	bool HasV1_1Additions();
+	virtual bool HasV1_1Additions();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
 	//! Renames the given (old name, new name) columns of each inlined table
