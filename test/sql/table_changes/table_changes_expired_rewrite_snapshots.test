@@ -127,7 +127,7 @@ SELECT list((id, s) ORDER BY id) FROM v AT (VERSION => 12)
 ----
 [(3, x)]
 
-# a table named like the rewrite marker does not keep a dropped table's file from cleanup
+# table names holding the rewrite marker of y neither hide y's deletes nor keep y's ended file from cleanup
 statement ok
 CREATE TABLE y(a INT)
 
@@ -138,20 +138,40 @@ statement ok
 BEGIN
 
 statement ok
-DROP TABLE y
+DELETE FROM y
 
 statement ok
-CREATE TABLE "rewrite_delete:"(x INT)
+CREATE TABLE "x,rewrite_delete:3,y"(x INT)
+
+statement ok
+CREATE TABLE "q""rewrite_delete:3,""r"(x INT)
 
 statement ok
 COMMIT
 
-# the drop ends y's data file at a snapshot whose changes name the marker table but hold no rewrite
+# y is table 3, and the names put its marker between commas in the changes of the snapshot that empties it
+query II
+SELECT (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'y'),
+       changes_made LIKE '%,rewrite_delete:3,%'
+FROM ducklake_meta.ducklake_snapshot_changes WHERE snapshot_id = 15
+----
+3	true
+
+# deleting every row ends y's data file at that snapshot, which holds the marker only inside quoted names
 query III
 SELECT data_file_id, begin_snapshot, end_snapshot FROM ducklake_meta.ducklake_data_file
 WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'y')
 ----
 10	14	15
+
+# the feed reads the deletes of the ended file, since the snapshot is no rewrite of y
+query IIII
+SELECT snapshot_id, rowid, change_type, a FROM table_changes('y', 14, 15) ORDER BY ALL
+----
+14	0	insert	1
+14	1	insert	2
+15	0	delete	1
+15	1	delete	2
 
 statement ok
 CALL ducklake_expire_snapshots('ducklake', versions => [14])
