@@ -103,6 +103,13 @@ struct DuckLakeNewGlobalStats {
 	bool initialized = false;
 };
 
+//! A file the transaction created itself and the begin snapshot it gets, unset when the commit decides it
+struct DuckLakeCreatedFile {
+	TableIndex table_id;
+	string path;
+	optional_idx begin_snapshot;
+};
+
 struct LocalTableChanges {
 public:
 	void Clear();
@@ -111,7 +118,7 @@ public:
 	void CleanupFiles(DatabaseInstance &db);
 	void CleanupFiles(ClientContext &context, TableIndex table_id);
 	//! The files the transaction created itself, without the files it registered
-	void GetCreatedFiles(vector<string> &result) const;
+	void GetCreatedFiles(idx_t commit_snapshot, vector<DuckLakeCreatedFile> &result) const;
 	void GetWrittenFiles(vector<string> &result) const;
 	bool HasTransactionLocalInserts(TableIndex table_id) const;
 	bool HasTransactionInlinedData(TableIndex table_id) const;
@@ -376,7 +383,7 @@ public:
 	//! Removes the files that this transaction wrote
 	void CleanupFiles();
 	//! What became of a commit whose COMMIT failed, read from the catalog through the files the transaction wrote
-	DuckLakeCommitOutcome CommitOutcome();
+	DuckLakeCommitOutcome CommitOutcome(const DuckLakeCommitState &commit_state);
 	//! Post-commit cleanup of empty inlined-data tables superseded by later schema versions.
 	void DropEmptySupersededInlinedTablesClientSide();
 	void ReportPostCommitError(const string &message);

@@ -2803,6 +2803,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		auto attempt_dropped_file_stats = dropped_file_stats;
 		ducklake_entry_oids_t attempt_entry_oids;
 		bool committing = false;
+		DuckLakeCommitState commit_state(commit_snapshot);
 		try {
 			can_retry = false;
 			if (i > 0 || attempt_changes.HasRefChanges()) {
@@ -2840,7 +2841,6 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				attempt_changes.dropped_snapshot_tags.insert(tag.name);
 			}
 			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
-			DuckLakeCommitState commit_state(commit_snapshot);
 			string batch_queries;
 			if (wrote_snapshot) {
 				// write the new snapshot
@@ -2876,7 +2876,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			RollbackKeepingError(context);
 			if (committing) {
 				// the COMMIT itself failed, which the catalog can have carried out anyway
-				auto outcome = context.commit_outcome(error);
+				auto outcome = context.commit_outcome(error, commit_state);
 				if (outcome == DuckLakeCommitOutcome::COMMITTED) {
 					new_entry_oids = std::move(attempt_entry_oids);
 					break;

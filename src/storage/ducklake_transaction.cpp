@@ -103,10 +103,32 @@ bool LocalTableChanges::HasChanges() const {
 	return !changes.empty();
 }
 
-void LocalTableChanges::GetCreatedFiles(vector<string> &result) const {
+void LocalTableChanges::GetCreatedFiles(idx_t commit_snapshot, vector<DuckLakeCreatedFile> &result) const {
 	lock_guard<mutex> guard(lock);
 	for (auto &entry : changes) {
-		entry.second.AddWrittenFiles(result, result, false);
+		auto &table_changes = entry.second;
+		auto add_file = [&](const string &path, optional_idx begin_snapshot) {
+			DuckLakeCreatedFile file;
+			file.table_id = entry.first;
+			file.path = path;
+			file.begin_snapshot = begin_snapshot;
+			result.push_back(std::move(file));
+		};
+		// a file without a begin snapshot of its own gets the commit snapshot
+		for (auto &file : table_changes.new_data_files) {
+			if (file.created_by_ducklake) {
+				add_file(file.file_name, file.begin_snapshot.IsValid() ? file.begin_snapshot : commit_snapshot);
+			}
+		}
+		ForEachDeleteFile(table_changes, [&](const DuckLakeDeleteFile &file) {
+			add_file(file.file_name, file.begin_snapshot.IsValid() ? file.begin_snapshot : commit_snapshot);
+		});
+		// a compaction output takes the begin snapshot of the compacted files, which the commit decides
+		for (auto &compaction : table_changes.compactions) {
+			for (auto &file : compaction.written_files) {
+				add_file(file.file_name, optional_idx());
+			}
+		}
 	}
 }
 
@@ -1601,30 +1623,33 @@ void DuckLakeTransaction::CleanupFiles() {
 	state->CleanupFiles();
 }
 
-DuckLakeCommitOutcome DuckLakeTransaction::CommitOutcome() {
-	vector<string> created_files;
-	state->local_changes.GetCreatedFiles(created_files);
+DuckLakeCommitOutcome DuckLakeTransaction::CommitOutcome(const DuckLakeCommitState &commit_state) {
+	vector<DuckLakeCreatedFile> created_files;
+	state->local_changes.GetCreatedFiles(commit_state.commit_snapshot.snapshot_id, created_files);
 	if (created_files.empty()) {
 		// without a file of its own the commit cannot be recognized, and there is no file to keep or to remove
 		return DuckLakeCommitOutcome::UNKNOWN;
 	}
-	// committed files stay referenced or get scheduled for deletion, their names are unique
+	// another table can register the same path, so a file counts for the table and snapshot of this commit alone
 	static constexpr idx_t MAX_FILES_CHECKED = 8;
 	vector<string> conditions;
 	for (idx_t i = 0; i < created_files.size() && i < MAX_FILES_CHECKED; i++) {
-		auto &path = created_files[i];
-		auto name_start = path.find_last_of("/\\");
-		conditions.push_back(
-		    "path LIKE " +
-		    SQLString::ToString("%" + (name_start == string::npos ? path : path.substr(name_start + 1))));
+		auto &file = created_files[i];
+		auto name_start = file.path.find_last_of("/\\");
+		auto name = name_start == string::npos ? file.path : file.path.substr(name_start + 1);
+		auto condition =
+		    StringUtil::Format("(table_id = %d AND path LIKE %s", commit_state.GetTableId(file.table_id).index,
+		                       SQLString::ToString("%" + name));
+		if (file.begin_snapshot.IsValid()) {
+			condition += StringUtil::Format(" AND begin_snapshot = %d", file.begin_snapshot.GetIndex());
+		}
+		conditions.push_back(condition + ")");
 	}
 	auto condition = StringUtil::Join(conditions, " OR ");
 	auto query =
 	    StringUtil::Format("SELECT count(*) FROM (SELECT path FROM {METADATA_CATALOG}.ducklake_data_file WHERE %s "
-	                       "UNION ALL SELECT path FROM {METADATA_CATALOG}.ducklake_delete_file WHERE %s "
-	                       "UNION ALL SELECT path FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion "
-	                       "WHERE %s)",
-	                       condition, condition, condition);
+	                       "UNION ALL SELECT path FROM {METADATA_CATALOG}.ducklake_delete_file WHERE %s)",
+	                       condition, condition);
 	// the catalog finishes a COMMIT whose reply was lost on its own, so the files show up within moments
 	static constexpr int64_t WAIT_MS = 3000;
 	static constexpr int64_t STEP_MS = 100;
@@ -1800,12 +1825,12 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 			                  "(ducklake_debug_lose_commit_reply)");
 		}
 	};
-	context.commit_outcome = [&](const ErrorData &error) {
+	context.commit_outcome = [&](const ErrorData &error, const DuckLakeCommitState &commit_state) {
 		// a COMMIT the catalog refused was rolled back, only a lost connection leaves the outcome open
 		if (!lost_reply_debug && !metadata_manager->IsCommitOutcomeUnknown(error.RawMessage())) {
 			return DuckLakeCommitOutcome::NOT_COMMITTED;
 		}
-		return CommitOutcome();
+		return CommitOutcome(commit_state);
 	};
 	context.try_rollback = [&]() {
 		if (connection->context->transaction.HasActiveTransaction()) {
