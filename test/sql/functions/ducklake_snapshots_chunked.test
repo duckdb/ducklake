@@ -49,3 +49,27 @@ WHERE snapshot_id > 0 AND (
 )
 ----
 0
+
+query III
+SELECT changes, commit_message, snapshot_id FROM ducklake_snapshots('dl') WHERE snapshot_id = 4097
+----
+{tables_inserted_into=[4097], tables_deleted_from=[4098]}	message 4097	4097
+
+query IIII
+SELECT snapshot_id, author, commit_message, commit_extra_info
+FROM ducklake_expire_snapshots('dl', dry_run => true, versions => [4095])
+----
+4095	author 4095	message 4095	extra 4095
+
+statement ok
+UPDATE meta.ducklake_snapshot_changes SET changes_made = 'unknown:1' WHERE snapshot_id = 4097
+
+query I
+SELECT count(*) FROM ducklake_snapshots('dl')
+----
+4098
+
+statement error
+SELECT changes FROM ducklake_snapshots('dl') WHERE snapshot_id = 4097
+----
+Unsupported change type
