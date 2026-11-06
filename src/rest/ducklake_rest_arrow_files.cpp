@@ -194,7 +194,8 @@ static vector<string> FileListNames() {
 	        "inlined_file_deletions",
 	        "column_min_max",
 	        "partition_id",
-	        "partition_values"};
+	        "partition_values",
+	        "snapshot_filter_excluded"};
 }
 
 static vector<LogicalType> FileListTypes() {
@@ -210,7 +211,8 @@ static vector<LogicalType> FileListTypes() {
 	        LogicalType::LIST(LogicalType::UBIGINT),
 	        LogicalType::LIST(MinMaxType()),
 	        LogicalType::UBIGINT,
-	        LogicalType::LIST(PartitionValueType())};
+	        LogicalType::LIST(PartitionValueType()),
+	        LogicalType::LIST(LogicalType::UBIGINT)};
 }
 
 string RESTArrowFiles::Write(ClientContext &context, const vector<DuckLakeFileListEntry> &files) {
@@ -230,6 +232,7 @@ string RESTArrowFiles::Write(ClientContext &context, const vector<DuckLakeFileLi
 		    auto min_max = FlatVector::Writer<VectorListType<MinMaxRow>>(chunk.data[10], count);
 		    auto partition_id = FlatVector::Writer<uint64_t>(chunk.data[11], count);
 		    auto partition_values = FlatVector::Writer<VectorListType<PartitionValueRow>>(chunk.data[12], count);
+		    auto excluded = FlatVector::Writer<VectorListType<uint64_t>>(chunk.data[13], count);
 		    for (idx_t i = 0; i < count; i++) {
 			    auto &entry = entries[start + i];
 			    WriteOptional(data_file_id, entry.data_file_id);
@@ -252,6 +255,12 @@ string RESTArrowFiles::Write(ClientContext &context, const vector<DuckLakeFileLi
 				    }
 			    }
 			    WriteOptional(partition_id, entry.partition_id);
+			    auto excluded_range = excluded.WriteList(entry.snapshot_filter_excluded.size());
+			    auto excluded_it = entry.snapshot_filter_excluded.begin();
+			    for (auto &writer : excluded_range) {
+				    writer.WriteValue(*excluded_it);
+				    ++excluded_it;
+			    }
 			    if (entry.partition_values.empty()) {
 				    partition_values.WriteNull();
 			    } else {
@@ -317,6 +326,7 @@ void RESTArrowFiles::Read(ClientContext &context, shared_ptr<const string> data,
 		auto min_max = chunk.data[10].Values<VectorListType<MinMaxRow>>();
 		auto partition_id = chunk.data[11].Values<uint64_t>();
 		auto partition_values = chunk.data[12].Values<VectorListType<PartitionValueRow>>();
+		auto excluded = chunk.data[13].Values<VectorListType<uint64_t>>();
 		for (idx_t i = 0; i < chunk.size(); i++) {
 			DuckLakeFileListEntry entry;
 			entry.data_file_id = ReadOptional(data_file_id[i]);
@@ -335,6 +345,12 @@ void RESTArrowFiles::Read(ClientContext &context, shared_ptr<const string> data,
 				}
 			}
 			entry.partition_id = ReadOptional(partition_id[i]);
+			auto excluded_snapshots = excluded[i];
+			if (excluded_snapshots.IsValid()) {
+				for (auto child : excluded_snapshots.GetChildValues()) {
+					entry.snapshot_filter_excluded.push_back(child.GetValue());
+				}
+			}
 			auto values = partition_values[i];
 			if (values.IsValid()) {
 				for (auto child : values.GetChildValues()) {

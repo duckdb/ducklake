@@ -264,6 +264,9 @@ public:
 	optional_ptr<BoundAtClause> CatalogSnapshot() const;
 
 	optional_ptr<CatalogEntry> CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) override;
+	//! Creates a schema with the given uuid and data path, new ones if they are empty
+	optional_ptr<CatalogEntry> CreateSchemaExtended(CatalogTransaction transaction, CreateSchemaInfo &info,
+	                                                string schema_uuid, string schema_data_path);
 
 	ErrorData SupportsCreateTable(BoundCreateTableInfo &info) override;
 

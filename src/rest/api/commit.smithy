@@ -321,7 +321,7 @@ structure OptionSetting {
     /// The schema, for options of a schema.
     schema_id: UInt64
 
-    /// The table, for options of a table. Can be a placeholder.
+    /// The table, for options of a table. A table created in the transaction takes its options from `create_table`.
     table_id: Long
 }
 

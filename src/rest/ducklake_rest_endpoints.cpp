@@ -44,50 +44,6 @@ static DuckLakeTableEntry &GetTableEntry(DuckLakeRESTRequest &request, DuckLakeS
 	return entry->Cast<DuckLakeTableEntry>();
 }
 
-//! Reads the columns and rows of a result, optionally with other names for the columns
-static void ReadQueryResult(RESTRowSet &rows, QueryResult &result, const vector<string> &names = {}) {
-	auto &types = result.GetTypes();
-	for (idx_t col_idx = 0; col_idx < result.ColumnCount(); col_idx++) {
-		RESTResultColumn column;
-		column.name = names.empty() ? result.GetNames()[col_idx].GetIdentifierName() : names[col_idx];
-		column.type = types[col_idx];
-		rows.columns.push_back(std::move(column));
-	}
-	auto collection = make_uniq<ColumnDataCollection>(Allocator::DefaultAllocator(), types);
-	while (true) {
-		auto chunk = result.Fetch();
-		if (!chunk || chunk->size() == 0) {
-			break;
-		}
-		collection->Append(*chunk);
-	}
-	rows.rows = RESTRows(std::move(collection));
-}
-
-static bool IsColumnName(const ParsedExpression &expression) {
-	return expression.GetExpressionClass() == ExpressionClass::COLUMN_REF &&
-	       !expression.Cast<ColumnRefExpression>().IsQualified();
-}
-
-//! The columns to read of a request, which can only be column names, optionally cast to the type to read them as
-static vector<string> GetColumnsToRead(const vector<string> &columns_to_read) {
-	vector<string> columns;
-	for (auto &column : columns_to_read) {
-		auto expressions = Parser::GetBuiltinParser().ParseExpressionList(column);
-		bool valid = expressions.size() == 1;
-		if (valid && expressions[0]->GetExpressionClass() == ExpressionClass::CAST) {
-			valid = IsColumnName(expressions[0]->Cast<CastExpression>().Child());
-		} else if (valid) {
-			valid = IsColumnName(*expressions[0]);
-		}
-		if (!valid) {
-			throw InvalidInputException("\"%s\" is not a column name", column);
-		}
-		columns.push_back(expressions[0]->ToString());
-	}
-	return columns;
-}
-
 //! The most entries that a page has
 static constexpr idx_t MAX_PAGE_SIZE = 10000;
 
@@ -1044,7 +1000,9 @@ void DuckLakeRESTCommit::CreateSchema(RESTCreateSchemaRequest &parameters) {
 	info->SetQualifiedName(GetSchemaName(path));
 	info->on_conflict =
 	    parameters.if_not_exists ? OnCreateConflict::IGNORE_ON_CONFLICT : OnCreateConflict::ERROR_ON_CONFLICT;
-	AddCreatedEntry(catalog.CreateSchema(catalog.GetCatalogTransaction(context), *info), parameters.placeholder_id);
+	AddCreatedEntry(catalog.CreateSchemaExtended(catalog.GetCatalogTransaction(context), *info, parameters.schema_uuid,
+	                                             parameters.path),
+	                parameters.placeholder_id);
 	schema_paths[parameters.placeholder_id] = std::move(path);
 }
 
@@ -1111,7 +1069,8 @@ void DuckLakeRESTCommit::CreateView(RESTCreateViewRequest &parameters) {
 	for (auto &entry : parameters.column_comments) {
 		info->column_comments_map[Identifier(entry.first)] = Value(entry.second);
 	}
-	AddCreatedEntry(schema.CreateView(catalog.GetCatalogTransaction(context), *info), parameters.placeholder_id);
+	AddCreatedEntry(schema.CreateViewExtended(catalog.GetCatalogTransaction(context), *info, parameters.view_uuid),
+	                parameters.placeholder_id);
 	AddPlaceholder(parameters.placeholder_id, CatalogType::VIEW_ENTRY, schema_path, parameters.view_name);
 }
 
@@ -1293,6 +1252,11 @@ void DuckLakeRESTCommit::SetOption(RESTSetOptionRequest &parameters) {
 		option.schema_id = SchemaIndex(option_in.schema_id.GetIndex());
 	}
 	if (option_in.table_id.has_value) {
+		if (option_in.table_id.value < 0) {
+			throw InvalidInputException("set_option cannot refer to the table %lld that the transaction creates, its "
+			                            "options are part of create_table",
+			                            option_in.table_id.value);
+		}
 		option.table_id = GetTable(GetTableId(option_in.table_id.value)).GetTableId();
 	}
 	if (parameters.reset) {
@@ -1325,6 +1289,12 @@ void DuckLakeRESTCommit::InsertRows(RESTInsertRowsRequest &parameters) {
 	}
 	new_data->row_ids = std::move(parameters.row_ids);
 	new_data->column_stats = std::move(parameters.column_stats);
+	if (table.GetInlinedDataTables().empty() ||
+	    !table.HasCurrentInlinedDataTable(
+	        catalog.GetTableSchemaVersions(transaction, table.GetTableId()).last_change)) {
+		// the commit creates the inlined data table, which the server-side commit of a metadata server cannot
+		transaction.SetRequiresNewInlinedTable(true);
+	}
 	transaction.AppendInlinedData(table.GetTableId(), std::move(new_data));
 }
 

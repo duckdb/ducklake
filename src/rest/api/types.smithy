@@ -618,6 +618,9 @@ structure FileListEntry {
     /// Only read rows that were inserted from this snapshot.
     snapshot_filter_min: UInt64
 
+    /// Skip the rows that these snapshots wrote, which rewrote rows that other files hold as well.
+    snapshot_filter_excluded: UInt64List = []
+
     /// The name map of the file.
     mapping_id: UInt64
 

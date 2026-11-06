@@ -845,7 +845,7 @@ struct RESTOptionSetting {
 	string value = string("");
 	//! The schema, for options of a schema.
 	optional_idx schema_id;
-	//! The table, for options of a table. Can be a placeholder.
+	//! The table, for options of a table. A table created in the transaction takes its options from `create_table`.
 	RESTOptional<int64_t> table_id;
 };
 

@@ -1416,6 +1416,8 @@ JSONMutableValue DuckLakeRESTSerializer::Write(JSONWriter &writer, const DuckLak
 	if (!RESTIsNull(value.snapshot_filter_min)) {
 		result.Add("snapshot_filter_min", RESTWriteValue<RESTUInt64Codec>(writer, value.snapshot_filter_min));
 	}
+	result.Add("snapshot_filter_excluded",
+	           RESTWriteValue<RESTListCodec<RESTUInt64Codec>>(writer, value.snapshot_filter_excluded));
 	if (!RESTIsNull(value.mapping_id)) {
 		result.Add("mapping_id", RESTWriteValue<RESTUInt64Codec>(writer, value.mapping_id));
 	}
@@ -1485,6 +1487,12 @@ DuckLakeFileListEntry DuckLakeRESTSerializer::Read(RESTJsonIn in) {
 		auto entry = in.TryGet("snapshot_filter_min");
 		if (!entry.IsNull()) {
 			RESTReadValue<RESTUInt64Codec>(entry, result.snapshot_filter_min);
+		}
+	}
+	{
+		auto entry = in.TryGet("snapshot_filter_excluded");
+		if (!entry.IsNull()) {
+			RESTReadValue<RESTListCodec<RESTUInt64Codec>>(entry, result.snapshot_filter_excluded);
 		}
 	}
 	{

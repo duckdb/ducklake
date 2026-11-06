@@ -433,6 +433,11 @@ string DuckLakeCatalog::GeneratePathFromName(const string &uuid, const string &n
 }
 
 optional_ptr<CatalogEntry> DuckLakeCatalog::CreateSchema(CatalogTransaction transaction, CreateSchemaInfo &info) {
+	return CreateSchemaExtended(transaction, info, string(), string());
+}
+
+optional_ptr<CatalogEntry> DuckLakeCatalog::CreateSchemaExtended(CatalogTransaction transaction, CreateSchemaInfo &info,
+                                                                 string schema_uuid, string schema_data_path) {
 	auto &schema_name = info.SchemaName();
 	optional_ptr<DuckLakeSchemaEntry> parent;
 	if (info.IsNested()) {
@@ -455,9 +460,13 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::CreateSchema(CatalogTransaction tran
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	//! get a local table-id
 	auto schema_id = SchemaIndex(duck_transaction.GetLocalCatalogId());
-	auto schema_uuid = duck_transaction.GenerateUUID();
-	auto schema_data_path = DataPath() + (parent ? schema_uuid + separator
-	                                             : GeneratePathFromName(schema_uuid, schema_name.GetIdentifierName()));
+	if (schema_uuid.empty()) {
+		schema_uuid = duck_transaction.GenerateUUID();
+	}
+	if (schema_data_path.empty()) {
+		schema_data_path = DataPath() + (parent ? schema_uuid + separator
+		                                        : GeneratePathFromName(schema_uuid, schema_name.GetIdentifierName()));
+	}
 	auto schema_entry = make_uniq<DuckLakeSchemaEntry>(*this, info, schema_id, std::move(schema_uuid),
 	                                                   std::move(schema_data_path), parent);
 	auto result = schema_entry.get();

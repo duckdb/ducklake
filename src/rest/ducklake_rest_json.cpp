@@ -241,30 +241,4 @@ LogicalType RESTJson::TypeFromJson(RESTJsonIn json) {
 	}
 }
 
-//! Variants keep the types of the values they hold, also of nested values
-static Value VariantFromValue(const Value &value) {
-	if (value.IsNull()) {
-		return Value(LogicalType::VARIANT());
-	}
-	switch (value.type().id()) {
-	case LogicalTypeId::STRUCT: {
-		child_list_t<Value> children;
-		auto &values = StructValue::GetChildren(value);
-		for (idx_t i = 0; i < values.size(); i++) {
-			children.emplace_back(StructType::GetChildName(value.type(), i), VariantFromValue(values[i]));
-		}
-		return Value::STRUCT(std::move(children)).DefaultCastAs(LogicalType::VARIANT());
-	}
-	case LogicalTypeId::LIST: {
-		vector<Value> children;
-		for (auto &child : ListValue::GetChildren(value)) {
-			children.push_back(VariantFromValue(child));
-		}
-		return Value::LIST(LogicalType::VARIANT(), std::move(children)).DefaultCastAs(LogicalType::VARIANT());
-	}
-	default:
-		return value.DefaultCastAs(LogicalType::VARIANT());
-	}
-}
-
 } // namespace duckdb
