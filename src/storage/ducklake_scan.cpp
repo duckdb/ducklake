@@ -116,10 +116,21 @@ unique_ptr<BaseStatistics> DuckLakeStatistics(ClientContext &context, const Func
 }
 
 unique_ptr<BaseStatistics> DuckLakeStatisticsExtended(ClientContext &context, TableFunctionGetStatisticsInput &input) {
-	if (input.column_index.IsVirtualColumn()) {
+	auto &column_index = input.column_index;
+	if (column_index.IsVirtualColumn()) {
 		return nullptr;
 	}
-	return DuckLakeStatistics(context, input.bind_data.get(), input.column_index.GetPrimaryIndex());
+	auto stats = DuckLakeStatistics(context, input.bind_data.get(), column_index.GetPrimaryIndex());
+	if (!stats || !column_index.IsPushdownExtract()) {
+		return stats;
+	}
+	// the scan reads a single field of this column, so narrow the statistics down to that field
+	auto stats_type = stats->GetStatsType();
+	if (stats_type != StatisticsType::STRUCT_STATS && stats_type != StatisticsType::VARIANT_STATS) {
+		return nullptr;
+	}
+	auto storage_index = StorageIndex::FromColumnIndex(column_index);
+	return stats->PushdownExtract(storage_index.GetChildIndexes()[0]);
 }
 
 optional_ptr<TableCatalogEntry> DuckLakeGetTableEntry(optional_ptr<const FunctionData> bind_data) {
@@ -245,7 +256,6 @@ TableFunction DuckLakeFunctions::GetDuckLakeScanFunction(DatabaseInstance &insta
 		function.get_multi_file_reader = DuckLakeMultiFileReader::CreateInstance;
 	}
 
-	function.statistics = DuckLakeStatistics;
 	function.statistics_extended = DuckLakeStatisticsExtended;
 	function.get_table_entry = DuckLakeGetTableEntry;
 	function.get_virtual_columns = DuckLakeVirtualColumns;

@@ -78,6 +78,9 @@ private:
 	//! Build the node for a table filter on one column - a leaf, or a conjunction of them when it
 	//! constrains several nested fields. nullptr for virtual columns and subjects that have no stats.
 	unique_ptr<DuckLakeFilterNode> GetFilterNode(column_t column_id, unique_ptr<TableFilter> filter) const;
+	//! Build the leaf node for a table filter on a struct field that the scan extracts from its column
+	unique_ptr<DuckLakeFilterNode> GetExtractFilterNode(const ColumnIndex &column_index,
+	                                                    unique_ptr<TableFilter> filter) const;
 	//! Build the node for a filter expression reading one table column, possibly several of its fields
 	unique_ptr<DuckLakeFilterNode> GetColumnFilterNode(column_t column_id, const Expression &expr,
 	                                                   const LogicalType &column_type) const;

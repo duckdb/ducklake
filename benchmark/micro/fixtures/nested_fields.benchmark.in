@@ -1,0 +1,24 @@
+# name: benchmark/micro/fixtures/nested_fields.benchmark.in
+# description: Read-only lake with a table of a wide shredded VARIANT column and a wide STRUCT column
+# group: [fixtures]
+
+cache_file nested_fields_ready.marker
+
+load
+@create nested_fields
+@attach nested_fields AS lake (DATA_PATH '${BENCHMARK_DIR}/nested_fields_data')
+CREATE TABLE lake.t AS
+SELECT i AS id,
+       {'k': 'key-' || (i % 1000)::VARCHAR, 'n': i, 'pad1': md5(i::VARCHAR), 'pad2': md5((i + 1)::VARCHAR),
+        'pad3': md5((i + 2)::VARCHAR), 'pad4': md5((i + 3)::VARCHAR)}::VARIANT AS v,
+       {'k': i % 1000, 'n': i, 'pad1': md5((i + 4)::VARCHAR), 'pad2': md5((i + 5)::VARCHAR),
+        'pad3': md5((i + 6)::VARCHAR), 'pad4': md5((i + 7)::VARCHAR)} AS s
+FROM range(1000000) t(i);
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+@seal nested_fields
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/nested_fields_ready.marker' (FORMAT CSV);
+@attach nested_fields AS lake (READ_ONLY)
+
+reload
+@attach nested_fields AS lake (READ_ONLY)
