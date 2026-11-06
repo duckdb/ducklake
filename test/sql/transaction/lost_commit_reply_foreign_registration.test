@@ -54,7 +54,10 @@ SELECT count(*) FROM ducklake.t
 ----
 0
 
+# the kept file is read through its registration in u
 query I
-SELECT count(*) FROM ducklake.u
+SELECT i FROM ducklake.u ORDER BY i
 ----
+1
+2
 3
