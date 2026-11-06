@@ -464,7 +464,13 @@ private:
 	};
 	//! Puts entries in the object cache and remembers them, under one lock so the entry kept is the one remembered
 	void PutCacheEntry(string key, shared_ptr<ObjectCacheEntry> entry);
+	//! The kept stats of a table no later commit changed, and the tables to read when this lookup read the changes
+	bool TryGetUnchangedTableStats(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot, TableIndex table_id,
+	                               idx_t table_count, bool read_changes,
+	                               shared_ptr<DuckLakeTableStatsCacheEntry> &result, vector<TableIndex> &load_tables);
 	void PutStatsCacheEntries(idx_t next_file_id, vector<pair<TableIndex, shared_ptr<ObjectCacheEntry>>> entries);
+	//! Forgets the last full load, requires stats_load_lock
+	void ForgetStatsLoad();
 	//! Requires cache_entries_lock
 	void TrackCacheEntry(const string &key, const shared_ptr<ObjectCacheEntry> &entry);
 	//! Removes the entries of this DuckLake from the object cache, as their keys belong to this instance only
@@ -509,6 +515,17 @@ private:
 	//! The number of tracked entries at which the evicted ones are forgotten
 	idx_t cache_entries_prune_size = 64;
 	idx_t stats_cache_entries_prune_size = 512;
+	mutex stats_load_lock;
+	//! The latest snapshot whose stats were read for every table, later snapshots keep them for unchanged tables
+	DuckLakeSnapshot stats_load_snapshot;
+	bool has_stats_load_snapshot = false;
+	//! The entries of that load by table id, since an older snapshot can share their keys, an expired one was evicted
+	unordered_map<idx_t, weak_ptr<DuckLakeTableStatsCacheEntry>> stats_load_entries;
+	//! The latest snapshot whose changes since stats_load_snapshot are known, and the tables they changed
+	idx_t stats_changes_snapshot_id = 0;
+	set<TableIndex> stats_changed_tables;
+	//! Held by the lookup that reads the changes of a snapshot, the other lookups wait for it instead of reading too
+	mutex stats_changes_read_lock;
 	//! Whether or not the catalog is initialized
 	bool initialized = false;
 	//! Whether or not the metadata server can execute the commit retry loop server-side.
