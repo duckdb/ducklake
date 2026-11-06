@@ -1112,6 +1112,22 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 	return shared_ptr<DuckLakeTableStats>(std::move(requested_entry), &raw->stats);
 }
 
+optional_idx DuckLakeCatalog::GetTableNetRowCount(DuckLakeTransaction &transaction, DuckLakeTableEntry &table) {
+	auto snapshot = transaction.GetSnapshot();
+	auto key = NetRowCountCacheKey(table.GetTableId());
+	auto cached = GetObjectCacheInstance().Get<DuckLakeTableNetRowCountCacheEntry>(key);
+	if (cached && cached->snapshot_id == snapshot.snapshot_id) {
+		return cached->row_count;
+	}
+	auto file_count = transaction.GetMetadataManager().GetNetDataFileRowCountForStats(table.GetTableId(), snapshot);
+	if (!file_count.IsValid()) {
+		return optional_idx();
+	}
+	auto row_count = file_count.GetIndex() + table.GetNetInlinedRowCount(transaction);
+	PutCacheEntry(std::move(key), make_shared_ptr<DuckLakeTableNetRowCountCacheEntry>(snapshot.snapshot_id, row_count));
+	return row_count;
+}
+
 idx_t DuckLakeCatalog::GetTableRecordCount(DuckLakeTransaction &transaction, TableIndex table_id) {
 	auto snapshot = transaction.GetSnapshot();
 	auto &cache = GetObjectCacheInstance();
@@ -1578,6 +1594,10 @@ string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) c
 
 string DuckLakeCatalog::RecordCountCacheKey(idx_t snapshot_id) const {
 	return StringUtil::Format("ducklake:%s:record_counts:%llu", instance_id, snapshot_id);
+}
+
+string DuckLakeCatalog::NetRowCountCacheKey(TableIndex table_id) const {
+	return StringUtil::Format("ducklake:%s:net_row_count:table:%llu", instance_id, table_id.index);
 }
 
 string DuckLakeCatalog::SchemaCacheKey(idx_t schema_version) const {
