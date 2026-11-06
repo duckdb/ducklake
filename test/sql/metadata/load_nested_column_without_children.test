@@ -1,0 +1,61 @@
+# name: test/sql/metadata/load_nested_column_without_children.test
+# description: loading a catalog with a nested column that has no child columns reports an error
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+foreach nested_type list struct map
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/nested_no_children_{nested_type}.db' AS dl (DATA_PATH '{DATA_PATH}/nested_no_children_{nested_type}')
+
+statement ok
+CREATE TABLE dl.t (i INTEGER, c INTEGER)
+
+statement ok
+UPDATE __ducklake_metadata_dl.ducklake_column SET column_type = '{nested_type}', initial_default = '[]' WHERE column_name = 'c'
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/nested_no_children_{nested_type}.db' AS dl
+
+statement error
+SELECT * FROM dl.t
+----
+<REGEX>:.*Column "c" has the nested type "(list|struct|map)" but no child columns.*
+
+statement ok
+DETACH dl
+
+endloop
+
+# a nested field without child columns is reported with its full path
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/nested_no_children_field.db' AS dl (DATA_PATH '{DATA_PATH}/nested_no_children_field')
+
+statement ok
+CREATE TABLE dl.t (s STRUCT(b INTEGER))
+
+statement ok
+UPDATE __ducklake_metadata_dl.ducklake_column SET column_type = 'struct' WHERE column_name = 'b'
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/nested_no_children_field.db' AS dl
+
+statement error
+SELECT * FROM dl.t
+----
+<REGEX>:.*Column "s"\."b" has the nested type "struct" but no child columns.*
+
+statement ok
+DETACH dl
