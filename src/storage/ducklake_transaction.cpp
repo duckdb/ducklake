@@ -920,30 +920,33 @@ void DuckLakeTransaction::UndoConfigOptions() {
 }
 
 void DuckLakeTransaction::ReloadConfigOptions() {
-	vector<pair<DuckLakeConfigOption, bool>> catalog_options;
+	// the undo of each change points at the catalog's value, so a value another transaction set since stays
+	vector<DuckLakeConfigOptionUndo> reloads;
+	vector<DuckLakeConfigOption> table_options;
 	try {
 		for (auto &change : config_option_undo) {
+			auto reload = change;
 			auto option = change.option;
-			bool set = metadata_manager->TryGetConfigOption(option);
-			catalog_options.emplace_back(std::move(option), set);
+			reload.was_set = metadata_manager->TryGetConfigOption(option);
+			reload.previous_value = option.option.value;
+			reloads.push_back(std::move(reload));
 		}
 		// the table options of the commit reach the cache on success alone
 		for (auto &table_option : state->committed_table_options) {
 			auto option = table_option;
 			if (metadata_manager->TryGetConfigOption(option)) {
-				catalog_options.emplace_back(std::move(option), true);
+				table_options.push_back(std::move(option));
 			}
 		}
 	} catch (std::exception &) { // NOLINT
 		// without the catalog's answer the undo restores the earlier values
 		return;
 	}
-	for (auto &entry : catalog_options) {
-		if (entry.second) {
-			ducklake_catalog.SetConfigOption(entry.first);
-		} else {
-			ducklake_catalog.ResetConfigOption(entry.first);
-		}
+	for (auto &reload : reloads) {
+		ducklake_catalog.UndoConfigOption(reload);
+	}
+	for (auto &option : table_options) {
+		ducklake_catalog.SetConfigOption(option);
 	}
 	config_option_undo.clear();
 }
