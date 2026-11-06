@@ -4852,6 +4852,17 @@ string DuckLakeMetadataManager::DropDataFiles(const set<DataFileIndex> &dropped_
 	return FlushDrop("ducklake_data_file", "data_file_id", dropped_files);
 }
 
+string DuckLakeMetadataManager::GetDeleteCountForDataFilesSql(TableIndex table_id, const set<DataFileIndex> &file_ids) {
+	return StringUtil::Format(R"(
+SELECT COALESCE(SUM(delete_count), 0)
+FROM {METADATA_CATALOG}.ducklake_delete_file
+WHERE table_id = %d
+  AND data_file_id IN (%s)
+  AND {SNAPSHOT_ID} >= begin_snapshot
+  AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL);)",
+	                          table_id.index, GenerateIDList(file_ids));
+}
+
 static string ScheduledDeletionTuple(idx_t file_id, const DuckLakePath &path) {
 	return StringUtil::Format("(%d, %s, %s, NOW())", file_id, SQLString(path.path),
 	                          DuckLakeUtil::BoolLiteral(path.path_is_relative));
