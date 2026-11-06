@@ -67,6 +67,8 @@ public:
 	void DropEntry(ClientContext &context, DropInfo &info) override;
 	//! Drops an entry, a replaced one without checking for tables that call it
 	void DropEntry(ClientContext &context, DropInfo &info, bool replacing);
+	//! Throws if a table calls one of the macros in its defaults or sort key
+	static void ThrowIfTablesCallMacros(ClientContext &context, Catalog &catalog, const identifier_set_t &macro_names);
 	optional_ptr<CatalogEntry> LookupEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
 
 	void AddEntry(CatalogType type, unique_ptr<CatalogEntry> entry);

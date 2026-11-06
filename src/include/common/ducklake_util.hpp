@@ -57,6 +57,8 @@ public:
 	static string ToQuotedList(const vector<Identifier> &input, char list_separator = ',');
 	static vector<string> ParseQuotedList(const string &input, char list_separator = ',');
 	static string StatsToString(const string &text);
+	//! Strips the quotes of a SQL string literal, returns the input if it is not one
+	static string UnquoteSQLString(const string &str);
 	static string ValueToSQL(DuckLakeMetadataManager &metadata_manager, ClientContext &context, const Value &val);
 
 	static ParsedCatalogEntry ParseCatalogEntry(const string &input);
@@ -113,6 +115,8 @@ public:
 	static void CopyExtensionSettings(ClientContext &from, ClientContext &to);
 	//! Reset the given extension settings of a context to their defaults, skipping those that are not registered
 	static void ResetExtensionSettings(ClientContext &context, const vector<string> &names);
+	//! Sets an extension setting of the session, if the extension that defines it is loaded
+	static void SetExtensionSetting(ClientContext &context, const string &name, const Value &value);
 
 	static string ParseConfigOptionValue(ClientContext &context, const string &option, const Value &val);
 	static void ValidateConfigOptionScope(const string &option, bool has_schema, bool has_table);

@@ -519,33 +519,22 @@ idx_t DuckLakeTableEntry::GetNetDataFileRowCount(DuckLakeTransaction &transactio
 vector<DuckLakeInlinedTableInfo> DuckLakeTableEntry::GetInlinedDataTables(DuckLakeTransaction &transaction,
                                                                           DuckLakeSnapshot snapshot,
                                                                           bool include_local_changes) const {
-	// another attach can drop superseded inlined tables without bumping the schema version
-	bool may_be_dropped = inlined_data_tables.size() > 1;
-	if (inlined_data_tables.size() == 1) {
-		// the only inlined table can be superseded after an older or pinned snapshot
-		may_be_dropped = transaction.GetCatalog().CatalogSnapshot() ||
-		                 snapshot.schema_version < transaction.GetSnapshot().schema_version;
-	}
-	identifier_set_t registered_tables;
-	if (may_be_dropped) {
-		registered_tables = transaction.GetMetadataManager().GetInlinedTableNames(GetTableId());
-	}
 	vector<DuckLakeInlinedTableInfo> result;
-	for (auto &inlined_table : inlined_data_tables) {
+	for (auto &inlined_table : transaction.GetMetadataManager().GetInlinedDataTables(*this, snapshot)) {
 		if (include_local_changes && transaction.InlinedTableFlushed(inlined_table.table_name)) {
 			continue;
 		}
-		if (may_be_dropped && registered_tables.find(inlined_table.table_name) == registered_tables.end()) {
-			continue;
-		}
-		result.push_back(inlined_table);
+		result.push_back(std::move(inlined_table));
 	}
 	return result;
 }
 
 idx_t DuckLakeTableEntry::GetNetInlinedRowCount(DuckLakeTransaction &transaction) {
+	return GetNetInlinedRowCount(transaction, transaction.GetSnapshot());
+}
+
+idx_t DuckLakeTableEntry::GetNetInlinedRowCount(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
 	auto &metadata_manager = transaction.GetMetadataManager();
-	auto snapshot = transaction.GetSnapshot();
 	idx_t total = 0;
 	for (auto &inlined_table : GetInlinedDataTables(transaction, snapshot)) {
 		total += metadata_manager.GetNetInlinedRowCount(inlined_table.table_name, snapshot);
