@@ -4295,6 +4295,27 @@ ORDER BY data.data_file_id ASC;
 	                          table_id.index);
 }
 
+//! The schema and table paths of the listed tables, read by ReadTablePath
+static string TablePathsQuery(const string &table_ids) {
+	return StringUtil::Format(R"(
+SELECT
+	t.table_id,
+	s.path AS s_path,
+	s.path_is_relative AS s_path_is_relative,
+	t.path AS t_path,
+	t.path_is_relative AS t_path_is_relative
+FROM {METADATA_CATALOG}.ducklake_schema s
+JOIN {METADATA_CATALOG}.ducklake_table t
+USING (schema_id)
+WHERE table_id IN (%s);)",
+	                          table_ids);
+}
+
+static string ReadTablePath(const QueryResultRow &row, const string &data_path, const string &separator) {
+	auto resolved_schema_path = ReadPathOrParent(row, 1, data_path, separator);
+	return ReadPathOrParent(row, 3, resolved_schema_path, separator);
+}
+
 string DuckLakeMetadataManager::GetPath(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
                                         const vector<DuckLakeSchemaInfo> &new_schemas_result) {
 	lock_guard<mutex> guard(paths_lock);
@@ -4336,26 +4357,13 @@ void DuckLakeMetadataManager::LoadTablePaths(const vector<TableIndex> &table_ids
 	if (missing.empty()) {
 		return;
 	}
-	auto result = Query(StringUtil::Format(R"(
-SELECT
-	t.table_id,
-	s.path AS s_path,
-	s.path_is_relative AS s_path_is_relative,
-	t.path AS t_path,
-	t.path_is_relative AS t_path_is_relative
-FROM {METADATA_CATALOG}.ducklake_schema s
-JOIN {METADATA_CATALOG}.ducklake_table t
-USING (schema_id)
-WHERE table_id IN (%s);)",
-	                                       GenerateIDList(missing)));
+	auto result = Query(TablePathsQuery(GenerateIDList(missing)));
 	result->ThrowIfError("Failed to get table paths from DuckLake: ");
 	auto &data_path = catalog.DataPath();
 	auto separator = GetPathSeparator(data_path);
 	lock_guard<mutex> guard(paths_lock);
 	for (auto &row : *result) {
-		auto resolved_schema_path = ReadPathOrParent(row, 1, data_path, separator);
-		table_paths.emplace(TableIndex(row.GetValue<idx_t>(0)),
-		                    ReadPathOrParent(row, 3, resolved_schema_path, separator));
+		table_paths.emplace(TableIndex(row.GetValue<idx_t>(0)), ReadTablePath(row, data_path, separator));
 	}
 }
 
@@ -4479,21 +4487,9 @@ string DuckLakeMetadataManager::GetPathForTable(TableIndex table_id, const vecto
 			return FromRelativePath(DuckLakePath {new_table.path, false}, base_data_path, separator);
 		}
 	}
-	auto query = StringUtil::Format(R"(
-SELECT
-	s.path AS s_path,
-	s.path_is_relative AS s_path_is_relative,
-	t.path AS t_path,
-	t.path_is_relative AS t_path_is_relative
-FROM {METADATA_CATALOG}.ducklake_schema s
-JOIN {METADATA_CATALOG}.ducklake_table t
-USING (schema_id)
-WHERE table_id = %d;)",
-	                                table_id.index);
-	auto result = query_executor(query);
+	auto result = query_executor(TablePathsQuery(to_string(table_id.index)));
 	for (auto &row : *result) {
-		auto resolved_schema_path = ReadPathOrParent(row, 0, base_data_path, separator);
-		return ReadPathOrParent(row, 2, resolved_schema_path, separator);
+		return ReadTablePath(row, base_data_path, separator);
 	}
 	// LCOV_EXCL_START
 	throw InvalidInputException("Failed to get path for table with id %d - table not found in metadata catalog",
@@ -6039,7 +6035,8 @@ WHERE scope = 'table' AND scope_id IN (%s);)",
 			    StringUtil::Format("DROP TABLE IF EXISTS {METADATA_CATALOG}.%s;", inlined_table_name);
 		}
 		if (!drop_inlined_tables.empty()) {
-			auto result = Execute(drop_inlined_tables);
+			// a Postgres catalog sends the batch in one postgres_execute, so the drops are not bound one by one
+			auto result = Execute(transaction.GetSnapshot(), drop_inlined_tables);
 			result->ThrowIfError("Failed to drop inlined-data table in DuckLake: ");
 		}
 	}
