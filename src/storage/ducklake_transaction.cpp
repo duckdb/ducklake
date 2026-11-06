@@ -124,7 +124,7 @@ void LocalTableChanges::GetCreatedFiles(idx_t commit_snapshot, vector<DuckLakeCr
 		ForEachDeleteFile(table_changes, [&](const DuckLakeDeleteFile &file) {
 			add_file(file.file_name, file.begin_snapshot.IsValid() ? file.begin_snapshot : commit_snapshot);
 		});
-		// a compaction output takes the begin snapshot of the compacted files, which the commit decides
+		// the commit decides the begin snapshot of a compaction output, which can be that of the compacted files
 		for (auto &compaction : table_changes.compactions) {
 			for (auto &file : compaction.written_files) {
 				add_file(file.file_name, optional_idx());
