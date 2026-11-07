@@ -407,7 +407,7 @@ private:
 	//! Takes the options the commit changed from the catalog, for a commit whose outcome is unknown
 	void ReloadConfigOptions(bool catalog_unreadable);
 	//! Takes the option changes of a commit from the catalog into the cache, false when it cannot be read
-	bool TryReloadConfigOptions(const DuckLakeConfigOptionReload &reload);
+	bool TryReloadConfigOptions(const DuckLakeConfigOptionReload &reload, bool catalog_unreadable);
 	//! Reloads the option changes of earlier commits whose outcome could not be read
 	void ReloadPendingConfigOptions(ClientContext &context);
 	//! The SQL that the commit runs for the options this transaction changed

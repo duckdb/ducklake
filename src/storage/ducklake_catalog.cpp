@@ -1263,6 +1263,7 @@ DuckLakeConfigOptionUndo DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOp
 	lock_guard<mutex> guard(config_lock);
 	auto &scope = GetOptionScope(options, option);
 	auto undo = GetConfigOptionUndo(scope, option);
+	undo.sequence = ++config_option_sequence;
 	scope[option.option.key] = option.option.value;
 	return undo;
 }
@@ -1271,6 +1272,7 @@ DuckLakeConfigOptionUndo DuckLakeCatalog::ResetConfigOption(const DuckLakeConfig
 	lock_guard<mutex> guard(config_lock);
 	auto &scope = GetOptionScope(options, option);
 	auto undo = GetConfigOptionUndo(scope, option);
+	undo.sequence = ++config_option_sequence;
 	undo.reset = true;
 	scope.erase(option.option.key);
 	return undo;

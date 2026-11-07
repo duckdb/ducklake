@@ -517,6 +517,8 @@ private:
 	mutable mutex config_lock;
 	//! The DuckLake options
 	DuckLakeOptions options;
+	//! The number of writes of the option cache, which orders the changes of the transactions
+	idx_t config_option_sequence = 0;
 	//! The option changes of commits whose outcome could not be read, by the number of their commit
 	map<idx_t, DuckLakeConfigOptionReload> pending_option_reloads;
 	idx_t pending_option_reload_count = 0;

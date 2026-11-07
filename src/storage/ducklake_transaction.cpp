@@ -39,6 +39,7 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/settings.hpp"
 
+#include <algorithm>
 #include <chrono>
 
 namespace duckdb {
@@ -929,9 +930,11 @@ void DuckLakeTransaction::ReloadConfigOptions(bool catalog_unreadable) {
 	DuckLakeConfigOptionReload reload;
 	reload.changes = std::move(config_option_undo);
 	reload.table_options = state->committed_table_options;
-	reload.rewrote = rewrote_config_options;
 	config_option_undo.clear();
-	if (catalog_unreadable || !TryReloadConfigOptions(reload)) {
+	for (auto &change : reload.changes) {
+		change.rewrote = rewrote_config_options;
+	}
+	if (!TryReloadConfigOptions(reload, catalog_unreadable)) {
 		// the next transaction takes the catalog's values, until then the cache keeps the commit's
 		ducklake_catalog.AddPendingOptionReload(std::move(reload));
 	}
@@ -961,28 +964,27 @@ static const DuckLakeConfigOptionUndo &LastConfigOptionChange(const vector<DuckL
 	return changes[last];
 }
 
-bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReload &reload) {
+bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReload &reload, bool catalog_unreadable) {
 	// one undo per option, which compares the cache against the value written last and points at the catalog's
 	vector<DuckLakeConfigOptionUndo> undos;
 	vector<DuckLakeConfigOption> table_options;
 	try {
+		if (catalog_unreadable) {
+			throw IOException("The connection to the metadata catalog is lost (ducklake_debug_lose_commit_reply)");
+		}
 		for (idx_t i = 0; i < reload.changes.size(); i++) {
 			if (ConfigOptionChangedEarlier(reload.changes, i)) {
 				continue;
 			}
 			auto &first = reload.changes[i];
-			auto &last = LastConfigOptionChange(reload.changes, i);
-			DuckLakeConfigOptionUndo undo;
-			undo.option = last.option;
-			undo.reset = last.reset;
+			auto undo = LastConfigOptionChange(reload.changes, i);
 			undo.was_set = first.was_set;
 			undo.previous_value = first.previous_value;
-			auto option = last.option;
+			auto option = undo.option;
 			if (metadata_manager->TryGetConfigOption(option)) {
 				undo.was_set = true;
 				undo.previous_value = option.option.value;
-			} else if (last.reset) {
-				// the row the reset removed is gone
+			} else if (undo.reset) {
 				undo.was_set = false;
 			}
 			// without a row, a set goes back to the value before the transaction, which the ATTACH or a default gave
@@ -999,7 +1001,7 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 		return false;
 	}
 	for (auto &undo : undos) {
-		if (!reload.rewrote) {
+		if (!undo.rewrote) {
 			// the undo leaves a value another transaction set since in place
 			ducklake_catalog.UndoConfigOption(undo);
 			continue;
@@ -1025,17 +1027,24 @@ void DuckLakeTransaction::ReloadPendingConfigOptions(ClientContext &context) {
 	if (pending.empty()) {
 		return;
 	}
+	// the changes of all records are resolved together, in the order they reached the cache
+	DuckLakeConfigOptionReload merged;
+	for (auto &entry : pending) {
+		auto &record = entry.second;
+		merged.changes.insert(merged.changes.end(), record.changes.begin(), record.changes.end());
+		merged.table_options.insert(merged.table_options.end(), record.table_options.begin(),
+		                            record.table_options.end());
+	}
+	std::stable_sort(
+	    merged.changes.begin(), merged.changes.end(),
+	    [](const DuckLakeConfigOptionUndo &a, const DuckLakeConfigOptionUndo &b) { return a.sequence < b.sequence; });
 	string lose_reply;
 	context.TryGetCurrentSetting("ducklake_debug_lose_commit_reply", lose_reply);
-	if (lose_reply == "before_unreadable") {
+	if (!TryReloadConfigOptions(merged, lose_reply == "before_unreadable")) {
 		return;
 	}
-	// the newest commit's changes go first, as each undo points at the value the commit before left in the cache
-	for (auto it = pending.rbegin(); it != pending.rend(); ++it) {
-		if (!TryReloadConfigOptions(it->second)) {
-			return;
-		}
-		ducklake_catalog.RemovePendingOptionReload(it->first);
+	for (auto &entry : pending) {
+		ducklake_catalog.RemovePendingOptionReload(entry.first);
 	}
 }
 

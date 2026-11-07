@@ -600,6 +600,10 @@ struct DuckLakeConfigOptionUndo {
 	bool reset = false;
 	//! the rows the option is expected to have in the metadata after this change
 	idx_t metadata_rows = 0;
+	//! the place of the change among the writes of the cache
+	idx_t sequence = 0;
+	//! whether a retried commit attempt wrote the change last
+	bool rewrote = false;
 };
 
 //! The option changes of a commit whose outcome is unknown, taken from the catalog once it can be read
@@ -607,8 +611,6 @@ struct DuckLakeConfigOptionReload {
 	vector<DuckLakeConfigOptionUndo> changes;
 	//! the options of the tables the commit created
 	vector<DuckLakeConfigOption> table_options;
-	//! whether a retried attempt wrote the options last
-	bool rewrote = false;
 };
 
 struct DuckLakeNameMapColumnInfo {
