@@ -1327,10 +1327,10 @@ idx_t DuckLakeCatalog::NextCommitAttempt() {
 	return ++commit_attempt_count;
 }
 
-idx_t DuckLakeCatalog::ConfigOptionCommitAttempt(const DuckLakeConfigOption &option) const {
+idx_t DuckLakeCatalog::ConfigOptionPublications(const DuckLakeConfigOption &option) const {
 	lock_guard<mutex> guard(config_lock);
 	auto entry = config_option_states.find(DuckLakeConfigOptionKey(option));
-	return entry == config_option_states.end() ? 0 : entry->second.committed_attempt;
+	return entry == config_option_states.end() ? 0 : entry->second.publications;
 }
 
 void DuckLakeCatalog::CommitConfigOptions(const vector<DuckLakeConfigOptionUndo> &changes, idx_t commit_attempt) {
@@ -1352,6 +1352,7 @@ void DuckLakeCatalog::CommitConfigOptions(const vector<DuckLakeConfigOptionUndo>
 			state.committed_set = !change.reset;
 			state.committed_value = change.option.option.value;
 			state.committed_attempt = commit_attempt;
+			state.publications++;
 		}
 		if (state.open_changes == 0) {
 			SetOptionEntry(GetOptionScope(options, change.option), change.option.option.key, state.committed_set,
@@ -1367,6 +1368,7 @@ void DuckLakeCatalog::SetCommittedConfigOption(const DuckLakeConfigOption &optio
 		auto &state = entry->second;
 		state.committed_set = true;
 		state.committed_value = option.option.value;
+		state.publications++;
 		if (state.open_changes > 0) {
 			return;
 		}
@@ -1387,11 +1389,11 @@ idx_t DuckLakeCatalog::AddPendingOptionReload(const DuckLakeConfigOptionReload &
 }
 
 bool DuckLakeCatalog::ReloadConfigOption(const DuckLakeConfigOption &option, bool has_row, bool reset,
-                                         idx_t committed_attempt) {
+                                         idx_t publications) {
 	lock_guard<mutex> guard(config_lock);
 	auto &state = GetConfigOptionState(option);
-	if (state.committed_attempt != committed_attempt) {
-		// a commit published the option since the read, so the value read is behind the catalog
+	if (state.publications != publications) {
+		// the option was published since the read, so the value read is behind the catalog
 		return false;
 	}
 	if (has_row) {
@@ -1401,6 +1403,7 @@ bool DuckLakeCatalog::ReloadConfigOption(const DuckLakeConfigOption &option, boo
 		// a reset is recorded only where the catalog had a row, so a committed reset removed it
 		state.committed_set = false;
 	}
+	state.publications++;
 	if (state.open_changes > 0) {
 		// the changes of an option an open transaction holds stay for a later transaction
 		return false;

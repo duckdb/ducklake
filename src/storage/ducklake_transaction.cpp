@@ -961,21 +961,24 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
                                                  vector<DuckLakeConfigOption> &unresolved) {
 	// one read per option, whose value is the row's, or stays committed without a row unless a change removed it
 	vector<DuckLakeConfigOption> options;
+	for (idx_t i = 0; i < reload.changes.size(); i++) {
+		if (!ConfigOptionChangedEarlier(reload.changes, i)) {
+			options.push_back(reload.changes[i].option);
+		}
+	}
+	// the publications are counted before the reads, whose first one fixes the snapshot of the catalog
+	vector<idx_t> publications;
+	for (auto &option : options) {
+		publications.push_back(ducklake_catalog.ConfigOptionPublications(option));
+	}
 	vector<bool> has_row;
-	vector<idx_t> attempts;
 	vector<DuckLakeConfigOption> table_options;
 	try {
 		if (catalog_unreadable) {
 			throw IOException("The connection to the metadata catalog is lost (ducklake_debug_lose_commit_reply)");
 		}
-		for (idx_t i = 0; i < reload.changes.size(); i++) {
-			if (ConfigOptionChangedEarlier(reload.changes, i)) {
-				continue;
-			}
-			auto option = reload.changes[i].option;
-			attempts.push_back(ducklake_catalog.ConfigOptionCommitAttempt(option));
+		for (auto &option : options) {
 			has_row.push_back(metadata_manager->TryGetConfigOption(option));
-			options.push_back(std::move(option));
 		}
 		// the table options of the commit reach the cache on success alone
 		for (auto &table_option : reload.table_options) {
@@ -989,7 +992,7 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 	}
 	for (idx_t i = 0; i < options.size(); i++) {
 		bool reset = ConfigOptionReset(reload.changes, options[i]);
-		if (!ducklake_catalog.ReloadConfigOption(options[i], has_row[i], reset, attempts[i])) {
+		if (!ducklake_catalog.ReloadConfigOption(options[i], has_row[i], reset, publications[i])) {
 			unresolved.push_back(options[i]);
 		}
 	}
@@ -1030,9 +1033,7 @@ void DuckLakeTransaction::Commit() {
 	if (connection) {
 		GetConnection();
 	}
-	if (!config_option_undo.empty()) {
-		commit_attempt = ducklake_catalog.NextCommitAttempt();
-	}
+	NumberCommitAttempt(false);
 	if (!expiry_filters.empty() && !ExpiresSnapshotsOnCommit()) {
 		try {
 			lock_guard<mutex> guard(snapshot_tag_lock);
@@ -1945,10 +1946,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.prepare_retry = [&]() {
 		option_lock_failed = false;
-		if (!config_option_undo.empty()) {
-			// the retry commits after the commit it conflicted with
-			commit_attempt = ducklake_catalog.NextCommitAttempt();
-		}
+		// the retry commits after the commit it conflicted with
+		NumberCommitAttempt(false);
 		inlined_inserts.clear();
 		metadata_manager->ClearInlinedTableCaches();
 		connection->BeginTransaction();
@@ -2112,12 +2111,22 @@ void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
 	// the catalog copy is not transactional - remember the previous value so a rollback can restore it
 	config_option_undo.push_back(ducklake_catalog.SetConfigOption(option));
 	config_option_undo.back().metadata_rows = ConfigOptionRows(config_option_undo.size() - 1, metadata_rows);
+	NumberCommitAttempt(true);
 }
 
 void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) {
 	if (metadata_manager->ResetConfigOption(option)) {
 		config_option_undo.push_back(ducklake_catalog.ResetConfigOption(option));
+		NumberCommitAttempt(true);
 	}
+}
+
+void DuckLakeTransaction::NumberCommitAttempt(bool option_written) {
+	// a catalog that commits each statement commits an option at its write, the others at the commit
+	if (config_option_undo.empty() || option_written != metadata_manager->CommitsEachStatement()) {
+		return;
+	}
+	commit_attempt = ducklake_catalog.NextCommitAttempt();
 }
 
 void DuckLakeTransaction::ClearMaintenanceChanges() {

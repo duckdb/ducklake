@@ -642,6 +642,8 @@ struct DuckLakeConfigOptionState {
 	string committed_value;
 	//! the number of the commit attempt that published the committed value
 	idx_t committed_attempt = 0;
+	//! how often the committed value was published, by commits and reloads
+	idx_t publications = 0;
 	//! the changes of open transactions that are not committed or undone yet
 	idx_t open_changes = 0;
 };

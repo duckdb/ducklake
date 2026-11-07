@@ -235,18 +235,17 @@ public:
 	void UndoConfigOption(const DuckLakeConfigOptionUndo &undo);
 	//! Numbers a commit attempt, a conflict starts a later one, so a higher number committed later in the catalog
 	idx_t NextCommitAttempt();
-	//! The number of the commit attempt that published the option last
-	idx_t ConfigOptionCommitAttempt(const DuckLakeConfigOption &option) const;
+	//! How often the option was published, by commits and reloads
+	idx_t ConfigOptionPublications(const DuckLakeConfigOption &option) const;
 	//! Takes the changes of a committed transaction as the catalog's values, unless a later attempt published them
 	void CommitConfigOptions(const vector<DuckLakeConfigOptionUndo> &changes, idx_t commit_attempt);
-	//! Sets a config option the catalog holds
 	void SetCommittedConfigOption(const DuckLakeConfigOption &option);
 	//! Keeps the option changes of a commit whose outcome could not be read, until a transaction reloads them
 	idx_t AddPendingOptionReload(const DuckLakeConfigOptionReload &reload);
 	//! The kept option changes, by the number of their commit
 	map<idx_t, DuckLakeConfigOptionReload> PendingOptionReloads() const;
-	//! Takes the value read from the catalog, false while a transaction holds a change or a commit published since
-	bool ReloadConfigOption(const DuckLakeConfigOption &option, bool has_row, bool reset, idx_t committed_attempt);
+	//! Takes the value read from the catalog, false while a transaction holds a change or it was published since
+	bool ReloadConfigOption(const DuckLakeConfigOption &option, bool has_row, bool reset, idx_t publications);
 	//! Drops the changes of the resolved options from the records, and the records left empty
 	void ResolvePendingOptionReloads(const vector<idx_t> &commit_numbers,
 	                                 const vector<DuckLakeConfigOption> &unresolved);
