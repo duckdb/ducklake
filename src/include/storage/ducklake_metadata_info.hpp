@@ -602,8 +602,6 @@ struct DuckLakeConfigOptionUndo {
 	idx_t metadata_rows = 0;
 	//! the place of the change among the writes of the cache
 	idx_t sequence = 0;
-	//! whether a retried commit attempt wrote the change last
-	bool rewrote = false;
 };
 
 //! The option changes of a commit whose outcome is unknown, taken from the catalog once it can be read

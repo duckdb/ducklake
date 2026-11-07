@@ -1278,24 +1278,37 @@ DuckLakeConfigOptionUndo DuckLakeCatalog::ResetConfigOption(const DuckLakeConfig
 	return undo;
 }
 
-void DuckLakeCatalog::UndoConfigOption(const DuckLakeConfigOptionUndo &undo) {
+bool DuckLakeCatalog::UndoConfigOption(const DuckLakeConfigOptionUndo &undo) {
+	lock_guard<mutex> guard(config_lock);
+	auto &scope = GetOptionScope(options, undo.option);
+	auto &key = undo.option.option.key;
+	auto entry = scope.find(key);
+	if (undo.reset) {
+		if (entry == scope.end() && undo.was_set) {
+			scope[key] = undo.previous_value;
+		}
+	} else if (entry != scope.end() && entry->second == undo.option.option.value) {
+		if (undo.was_set) {
+			entry->second = undo.previous_value;
+		} else {
+			scope.erase(entry);
+		}
+	}
+	// another transaction has set the option since - its value stays in place
+	entry = scope.find(key);
+	if (!undo.was_set) {
+		return entry == scope.end();
+	}
+	return entry != scope.end() && entry->second == undo.previous_value;
+}
+
+void DuckLakeCatalog::UndoReplacesCachedValue(DuckLakeConfigOptionUndo &undo) {
 	lock_guard<mutex> guard(config_lock);
 	auto &scope = GetOptionScope(options, undo.option);
 	auto entry = scope.find(undo.option.option.key);
-	if (undo.reset) {
-		if (entry == scope.end() && undo.was_set) {
-			scope[undo.option.option.key] = undo.previous_value;
-		}
-		return;
-	}
-	if (entry == scope.end() || entry->second != undo.option.option.value) {
-		// another transaction has set the option since - leave its value in place
-		return;
-	}
-	if (undo.was_set) {
-		entry->second = undo.previous_value;
-	} else {
-		scope.erase(entry);
+	undo.reset = entry == scope.end();
+	if (!undo.reset) {
+		undo.option.option.value = entry->second;
 	}
 }
 
