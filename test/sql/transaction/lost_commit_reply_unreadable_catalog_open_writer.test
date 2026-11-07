@@ -1,0 +1,127 @@
+# name: test/sql/transaction/lost_commit_reply_unreadable_catalog_open_writer.test
+# description: The option of a commit whose outcome could not be read is reloaded once a transaction that set it since is gone
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/lost_commit_reply_unreadable_catalog_open_writer', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('data_inlining_row_limit', 20)
+
+statement ok con1
+CREATE TABLE ducklake.a(i INTEGER)
+
+# a second transaction is open before the commit of the first is lost
+statement ok con2
+BEGIN
+
+query I con2
+SELECT count(*) FROM ducklake.t
+----
+0
+
+# the catalog never carries the commit out and cannot be read while its outcome is checked
+statement ok
+SET ducklake_debug_lose_commit_reply = 'before_unreadable'
+
+statement error con1
+COMMIT
+----
+whether it carried the commit out is unknown
+
+statement ok
+RESET ducklake_debug_lose_commit_reply
+
+# the open transaction sets the option while the changes of the lost commit wait
+statement ok con2
+CALL ducklake.set_option('data_inlining_row_limit', 30)
+
+# a new transaction reads the catalog, but the option belongs to the open transaction
+query I
+SELECT count(*) FROM ducklake.t
+----
+0
+
+statement ok con2
+ROLLBACK
+
+query I
+SELECT count(*) FROM metadata.ducklake_metadata WHERE key = 'data_inlining_row_limit'
+----
+0
+
+# the limit of the ATTACH holds again, so the row goes to a file
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/lost_commit_reply_unreadable_catalog_open_writer/main/t/*.parquet')
+----
+1
+
+# the same with the open transaction setting the value of the ATTACH, which the cache would show without it
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('data_inlining_row_limit', 20)
+
+statement ok con1
+CREATE TABLE ducklake.b(i INTEGER)
+
+statement ok con2
+BEGIN
+
+query I con2
+SELECT count(*) FROM ducklake.t
+----
+1
+
+statement ok
+SET ducklake_debug_lose_commit_reply = 'before_unreadable'
+
+statement error con1
+COMMIT
+----
+whether it carried the commit out is unknown
+
+statement ok
+RESET ducklake_debug_lose_commit_reply
+
+statement ok con2
+CALL ducklake.set_option('data_inlining_row_limit', 0)
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+1
+
+statement ok con2
+ROLLBACK
+
+query I
+SELECT count(*) FROM metadata.ducklake_metadata WHERE key = 'data_inlining_row_limit'
+----
+0
+
+statement ok
+INSERT INTO ducklake.t VALUES (2)
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/lost_commit_reply_unreadable_catalog_open_writer/main/t/*.parquet')
+----
+2

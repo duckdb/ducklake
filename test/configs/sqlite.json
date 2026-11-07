@@ -139,7 +139,7 @@
         "test/sql/general/postgres_nul_byte_text.test",
         "test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test",
-        "test/sql/metadata/postgres_attach_cache_clear.test"
+        "test/sql/metadata/postgres_attach_cache_clear.test",
         "test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test"
       ]
     },
@@ -161,6 +161,18 @@
       "reason": "The concurrent INSERT commit fails with \"database is locked\" while the reader transaction is open, which skip_error_messages turns into a silent skip; the partial-file scenario needs a catalog that does not pin reads (quack)",
       "paths": [
         "test/sql/quack/partial_file_count.test"
+      ]
+    },
+    {
+      "reason": "con2 cannot write while the transaction of con1 is open on the SQLite catalog (\"database is locked\"), which skip_error_messages turns into a silent skip",
+      "paths": [
+        "test/sql/transaction/lost_commit_reply_foreign_registration.test",
+        "test/sql/transaction/lost_commit_reply_option_retry.test",
+        "test/sql/transaction/lost_commit_reply_compaction_registration.test",
+        "test/sql/transaction/lost_commit_reply_option_set_reset_retry.test",
+        "test/sql/transaction/lost_commit_reply_unreadable_catalog_order.test",
+        "test/sql/transaction/lost_commit_reply_option_set_reset_concurrent.test",
+        "test/sql/transaction/lost_commit_reply_fallback_other_writer.test"
       ]
     }
   ]

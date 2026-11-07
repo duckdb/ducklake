@@ -589,6 +589,11 @@ struct DuckLakeConfigOption {
 	SchemaIndex schema_id;
 	//! table_id, if scoped to a table
 	TableIndex table_id;
+
+	//! Whether the other option is the same key in the same scope
+	bool IsSame(const DuckLakeConfigOption &other) const {
+		return option.key == other.option.key && schema_id == other.schema_id && table_id == other.table_id;
+	}
 };
 
 //! What a config option held before a transaction set it, so a rollback can put it back
@@ -600,6 +605,49 @@ struct DuckLakeConfigOptionUndo {
 	bool reset = false;
 	//! the rows the option is expected to have in the metadata after this change
 	idx_t metadata_rows = 0;
+	//! the number that orders the publication of the change, from its write or its commit
+	idx_t attempt = 0;
+};
+
+//! The option changes of a commit whose outcome is unknown, taken from the catalog once it can be read
+struct DuckLakeConfigOptionReload {
+	vector<DuckLakeConfigOptionUndo> changes;
+	//! the options of the tables the commit created
+	vector<DuckLakeConfigOption> table_options;
+};
+
+//! The key of a config option in its scope
+struct DuckLakeConfigOptionKey {
+	explicit DuckLakeConfigOptionKey(const DuckLakeConfigOption &option)
+	    : schema_id(option.schema_id), table_id(option.table_id), key(option.option.key) {
+	}
+
+	SchemaIndex schema_id;
+	TableIndex table_id;
+	string key;
+
+	bool operator<(const DuckLakeConfigOptionKey &other) const {
+		if (schema_id != other.schema_id) {
+			return schema_id < other.schema_id;
+		}
+		if (table_id != other.table_id) {
+			return table_id < other.table_id;
+		}
+		return key < other.key;
+	}
+};
+
+//! What the catalog holds for a config option that a transaction changed, besides the value the cache shows
+struct DuckLakeConfigOptionState {
+	//! the value of the catalog row or the ATTACH, which the cache holds while no transaction holds a change
+	bool committed_set = false;
+	string committed_value;
+	//! the number of the commit attempt that published the committed value
+	idx_t committed_attempt = 0;
+	//! how often the committed value was published, by commits and reloads
+	idx_t publications = 0;
+	//! the changes of open transactions that are not committed or undone yet
+	idx_t open_changes = 0;
 };
 
 struct DuckLakeNameMapColumnInfo {
