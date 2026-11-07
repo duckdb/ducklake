@@ -928,8 +928,14 @@ void DuckLakeTransaction::ReloadConfigOptions() {
 		for (auto &change : config_option_undo) {
 			auto reload = change;
 			auto option = change.option;
-			reload.was_set = metadata_manager->TryGetConfigOption(option);
-			reload.previous_value = option.option.value;
+			if (metadata_manager->TryGetConfigOption(option)) {
+				reload.was_set = true;
+				reload.previous_value = option.option.value;
+			} else if (change.reset) {
+				// the row the reset removed is gone
+				reload.was_set = false;
+			}
+			// without a row, a set goes back to the value it replaced, which the ATTACH gave the cache
 			reloads.push_back(std::move(reload));
 		}
 		// the table options of the commit reach the cache on success alone
@@ -944,7 +950,9 @@ void DuckLakeTransaction::ReloadConfigOptions() {
 		config_option_undo.clear();
 		return;
 	}
-	for (auto &reload : reloads) {
+	// the changes are undone from the last to the first, as in a rollback
+	for (auto it = reloads.rbegin(); it != reloads.rend(); ++it) {
+		auto &reload = *it;
 		if (!rewrote_config_options) {
 			ducklake_catalog.UndoConfigOption(reload);
 			continue;
