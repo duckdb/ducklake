@@ -1,0 +1,76 @@
+# name: test/sql/transaction/lost_commit_reply_follows_open_writer.test
+# description: A pending option reload is kept while an open transaction holds an undo that points at the lost value
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/lost_commit_reply_follows_open_writer', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('data_inlining_row_limit', 20)
+
+statement ok con1
+CREATE TABLE ducklake.a(i INTEGER)
+
+# a second transaction is open before the commit of the first is lost
+statement ok con2
+BEGIN
+
+query I con2
+SELECT count(*) FROM ducklake.t
+----
+0
+
+# the catalog never carries the commit of the first transaction out and cannot be read for the reload
+statement ok con1
+SET ducklake_debug_lose_commit_reply = 'before_unreadable'
+
+statement error con1
+COMMIT
+----
+whether it carried the commit out is unknown
+
+statement ok con1
+RESET ducklake_debug_lose_commit_reply
+
+# the open transaction sets the value of the catalog while the reload is pending, its undo points at the lost 20
+statement ok con2
+CALL ducklake.set_option('data_inlining_row_limit', 0)
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+0
+
+statement ok con2
+ROLLBACK
+
+query I
+SELECT value::INTEGER FROM metadata.ducklake_metadata WHERE key = 'data_inlining_row_limit'
+----
+0
+
+# the catalog holds 0, so the row goes to a file
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/lost_commit_reply_follows_open_writer/main/t/*.parquet')
+----
+1
