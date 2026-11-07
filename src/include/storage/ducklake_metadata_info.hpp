@@ -591,6 +591,10 @@ struct DuckLakeConfigOption {
 	TableIndex table_id;
 };
 
+//! What an undo compares the cache against: the option as the change wrote it, or the cache as it was when a commit
+//! kept the change for a reload
+enum class DuckLakeConfigOptionCompare : uint8_t { WRITTEN, CACHED_VALUE, CACHED_NONE };
+
 //! What a config option held before a transaction set it, so a rollback can put it back
 struct DuckLakeConfigOptionUndo {
 	//! the option as written, whose value the undo compares against
@@ -598,6 +602,7 @@ struct DuckLakeConfigOptionUndo {
 	string previous_value;
 	bool was_set = false;
 	bool reset = false;
+	DuckLakeConfigOptionCompare compare = DuckLakeConfigOptionCompare::WRITTEN;
 	//! the rows the option is expected to have in the metadata after this change
 	idx_t metadata_rows = 0;
 	//! the place of the change among the writes of the cache

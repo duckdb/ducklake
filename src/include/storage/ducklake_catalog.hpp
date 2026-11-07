@@ -231,10 +231,12 @@ public:
 	//! Sets a config option, returning what it held before so a rollback can put it back
 	DuckLakeConfigOptionUndo SetConfigOption(const DuckLakeConfigOption &option);
 	DuckLakeConfigOptionUndo ResetConfigOption(const DuckLakeConfigOption &option);
-	//! Puts the value before the change back, true when the cache holds it afterwards
+	//! Puts the value before the change back, false when the cache no longer holds what the undo compares against
 	bool UndoConfigOption(const DuckLakeConfigOptionUndo &undo);
 	//! Lets the undo replace the value the cache holds now, for a change a retried commit wrote last
 	void UndoReplacesCachedValue(DuckLakeConfigOptionUndo &undo);
+	//! The value the cache holds for the option in its own scope, without the fallback to wider scopes
+	bool TryGetCachedConfigOption(const DuckLakeConfigOption &option, string &result) const;
 	//! Keeps the option changes of a commit whose outcome could not be read, until a transaction reloads them
 	void AddPendingOptionReload(DuckLakeConfigOptionReload reload);
 	//! The kept option changes, by the number of their commit

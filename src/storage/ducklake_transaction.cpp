@@ -970,6 +970,7 @@ static const DuckLakeConfigOptionUndo &LastConfigOptionChange(const vector<DuckL
 bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReload &reload, bool catalog_unreadable) {
 	// one undo per option, which compares the cache against the value written last and points at the catalog's
 	vector<DuckLakeConfigOptionUndo> undos;
+	vector<bool> has_row;
 	vector<DuckLakeConfigOption> table_options;
 	try {
 		if (catalog_unreadable) {
@@ -984,7 +985,8 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 			undo.was_set = first.was_set;
 			undo.previous_value = first.previous_value;
 			auto option = undo.option;
-			if (metadata_manager->TryGetConfigOption(option)) {
+			bool row = metadata_manager->TryGetConfigOption(option);
+			if (row) {
 				undo.was_set = true;
 				undo.previous_value = option.option.value;
 			} else if (undo.reset) {
@@ -992,6 +994,7 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 			}
 			// without a row, a set goes back to the value before the transaction, which the ATTACH or a default gave
 			undos.push_back(std::move(undo));
+			has_row.push_back(row);
 		}
 		// the table options of the commit reach the cache on success alone
 		for (auto &table_option : reload.table_options) {
@@ -1005,8 +1008,16 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 	}
 	// an option an open transaction holds keeps its value, the record then stays for a later transaction
 	bool reloaded = true;
-	for (auto &undo : undos) {
-		reloaded = ducklake_catalog.UndoConfigOption(undo) && reloaded;
+	for (idx_t i = 0; i < undos.size(); i++) {
+		auto &undo = undos[i];
+		if (ducklake_catalog.UndoConfigOption(undo)) {
+			continue;
+		}
+		// the cache also follows the catalog when it holds the row's value, or nothing without a row
+		string cached;
+		bool cached_set = ducklake_catalog.TryGetCachedConfigOption(undo.option, cached);
+		bool follows = has_row[i] ? cached_set && cached == undo.previous_value : !cached_set;
+		reloaded = reloaded && follows;
 	}
 	for (auto &option : table_options) {
 		ducklake_catalog.SetConfigOption(option);

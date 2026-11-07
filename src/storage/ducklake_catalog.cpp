@@ -1283,33 +1283,39 @@ bool DuckLakeCatalog::UndoConfigOption(const DuckLakeConfigOptionUndo &undo) {
 	auto &scope = GetOptionScope(options, undo.option);
 	auto &key = undo.option.option.key;
 	auto entry = scope.find(key);
-	if (undo.reset) {
-		if (entry == scope.end() && undo.was_set) {
+	bool expects_none = undo.compare == DuckLakeConfigOptionCompare::CACHED_NONE ||
+	                    (undo.compare == DuckLakeConfigOptionCompare::WRITTEN && undo.reset);
+	if (expects_none) {
+		if (entry != scope.end()) {
+			return false;
+		}
+		if (undo.was_set) {
 			scope[key] = undo.previous_value;
 		}
-	} else if (entry != scope.end() && entry->second == undo.option.option.value) {
-		if (undo.was_set) {
-			entry->second = undo.previous_value;
-		} else {
-			scope.erase(entry);
-		}
+		return true;
 	}
-	// another transaction has set the option since - its value stays in place
-	entry = scope.find(key);
-	if (!undo.was_set) {
-		return entry == scope.end();
+	if (entry == scope.end() || entry->second != undo.option.option.value) {
+		// a value another transaction set since stays in place
+		return false;
 	}
-	return entry != scope.end() && entry->second == undo.previous_value;
+	if (undo.was_set) {
+		entry->second = undo.previous_value;
+	} else {
+		scope.erase(entry);
+	}
+	return true;
 }
 
 void DuckLakeCatalog::UndoReplacesCachedValue(DuckLakeConfigOptionUndo &undo) {
 	lock_guard<mutex> guard(config_lock);
 	auto &scope = GetOptionScope(options, undo.option);
 	auto entry = scope.find(undo.option.option.key);
-	undo.reset = entry == scope.end();
-	if (!undo.reset) {
-		undo.option.option.value = entry->second;
+	if (entry == scope.end()) {
+		undo.compare = DuckLakeConfigOptionCompare::CACHED_NONE;
+		return;
 	}
+	undo.compare = DuckLakeConfigOptionCompare::CACHED_VALUE;
+	undo.option.option.value = entry->second;
 }
 
 void DuckLakeCatalog::AddPendingOptionReload(DuckLakeConfigOptionReload reload) {
@@ -1347,6 +1353,22 @@ static bool TryGetOptionInScope(const SCOPE_MAP &scope_map, SCOPE_ID scope_id, c
 bool DuckLakeCatalog::TryGetTableConfigOption(const string &option, string &result, TableIndex table_id) const {
 	lock_guard<mutex> guard(config_lock);
 	return TryGetOptionInScope(options.table_options, table_id, option, result);
+}
+
+bool DuckLakeCatalog::TryGetCachedConfigOption(const DuckLakeConfigOption &option, string &result) const {
+	lock_guard<mutex> guard(config_lock);
+	if (option.table_id.IsValid()) {
+		return TryGetOptionInScope(options.table_options, option.table_id, option.option.key, result);
+	}
+	if (option.schema_id.IsValid()) {
+		return TryGetOptionInScope(options.schema_options, option.schema_id, option.option.key, result);
+	}
+	auto entry = options.config_options.find(option.option.key);
+	if (entry == options.config_options.end()) {
+		return false;
+	}
+	result = entry->second;
+	return true;
 }
 
 bool DuckLakeCatalog::TryGetScopedConfigOption(const string &option, string &result, SchemaIndex schema_id,
