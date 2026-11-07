@@ -58,8 +58,29 @@ SELECT count(*) FROM ducklake.t
 ----
 0
 
+# a third transaction is open across the rollback, so its insert sees the cache before any reload
+statement ok con3
+BEGIN
+
+query I con3
+SELECT count(*) FROM ducklake.t
+----
+0
+
 statement ok con2
 ROLLBACK
+
+# the rollback leaves the committed 0, so the row goes to a file
+statement ok con3
+INSERT INTO ducklake.t VALUES (1)
+
+statement ok con3
+COMMIT
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/lost_commit_reply_follows_open_writer/main/t/*.parquet')
+----
+1
 
 statement ok
 CALL enable_logging('DuckLakeMetadata')
@@ -68,12 +89,12 @@ CALL enable_logging('DuckLakeMetadata')
 query I
 SELECT count(*) FROM ducklake.t
 ----
-0
+1
 
 query I
 SELECT count(*) FROM ducklake.t
 ----
-0
+1
 
 query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%SELECT value%ducklake_metadata%WHERE key = %data_inlining_row_limit%'
@@ -90,9 +111,9 @@ SELECT value::INTEGER FROM metadata.ducklake_metadata WHERE key = 'data_inlining
 
 # the catalog holds 0, so the row goes to a file
 statement ok
-INSERT INTO ducklake.t VALUES (1)
+INSERT INTO ducklake.t VALUES (2)
 
 query I
 SELECT count(*) FROM glob('{DATA_PATH}/lost_commit_reply_follows_open_writer/main/t/*.parquet')
 ----
-1
+2
