@@ -11,7 +11,7 @@ require quack
 require-env DUCKLAKE_CONNECTION quack:localhost:19999
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{TEST_DIR}/option_commit_order')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{TEST_DIR}/option_commit_order', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok con1
 BEGIN
