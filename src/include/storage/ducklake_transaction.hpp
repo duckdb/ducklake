@@ -103,11 +103,11 @@ struct DuckLakeNewGlobalStats {
 	bool initialized = false;
 };
 
-//! A file the transaction created itself and the begin snapshot it gets, unset when the commit decides it
+//! A file the transaction created itself and the begin snapshot its commit gives it
 struct DuckLakeCreatedFile {
 	TableIndex table_id;
 	string path;
-	optional_idx begin_snapshot;
+	idx_t begin_snapshot = 0;
 };
 
 struct LocalTableChanges {

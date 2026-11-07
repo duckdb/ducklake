@@ -800,6 +800,21 @@ DuckLakeTransactionState::GetNewInlinedFileDeletes(DuckLakeCommitState &commit_s
 	return result;
 }
 
+idx_t DuckLakeTransactionState::CompactionOutputBeginSnapshot(const DuckLakeCompactionEntry &compaction,
+                                                              idx_t commit_snapshot) {
+	switch (compaction.type) {
+	case CompactionType::REWRITE_DELETES:
+		return commit_snapshot;
+	case CompactionType::MERGE_ADJACENT_TABLES:
+		// use the first source file's begin_snapshot for proper time travel support
+		return compaction.source_files[0].file.begin_snapshot;
+	default:
+		// LCOV_EXCL_START
+		throw InternalException("DuckLakeTransactionState::CompactionOutputBeginSnapshot Compaction type is invalid");
+		// LCOV_EXCL_STOP
+	}
+}
+
 CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCommitState &commit_state,
                                                                      CompactionType type) {
 	auto &commit_snapshot = commit_state.commit_snapshot;
@@ -817,14 +832,10 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 			idx_t output_begin_snapshot = 0;
 			optional_idx output_max_partial_snapshot;
 			if (has_new_files) {
-				switch (type) {
-				case CompactionType::REWRITE_DELETES:
-					output_begin_snapshot = commit_snapshot.snapshot_id;
-					break;
-				case CompactionType::MERGE_ADJACENT_TABLES: {
+				output_begin_snapshot = CompactionOutputBeginSnapshot(compaction, commit_snapshot.snapshot_id);
+				if (type == CompactionType::MERGE_ADJACENT_TABLES && compaction.source_files.size() > 1) {
 					// track the max partial snapshot across all source files
 					optional_idx merged_max_partial_snapshot;
-					idx_t first_begin_snapshot = compaction.source_files[0].file.begin_snapshot;
 					for (auto &compacted_file : compaction.source_files) {
 						idx_t file_max_snapshot = compacted_file.max_partial_file_snapshot.IsValid()
 						                              ? compacted_file.max_partial_file_snapshot.GetIndex()
@@ -834,18 +845,7 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 							merged_max_partial_snapshot = file_max_snapshot;
 						}
 					}
-					// use the first source file's begin_snapshot for proper time travel support
-					output_begin_snapshot = first_begin_snapshot;
-					if (compaction.source_files.size() > 1) {
-						output_max_partial_snapshot = merged_max_partial_snapshot;
-					}
-					break;
-				}
-				default:
-					// LCOV_EXCL_START
-					throw InternalException(
-					    "DuckLakeTransactionState::GetCompactionChanges Compaction type is invalid");
-					// LCOV_EXCL_STOP
+					output_max_partial_snapshot = merged_max_partial_snapshot;
 				}
 			}
 

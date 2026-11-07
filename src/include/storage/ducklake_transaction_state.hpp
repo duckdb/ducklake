@@ -261,6 +261,8 @@ public:
 	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
 	                            const DuckLakeCommitContext &context);
 	CompactionInformation GetCompactionChanges(DuckLakeCommitState &commit_state, CompactionType type);
+	//! The begin snapshot of the output files of a compaction, the commit snapshot for a rewrite of deletes
+	static idx_t CompactionOutputBeginSnapshot(const DuckLakeCompactionEntry &compaction, idx_t commit_snapshot);
 	//! After a REWRITE_DELETES compaction, recompute EXACT global stats for `table_id` from the post-rewrite file set
 	//! (+ committed inlined data) and append the UpdateGlobalTableStats SQL to `batch_query`. No-op (leaving the
 	//! existing stale stats, and the scan fallback) if the table is not fully delete-free post-rewrite or the

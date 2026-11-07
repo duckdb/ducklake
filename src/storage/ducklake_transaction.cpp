@@ -108,7 +108,7 @@ void LocalTableChanges::GetCreatedFiles(idx_t commit_snapshot, vector<DuckLakeCr
 	lock_guard<mutex> guard(lock);
 	for (auto &entry : changes) {
 		auto &table_changes = entry.second;
-		auto add_file = [&](const string &path, optional_idx begin_snapshot) {
+		auto add_file = [&](const string &path, idx_t begin_snapshot) {
 			DuckLakeCreatedFile file;
 			file.table_id = entry.first;
 			file.path = path;
@@ -118,16 +118,17 @@ void LocalTableChanges::GetCreatedFiles(idx_t commit_snapshot, vector<DuckLakeCr
 		// a file without a begin snapshot of its own gets the commit snapshot
 		for (auto &file : table_changes.new_data_files) {
 			if (file.created_by_ducklake) {
-				add_file(file.file_name, file.begin_snapshot.IsValid() ? file.begin_snapshot : commit_snapshot);
+				add_file(file.file_name,
+				         file.begin_snapshot.IsValid() ? file.begin_snapshot.GetIndex() : commit_snapshot);
 			}
 		}
 		ForEachDeleteFile(table_changes, [&](const DuckLakeDeleteFile &file) {
-			add_file(file.file_name, file.begin_snapshot.IsValid() ? file.begin_snapshot : commit_snapshot);
+			add_file(file.file_name, file.begin_snapshot.IsValid() ? file.begin_snapshot.GetIndex() : commit_snapshot);
 		});
-		// the commit decides the begin snapshot of a compaction output, which can be that of the compacted files
 		for (auto &compaction : table_changes.compactions) {
 			for (auto &file : compaction.written_files) {
-				add_file(file.file_name, optional_idx());
+				add_file(file.file_name,
+				         DuckLakeTransactionState::CompactionOutputBeginSnapshot(compaction, commit_snapshot));
 			}
 		}
 	}
@@ -1682,13 +1683,9 @@ DuckLakeCommitOutcome DuckLakeTransaction::CommitOutcome(const DuckLakeCommitSta
 		auto &file = created_files[i];
 		auto name_start = file.path.find_last_of("/\\");
 		auto name = name_start == string::npos ? file.path : file.path.substr(name_start + 1);
-		auto condition =
-		    StringUtil::Format("(table_id = %d AND path LIKE %s", commit_state.GetTableId(file.table_id).index,
-		                       SQLString::ToString("%" + name));
-		if (file.begin_snapshot.IsValid()) {
-			condition += StringUtil::Format(" AND begin_snapshot = %d", file.begin_snapshot.GetIndex());
-		}
-		conditions.push_back(condition + ")");
+		conditions.push_back(StringUtil::Format("(table_id = %d AND path LIKE %s AND begin_snapshot = %d)",
+		                                        commit_state.GetTableId(file.table_id).index,
+		                                        SQLString::ToString("%" + name), file.begin_snapshot));
 	}
 	auto condition = StringUtil::Join(conditions, " OR ");
 	auto query =
