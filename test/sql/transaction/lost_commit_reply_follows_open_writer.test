@@ -61,6 +61,28 @@ SELECT count(*) FROM ducklake.t
 statement ok con2
 ROLLBACK
 
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# the record was kept, so the next transaction reads the option once more and the one after it reads no option
+query I
+SELECT count(*) FROM ducklake.t
+----
+0
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%SELECT value%ducklake_metadata%WHERE key = ''data_inlining_row_limit''%'
+----
+1
+
+statement ok
+CALL disable_logging()
+
 query I
 SELECT value::INTEGER FROM metadata.ducklake_metadata WHERE key = 'data_inlining_row_limit'
 ----
