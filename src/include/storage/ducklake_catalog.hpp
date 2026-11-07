@@ -241,7 +241,7 @@ public:
 	idx_t AddPendingOptionReload(DuckLakeConfigOptionReload reload);
 	//! The kept option changes, by the number of their commit
 	map<idx_t, DuckLakeConfigOptionReload> PendingOptionReloads() const;
-	//! Drops the changes of the options that follow the catalog again from the records, and the records left empty
+	//! Drops the changes of the resolved options from the records, and the records left empty
 	void ResolvePendingOptionReloads(const vector<idx_t> &commit_numbers,
 	                                 const vector<DuckLakeConfigOption> &unresolved);
 	//! Pending table options take precedence
