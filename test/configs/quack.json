@@ -252,13 +252,21 @@
       "reason": "The debug setting that loses the COMMIT reply acts in the client commit loop, Quack commits data on the server",
       "paths": [
         "test/sql/transaction/lost_commit_reply_keeps_files.test",
-        "test/sql/transaction/lost_commit_reply_foreign_registration.test"
+        "test/sql/transaction/lost_commit_reply_foreign_registration.test",
+        "test/sql/transaction/lost_commit_reply_compaction_registration.test"
       ]
     },
     {
       "reason": "Quack commits an option when it is set, so a retried commit does not write its options last",
       "paths": [
         "test/sql/transaction/lost_commit_reply_option_retry.test"
+      ]
+    },
+    {
+      "reason": "Quack commits an option when it is set, so the catalog holds the option of a commit it never carried out",
+      "paths": [
+        "test/sql/transaction/lost_commit_reply_attach_option_reload.test",
+        "test/sql/transaction/lost_commit_reply_unreadable_catalog.test"
       ]
     }
   ]

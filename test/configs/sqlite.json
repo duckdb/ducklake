@@ -167,7 +167,8 @@
       "reason": "con2 cannot write while the transaction of con1 is open on the SQLite catalog (\"database is locked\"), which skip_error_messages turns into a silent skip",
       "paths": [
         "test/sql/transaction/lost_commit_reply_foreign_registration.test",
-        "test/sql/transaction/lost_commit_reply_option_retry.test"
+        "test/sql/transaction/lost_commit_reply_option_retry.test",
+        "test/sql/transaction/lost_commit_reply_compaction_registration.test"
       ]
     }
   ]
