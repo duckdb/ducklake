@@ -239,7 +239,8 @@ public:
 	idx_t ConfigOptionPublications(const DuckLakeConfigOption &option) const;
 	//! Takes the changes of a committed transaction as the catalog's values, unless a later attempt published them
 	void CommitConfigOptions(const vector<DuckLakeConfigOptionUndo> &changes);
-	void SetCommittedConfigOption(const DuckLakeConfigOption &option);
+	//! Sets the option of a table a commit created, unless a later attempt published the option
+	void SetCommittedConfigOption(const DuckLakeConfigOption &option, idx_t attempt);
 	//! Keeps the option changes of a commit whose outcome could not be read, until a transaction reloads them
 	idx_t AddPendingOptionReload(const DuckLakeConfigOptionReload &reload);
 	//! The kept option changes, by the number of their commit

@@ -1364,13 +1364,17 @@ void DuckLakeCatalog::CommitConfigOptions(const vector<DuckLakeConfigOptionUndo>
 	}
 }
 
-void DuckLakeCatalog::SetCommittedConfigOption(const DuckLakeConfigOption &option) {
+void DuckLakeCatalog::SetCommittedConfigOption(const DuckLakeConfigOption &option, idx_t attempt) {
 	lock_guard<mutex> guard(config_lock);
 	auto entry = config_option_states.find(DuckLakeConfigOptionKey(option));
 	if (entry != config_option_states.end()) {
 		auto &state = entry->second;
+		if (attempt < state.committed_attempt) {
+			return;
+		}
 		state.committed_set = true;
 		state.committed_value = option.option.value;
+		state.committed_attempt = attempt;
 		state.publications++;
 		if (state.open_changes > 0) {
 			return;
@@ -1406,7 +1410,7 @@ bool DuckLakeCatalog::ReloadConfigOption(const DuckLakeConfigOption &option, boo
 		// a reset is recorded only where the catalog had a row, so a committed reset removed it
 		state.committed_set = false;
 	}
-	// a commit numbered below the lost one committed before its attempt, so the read saw it already
+	// a commit numbered below the lost one counts as older than the value read, the kept record repairs exceptions
 	state.committed_attempt = MaxValue<idx_t>(state.committed_attempt, attempt);
 	state.publications++;
 	if (state.open_changes > 0) {

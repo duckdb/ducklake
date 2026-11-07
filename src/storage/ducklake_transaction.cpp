@@ -2098,7 +2098,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.set_table_options = [&](const vector<DuckLakeConfigOption> &options) {
 		for (auto &option : options) {
-			ducklake_catalog.SetCommittedConfigOption(option);
+			ducklake_catalog.SetCommittedConfigOption(option, commit_attempt);
 		}
 	};
 	context.invalidate_table_stats_cache = [&](idx_t next_file_id, TableIndex table_id) {
@@ -2137,12 +2137,15 @@ void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) 
 }
 
 void DuckLakeTransaction::NumberCommitAttempt() {
-	if (config_option_undo.empty() || metadata_manager->CommitsEachStatement()) {
+	if (metadata_manager->CommitsEachStatement()) {
 		return;
 	}
-	auto attempt = ducklake_catalog.NextCommitAttempt();
+	if (config_option_undo.empty() && state->committed_table_options.empty()) {
+		return;
+	}
+	commit_attempt = ducklake_catalog.NextCommitAttempt();
 	for (auto &change : config_option_undo) {
-		change.attempt = attempt;
+		change.attempt = commit_attempt;
 	}
 }
 

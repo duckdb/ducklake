@@ -411,7 +411,7 @@ private:
 	                            vector<DuckLakeConfigOption> &unresolved);
 	//! Reloads the option changes of earlier commits whose outcome could not be read
 	void ReloadPendingConfigOptions(ClientContext &context);
-	//! Numbers the changes a commit publishes, unless the catalog commits each statement and their writes did
+	//! Numbers the options a commit publishes, unless the catalog commits each statement and their writes did
 	void NumberCommitAttempt();
 	//! The SQL that the commit runs for the options this transaction changed
 	string ConfigOptionLockSql() const;
@@ -516,6 +516,8 @@ private:
 	vector<MappingIndex> pending_name_map_cache_invalidations;
 	//! Previous values of config options set by this transaction, for rollback
 	vector<DuckLakeConfigOptionUndo> config_option_undo;
+	//! The number of the attempt that publishes the options of the tables the commit creates
+	idx_t commit_attempt = 0;
 	//! Expiries and cleanups of the transaction can run in parallel statements
 	mutex maintenance_lock;
 	//! Whether the metadata transaction expired snapshots
