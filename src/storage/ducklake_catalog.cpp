@@ -1322,7 +1322,18 @@ void DuckLakeCatalog::UndoConfigOption(const DuckLakeConfigOptionUndo &undo) {
 	SetOptionEntry(scope, key, undo.was_set, undo.previous_value);
 }
 
-void DuckLakeCatalog::CommitConfigOptions(const vector<DuckLakeConfigOptionUndo> &changes) {
+idx_t DuckLakeCatalog::NextCommitAttempt() {
+	lock_guard<mutex> guard(config_lock);
+	return ++commit_attempt_count;
+}
+
+idx_t DuckLakeCatalog::ConfigOptionCommitAttempt(const DuckLakeConfigOption &option) const {
+	lock_guard<mutex> guard(config_lock);
+	auto entry = config_option_states.find(DuckLakeConfigOptionKey(option));
+	return entry == config_option_states.end() ? 0 : entry->second.committed_attempt;
+}
+
+void DuckLakeCatalog::CommitConfigOptions(const vector<DuckLakeConfigOptionUndo> &changes, idx_t commit_attempt) {
 	lock_guard<mutex> guard(config_lock);
 	for (idx_t i = 0; i < changes.size(); i++) {
 		auto &change = changes[i];
@@ -1337,8 +1348,11 @@ void DuckLakeCatalog::CommitConfigOptions(const vector<DuckLakeConfigOptionUndo>
 			continue;
 		}
 		// the last change of the option is the catalog's value, which the cache shows unless a transaction holds one
-		state.committed_set = !change.reset;
-		state.committed_value = change.option.option.value;
+		if (commit_attempt > state.committed_attempt) {
+			state.committed_set = !change.reset;
+			state.committed_value = change.option.option.value;
+			state.committed_attempt = commit_attempt;
+		}
 		if (state.open_changes == 0) {
 			SetOptionEntry(GetOptionScope(options, change.option), change.option.option.key, state.committed_set,
 			               state.committed_value);
@@ -1372,9 +1386,14 @@ idx_t DuckLakeCatalog::AddPendingOptionReload(const DuckLakeConfigOptionReload &
 	return pending_option_reload_count++;
 }
 
-bool DuckLakeCatalog::ReloadConfigOption(const DuckLakeConfigOption &option, bool has_row, bool reset) {
+bool DuckLakeCatalog::ReloadConfigOption(const DuckLakeConfigOption &option, bool has_row, bool reset,
+                                         idx_t committed_attempt) {
 	lock_guard<mutex> guard(config_lock);
 	auto &state = GetConfigOptionState(option);
+	if (state.committed_attempt != committed_attempt) {
+		// a commit published the option since the read, so the value read is behind the catalog
+		return false;
+	}
 	if (has_row) {
 		state.committed_set = true;
 		state.committed_value = option.option.value;

@@ -514,6 +514,8 @@ private:
 	vector<MappingIndex> pending_name_map_cache_invalidations;
 	//! Previous values of config options set by this transaction, for rollback
 	vector<DuckLakeConfigOptionUndo> config_option_undo;
+	//! The number of the attempt the commit publishes its option changes with
+	idx_t commit_attempt = 0;
 	//! Expiries and cleanups of the transaction can run in parallel statements
 	mutex maintenance_lock;
 	//! Whether the metadata transaction expired snapshots

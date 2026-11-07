@@ -640,6 +640,8 @@ struct DuckLakeConfigOptionState {
 	//! the value of the catalog row or the ATTACH, which the cache holds while no transaction holds a change
 	bool committed_set = false;
 	string committed_value;
+	//! the number of the commit attempt that published the committed value
+	idx_t committed_attempt = 0;
 	//! the changes of open transactions that are not committed or undone yet
 	idx_t open_changes = 0;
 };

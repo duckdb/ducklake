@@ -962,6 +962,7 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 	// one read per option, whose value is the row's, or stays committed without a row unless a change removed it
 	vector<DuckLakeConfigOption> options;
 	vector<bool> has_row;
+	vector<idx_t> attempts;
 	vector<DuckLakeConfigOption> table_options;
 	try {
 		if (catalog_unreadable) {
@@ -972,6 +973,7 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 				continue;
 			}
 			auto option = reload.changes[i].option;
+			attempts.push_back(ducklake_catalog.ConfigOptionCommitAttempt(option));
 			has_row.push_back(metadata_manager->TryGetConfigOption(option));
 			options.push_back(std::move(option));
 		}
@@ -987,7 +989,7 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 	}
 	for (idx_t i = 0; i < options.size(); i++) {
 		bool reset = ConfigOptionReset(reload.changes, options[i]);
-		if (!ducklake_catalog.ReloadConfigOption(options[i], has_row[i], reset)) {
+		if (!ducklake_catalog.ReloadConfigOption(options[i], has_row[i], reset, attempts[i])) {
 			unresolved.push_back(options[i]);
 		}
 	}
@@ -1028,6 +1030,9 @@ void DuckLakeTransaction::Commit() {
 	if (connection) {
 		GetConnection();
 	}
+	if (!config_option_undo.empty()) {
+		commit_attempt = ducklake_catalog.NextCommitAttempt();
+	}
 	if (!expiry_filters.empty() && !ExpiresSnapshotsOnCommit()) {
 		try {
 			lock_guard<mutex> guard(snapshot_tag_lock);
@@ -1062,7 +1067,7 @@ void DuckLakeTransaction::Commit() {
 	}
 	ClearMaintenanceChanges();
 	if (!config_option_undo.empty()) {
-		ducklake_catalog.CommitConfigOptions(config_option_undo);
+		ducklake_catalog.CommitConfigOptions(config_option_undo, commit_attempt);
 		config_option_undo.clear();
 	}
 	FlushNameMapCacheInvalidations();
@@ -1940,6 +1945,10 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.prepare_retry = [&]() {
 		option_lock_failed = false;
+		if (!config_option_undo.empty()) {
+			// the retry commits after the commit it conflicted with
+			commit_attempt = ducklake_catalog.NextCommitAttempt();
+		}
 		inlined_inserts.clear();
 		metadata_manager->ClearInlinedTableCaches();
 		connection->BeginTransaction();

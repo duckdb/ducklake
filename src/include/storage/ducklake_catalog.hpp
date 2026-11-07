@@ -233,16 +233,20 @@ public:
 	DuckLakeConfigOptionUndo ResetConfigOption(const DuckLakeConfigOption &option);
 	//! Puts back what the change replaced, or the committed value once no transaction holds a change of the option
 	void UndoConfigOption(const DuckLakeConfigOptionUndo &undo);
-	//! Takes the changes of a committed transaction as the catalog's values
-	void CommitConfigOptions(const vector<DuckLakeConfigOptionUndo> &changes);
+	//! Numbers a commit attempt, a conflict starts a later one, so a higher number committed later in the catalog
+	idx_t NextCommitAttempt();
+	//! The number of the commit attempt that published the option last
+	idx_t ConfigOptionCommitAttempt(const DuckLakeConfigOption &option) const;
+	//! Takes the changes of a committed transaction as the catalog's values, unless a later attempt published them
+	void CommitConfigOptions(const vector<DuckLakeConfigOptionUndo> &changes, idx_t commit_attempt);
 	//! Sets a config option the catalog holds
 	void SetCommittedConfigOption(const DuckLakeConfigOption &option);
 	//! Keeps the option changes of a commit whose outcome could not be read, until a transaction reloads them
 	idx_t AddPendingOptionReload(const DuckLakeConfigOptionReload &reload);
 	//! The kept option changes, by the number of their commit
 	map<idx_t, DuckLakeConfigOptionReload> PendingOptionReloads() const;
-	//! Takes the catalog's value of a reloaded option, false while a transaction holds a change of the option
-	bool ReloadConfigOption(const DuckLakeConfigOption &option, bool has_row, bool reset);
+	//! Takes the value read from the catalog, false while a transaction holds a change or a commit published since
+	bool ReloadConfigOption(const DuckLakeConfigOption &option, bool has_row, bool reset, idx_t committed_attempt);
 	//! Drops the changes of the resolved options from the records, and the records left empty
 	void ResolvePendingOptionReloads(const vector<idx_t> &commit_numbers,
 	                                 const vector<DuckLakeConfigOption> &unresolved);
@@ -528,8 +532,10 @@ private:
 	mutable mutex config_lock;
 	//! The DuckLake options
 	DuckLakeOptions options;
-	//! What the catalog holds for the options transactions changed, and how many open transactions hold a change
+	//! What the catalog holds for the options transactions changed, and the count of their changes still open
 	map<DuckLakeConfigOptionKey, DuckLakeConfigOptionState> config_option_states;
+	//! The commit attempts of the transactions that change options, numbered in the order they start
+	idx_t commit_attempt_count = 0;
 	//! The option changes of commits whose outcome could not be read, by the number of their commit
 	map<idx_t, DuckLakeConfigOptionReload> pending_option_reloads;
 	idx_t pending_option_reload_count = 0;
