@@ -39,7 +39,6 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/settings.hpp"
 
-#include <algorithm>
 #include <chrono>
 
 namespace duckdb {
