@@ -966,6 +966,16 @@ static bool ConfigOptionReset(const vector<DuckLakeConfigOptionUndo> &changes, c
 	return false;
 }
 
+static idx_t ConfigOptionAttempt(const vector<DuckLakeConfigOptionUndo> &changes, const DuckLakeConfigOption &option) {
+	idx_t attempt = 0;
+	for (auto &change : changes) {
+		if (change.option.IsSame(option)) {
+			attempt = MaxValue<idx_t>(attempt, change.attempt);
+		}
+	}
+	return attempt;
+}
+
 bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReload &reload, bool catalog_unreadable,
                                                  vector<DuckLakeConfigOption> &unresolved) {
 	// one read per option, whose value is the row's, or stays committed without a row unless a change removed it
@@ -982,7 +992,7 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 			options.push_back(table_option);
 		}
 	}
-	// the publications are counted before the reads, whose first one fixes the snapshot of the catalog
+	// the publications are counted before the reads, which may share one snapshot of the catalog
 	vector<idx_t> publications;
 	for (auto &option : options) {
 		publications.push_back(ducklake_catalog.ConfigOptionPublications(option));
@@ -1003,7 +1013,8 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 			continue;
 		}
 		bool reset = ConfigOptionReset(reload.changes, options[i]);
-		if (!ducklake_catalog.ReloadConfigOption(options[i], has_row[i], reset, publications[i])) {
+		auto attempt = ConfigOptionAttempt(reload.changes, options[i]);
+		if (!ducklake_catalog.ReloadConfigOption(options[i], has_row[i], reset, publications[i], attempt)) {
 			unresolved.push_back(options[i]);
 		}
 	}

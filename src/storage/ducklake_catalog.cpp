@@ -1392,7 +1392,7 @@ idx_t DuckLakeCatalog::AddPendingOptionReload(const DuckLakeConfigOptionReload &
 }
 
 bool DuckLakeCatalog::ReloadConfigOption(const DuckLakeConfigOption &option, bool has_row, bool reset,
-                                         idx_t publications) {
+                                         idx_t publications, idx_t attempt) {
 	lock_guard<mutex> guard(config_lock);
 	auto &state = GetConfigOptionState(option);
 	if (state.publications != publications) {
@@ -1406,6 +1406,8 @@ bool DuckLakeCatalog::ReloadConfigOption(const DuckLakeConfigOption &option, boo
 		// a reset is recorded only where the catalog had a row, so a committed reset removed it
 		state.committed_set = false;
 	}
+	// a commit numbered below the lost one committed before its attempt, so the read saw it already
+	state.committed_attempt = MaxValue<idx_t>(state.committed_attempt, attempt);
 	state.publications++;
 	if (state.open_changes > 0) {
 		// the changes of an option an open transaction holds stay for a later transaction
