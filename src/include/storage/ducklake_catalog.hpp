@@ -231,7 +231,19 @@ public:
 	//! Sets a config option, returning what it held before so a rollback can put it back
 	DuckLakeConfigOptionUndo SetConfigOption(const DuckLakeConfigOption &option);
 	DuckLakeConfigOptionUndo ResetConfigOption(const DuckLakeConfigOption &option);
-	void UndoConfigOption(const DuckLakeConfigOptionUndo &undo);
+	//! Puts the value before the change back, false when the cache no longer holds what the undo compares against
+	bool UndoConfigOption(const DuckLakeConfigOptionUndo &undo);
+	//! Lets the undo replace the value the cache holds now, for a change a retried commit wrote last
+	void UndoReplacesCachedValue(DuckLakeConfigOptionUndo &undo);
+	//! The value the cache holds for the option in its own scope, without the fallback to wider scopes
+	bool TryGetCachedConfigOption(const DuckLakeConfigOption &option, string &result) const;
+	//! Keeps the option changes of a commit whose outcome could not be read, until a transaction reloads them
+	idx_t AddPendingOptionReload(DuckLakeConfigOptionReload reload);
+	//! The kept option changes, by the number of their commit
+	map<idx_t, DuckLakeConfigOptionReload> PendingOptionReloads() const;
+	//! Drops the changes of the resolved options from the records, and the records left empty
+	void ResolvePendingOptionReloads(const vector<idx_t> &commit_numbers,
+	                                 const vector<DuckLakeConfigOption> &unresolved);
 	//! Pending table options take precedence
 	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id,
 	                        optional_ptr<const map<string, string>> table_options = nullptr) const;
@@ -512,6 +524,11 @@ private:
 	mutable mutex config_lock;
 	//! The DuckLake options
 	DuckLakeOptions options;
+	//! The number of writes of the option cache, which orders the changes of the transactions
+	idx_t config_option_sequence = 0;
+	//! The option changes of commits whose outcome could not be read, by the number of their commit
+	map<idx_t, DuckLakeConfigOptionReload> pending_option_reloads;
+	idx_t pending_option_reload_count = 0;
 	//! The path separator
 	string separator = "/";
 	//! A unique tracker for catalog changes in uncommitted transactions.

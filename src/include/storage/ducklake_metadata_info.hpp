@@ -589,7 +589,15 @@ struct DuckLakeConfigOption {
 	SchemaIndex schema_id;
 	//! table_id, if scoped to a table
 	TableIndex table_id;
+
+	//! Whether the other option is the same key in the same scope
+	bool IsSame(const DuckLakeConfigOption &other) const {
+		return option.key == other.option.key && schema_id == other.schema_id && table_id == other.table_id;
+	}
 };
+
+//! Whether an undo compares the cache against the option as written, or against the cache as a kept change found it
+enum class DuckLakeConfigOptionCompare : uint8_t { WRITTEN, CACHED_VALUE, CACHED_NONE };
 
 //! What a config option held before a transaction set it, so a rollback can put it back
 struct DuckLakeConfigOptionUndo {
@@ -598,8 +606,18 @@ struct DuckLakeConfigOptionUndo {
 	string previous_value;
 	bool was_set = false;
 	bool reset = false;
+	DuckLakeConfigOptionCompare compare = DuckLakeConfigOptionCompare::WRITTEN;
 	//! the rows the option is expected to have in the metadata after this change
 	idx_t metadata_rows = 0;
+	//! the place of the change among the writes of the cache
+	idx_t sequence = 0;
+};
+
+//! The option changes of a commit whose outcome is unknown, taken from the catalog once it can be read
+struct DuckLakeConfigOptionReload {
+	vector<DuckLakeConfigOptionUndo> changes;
+	//! the options of the tables the commit created
+	vector<DuckLakeConfigOption> table_options;
 };
 
 struct DuckLakeNameMapColumnInfo {

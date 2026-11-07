@@ -103,11 +103,11 @@ struct DuckLakeNewGlobalStats {
 	bool initialized = false;
 };
 
-//! A file the transaction created itself and the begin snapshot it gets, unset when the commit decides it
+//! A file the transaction created itself and the begin snapshot its commit gives it
 struct DuckLakeCreatedFile {
 	TableIndex table_id;
 	string path;
-	optional_idx begin_snapshot;
+	idx_t begin_snapshot = 0;
 };
 
 struct LocalTableChanges {
@@ -405,7 +405,12 @@ private:
 	//! Puts back the config options this transaction replaced in the catalog
 	void UndoConfigOptions();
 	//! Takes the options the commit changed from the catalog, for a commit whose outcome is unknown
-	void ReloadConfigOptions();
+	void ReloadConfigOptions(bool catalog_unreadable);
+	//! Takes the option changes of a commit from the catalog into the cache, false when the catalog cannot be read
+	bool TryReloadConfigOptions(const DuckLakeConfigOptionReload &reload, bool catalog_unreadable,
+	                            vector<DuckLakeConfigOption> &unresolved);
+	//! Reloads the option changes of earlier commits whose outcome could not be read
+	void ReloadPendingConfigOptions(ClientContext &context);
 	//! The SQL that the commit runs for the options this transaction changed
 	string ConfigOptionLockSql() const;
 	//! The last change of the option before the change at the index
