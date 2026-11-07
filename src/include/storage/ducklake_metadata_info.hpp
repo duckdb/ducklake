@@ -605,7 +605,7 @@ struct DuckLakeConfigOptionUndo {
 	bool reset = false;
 	//! the rows the option is expected to have in the metadata after this change
 	idx_t metadata_rows = 0;
-	//! the number of the commit attempt that publishes the change
+	//! the number that orders the publication of the change, from its write or its commit
 	idx_t attempt = 0;
 };
 

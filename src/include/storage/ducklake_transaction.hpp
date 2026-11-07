@@ -411,8 +411,8 @@ private:
 	                            vector<DuckLakeConfigOption> &unresolved);
 	//! Reloads the option changes of earlier commits whose outcome could not be read
 	void ReloadPendingConfigOptions(ClientContext &context);
-	//! Numbers the changes a commit publishes, at the commit or at the write where the catalog commits each statement
-	void NumberCommitAttempt(bool option_written);
+	//! Numbers the changes a commit publishes, unless the catalog commits each statement and their writes did
+	void NumberCommitAttempt();
 	//! The SQL that the commit runs for the options this transaction changed
 	string ConfigOptionLockSql() const;
 	//! The last change of the option before the change at the index

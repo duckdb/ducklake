@@ -1008,7 +1008,6 @@ void DuckLakeTransaction::ReloadPendingConfigOptions(ClientContext &context) {
 	if (pending.empty()) {
 		return;
 	}
-	// the changes of all records are resolved together
 	DuckLakeConfigOptionReload merged;
 	for (auto &entry : pending) {
 		auto &record = entry.second;
@@ -1049,7 +1048,7 @@ void DuckLakeTransaction::Commit() {
 		if (ChangesMade() || !ConfigOptionLockSql().empty()) {
 			FlushChanges();
 		} else if (connection) {
-			NumberCommitAttempt(false);
+			NumberCommitAttempt();
 			try {
 				connection->Commit();
 			} catch (std::exception &ex) {
@@ -1911,7 +1910,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	string lost_reply_debug;
 	context.commit_connection = [&]() {
-		NumberCommitAttempt(false);
+		NumberCommitAttempt();
 		string lose_reply;
 		auto client_context = this->context.lock();
 		if (client_context) {
@@ -2110,26 +2109,20 @@ void DuckLakeTransaction::SetConfigOption(const DuckLakeConfigOption &option) {
 	// the catalog copy is not transactional - remember the previous value so a rollback can restore it
 	config_option_undo.push_back(ducklake_catalog.SetConfigOption(option));
 	config_option_undo.back().metadata_rows = ConfigOptionRows(config_option_undo.size() - 1, metadata_rows);
-	NumberCommitAttempt(true);
 }
 
 void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) {
 	if (metadata_manager->ResetConfigOption(option)) {
 		config_option_undo.push_back(ducklake_catalog.ResetConfigOption(option));
-		NumberCommitAttempt(true);
 	}
 }
 
-void DuckLakeTransaction::NumberCommitAttempt(bool option_written) {
-	// a catalog that commits each statement commits an option at its write, the others at the commit
-	if (config_option_undo.empty() || option_written != metadata_manager->CommitsEachStatement()) {
+void DuckLakeTransaction::NumberCommitAttempt() {
+	// a catalog that commits each statement committed the options at their writes, which numbered them
+	if (config_option_undo.empty() || metadata_manager->CommitsEachStatement()) {
 		return;
 	}
 	auto attempt = ducklake_catalog.NextCommitAttempt();
-	if (option_written) {
-		config_option_undo.back().attempt = attempt;
-		return;
-	}
 	for (auto &change : config_option_undo) {
 		change.attempt = attempt;
 	}

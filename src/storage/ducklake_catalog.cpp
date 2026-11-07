@@ -1288,6 +1288,8 @@ DuckLakeConfigOptionUndo DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOp
 	lock_guard<mutex> guard(config_lock);
 	auto &scope = GetOptionScope(options, option);
 	auto undo = GetConfigOptionUndo(scope, option);
+	// the write numbers the change for a catalog that commits each statement, the commit numbers it for the others
+	undo.attempt = ++commit_attempt_count;
 	GetConfigOptionState(option).open_changes++;
 	scope[option.option.key] = option.option.value;
 	return undo;
@@ -1297,6 +1299,7 @@ DuckLakeConfigOptionUndo DuckLakeCatalog::ResetConfigOption(const DuckLakeConfig
 	lock_guard<mutex> guard(config_lock);
 	auto &scope = GetOptionScope(options, option);
 	auto undo = GetConfigOptionUndo(scope, option);
+	undo.attempt = ++commit_attempt_count;
 	undo.reset = true;
 	GetConfigOptionState(option).open_changes++;
 	scope.erase(option.option.key);
