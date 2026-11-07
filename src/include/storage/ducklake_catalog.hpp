@@ -238,10 +238,12 @@ public:
 	//! The value the cache holds for the option in its own scope, without the fallback to wider scopes
 	bool TryGetCachedConfigOption(const DuckLakeConfigOption &option, string &result) const;
 	//! Keeps the option changes of a commit whose outcome could not be read, until a transaction reloads them
-	void AddPendingOptionReload(DuckLakeConfigOptionReload reload);
+	idx_t AddPendingOptionReload(DuckLakeConfigOptionReload reload);
 	//! The kept option changes, by the number of their commit
 	map<idx_t, DuckLakeConfigOptionReload> PendingOptionReloads() const;
-	void RemovePendingOptionReload(idx_t commit_number);
+	//! Drops the changes of the options that follow the catalog again from the records, and the records left empty
+	void ResolvePendingOptionReloads(const vector<idx_t> &commit_numbers,
+	                                 const vector<DuckLakeConfigOption> &unresolved);
 	//! Pending table options take precedence
 	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id,
 	                        optional_ptr<const map<string, string>> table_options = nullptr) const;

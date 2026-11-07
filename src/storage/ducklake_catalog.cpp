@@ -1318,9 +1318,10 @@ void DuckLakeCatalog::UndoReplacesCachedValue(DuckLakeConfigOptionUndo &undo) {
 	undo.option.option.value = entry->second;
 }
 
-void DuckLakeCatalog::AddPendingOptionReload(DuckLakeConfigOptionReload reload) {
+idx_t DuckLakeCatalog::AddPendingOptionReload(DuckLakeConfigOptionReload reload) {
 	lock_guard<mutex> guard(config_lock);
-	pending_option_reloads[pending_option_reload_count++] = std::move(reload);
+	pending_option_reloads[pending_option_reload_count] = std::move(reload);
+	return pending_option_reload_count++;
 }
 
 map<idx_t, DuckLakeConfigOptionReload> DuckLakeCatalog::PendingOptionReloads() const {
@@ -1328,9 +1329,31 @@ map<idx_t, DuckLakeConfigOptionReload> DuckLakeCatalog::PendingOptionReloads() c
 	return pending_option_reloads;
 }
 
-void DuckLakeCatalog::RemovePendingOptionReload(idx_t commit_number) {
+void DuckLakeCatalog::ResolvePendingOptionReloads(const vector<idx_t> &commit_numbers,
+                                                  const vector<DuckLakeConfigOption> &unresolved) {
 	lock_guard<mutex> guard(config_lock);
-	pending_option_reloads.erase(commit_number);
+	for (auto commit_number : commit_numbers) {
+		auto entry = pending_option_reloads.find(commit_number);
+		if (entry == pending_option_reloads.end()) {
+			continue;
+		}
+		auto &record = entry->second;
+		record.table_options.clear();
+		vector<DuckLakeConfigOptionUndo> changes;
+		for (auto &change : record.changes) {
+			for (auto &option : unresolved) {
+				if (change.option.IsSame(option)) {
+					changes.push_back(std::move(change));
+					break;
+				}
+			}
+		}
+		if (changes.empty()) {
+			pending_option_reloads.erase(entry);
+		} else {
+			record.changes = std::move(changes);
+		}
+	}
 }
 
 template <class SCOPE_MAP, class SCOPE_ID>

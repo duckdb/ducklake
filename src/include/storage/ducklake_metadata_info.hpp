@@ -589,6 +589,11 @@ struct DuckLakeConfigOption {
 	SchemaIndex schema_id;
 	//! table_id, if scoped to a table
 	TableIndex table_id;
+
+	//! Whether the other option is the same key in the same scope
+	bool IsSame(const DuckLakeConfigOption &other) const {
+		return option.key == other.option.key && schema_id == other.schema_id && table_id == other.table_id;
+	}
 };
 
 //! Whether an undo compares the cache against the option as written, or against the cache as a kept change found it
