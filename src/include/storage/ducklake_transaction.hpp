@@ -405,7 +405,7 @@ private:
 	//! Puts back the config options this transaction replaced in the catalog
 	void UndoConfigOptions();
 	//! Takes the options the commit changed from the catalog, for a commit whose outcome is unknown
-	void ReloadConfigOptions();
+	void ReloadConfigOptions(bool catalog_unreadable);
 	//! The SQL that the commit runs for the options this transaction changed
 	string ConfigOptionLockSql() const;
 	//! The last change of the option before the change at the index

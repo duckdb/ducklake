@@ -920,11 +920,14 @@ void DuckLakeTransaction::UndoConfigOptions() {
 	config_option_undo.clear();
 }
 
-void DuckLakeTransaction::ReloadConfigOptions() {
+void DuckLakeTransaction::ReloadConfigOptions(bool catalog_unreadable) {
 	// the undo of each change points at the catalog's value, so a value another transaction set since stays
 	vector<DuckLakeConfigOptionUndo> reloads;
 	vector<DuckLakeConfigOption> table_options;
 	try {
+		if (catalog_unreadable) {
+			throw IOException("The connection to the metadata catalog is lost (ducklake_debug_lose_commit_reply)");
+		}
 		for (auto &change : config_option_undo) {
 			auto reload = change;
 			auto option = change.option;
@@ -1859,30 +1862,31 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 			metadata_manager->ClearCache();
 		}
 	};
-	bool lost_reply_debug = false;
+	string lost_reply_debug;
 	context.commit_connection = [&]() {
 		string lose_reply;
 		auto client_context = this->context.lock();
 		if (client_context) {
 			client_context->TryGetCurrentSetting("ducklake_debug_lose_commit_reply", lose_reply);
 		}
-		if (lose_reply != "before") {
+		bool lose_before = lose_reply == "before" || lose_reply == "before_unreadable";
+		if (!lose_before) {
 			connection->Commit();
 		}
-		if (lose_reply == "before" || lose_reply == "after") {
-			lost_reply_debug = true;
+		if (lose_before || lose_reply == "after") {
+			lost_reply_debug = lose_reply;
 			throw IOException("The connection to the metadata catalog was lost at its COMMIT "
 			                  "(ducklake_debug_lose_commit_reply)");
 		}
 	};
 	context.commit_outcome = [&](const ErrorData &error, const DuckLakeCommitState &commit_state) {
 		// a COMMIT the catalog refused was rolled back, only a lost connection leaves the outcome open
-		if (!lost_reply_debug && !metadata_manager->IsCommitOutcomeUnknown(error.RawMessage())) {
+		if (lost_reply_debug.empty() && !metadata_manager->IsCommitOutcomeUnknown(error.RawMessage())) {
 			return DuckLakeCommitOutcome::NOT_COMMITTED;
 		}
 		auto outcome = CommitOutcome(commit_state);
 		if (outcome == DuckLakeCommitOutcome::UNKNOWN) {
-			ReloadConfigOptions();
+			ReloadConfigOptions(lost_reply_debug == "before_unreadable");
 		}
 		return outcome;
 	};
