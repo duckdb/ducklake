@@ -31,6 +31,12 @@ COMMIT
 ----
 whether it carried the commit out is unknown
 
+# the catalog stays unreadable, so the option of the lost commit stays cached and a message stays required
+statement error
+CREATE TABLE ducklake.t2(i INTEGER)
+----
+required
+
 statement ok
 RESET ducklake_debug_lose_commit_reply
 
