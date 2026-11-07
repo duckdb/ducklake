@@ -233,12 +233,12 @@ public:
 	DuckLakeConfigOptionUndo ResetConfigOption(const DuckLakeConfigOption &option);
 	//! Puts back what the change replaced, or the committed value once no transaction holds a change of the option
 	void UndoConfigOption(const DuckLakeConfigOptionUndo &undo);
-	//! Numbers a commit attempt, a conflict starts a later one, so a higher number committed later in the catalog
+	//! Numbers a commit of options right before it, so the later of two commits of one option has the higher number
 	idx_t NextCommitAttempt();
 	//! How often the option was published, by commits and reloads
 	idx_t ConfigOptionPublications(const DuckLakeConfigOption &option) const;
 	//! Takes the changes of a committed transaction as the catalog's values, unless a later attempt published them
-	void CommitConfigOptions(const vector<DuckLakeConfigOptionUndo> &changes, idx_t commit_attempt);
+	void CommitConfigOptions(const vector<DuckLakeConfigOptionUndo> &changes);
 	void SetCommittedConfigOption(const DuckLakeConfigOption &option);
 	//! Keeps the option changes of a commit whose outcome could not be read, until a transaction reloads them
 	idx_t AddPendingOptionReload(const DuckLakeConfigOptionReload &reload);

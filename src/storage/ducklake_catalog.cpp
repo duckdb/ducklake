@@ -1333,7 +1333,7 @@ idx_t DuckLakeCatalog::ConfigOptionPublications(const DuckLakeConfigOption &opti
 	return entry == config_option_states.end() ? 0 : entry->second.publications;
 }
 
-void DuckLakeCatalog::CommitConfigOptions(const vector<DuckLakeConfigOptionUndo> &changes, idx_t commit_attempt) {
+void DuckLakeCatalog::CommitConfigOptions(const vector<DuckLakeConfigOptionUndo> &changes) {
 	lock_guard<mutex> guard(config_lock);
 	for (idx_t i = 0; i < changes.size(); i++) {
 		auto &change = changes[i];
@@ -1348,10 +1348,10 @@ void DuckLakeCatalog::CommitConfigOptions(const vector<DuckLakeConfigOptionUndo>
 			continue;
 		}
 		// the last change of the option is the catalog's value, which the cache shows unless a transaction holds one
-		if (commit_attempt > state.committed_attempt) {
+		if (change.attempt > state.committed_attempt) {
 			state.committed_set = !change.reset;
 			state.committed_value = change.option.option.value;
-			state.committed_attempt = commit_attempt;
+			state.committed_attempt = change.attempt;
 			state.publications++;
 		}
 		if (state.open_changes == 0) {

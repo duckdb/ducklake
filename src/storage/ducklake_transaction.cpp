@@ -1033,7 +1033,6 @@ void DuckLakeTransaction::Commit() {
 	if (connection) {
 		GetConnection();
 	}
-	NumberCommitAttempt(false);
 	if (!expiry_filters.empty() && !ExpiresSnapshotsOnCommit()) {
 		try {
 			lock_guard<mutex> guard(snapshot_tag_lock);
@@ -1050,6 +1049,7 @@ void DuckLakeTransaction::Commit() {
 		if (ChangesMade() || !ConfigOptionLockSql().empty()) {
 			FlushChanges();
 		} else if (connection) {
+			NumberCommitAttempt(false);
 			try {
 				connection->Commit();
 			} catch (std::exception &ex) {
@@ -1068,7 +1068,7 @@ void DuckLakeTransaction::Commit() {
 	}
 	ClearMaintenanceChanges();
 	if (!config_option_undo.empty()) {
-		ducklake_catalog.CommitConfigOptions(config_option_undo, commit_attempt);
+		ducklake_catalog.CommitConfigOptions(config_option_undo);
 		config_option_undo.clear();
 	}
 	FlushNameMapCacheInvalidations();
@@ -1911,6 +1911,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	string lost_reply_debug;
 	context.commit_connection = [&]() {
+		NumberCommitAttempt(false);
 		string lose_reply;
 		auto client_context = this->context.lock();
 		if (client_context) {
@@ -1946,8 +1947,6 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.prepare_retry = [&]() {
 		option_lock_failed = false;
-		// the retry commits after the commit it conflicted with
-		NumberCommitAttempt(false);
 		inlined_inserts.clear();
 		metadata_manager->ClearInlinedTableCaches();
 		connection->BeginTransaction();
@@ -2126,7 +2125,14 @@ void DuckLakeTransaction::NumberCommitAttempt(bool option_written) {
 	if (config_option_undo.empty() || option_written != metadata_manager->CommitsEachStatement()) {
 		return;
 	}
-	commit_attempt = ducklake_catalog.NextCommitAttempt();
+	auto attempt = ducklake_catalog.NextCommitAttempt();
+	if (option_written) {
+		config_option_undo.back().attempt = attempt;
+		return;
+	}
+	for (auto &change : config_option_undo) {
+		change.attempt = attempt;
+	}
 }
 
 void DuckLakeTransaction::ClearMaintenanceChanges() {

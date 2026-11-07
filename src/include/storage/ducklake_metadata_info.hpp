@@ -605,6 +605,8 @@ struct DuckLakeConfigOptionUndo {
 	bool reset = false;
 	//! the rows the option is expected to have in the metadata after this change
 	idx_t metadata_rows = 0;
+	//! the number of the commit attempt that publishes the change
+	idx_t attempt = 0;
 };
 
 //! The option changes of a commit whose outcome is unknown, taken from the catalog once it can be read
