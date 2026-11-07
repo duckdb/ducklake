@@ -33,10 +33,10 @@ CALL ducklake_merge_adjacent_files('ducklake', 't')
 statement ok
 RESET ducklake_debug_lose_commit_reply
 
-query I
-SELECT count(*) FROM metadata.ducklake_data_file WHERE end_snapshot IS NULL
+query II
+SELECT count(*), min(begin_snapshot) FROM metadata.ducklake_data_file WHERE end_snapshot IS NULL
 ----
-1
+1	2
 
 query I
 SELECT i FROM ducklake.t ORDER BY i
@@ -57,10 +57,11 @@ CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
 statement ok
 RESET ducklake_debug_lose_commit_reply
 
-query I
-SELECT count(*) FROM metadata.ducklake_data_file WHERE end_snapshot IS NULL
+# the rewritten file begins at the snapshot of the rewrite, which ends the merged file
+query III
+SELECT count(*), count(*) FILTER (WHERE end_snapshot IS NULL), max(begin_snapshot) FROM metadata.ducklake_data_file
 ----
-1
+2	1	6
 
 query I
 SELECT i FROM ducklake.t
