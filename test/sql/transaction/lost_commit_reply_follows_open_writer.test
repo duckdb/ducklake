@@ -76,7 +76,7 @@ SELECT count(*) FROM ducklake.t
 0
 
 query I
-SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%SELECT value%ducklake_metadata%WHERE key = ''data_inlining_row_limit''%'
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%SELECT value%ducklake_metadata%WHERE key = %data_inlining_row_limit%'
 ----
 1
 
