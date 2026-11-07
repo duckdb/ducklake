@@ -72,3 +72,56 @@ query I
 SELECT count(*) FROM glob('{DATA_PATH}/lost_commit_reply_unreadable_catalog_open_writer/main/t/*.parquet')
 ----
 1
+
+# the same with the open transaction setting the value of the ATTACH, which the cache would show without it
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('data_inlining_row_limit', 20)
+
+statement ok con1
+CREATE TABLE ducklake.b(i INTEGER)
+
+statement ok con2
+BEGIN
+
+query I con2
+SELECT count(*) FROM ducklake.t
+----
+1
+
+statement ok
+SET ducklake_debug_lose_commit_reply = 'before_unreadable'
+
+statement error con1
+COMMIT
+----
+whether it carried the commit out is unknown
+
+statement ok
+RESET ducklake_debug_lose_commit_reply
+
+statement ok con2
+CALL ducklake.set_option('data_inlining_row_limit', 0)
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+1
+
+statement ok con2
+ROLLBACK
+
+query I
+SELECT count(*) FROM metadata.ducklake_metadata WHERE key = 'data_inlining_row_limit'
+----
+0
+
+statement ok
+INSERT INTO ducklake.t VALUES (2)
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/lost_commit_reply_unreadable_catalog_open_writer/main/t/*.parquet')
+----
+2
