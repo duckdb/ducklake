@@ -591,8 +591,7 @@ struct DuckLakeConfigOption {
 	TableIndex table_id;
 };
 
-//! What an undo compares the cache against: the option as the change wrote it, or the cache as it was when a commit
-//! kept the change for a reload
+//! Whether an undo compares the cache against the option as written, or against the cache as a kept change found it
 enum class DuckLakeConfigOptionCompare : uint8_t { WRITTEN, CACHED_VALUE, CACHED_NONE };
 
 //! What a config option held before a transaction set it, so a rollback can put it back
