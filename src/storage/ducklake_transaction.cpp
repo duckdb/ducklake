@@ -931,17 +931,10 @@ void DuckLakeTransaction::ReloadConfigOptions(bool catalog_unreadable) {
 	reload.changes = std::move(config_option_undo);
 	reload.table_options = state->committed_table_options;
 	config_option_undo.clear();
-	if (rewrote_config_options) {
-		// the retried commit wrote its options last, also where another transaction set them meanwhile
-		for (auto &change : reload.changes) {
-			ducklake_catalog.UndoReplacesCachedValue(change);
-		}
-	}
-	vector<DuckLakeConfigOption> unresolved;
-	bool read = TryReloadConfigOptions(reload, catalog_unreadable, unresolved);
 	// the changes of an option stay until the cache holds the catalog's value, which a later transaction brings
-	auto commit_number = ducklake_catalog.AddPendingOptionReload(std::move(reload));
-	if (read) {
+	auto commit_number = ducklake_catalog.AddPendingOptionReload(reload);
+	vector<DuckLakeConfigOption> unresolved;
+	if (TryReloadConfigOptions(reload, catalog_unreadable, unresolved)) {
 		ducklake_catalog.ResolvePendingOptionReloads({commit_number}, unresolved);
 	}
 }
@@ -955,21 +948,19 @@ static bool ConfigOptionChangedEarlier(const vector<DuckLakeConfigOptionUndo> &c
 	return false;
 }
 
-static const DuckLakeConfigOptionUndo &LastConfigOptionChange(const vector<DuckLakeConfigOptionUndo> &changes,
-                                                              idx_t index) {
-	idx_t last = index;
-	for (idx_t later = index + 1; later < changes.size(); later++) {
-		if (changes[later].option.IsSame(changes[index].option)) {
-			last = later;
+static bool ConfigOptionReset(const vector<DuckLakeConfigOptionUndo> &changes, const DuckLakeConfigOption &option) {
+	for (auto &change : changes) {
+		if (change.reset && change.option.IsSame(option)) {
+			return true;
 		}
 	}
-	return changes[last];
+	return false;
 }
 
 bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReload &reload, bool catalog_unreadable,
                                                  vector<DuckLakeConfigOption> &unresolved) {
-	// one undo per option, which compares the cache against the value written last and points at the catalog's
-	vector<DuckLakeConfigOptionUndo> undos;
+	// one read per option, whose value is the row's, or stays committed without a row unless a change removed it
+	vector<DuckLakeConfigOption> options;
 	vector<bool> has_row;
 	vector<DuckLakeConfigOption> table_options;
 	try {
@@ -980,21 +971,9 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 			if (ConfigOptionChangedEarlier(reload.changes, i)) {
 				continue;
 			}
-			auto &first = reload.changes[i];
-			auto undo = LastConfigOptionChange(reload.changes, i);
-			undo.was_set = first.was_set;
-			undo.previous_value = first.previous_value;
-			auto option = undo.option;
-			bool row = metadata_manager->TryGetConfigOption(option);
-			if (row) {
-				undo.was_set = true;
-				undo.previous_value = option.option.value;
-			} else if (undo.reset) {
-				undo.was_set = false;
-			}
-			// without a row, a set goes back to the value before the transaction, which the ATTACH or a default gave
-			undos.push_back(std::move(undo));
-			has_row.push_back(row);
+			auto option = reload.changes[i].option;
+			has_row.push_back(metadata_manager->TryGetConfigOption(option));
+			options.push_back(std::move(option));
 		}
 		// the table options of the commit reach the cache on success alone
 		for (auto &table_option : reload.table_options) {
@@ -1006,22 +985,14 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 	} catch (std::exception &) { // NOLINT
 		return false;
 	}
-	// an option an open transaction holds keeps its value, its changes then stay for a later transaction
-	for (idx_t i = 0; i < undos.size(); i++) {
-		auto &undo = undos[i];
-		if (ducklake_catalog.UndoConfigOption(undo)) {
-			continue;
-		}
-		// the cache also follows the catalog when it holds the row's value, or nothing without a row
-		string cached;
-		bool cached_set = ducklake_catalog.TryGetCachedConfigOption(undo.option, cached);
-		bool follows = has_row[i] ? cached_set && cached == undo.previous_value : !cached_set;
-		if (!follows) {
-			unresolved.push_back(undo.option);
+	for (idx_t i = 0; i < options.size(); i++) {
+		bool reset = ConfigOptionReset(reload.changes, options[i]);
+		if (!ducklake_catalog.ReloadConfigOption(options[i], has_row[i], reset)) {
+			unresolved.push_back(options[i]);
 		}
 	}
 	for (auto &option : table_options) {
-		ducklake_catalog.SetConfigOption(option);
+		ducklake_catalog.SetCommittedConfigOption(option);
 	}
 	return true;
 }
@@ -1032,7 +1003,7 @@ void DuckLakeTransaction::ReloadPendingConfigOptions(ClientContext &context) {
 	if (pending.empty()) {
 		return;
 	}
-	// the changes of all records are resolved together, in the order they reached the cache
+	// the changes of all records are resolved together
 	DuckLakeConfigOptionReload merged;
 	for (auto &entry : pending) {
 		auto &record = entry.second;
@@ -1040,9 +1011,6 @@ void DuckLakeTransaction::ReloadPendingConfigOptions(ClientContext &context) {
 		merged.table_options.insert(merged.table_options.end(), record.table_options.begin(),
 		                            record.table_options.end());
 	}
-	std::stable_sort(
-	    merged.changes.begin(), merged.changes.end(),
-	    [](const DuckLakeConfigOptionUndo &a, const DuckLakeConfigOptionUndo &b) { return a.sequence < b.sequence; });
 	string lose_reply;
 	context.TryGetCurrentSetting("ducklake_debug_lose_commit_reply", lose_reply);
 	vector<DuckLakeConfigOption> unresolved;
@@ -1093,21 +1061,13 @@ void DuckLakeTransaction::Commit() {
 		throw;
 	}
 	ClearMaintenanceChanges();
-	if (rewrote_config_options) {
-		// the retried commit wrote its options last, also where another transaction set them meanwhile
-		for (auto &change : config_option_undo) {
-			if (change.reset) {
-				ducklake_catalog.ResetConfigOption(change.option);
-			} else {
-				ducklake_catalog.SetConfigOption(change.option);
-			}
-		}
-		rewrote_config_options = false;
+	if (!config_option_undo.empty()) {
+		ducklake_catalog.CommitConfigOptions(config_option_undo);
+		config_option_undo.clear();
 	}
 	FlushNameMapCacheInvalidations();
 	connection.reset();
 	state->local_changes.Clear();
-	config_option_undo.clear();
 	SetRequiresNewInlinedTable(false);
 	ClearSchemaCachePins();
 }
@@ -2113,7 +2073,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.set_table_options = [&](const vector<DuckLakeConfigOption> &options) {
 		for (auto &option : options) {
-			ducklake_catalog.SetConfigOption(option);
+			ducklake_catalog.SetCommittedConfigOption(option);
 		}
 	};
 	context.invalidate_table_stats_cache = [&](idx_t next_file_id, TableIndex table_id) {
@@ -2220,7 +2180,6 @@ void DuckLakeTransaction::RewriteConfigOptions() {
 		} else {
 			change.metadata_rows = ConfigOptionRows(i, metadata_manager->SetConfigOption(change.option));
 		}
-		rewrote_config_options = true;
 	}
 }
 
