@@ -1,0 +1,51 @@
+# name: test/sql/quack/option_commit_order.test
+# description: The commit of a transaction that set an option first does not publish it over the value set later
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require quack
+
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{TEST_DIR}/option_commit_order')
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('require_commit_message', true)
+
+statement ok con1
+CREATE TABLE ducklake.a(i INTEGER)
+
+# Quack writes an option when it is set, so the server holds the value of the later set
+statement ok con2
+BEGIN
+
+statement ok con2
+CALL ducklake.set_commit_message('review', 'other')
+
+statement ok con2
+CALL ducklake.set_option('require_commit_message', false)
+
+statement ok con2
+CREATE TABLE ducklake.b(i INTEGER)
+
+statement ok con2
+COMMIT
+
+statement ok con1
+COMMIT
+
+# the cache follows the server, so a commit needs no message
+statement ok
+CREATE TABLE ducklake.c(i INTEGER)
+
+query I
+SELECT count(*) FROM ducklake.c
+----
+0
