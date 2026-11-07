@@ -232,9 +232,11 @@ public:
 	DuckLakeConfigOptionUndo SetConfigOption(const DuckLakeConfigOption &option);
 	DuckLakeConfigOptionUndo ResetConfigOption(const DuckLakeConfigOption &option);
 	void UndoConfigOption(const DuckLakeConfigOptionUndo &undo);
-	//! Keeps the option changes of a commit whose outcome could not be read, for the next transaction
+	//! Keeps the option changes of a commit whose outcome could not be read, until a transaction reloads them
 	void AddPendingOptionReload(DuckLakeConfigOptionReload reload);
-	vector<DuckLakeConfigOptionReload> TakePendingOptionReloads();
+	//! The kept option changes, by the number of their commit
+	map<idx_t, DuckLakeConfigOptionReload> PendingOptionReloads() const;
+	void RemovePendingOptionReload(idx_t commit_number);
 	//! Pending table options take precedence
 	bool TryGetConfigOption(const string &option, string &result, SchemaIndex schema_id, TableIndex table_id,
 	                        optional_ptr<const map<string, string>> table_options = nullptr) const;
@@ -515,8 +517,9 @@ private:
 	mutable mutex config_lock;
 	//! The DuckLake options
 	DuckLakeOptions options;
-	//! The option changes of commits whose outcome could not be read, reloaded by the next transaction
-	vector<DuckLakeConfigOptionReload> pending_option_reloads;
+	//! The option changes of commits whose outcome could not be read, by the number of their commit
+	map<idx_t, DuckLakeConfigOptionReload> pending_option_reloads;
+	idx_t pending_option_reload_count = 0;
 	//! The path separator
 	string separator = "/";
 	//! A unique tracker for catalog changes in uncommitted transactions.

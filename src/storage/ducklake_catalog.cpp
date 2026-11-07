@@ -1299,14 +1299,17 @@ void DuckLakeCatalog::UndoConfigOption(const DuckLakeConfigOptionUndo &undo) {
 
 void DuckLakeCatalog::AddPendingOptionReload(DuckLakeConfigOptionReload reload) {
 	lock_guard<mutex> guard(config_lock);
-	pending_option_reloads.push_back(std::move(reload));
+	pending_option_reloads[pending_option_reload_count++] = std::move(reload);
 }
 
-vector<DuckLakeConfigOptionReload> DuckLakeCatalog::TakePendingOptionReloads() {
+map<idx_t, DuckLakeConfigOptionReload> DuckLakeCatalog::PendingOptionReloads() const {
 	lock_guard<mutex> guard(config_lock);
-	auto result = std::move(pending_option_reloads);
-	pending_option_reloads.clear();
-	return result;
+	return pending_option_reloads;
+}
+
+void DuckLakeCatalog::RemovePendingOptionReload(idx_t commit_number) {
+	lock_guard<mutex> guard(config_lock);
+	pending_option_reloads.erase(commit_number);
 }
 
 template <class SCOPE_MAP, class SCOPE_ID>
