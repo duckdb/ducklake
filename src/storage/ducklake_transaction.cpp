@@ -982,8 +982,7 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 			options.push_back(table_option);
 		}
 	}
-	// the publications are counted and the reload numbered before the reads, whose first one fixes the snapshot
-	auto attempt = ducklake_catalog.NextCommitAttempt();
+	// the publications are counted before the reads, whose first one fixes the snapshot of the catalog
 	vector<idx_t> publications;
 	for (auto &option : options) {
 		publications.push_back(ducklake_catalog.ConfigOptionPublications(option));
@@ -1004,7 +1003,7 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 			continue;
 		}
 		bool reset = ConfigOptionReset(reload.changes, options[i]);
-		if (!ducklake_catalog.ReloadConfigOption(options[i], has_row[i], reset, publications[i], attempt)) {
+		if (!ducklake_catalog.ReloadConfigOption(options[i], has_row[i], reset, publications[i])) {
 			unresolved.push_back(options[i]);
 		}
 	}

@@ -245,8 +245,7 @@ public:
 	//! The kept option changes, by the number of their commit
 	map<idx_t, DuckLakeConfigOptionReload> PendingOptionReloads() const;
 	//! Takes the value read from the catalog, false while a transaction holds a change or it was published since
-	bool ReloadConfigOption(const DuckLakeConfigOption &option, bool has_row, bool reset, idx_t publications,
-	                        idx_t attempt);
+	bool ReloadConfigOption(const DuckLakeConfigOption &option, bool has_row, bool reset, idx_t publications);
 	//! Drops the changes of the resolved options from the records, and the records left empty
 	void ResolvePendingOptionReloads(const vector<idx_t> &commit_numbers,
 	                                 const vector<DuckLakeConfigOption> &unresolved);
