@@ -1355,8 +1355,9 @@ void DuckLakeCatalog::CommitConfigOptions(const vector<DuckLakeConfigOptionUndo>
 			state.committed_set = !change.reset;
 			state.committed_value = change.option.option.value;
 			state.committed_attempt = change.attempt;
-			state.publications++;
 		}
+		// a reload that read before this commit reads again, also where a later attempt published already
+		state.publications++;
 		if (state.open_changes == 0) {
 			SetOptionEntry(GetOptionScope(options, change.option), change.option.option.key, state.committed_set,
 			               state.committed_value);
@@ -1369,13 +1370,13 @@ void DuckLakeCatalog::SetCommittedConfigOption(const DuckLakeConfigOption &optio
 	auto entry = config_option_states.find(DuckLakeConfigOptionKey(option));
 	if (entry != config_option_states.end()) {
 		auto &state = entry->second;
+		state.publications++;
 		if (attempt < state.committed_attempt) {
 			return;
 		}
 		state.committed_set = true;
 		state.committed_value = option.option.value;
 		state.committed_attempt = attempt;
-		state.publications++;
 		if (state.open_changes > 0) {
 			return;
 		}

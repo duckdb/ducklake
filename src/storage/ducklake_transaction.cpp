@@ -992,7 +992,7 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 			options.push_back(table_option);
 		}
 	}
-	// the publications are counted before the reads, which may share one snapshot of the catalog
+	// the publications are counted before the reads, which may share a snapshot
 	vector<idx_t> publications;
 	for (auto &option : options) {
 		publications.push_back(ducklake_catalog.ConfigOptionPublications(option));
