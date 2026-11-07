@@ -92,3 +92,57 @@ query I
 SELECT count(*) FROM glob('{TEST_DIR}/option_commit_order/main/f/*.parquet')
 ----
 0
+
+# the same with the later set lost at its commit and reloaded while the first transaction is open
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('data_inlining_row_limit', 20)
+
+statement ok con1
+CREATE TABLE ducklake.g(i INTEGER)
+
+statement ok con2
+BEGIN
+
+statement ok con2
+CALL ducklake.set_option('data_inlining_row_limit', 0)
+
+statement ok con2
+CREATE TABLE ducklake.h(i INTEGER)
+
+statement ok con2
+SET ducklake_debug_lose_commit_reply = 'after'
+
+statement error con2
+COMMIT
+----
+whether it carried the commit out is unknown
+
+statement ok con2
+RESET ducklake_debug_lose_commit_reply
+
+# a transaction open across the commit of the first one sees the cache without a reload
+statement ok con3
+BEGIN
+
+query I con3
+SELECT count(*) FROM ducklake.f
+----
+1
+
+statement ok con1
+COMMIT
+
+# the server holds the later set, which the commit of the earlier set does not publish over
+statement ok con3
+INSERT INTO ducklake.f VALUES (2)
+
+statement ok con3
+COMMIT
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/option_commit_order/main/f/*.parquet')
+----
+1
