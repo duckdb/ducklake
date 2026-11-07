@@ -49,3 +49,46 @@ query I
 SELECT count(*) FROM ducklake.c
 ----
 0
+
+# the same with the first transaction writing another option after the commit of the second
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('require_commit_message', true)
+
+statement ok con1
+CREATE TABLE ducklake.d(i INTEGER)
+
+statement ok con2
+BEGIN
+
+statement ok con2
+CALL ducklake.set_commit_message('review', 'other')
+
+statement ok con2
+CALL ducklake.set_option('require_commit_message', false)
+
+statement ok con2
+CREATE TABLE ducklake.e(i INTEGER)
+
+statement ok con2
+COMMIT
+
+statement ok con1
+CALL ducklake.set_option('data_inlining_row_limit', 5)
+
+statement ok con1
+COMMIT
+
+statement ok
+CREATE TABLE ducklake.f(i INTEGER)
+
+# the option written last is published, so the row is inlined
+statement ok
+INSERT INTO ducklake.f VALUES (1)
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/option_commit_order/main/f/*.parquet')
+----
+0
