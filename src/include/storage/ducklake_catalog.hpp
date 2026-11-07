@@ -233,7 +233,7 @@ public:
 	DuckLakeConfigOptionUndo ResetConfigOption(const DuckLakeConfigOption &option);
 	//! Puts back what the change replaced, or the committed value once no transaction holds a change of the option
 	void UndoConfigOption(const DuckLakeConfigOptionUndo &undo);
-	//! Numbers a commit of options right before it, so the later of two commits of one option has the higher number
+	//! Numbers a commit attempt right before its COMMIT, so a retry comes after the commit it conflicted with
 	idx_t NextCommitAttempt();
 	//! How often the option was published, by commits and reloads
 	idx_t ConfigOptionPublications(const DuckLakeConfigOption &option) const;
