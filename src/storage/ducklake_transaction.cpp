@@ -966,13 +966,15 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 			options.push_back(reload.changes[i].option);
 		}
 	}
+	// the table options of the commit reach the cache on success alone
+	idx_t change_count = options.size();
+	options.insert(options.end(), reload.table_options.begin(), reload.table_options.end());
 	// the publications are counted before the reads, whose first one fixes the snapshot of the catalog
 	vector<idx_t> publications;
 	for (auto &option : options) {
 		publications.push_back(ducklake_catalog.ConfigOptionPublications(option));
 	}
 	vector<bool> has_row;
-	vector<DuckLakeConfigOption> table_options;
 	try {
 		if (catalog_unreadable) {
 			throw IOException("The connection to the metadata catalog is lost (ducklake_debug_lose_commit_reply)");
@@ -980,24 +982,17 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 		for (auto &option : options) {
 			has_row.push_back(metadata_manager->TryGetConfigOption(option));
 		}
-		// the table options of the commit reach the cache on success alone
-		for (auto &table_option : reload.table_options) {
-			auto option = table_option;
-			if (metadata_manager->TryGetConfigOption(option)) {
-				table_options.push_back(std::move(option));
-			}
-		}
 	} catch (std::exception &) { // NOLINT
 		return false;
 	}
 	for (idx_t i = 0; i < options.size(); i++) {
+		if (i >= change_count && !has_row[i]) {
+			continue;
+		}
 		bool reset = ConfigOptionReset(reload.changes, options[i]);
 		if (!ducklake_catalog.ReloadConfigOption(options[i], has_row[i], reset, publications[i])) {
 			unresolved.push_back(options[i]);
 		}
-	}
-	for (auto &option : table_options) {
-		ducklake_catalog.SetCommittedConfigOption(option);
 	}
 	return true;
 }
@@ -2118,7 +2113,6 @@ void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) 
 }
 
 void DuckLakeTransaction::NumberCommitAttempt() {
-	// a catalog that commits each statement committed the options at their writes, which numbered them
 	if (config_option_undo.empty() || metadata_manager->CommitsEachStatement()) {
 		return;
 	}

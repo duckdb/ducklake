@@ -1429,20 +1429,31 @@ void DuckLakeCatalog::ResolvePendingOptionReloads(const vector<idx_t> &commit_nu
 			continue;
 		}
 		auto &record = entry->second;
-		record.table_options.clear();
-		vector<DuckLakeConfigOptionUndo> changes;
-		for (auto &change : record.changes) {
-			for (auto &option : unresolved) {
-				if (change.option.IsSame(option)) {
-					changes.push_back(std::move(change));
-					break;
+		auto is_unresolved = [&](const DuckLakeConfigOption &option) {
+			for (auto &unresolved_option : unresolved) {
+				if (option.IsSame(unresolved_option)) {
+					return true;
 				}
 			}
+			return false;
+		};
+		vector<DuckLakeConfigOptionUndo> changes;
+		for (auto &change : record.changes) {
+			if (is_unresolved(change.option)) {
+				changes.push_back(std::move(change));
+			}
 		}
-		if (changes.empty()) {
+		vector<DuckLakeConfigOption> table_options;
+		for (auto &table_option : record.table_options) {
+			if (is_unresolved(table_option)) {
+				table_options.push_back(std::move(table_option));
+			}
+		}
+		if (changes.empty() && table_options.empty()) {
 			pending_option_reloads.erase(entry);
 		} else {
 			record.changes = std::move(changes);
+			record.table_options = std::move(table_options);
 		}
 	}
 }
