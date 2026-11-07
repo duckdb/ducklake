@@ -1,5 +1,5 @@
 # name: test/sql/transaction/lost_commit_reply_unreadable_catalog_order.test
-# description: The options of two commits whose outcome could not be read are reloaded from the newest to the oldest
+# description: The options of two commits whose outcome could not be read are reloaded in the order of their writes
 # group: [transaction]
 
 require ducklake
@@ -65,3 +65,51 @@ query I
 SELECT count(*) FROM glob('{DATA_PATH}/lost_commit_reply_unreadable_catalog_order/main/t/*.parquet')
 ----
 1
+
+# the same with the commits in the other order than the writes
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake.set_option('data_inlining_row_limit', 40)
+
+statement ok con1
+CREATE TABLE ducklake.c(i INTEGER)
+
+statement ok con2
+BEGIN
+
+statement ok con2
+CALL ducklake.set_option('data_inlining_row_limit', 50)
+
+statement ok con2
+CREATE TABLE ducklake.d(i INTEGER)
+
+statement ok
+SET ducklake_debug_lose_commit_reply = 'before_unreadable'
+
+statement error con2
+COMMIT
+----
+whether it carried the commit out is unknown
+
+statement error con1
+COMMIT
+----
+whether it carried the commit out is unknown
+
+statement ok
+RESET ducklake_debug_lose_commit_reply
+
+query I
+SELECT count(*) FROM metadata.ducklake_metadata WHERE key = 'data_inlining_row_limit'
+----
+0
+
+statement ok
+INSERT INTO ducklake.t VALUES (2)
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/lost_commit_reply_unreadable_catalog_order/main/t/*.parquet')
+----
+2
