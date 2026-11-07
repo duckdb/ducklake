@@ -1,0 +1,74 @@
+# name: test/sql/transaction/lost_commit_reply_compaction_outcome.test
+# description: A compaction whose COMMIT reply was lost finds its output in the catalog by the begin snapshot the commit gives it
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/lost_commit_reply_compaction_outcome', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+statement ok
+INSERT INTO ducklake.t VALUES (2)
+
+# the catalog carries the COMMIT out, only its reply is lost
+statement ok
+SET ducklake_debug_lose_commit_reply = 'after'
+
+# the merged file is registered with the begin snapshot of the first merged file, where the commit finds it
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 't')
+
+statement ok
+RESET ducklake_debug_lose_commit_reply
+
+query I
+SELECT count(*) FROM metadata.ducklake_data_file WHERE end_snapshot IS NULL
+----
+1
+
+query I
+SELECT i FROM ducklake.t ORDER BY i
+----
+1
+2
+
+statement ok
+DELETE FROM ducklake.t WHERE i = 1
+
+statement ok
+SET ducklake_debug_lose_commit_reply = 'after'
+
+# the rewritten file is registered with the commit snapshot, where the commit finds it
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
+
+statement ok
+RESET ducklake_debug_lose_commit_reply
+
+query I
+SELECT count(*) FROM metadata.ducklake_data_file WHERE end_snapshot IS NULL
+----
+1
+
+query I
+SELECT i FROM ducklake.t
+----
+2
+
+# the kept files are referenced, not orphans
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('ducklake', dry_run => true, cleanup_all => true)
+----
+0
