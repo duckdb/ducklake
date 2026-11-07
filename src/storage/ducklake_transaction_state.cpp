@@ -2270,9 +2270,13 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::WriteNewTables(result.new_tables, resolved_table_paths);
 		batch_queries += DuckLakeMetadataManager::WriteNewTableOptions(result.new_table_options);
 		committed_table_options = result.new_table_options;
-		auto existing_catalog =
-		    DuckLakeMetadataManager::BuildCatalogForSnapshot(commit_snapshot, context.query_metadata_with_snapshot,
-		                                                     data_path, separator, context.supports_v1_1_metadata);
+		DuckLakeCatalogInfo existing_catalog;
+		if (!result.new_partition_keys.empty() || !result.new_sort_keys.empty()) {
+			// only a commit that changes a partition or sort spec compares it with the committed ones
+			existing_catalog =
+			    DuckLakeMetadataManager::BuildCatalogForSnapshot(commit_snapshot, context.query_metadata_with_snapshot,
+			                                                     data_path, separator, context.supports_v1_1_metadata);
+		}
 		batch_queries +=
 		    DuckLakeMetadataManager::WriteNewPartitionKeys(existing_catalog.partitions, result.new_partition_keys);
 		auto unchanged_partition_ids =
@@ -2775,11 +2779,12 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			RollbackKeepingError(context);
 			retryable_metadata_error =
 			    retryable_metadata_error || context.is_retryable_metadata_error(error.RawMessage());
+			auto error_without_query = context.commit_error_without_query(error.RawMessage());
 			// an internal error is a bug that a retry cannot fix
 			// a retryable metadata error in the conflict check is retried, a conflict that it finds is not
 			bool retry_on_error =
 			    error.Type() != ExceptionType::INTERNAL &&
-			    (retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error.RawMessage())));
+			    (retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error_without_query)));
 			// We perform one initial attempt plus up to max_retry_count retries. Since i is the
 			// zero-based attempt index, we are done retrying once i reaches max_retry_count.
 			bool finished_retrying = i >= retry_config.max_retry_count;
