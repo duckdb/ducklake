@@ -602,6 +602,15 @@ struct DuckLakeConfigOptionUndo {
 	idx_t metadata_rows = 0;
 };
 
+//! The option changes of a commit whose outcome is unknown, taken from the catalog once it can be read
+struct DuckLakeConfigOptionReload {
+	vector<DuckLakeConfigOptionUndo> changes;
+	//! the options of the tables the commit created
+	vector<DuckLakeConfigOption> table_options;
+	//! whether a retried attempt wrote the options last
+	bool rewrote = false;
+};
+
 struct DuckLakeNameMapColumnInfo {
 	idx_t column_id;
 	string source_name;

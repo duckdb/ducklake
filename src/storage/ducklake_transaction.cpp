@@ -885,6 +885,8 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
       local_catalog_id(DuckLakeConstants::TRANSACTION_LOCAL_ID_START), catalog_version(0) {
 	metadata_manager = DuckLakeMetadataManager::Create(*this);
 	schema_pins = make_uniq<DuckLakeSchemaPinState>();
+	// the options of a commit whose outcome could not be read come from the catalog before their first use
+	ReloadPendingConfigOptions();
 	state = make_uniq<DuckLakeTransactionState>(db, ducklake_catalog.IsCommitInfoRequired(), new_name_maps,
 	                                            ducklake_catalog.DataPath(), ducklake_catalog.Separator());
 	start_time = timestamp_tz_t(MetaTransaction::Get(context).start_timestamp);
@@ -921,49 +923,56 @@ void DuckLakeTransaction::UndoConfigOptions() {
 }
 
 void DuckLakeTransaction::ReloadConfigOptions(bool catalog_unreadable) {
+	DuckLakeConfigOptionReload reload;
+	reload.changes = std::move(config_option_undo);
+	reload.table_options = state->committed_table_options;
+	reload.rewrote = rewrote_config_options;
+	config_option_undo.clear();
+	if (catalog_unreadable || !TryReloadConfigOptions(reload)) {
+		// the next transaction takes the catalog's values, until then the cache keeps the commit's
+		ducklake_catalog.AddPendingOptionReload(std::move(reload));
+	}
+}
+
+bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReload &reload) {
 	// the undo of each change points at the catalog's value, so a value another transaction set since stays
-	vector<DuckLakeConfigOptionUndo> reloads;
+	vector<DuckLakeConfigOptionUndo> undos;
 	vector<DuckLakeConfigOption> table_options;
 	try {
-		if (catalog_unreadable) {
-			throw IOException("The connection to the metadata catalog is lost (ducklake_debug_lose_commit_reply)");
-		}
-		for (auto &change : config_option_undo) {
-			auto reload = change;
+		for (auto &change : reload.changes) {
+			auto undo = change;
 			auto option = change.option;
 			if (metadata_manager->TryGetConfigOption(option)) {
-				reload.was_set = true;
-				reload.previous_value = option.option.value;
+				undo.was_set = true;
+				undo.previous_value = option.option.value;
 			} else if (change.reset) {
 				// the row the reset removed is gone
-				reload.was_set = false;
+				undo.was_set = false;
 			}
 			// without a row, a set goes back to the value it replaced, which the ATTACH gave the cache
-			reloads.push_back(std::move(reload));
+			undos.push_back(std::move(undo));
 		}
 		// the table options of the commit reach the cache on success alone
-		for (auto &table_option : state->committed_table_options) {
+		for (auto &table_option : reload.table_options) {
 			auto option = table_option;
 			if (metadata_manager->TryGetConfigOption(option)) {
 				table_options.push_back(std::move(option));
 			}
 		}
 	} catch (std::exception &) { // NOLINT
-		// without the catalog's answer the cache stays as it is, like the files the commit wrote
-		config_option_undo.clear();
-		return;
+		return false;
 	}
 	// the changes are undone from the last to the first, as in a rollback
-	for (auto it = reloads.rbegin(); it != reloads.rend(); ++it) {
-		auto &reload = *it;
-		if (!rewrote_config_options) {
-			ducklake_catalog.UndoConfigOption(reload);
+	for (auto it = undos.rbegin(); it != undos.rend(); ++it) {
+		auto &undo = *it;
+		if (!reload.rewrote) {
+			ducklake_catalog.UndoConfigOption(undo);
 			continue;
 		}
 		// the retried commit wrote its options last, so the cache takes the catalog's value as on success
-		auto option = reload.option;
-		option.option.value = reload.previous_value;
-		if (reload.was_set) {
+		auto option = undo.option;
+		option.option.value = undo.previous_value;
+		if (undo.was_set) {
 			ducklake_catalog.SetConfigOption(option);
 		} else {
 			ducklake_catalog.ResetConfigOption(option);
@@ -972,7 +981,15 @@ void DuckLakeTransaction::ReloadConfigOptions(bool catalog_unreadable) {
 	for (auto &option : table_options) {
 		ducklake_catalog.SetConfigOption(option);
 	}
-	config_option_undo.clear();
+	return true;
+}
+
+void DuckLakeTransaction::ReloadPendingConfigOptions() {
+	for (auto &reload : ducklake_catalog.TakePendingOptionReloads()) {
+		if (!TryReloadConfigOptions(reload)) {
+			ducklake_catalog.AddPendingOptionReload(std::move(reload));
+		}
+	}
 }
 
 void DuckLakeTransaction::Commit() {

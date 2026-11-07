@@ -1297,6 +1297,18 @@ void DuckLakeCatalog::UndoConfigOption(const DuckLakeConfigOptionUndo &undo) {
 	}
 }
 
+void DuckLakeCatalog::AddPendingOptionReload(DuckLakeConfigOptionReload reload) {
+	lock_guard<mutex> guard(config_lock);
+	pending_option_reloads.push_back(std::move(reload));
+}
+
+vector<DuckLakeConfigOptionReload> DuckLakeCatalog::TakePendingOptionReloads() {
+	lock_guard<mutex> guard(config_lock);
+	auto result = std::move(pending_option_reloads);
+	pending_option_reloads.clear();
+	return result;
+}
+
 template <class SCOPE_MAP, class SCOPE_ID>
 static bool TryGetOptionInScope(const SCOPE_MAP &scope_map, SCOPE_ID scope_id, const string &option, string &result) {
 	if (!scope_id.IsValid()) {
