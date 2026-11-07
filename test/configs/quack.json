@@ -266,7 +266,8 @@
       "reason": "Quack commits an option when it is set, so the catalog holds the option of a commit it never carried out",
       "paths": [
         "test/sql/transaction/lost_commit_reply_attach_option_reload.test",
-        "test/sql/transaction/lost_commit_reply_unreadable_catalog.test"
+        "test/sql/transaction/lost_commit_reply_unreadable_catalog.test",
+        "test/sql/transaction/lost_commit_reply_unreadable_catalog_order.test"
       ]
     }
   ]

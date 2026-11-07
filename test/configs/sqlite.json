@@ -168,7 +168,9 @@
       "paths": [
         "test/sql/transaction/lost_commit_reply_foreign_registration.test",
         "test/sql/transaction/lost_commit_reply_option_retry.test",
-        "test/sql/transaction/lost_commit_reply_compaction_registration.test"
+        "test/sql/transaction/lost_commit_reply_compaction_registration.test",
+        "test/sql/transaction/lost_commit_reply_option_set_reset_retry.test",
+        "test/sql/transaction/lost_commit_reply_unreadable_catalog_order.test"
       ]
     }
   ]
