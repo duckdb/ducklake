@@ -228,19 +228,26 @@ public:
 	string &Separator() {
 		return separator;
 	}
-	//! Sets a config option, returning what it held before so a rollback can put it back
+	//! Sets a config option for a transaction, returning what it held before so a rollback can put it back
 	DuckLakeConfigOptionUndo SetConfigOption(const DuckLakeConfigOption &option);
 	DuckLakeConfigOptionUndo ResetConfigOption(const DuckLakeConfigOption &option);
-	//! Puts the value before the change back, false when the cache no longer holds what the undo compares against
-	bool UndoConfigOption(const DuckLakeConfigOptionUndo &undo);
-	//! Lets the undo replace the value the cache holds now, for a change a retried commit wrote last
-	void UndoReplacesCachedValue(DuckLakeConfigOptionUndo &undo);
-	//! The value the cache holds for the option in its own scope, without the fallback to wider scopes
-	bool TryGetCachedConfigOption(const DuckLakeConfigOption &option, string &result) const;
+	//! Puts back what the change replaced, or the committed value once no transaction holds a change of the option
+	void UndoConfigOption(const DuckLakeConfigOptionUndo &undo);
+	//! Numbers a commit attempt right before its COMMIT, so a retry comes after the commit it conflicted with
+	idx_t NextCommitAttempt();
+	//! How often the option was published, by commits and reloads
+	idx_t ConfigOptionPublications(const DuckLakeConfigOption &option) const;
+	//! Takes the changes of a committed transaction as the catalog's values, unless a later attempt published them
+	void CommitConfigOptions(const vector<DuckLakeConfigOptionUndo> &changes);
+	//! Sets the option of a table a commit created, unless a later attempt published the option
+	void SetCommittedConfigOption(const DuckLakeConfigOption &option, idx_t attempt);
 	//! Keeps the option changes of a commit whose outcome could not be read, until a transaction reloads them
-	idx_t AddPendingOptionReload(DuckLakeConfigOptionReload reload);
+	idx_t AddPendingOptionReload(const DuckLakeConfigOptionReload &reload);
 	//! The kept option changes, by the number of their commit
 	map<idx_t, DuckLakeConfigOptionReload> PendingOptionReloads() const;
+	//! Takes the value read from the catalog, false while a transaction holds a change or it was published since
+	bool ReloadConfigOption(const DuckLakeConfigOption &option, bool has_row, bool reset, idx_t publications,
+	                        idx_t attempt);
 	//! Drops the changes of the resolved options from the records, and the records left empty
 	void ResolvePendingOptionReloads(const vector<idx_t> &commit_numbers,
 	                                 const vector<DuckLakeConfigOption> &unresolved);
@@ -510,6 +517,8 @@ private:
 	bool UnregisterCatalog();
 	//! Gives an entry loaded from the catalog the oid of its id, so it keeps its oid across snapshots
 	void AssignStableOid(CatalogEntry &entry, idx_t id);
+	//! The state of a config option, which an option no transaction changed yet takes from the cache
+	DuckLakeConfigOptionState &GetConfigOptionState(const DuckLakeConfigOption &option);
 
 private:
 	//! The oid of each loaded or committed entry
@@ -524,8 +533,10 @@ private:
 	mutable mutex config_lock;
 	//! The DuckLake options
 	DuckLakeOptions options;
-	//! The number of writes of the option cache, which orders the changes of the transactions
-	idx_t config_option_sequence = 0;
+	//! What the catalog holds for the options transactions changed, and the count of their changes still open
+	map<DuckLakeConfigOptionKey, DuckLakeConfigOptionState> config_option_states;
+	//! The commit attempts of the transactions that change options, numbered in the order they start
+	idx_t commit_attempt_count = 0;
 	//! The option changes of commits whose outcome could not be read, by the number of their commit
 	map<idx_t, DuckLakeConfigOptionReload> pending_option_reloads;
 	idx_t pending_option_reload_count = 0;

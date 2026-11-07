@@ -271,7 +271,8 @@
         "test/sql/transaction/lost_commit_reply_unreadable_catalog.test",
         "test/sql/transaction/lost_commit_reply_unreadable_catalog_order.test",
         "test/sql/transaction/lost_commit_reply_unreadable_catalog_open_writer.test",
-        "test/sql/transaction/lost_commit_reply_unreadable_catalog_two_options.test"
+        "test/sql/transaction/lost_commit_reply_unreadable_catalog_two_options.test",
+        "test/sql/transaction/lost_commit_reply_fallback_other_writer.test"
       ]
     }
   ]

@@ -171,7 +171,8 @@
         "test/sql/transaction/lost_commit_reply_compaction_registration.test",
         "test/sql/transaction/lost_commit_reply_option_set_reset_retry.test",
         "test/sql/transaction/lost_commit_reply_unreadable_catalog_order.test",
-        "test/sql/transaction/lost_commit_reply_option_set_reset_concurrent.test"
+        "test/sql/transaction/lost_commit_reply_option_set_reset_concurrent.test",
+        "test/sql/transaction/lost_commit_reply_fallback_other_writer.test"
       ]
     }
   ]
