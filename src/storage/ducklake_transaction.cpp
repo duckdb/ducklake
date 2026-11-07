@@ -948,6 +948,15 @@ static bool ConfigOptionChangedEarlier(const vector<DuckLakeConfigOptionUndo> &c
 	return false;
 }
 
+static bool ConfigOptionListed(const vector<DuckLakeConfigOption> &options, const DuckLakeConfigOption &option) {
+	for (auto &listed : options) {
+		if (listed.IsSame(option)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 static bool ConfigOptionReset(const vector<DuckLakeConfigOptionUndo> &changes, const DuckLakeConfigOption &option) {
 	for (auto &change : changes) {
 		if (change.reset && change.option.IsSame(option)) {
@@ -968,8 +977,13 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 	}
 	// the table options of the commit reach the cache on success alone
 	idx_t change_count = options.size();
-	options.insert(options.end(), reload.table_options.begin(), reload.table_options.end());
-	// the publications are counted before the reads, whose first one fixes the snapshot of the catalog
+	for (auto &table_option : reload.table_options) {
+		if (!ConfigOptionListed(options, table_option)) {
+			options.push_back(table_option);
+		}
+	}
+	// the publications are counted and the reload numbered before the reads, whose first one fixes the snapshot
+	auto attempt = ducklake_catalog.NextCommitAttempt();
 	vector<idx_t> publications;
 	for (auto &option : options) {
 		publications.push_back(ducklake_catalog.ConfigOptionPublications(option));
@@ -990,7 +1004,7 @@ bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReloa
 			continue;
 		}
 		bool reset = ConfigOptionReset(reload.changes, options[i]);
-		if (!ducklake_catalog.ReloadConfigOption(options[i], has_row[i], reset, publications[i])) {
+		if (!ducklake_catalog.ReloadConfigOption(options[i], has_row[i], reset, publications[i], attempt)) {
 			unresolved.push_back(options[i]);
 		}
 	}
