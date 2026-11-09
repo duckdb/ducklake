@@ -2892,9 +2892,8 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 	}
 	if (filter_info && file_list_type == FileListType::SCAN) {
 		// a filter the conditions do not express is checked against the file statistics, within the budget
-		// the visibility joined sources deepen the join tree, so they halve the budget
-		const auto cte_budget = transaction.GetCatalog().SupportsBranching() ? MAX_STATS_CTES / 2 : MAX_STATS_CTES;
-		const auto max_ctes = MinValue<idx_t>(cte_budget, MaxColumnCount() / 4);
+		// the visibility joined sources deepen the join tree, so half the budget bounds the plan depth
+		const auto max_ctes = MinValue<idx_t>(MAX_STATS_CTES / 2, MaxColumnCount() / 4);
 		for (auto &column_field_index : filter_result.unexpressed_columns) {
 			if (runtime_filter_stats_columns.size() >= max_ctes) {
 				break;

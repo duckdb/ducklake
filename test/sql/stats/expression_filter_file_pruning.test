@@ -182,7 +182,7 @@ SELECT count(*) FROM dl.wide WHERE least(COLUMNS(*), 1) = 0
 1
 
 query I
-SELECT len(regexp_extract_all(query, 'col_[0-9]+_stats AS')) IN (16, 32)
+SELECT len(regexp_extract_all(query, 'col_[0-9]+_stats AS')) = 16
 FROM duckdb_logs_parsed('DuckLakeMetadata')
 WHERE query LIKE '%col_%_stats AS%'
 ORDER BY timestamp DESC LIMIT 1
