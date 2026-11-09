@@ -213,3 +213,35 @@ query II
 SELECT count(*), max(s) FROM dl.files
 ----
 150	g
+
+# the same when the file with the longer bounds is merged into the bounds of an earlier file
+statement ok
+CREATE TABLE dl.files2 (i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO dl.files2 SELECT range, 'f' FROM range(100)
+
+statement ok
+INSERT INTO dl.files2 SELECT range, 'g' FROM range(100, 200)
+
+statement ok
+INSERT INTO dl.files2 SELECT range, 'h' FROM range(200, 300)
+
+statement ok
+UPDATE meta.ducklake_file_column_stats SET max_value = repeat('z', 300), max_is_exact = true WHERE data_file_id = (SELECT data_file_id FROM meta.ducklake_data_file WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'files2') ORDER BY data_file_id OFFSET 1 LIMIT 1) AND column_id = 2
+
+statement ok
+DELETE FROM dl.files2 WHERE i >= 250
+
+statement ok
+CALL ducklake_rewrite_data_files('dl', 'files2', delete_threshold => 0)
+
+query III
+SELECT strlen(max_value), max_value = repeat('z', 255) || '{', max_is_exact FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'files2') AND column_id = 2
+----
+256	true	false
+
+query II
+SELECT count(*), max(s) FROM dl.files2
+----
+250	h
