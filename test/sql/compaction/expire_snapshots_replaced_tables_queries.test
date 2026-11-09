@@ -17,7 +17,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/expire_s
 loop i 0 5
 
 statement ok
-CREATE TABLE lake.t${i} AS SELECT range AS v FROM range(10)
+CREATE TABLE lake.t{i} AS SELECT range AS v FROM range(10)
 
 endloop
 
@@ -29,7 +29,7 @@ BEGIN
 loop i 0 5
 
 statement ok
-CREATE OR REPLACE TABLE lake.t${i} AS SELECT range + ${r} AS v FROM range(10)
+CREATE OR REPLACE TABLE lake.t{i} AS SELECT range + {r} AS v FROM range(10)
 
 endloop
 
