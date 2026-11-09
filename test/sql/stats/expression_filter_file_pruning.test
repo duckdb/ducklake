@@ -172,7 +172,7 @@ analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 statement ok
 INSERT INTO dl.wide SELECT * FROM (PIVOT (SELECT range AS i, 5 AS v FROM range(600)) ON i USING first(v))
 
-# the file list query joins the statistics of the first 32 columns
+# the file list query joins the statistics of the first 16 columns
 statement ok
 CALL enable_logging('DuckLakeMetadata')
 
