@@ -6,7 +6,7 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/inlined_string_bounds_truncated.db
 
 test-env DATA_PATH {TEST_DIR}
 
@@ -147,3 +147,40 @@ query III
 SELECT count(*), min(s), length(max(s)) FROM dl.rw
 ----
 51	v	300
+
+# the default of an added column is a bound of the older rows
+statement ok
+ALTER TABLE dl.short ADD COLUMN d VARCHAR DEFAULT 'wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww'
+
+query IIII
+SELECT strlen(min_value), max_value = repeat('w', 255) || 'x', min_is_exact, max_is_exact FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'short') AND column_id = (SELECT column_id FROM meta.ducklake_column WHERE column_name = 'd')
+----
+256	true	false	false
+
+query I
+SELECT count(*) FROM dl.short WHERE d = repeat('w', 300)
+----
+2
+
+# a bound stored whole by an older version is cut at the next commit that touches the table
+statement ok
+UPDATE meta.ducklake_table_column_stats SET max_value = repeat('z', 300), max_is_exact = true WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'short') AND column_id = 1
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_CATALOG 'meta')
+
+statement ok
+INSERT INTO dl.short VALUES ('m', 'm')
+
+query III
+SELECT strlen(max_value), max_value = repeat('z', 255) || '{', max_is_exact FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'short') AND column_id = 1
+----
+256	true	false
+
+query II
+SELECT count(*), max(s) = repeat('y', 256) FROM dl.short
+----
+3	true

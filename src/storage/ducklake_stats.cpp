@@ -118,6 +118,7 @@ DuckLakeColumnStats DuckLakeColumnStats::FromConstant(const LogicalType &type, c
 		stats.min = stats.max = value.ToString();
 		stats.has_min = stats.has_max = true;
 		stats.min_is_exact = stats.max_is_exact = true;
+		stats.TruncateStringBounds();
 	}
 	return stats;
 }
@@ -357,6 +358,8 @@ static void MergeExtraStats(unique_ptr<DuckLakeColumnExtraStats> &extra_stats, c
 }
 
 void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
+	// bounds stored by older versions can be longer than the ones written now
+	TruncateStringBounds();
 	// the null state has to be read before the counts of the source are added to it
 	bool adopt_bounds = !bounds_unknown && has_num_values && has_null_count && num_values == null_count;
 	bool types_differ = type != new_stats.type;
