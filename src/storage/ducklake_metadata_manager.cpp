@@ -4808,6 +4808,20 @@ bool DuckLakeMetadataManager::InlinedDeletionTableExists(const Identifier &table
 	                                             table_name) != nullptr;
 }
 
+bool DuckLakeMetadataManager::ListedInlinedDeletionTableExists(const Identifier &table_name,
+                                                               const std::function<unique_ptr<QueryResult>()> &list) {
+	auto tables = transaction.GetCatalog().GetInlinedDeletionTables(transaction.GetNewestVisibleSnapshotId(), [&]() {
+		auto result = list();
+		result->ThrowIfError("Failed to probe for DuckLake inlined-deletion table: ");
+		unordered_set<string> listed;
+		for (auto &row : *result) {
+			listed.insert(row.GetValue<string>(0));
+		}
+		return listed;
+	});
+	return tables->count(table_name.GetIdentifierName()) > 0;
+}
+
 Identifier DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
                                                                 bool include_local_changes) {
 	// The table name is always deterministic
