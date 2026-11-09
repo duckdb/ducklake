@@ -517,8 +517,10 @@ public:
 	static string InlinedTableRegistrationTuple(idx_t table_id, const Identifier &table_name, idx_t schema_version);
 	static string LatestInlinedTableQuery(idx_t table_id);
 	static string DropDataFiles(const set<DataFileIndex> &dropped_files);
-	//! The deletes recorded in delete files against the given data files of the table at the snapshot
-	static string GetDeleteCountForDataFilesSql(TableIndex table_id, const set<DataFileIndex> &file_ids);
+	//! The deletes recorded against the given data files of the table at the snapshot, in delete files and in the
+	//! inlined deletion table when the table has one
+	static string GetDeleteCountForDataFilesSql(TableIndex table_id, const set<DataFileIndex> &file_ids,
+	                                            const Identifier &inlined_deletion_table);
 	//! Selects the given data files that are still in the metadata
 	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
 	//! Selects the given columns that a live data file of the table records values of, or holds the default of

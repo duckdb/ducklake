@@ -1,0 +1,98 @@
+# name: test/sql/remove_files/remove_data_files_concurrent.test
+# description: an older transaction keeps seeing the rows of a file another connection removed
+# group: [remove_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/remove_data_files_concurrent', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t FROM range(0, 10)
+
+statement ok
+INSERT INTO ducklake.t FROM range(10, 20)
+
+statement ok
+INSERT INTO ducklake.t FROM range(20, 30)
+
+statement ok
+INSERT INTO ducklake.t FROM range(30, 40)
+
+statement ok con2
+SET VARIABLE third_file = (SELECT filename FROM ducklake.t WHERE i = 25)
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM ducklake.t
+----
+40
+
+# the removing connection reads the table afterwards, which caches the narrowed bounds
+statement ok con2
+CALL ducklake_remove_data_files('ducklake', 't', getvariable('third_file'))
+
+query III con2
+SELECT min(i), max(i), count(*) FROM ducklake.t
+----
+0	39	30
+
+query II con2
+SELECT min(i), max(i) FROM ducklake.t WHERE i = 25
+----
+NULL	NULL
+
+# the older transaction keeps its own bounds, so the filter is not pruned away
+query III con1
+SELECT min(i), max(i), count(*) FROM ducklake.t
+----
+0	39	40
+
+query II con1
+SELECT min(i), max(i) FROM ducklake.t WHERE i = 25
+----
+25	25
+
+statement ok con1
+ROLLBACK
+
+# the same with a whole-file DELETE
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM ducklake.t
+----
+30
+
+statement ok con2
+DELETE FROM ducklake.t WHERE i >= 30
+
+query III con2
+SELECT min(i), max(i), count(*) FROM ducklake.t
+----
+0	19	20
+
+query III con1
+SELECT min(i), max(i), count(*) FROM ducklake.t
+----
+0	39	30
+
+query II con1
+SELECT min(i), max(i) FROM ducklake.t WHERE i = 35
+----
+35	35
+
+statement ok con1
+ROLLBACK

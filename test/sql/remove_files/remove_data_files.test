@@ -84,6 +84,16 @@ CALL ducklake_remove_data_files('ducklake', 'nope', 'nope.parquet')
 ----
 does not exist
 
+statement error
+CALL ducklake_remove_data_files('ducklake', NULL, 'nope.parquet')
+----
+Table name cannot be NULL
+
+statement error
+CALL ducklake_remove_data_files('ducklake', 't', ['nope.parquet', NULL])
+----
+File list cannot contain NULL
+
 # remove a list of files
 statement ok
 SET VARIABLE remaining = (SELECT list(data_file) FROM ducklake_list_files('ducklake', 't'))
@@ -126,6 +136,24 @@ query I
 SELECT count(*) FROM ducklake.t
 ----
 5
+
+# listing a transaction-local file twice gives the ordinary error
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t SELECT range, 'e' || range FROM range(100, 110);
+
+statement ok
+SET VARIABLE local_file = (SELECT filename FROM ducklake.t WHERE i = 105)
+
+statement error
+CALL ducklake_remove_data_files('ducklake', 't', [getvariable('local_file'), getvariable('local_file')])
+----
+is not a data file of table
+
+statement ok
+ROLLBACK
 
 # a file written by the same transaction is removed before it is ever committed
 statement ok

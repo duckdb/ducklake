@@ -63,14 +63,17 @@ static void DuckLakeRemoveDataFilesExecute(ClientContext &context, TableFunction
 		committed_files = metadata_manager.GetExtendedFilesForTable(table, transaction.GetSnapshot());
 	}
 	auto local_files = transaction.GetTransactionLocalFiles(table_id);
+	set<string> removed_paths;
 	for (auto &path : bind_data.paths) {
 		bool found = false;
-		if (!transaction.FileIsDropped(path)) {
+		// a path listed twice is no longer a data file of the table the second time
+		bool removed = transaction.FileIsDropped(path) || removed_paths.find(path) != removed_paths.end();
+		if (!removed) {
 			for (auto &file : committed_files) {
 				if (file.file.path != path) {
 					continue;
 				}
-				// the file keeps serving older snapshots - it is only ended at the commit snapshot
+				// the file keeps serving older snapshots, it is only ended at the commit snapshot
 				transaction.DropFile(table_id, file.file_id, file.file.path, file.row_count, file.file.file_size_bytes);
 				found = true;
 				break;
@@ -80,9 +83,10 @@ static void DuckLakeRemoveDataFilesExecute(ClientContext &context, TableFunction
 			continue;
 		}
 		for (auto &file : local_files) {
-			if (file.file_name != path) {
+			if (removed || file.file_name != path) {
 				continue;
 			}
+			removed_paths.insert(path);
 			if (!transaction.TryDropTransactionLocalFile(table_id, path)) {
 				throw InvalidInputException("Cannot remove file \"%s\" - it holds rows flushed from earlier snapshots",
 				                            path);

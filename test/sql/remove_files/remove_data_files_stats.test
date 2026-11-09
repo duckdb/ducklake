@@ -215,3 +215,85 @@ query II
 EXPLAIN ANALYZE SELECT min(i), max(i) FROM ducklake.t2
 ----
 analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# a removal in a transaction that also inserts rows keeps the column stats exact
+statement ok
+CREATE TABLE ducklake.t3(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.t3 FROM range(0, 10);
+
+statement ok
+INSERT INTO ducklake.t3 FROM range(10, 20);
+
+statement ok
+SET VARIABLE t3_file = (SELECT filename FROM ducklake.t3 WHERE i = 15)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t3 FROM range(100, 110);
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't3', getvariable('t3_file'))
+
+statement ok
+COMMIT
+
+query III
+SELECT min(i), max(i), count(*) FROM ducklake.t3
+----
+0	109	20
+
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats WHERE table_id = 3
+----
+0	109	true	true
+
+query II
+EXPLAIN ANALYZE SELECT min(i), max(i) FROM ducklake.t3
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# inlined deletions against the removed file leave with it as well
+statement ok
+CREATE TABLE ducklake.t4(i INTEGER);
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 5, table_name => 't4')
+
+statement ok
+INSERT INTO ducklake.t4 FROM range(0, 10);
+
+statement ok
+INSERT INTO ducklake.t4 FROM range(10, 20);
+
+statement ok
+DELETE FROM ducklake.t4 WHERE i = 15
+
+query I
+SELECT count(*) FROM dl.ducklake_inlined_delete_4
+----
+1
+
+statement ok
+SET VARIABLE t4_file = (SELECT filename FROM ducklake.t4 WHERE i = 16)
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't4', getvariable('t4_file'))
+
+query III
+SELECT min(i), max(i), count(*) FROM ducklake.t4
+----
+0	9	10
+
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats WHERE table_id = 4
+----
+0	9	true	true
+
+query II
+EXPLAIN ANALYZE SELECT min(i), max(i) FROM ducklake.t4
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*

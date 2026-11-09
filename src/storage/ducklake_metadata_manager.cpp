@@ -4852,15 +4852,28 @@ string DuckLakeMetadataManager::DropDataFiles(const set<DataFileIndex> &dropped_
 	return FlushDrop("ducklake_data_file", "data_file_id", dropped_files);
 }
 
-string DuckLakeMetadataManager::GetDeleteCountForDataFilesSql(TableIndex table_id, const set<DataFileIndex> &file_ids) {
+string DuckLakeMetadataManager::GetDeleteCountForDataFilesSql(TableIndex table_id, const set<DataFileIndex> &file_ids,
+                                                              const Identifier &inlined_deletion_table) {
+	auto id_list = GenerateIDList(file_ids);
+	string inlined_deletions = "0";
+	if (!inlined_deletion_table.empty()) {
+		inlined_deletions = StringUtil::Format(R"(
+(SELECT COUNT(*) FROM {METADATA_CATALOG}.%s
+ WHERE file_id IN (%s)
+   AND begin_snapshot <= {SNAPSHOT_ID}))",
+		                                       inlined_deletion_table, id_list);
+	}
 	return StringUtil::Format(R"(
-SELECT COALESCE(SUM(delete_count), 0)
-FROM {METADATA_CATALOG}.ducklake_delete_file
-WHERE table_id = %d
-  AND data_file_id IN (%s)
-  AND {SNAPSHOT_ID} >= begin_snapshot
-  AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL);)",
-	                          table_id.index, GenerateIDList(file_ids));
+SELECT
+  (SELECT COALESCE(SUM(delete_count), 0)
+   FROM {METADATA_CATALOG}.ducklake_delete_file
+   WHERE table_id = %d
+     AND data_file_id IN (%s)
+     AND {SNAPSHOT_ID} >= begin_snapshot
+     AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL))
+  +
+  %s;)",
+	                          table_id.index, id_list, inlined_deletions);
 }
 
 static string ScheduledDeletionTuple(idx_t file_id, const DuckLakePath &path) {
