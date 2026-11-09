@@ -4,6 +4,7 @@
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 #include "common/ducklake_data_file.hpp"
+#include "duckdb/common/file_system.hpp"
 
 namespace duckdb {
 
@@ -63,15 +64,21 @@ static void DuckLakeRemoveDataFilesExecute(ClientContext &context, TableFunction
 		committed_files = metadata_manager.GetExtendedFilesForTable(table, transaction.GetSnapshot());
 	}
 	auto local_files = transaction.GetTransactionLocalFiles(table_id);
+	// paths are matched with the separators of the platform, a registered path keeps the separators it was given
+	auto &fs = FileSystem::GetFileSystem(context);
+	auto normalize = [&](const string &p) {
+		return fs.ConvertSeparators(p);
+	};
 	// the local files are listed once, so a path removed by this call is not a data file of the table anymore
 	set<string> removed_paths;
-	for (auto &path : bind_data.paths) {
+	for (auto &input_path : bind_data.paths) {
+		auto path = normalize(input_path);
 		bool found = false;
 		bool removed = removed_paths.find(path) != removed_paths.end();
 		if (!removed) {
 			for (auto &file : committed_files) {
 				// a committed file dropped earlier in the transaction can be registered again as a local file
-				if (file.file.path != path || transaction.FileIsDropped(path)) {
+				if (normalize(file.file.path) != path || transaction.FileIsDropped(file.file.path)) {
 					continue;
 				}
 				// the file keeps serving older snapshots, it is only ended at the commit snapshot
@@ -84,13 +91,13 @@ static void DuckLakeRemoveDataFilesExecute(ClientContext &context, TableFunction
 			continue;
 		}
 		for (auto &file : local_files) {
-			if (removed || file.file_name != path) {
+			if (removed || normalize(file.file_name) != path) {
 				continue;
 			}
 			removed_paths.insert(path);
-			if (!transaction.TryDropTransactionLocalFile(table_id, path)) {
+			if (!transaction.TryDropTransactionLocalFile(table_id, file.file_name)) {
 				throw InvalidInputException("Cannot remove file \"%s\" - it holds rows flushed from earlier snapshots",
-				                            path);
+				                            input_path);
 			}
 			found = true;
 			break;
@@ -98,7 +105,7 @@ static void DuckLakeRemoveDataFilesExecute(ClientContext &context, TableFunction
 		if (!found) {
 			throw InvalidInputException("File \"%s\" is not a data file of table \"%s\" - ducklake_list_files lists "
 			                            "the data files of a table",
-			                            path, table.name);
+			                            input_path, table.name);
 		}
 	}
 }
