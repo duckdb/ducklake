@@ -165,6 +165,60 @@ void DuckLakeMissingField::AddStats(idx_t count, map<FieldIndex, DuckLakeColumnS
 	result.emplace(field_index, std::move(unknown_stats));
 }
 
+//! The Parquet writer stores string bounds of at most this many bytes
+static constexpr idx_t MAX_STRING_STATISTICS_SIZE = 256;
+
+static bool IsCharacterStart(char c) {
+	return (c & 0xc0) != 0x80;
+}
+
+//! A prefix that ends at a character boundary stays a lower bound
+static string TruncateMin(const string &value) {
+	idx_t size = MAX_STRING_STATISTICS_SIZE;
+	for (; size > 0; size--) {
+		if (IsCharacterStart(value[size])) {
+			break;
+		}
+	}
+	return value.substr(0, size);
+}
+
+//! A prefix stays an upper bound when its last ASCII byte is incremented
+static bool TryTruncateMax(const string &value, string &result) {
+	idx_t increment_pos = MAX_STRING_STATISTICS_SIZE;
+	for (; increment_pos > 0; increment_pos--) {
+		if (static_cast<data_t>(value[increment_pos - 1]) < 0x7F) {
+			break;
+		}
+	}
+	if (increment_pos == 0) {
+		return false;
+	}
+	result = value.substr(0, increment_pos);
+	result[increment_pos - 1]++;
+	return true;
+}
+
+void DuckLakeColumnStats::TruncateStringBounds() {
+	if (type.id() != LogicalTypeId::VARCHAR) {
+		return;
+	}
+	if (has_max && max.size() > MAX_STRING_STATISTICS_SIZE) {
+		string truncated;
+		if (!TryTruncateMax(max, truncated)) {
+			// the Parquet writer stores no bounds for such a column
+			ClearBounds();
+			return;
+		}
+		max = std::move(truncated);
+		max_is_exact = false;
+	}
+	if (has_min && min.size() > MAX_STRING_STATISTICS_SIZE) {
+		min = TruncateMin(min);
+		min_is_exact = false;
+	}
+}
+
 void DuckLakeColumnStats::ClearBounds() {
 	min.clear();
 	max.clear();

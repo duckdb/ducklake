@@ -104,3 +104,46 @@ query II
 SELECT min_value IS NULL, max_value IS NULL FROM meta.ducklake_file_column_stats WHERE data_file_id = (SELECT max(data_file_id) FROM meta.ducklake_data_file)
 ----
 true	true
+
+# a long value with multi byte characters is cut at a character boundary, its max ends at the incremented ASCII byte
+statement ok
+CREATE TABLE dl.utf8 (s VARCHAR)
+
+statement ok
+INSERT INTO dl.utf8 VALUES ('a' || repeat('é', 200)), ('z' || repeat('é', 200))
+
+query IIII
+SELECT min_value = 'a' || repeat('é', 127), strlen(min_value), max_value, max_is_exact FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'utf8')
+----
+true	255	{	false
+
+query II
+SELECT count(*) FILTER (WHERE s = 'a' || repeat('é', 200)), count(*) FILTER (WHERE s > 'z') FROM dl.utf8
+----
+1	1
+
+# a rewrite recomputes the bounds from the inlined rows and truncates them as well
+statement ok
+CREATE TABLE dl.rw (i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO dl.rw SELECT range, 'v' FROM range(100)
+
+statement ok
+INSERT INTO dl.rw VALUES (1000, repeat('z', 300))
+
+statement ok
+DELETE FROM dl.rw WHERE i < 50
+
+statement ok
+CALL ducklake_rewrite_data_files('dl', 'rw', delete_threshold => 0)
+
+query IIII
+SELECT min_value, length(max_value), max_value = repeat('z', 255) || '{', max_is_exact FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'rw') AND column_id = 2
+----
+v	256	true	false
+
+query III
+SELECT count(*), min(s), length(max(s)) FROM dl.rw
+----
+51	v	300

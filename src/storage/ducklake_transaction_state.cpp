@@ -1046,6 +1046,7 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(TableIndex table_id,
 						col_stats.max = row.GetValue<string>(col_offset + 1);
 						col_stats.max_is_exact = true;
 					}
+					col_stats.TruncateStringBounds();
 				}
 				target.MergeStats(col.field_index, col_stats);
 				col_offset += 4;
