@@ -18,7 +18,7 @@ run
 BEGIN;
 SELECT count(*) AS expired FROM ducklake_expire_snapshots('lake', older_than => TIMESTAMPTZ '2999-01-01');
 
-# The rollback keeps all 52 snapshots, so a missed reset leaves nothing to expire in the next run
+# Roll back so every run expires the same 51 snapshots
 cleanup
 @rollback ${lake}_pristine TO ${work}
 
