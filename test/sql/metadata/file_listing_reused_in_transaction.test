@@ -87,7 +87,7 @@ CALL disable_logging()
 
 # the first read reuses the listing block one cached for the unchanged head, the expiry drops it
 query I
-SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite') THEN
+SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite', 'postgres') THEN
     (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
      WHERE query LIKE '%ducklake^_data^_file%' ESCAPE '^' AND query LIKE '%ORDER BY data.data^_file^_id%' ESCAPE '^') = 1
     ELSE (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
