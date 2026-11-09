@@ -1,0 +1,61 @@
+# name: test/sql/migration/dev1_heal_guards.test
+# description: a dropped visibility table is recreated for a catalog without files and rejected once its ranges are gone
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_heal_guards_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+# without files there is nothing to recover, so the writable attach recreates the dropped table
+statement ok
+DROP TABLE meta.ducklake_file_visibility
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_heal_guards_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_visibility
+----
+0
+
+statement ok
+CREATE TABLE dl.t AS SELECT i FROM range(10) t(i)
+
+statement ok
+DELETE FROM dl.t WHERE i = 5
+
+query II
+SELECT (SELECT COUNT(*) FROM meta.ducklake_file_visibility), (SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility)
+----
+1	1
+
+# the preserved data ranges cannot heal a dropped delete visibility table
+statement ok
+ALTER TABLE meta.ducklake_data_file ADD COLUMN begin_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_data_file ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_data_file SET begin_snapshot = v.snapshot_id FROM meta.ducklake_file_visibility v WHERE v.branch_id = 0 AND v.is_delete = FALSE AND v.data_file_id = ducklake_data_file.data_file_id
+
+statement ok
+DROP TABLE meta.ducklake_delete_file_visibility
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_heal_guards_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+----
+Cannot heal

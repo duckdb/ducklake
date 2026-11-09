@@ -231,6 +231,7 @@
         "test/sql/issues/issue_1573_rewritten_delete_snapshot.test",
         "test/sql/metadata/file_listing_reused_in_transaction.test",
         "test/sql/compaction/rewrite_record_count.test",
+        "test/sql/migration/dev1_heal_guards.test",
         "test/sql/migration/dev1_partial_heal.test",
         "test/sql/migration/dev1_visibility_events_rewrite.test",
         "test/sql/partitioning/bucket_pruning.test",
