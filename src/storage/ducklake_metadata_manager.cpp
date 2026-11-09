@@ -7331,17 +7331,25 @@ string DuckLakeMetadataManager::InsertNewSchema(const DuckLakeSnapshot &snapshot
 	return result;
 }
 
-unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithRewriteCandidates() {
-	auto result = Query("SELECT DISTINCT table_id FROM " + DeleteFiles() +
-	                    " WHERE end_snapshot IS NULL "
-	                    "UNION SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_inlined_data_tables "
-	                    "WHERE table_name LIKE 'ducklake^_inlined^_delete^_%' ESCAPE '^'");
+unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithRewriteCandidates(DuckLakeSnapshot snapshot,
+                                                                             const vector<TableIndex> &table_ids) {
+	auto result = Query("SELECT DISTINCT table_id FROM " + DeleteFiles() + " WHERE end_snapshot IS NULL");
 	result->ThrowIfError("Failed to get the tables with rewrite candidates from DuckLake: ");
-	unordered_set<idx_t> table_ids;
+	unordered_set<idx_t> candidates;
 	for (auto &row : *result) {
-		table_ids.insert(row.GetValue<idx_t>(0));
+		candidates.insert(row.GetValue<idx_t>(0));
 	}
-	return table_ids;
+	// inlined deletions live in an unlisted table per data table, so probe the tables in scope
+	for (auto &table_id : table_ids) {
+		if (candidates.count(table_id.index)) {
+			continue;
+		}
+		if (transaction.HasLocalDeletes(table_id) || transaction.HasLocalInlinedFileDeletes(table_id) ||
+		    !GetInlinedDeletionTableName(table_id, snapshot, false).GetIdentifierName().empty()) {
+			candidates.insert(table_id.index);
+		}
+	}
+	return candidates;
 }
 
 unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithLiveDataFiles() {
