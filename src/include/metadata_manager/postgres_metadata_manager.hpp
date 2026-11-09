@@ -58,6 +58,10 @@ public:
 protected:
 	string GetLatestSnapshotQuery() const override;
 	string GetSnapshotMaximaQuery() const override;
+	//! READ COMMITTED metadata reads see other transactions' commits, so parsed results stay statement scoped
+	bool MetadataReadsAreRepeatable() const override {
+		return false;
+	}
 	string SnapshotTimeSql() const override {
 		// the server's clock, as NOW() is the start of the metadata transaction
 		return "clock_timestamp()";

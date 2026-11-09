@@ -206,7 +206,8 @@ public:
 
 	DuckLakeSnapshotCommit &GetCommitInfo();
 	//! Execute SQL on the metadata connection without placeholder substitution or metadata-manager wrapping.
-	unique_ptr<QueryResult> ExecuteRaw(string query);
+	//! Reads pass invalidates_caches false so the parsed listings of the transaction survive them.
+	unique_ptr<QueryResult> ExecuteRaw(string query, bool invalidates_caches = true);
 	//! Execute a statement on the metadata connection, logged with its query text like ExecuteRaw.
 	unique_ptr<QueryResult> ExecuteStatement(unique_ptr<SQLStatement> statement);
 	Connection &GetConnection();

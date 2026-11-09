@@ -47,32 +47,49 @@ COMMIT
 statement ok
 CALL disable_logging()
 
-# the second identical listing reuses the parsed rows of the first
+# the second identical listing reuses the parsed rows of the first where metadata reads share one snapshot
 query I
-SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%ducklake^_data^_file%' ESCAPE '^' AND query LIKE '%ducklake^_file^_visibility%' ESCAPE '^'
+SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite') THEN
+    (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+     WHERE query LIKE '%ducklake^_data^_file%' ESCAPE '^' AND query LIKE '%ducklake^_file^_visibility%' ESCAPE '^')
+    ELSE 1 END
 ----
 1
 
-# a metadata write between listings drops the cache so the expiry result is read fresh
+# a metadata write between listings drops the cache so the second read lists the files again
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
 statement ok
 BEGIN
 
 query I
-SELECT count(*) FROM dl.gone
+SELECT sum(i) FROM dl.t
 ----
-0
+4950
 
 statement ok
 CALL ducklake_expire_snapshots('dl', versions => [2])
 
 query I
-SELECT count(*) FROM dl.gone
+SELECT sum(i) FROM dl.t
 ----
-0
+4950
 
 statement ok
 COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%ducklake^_data^_file%' ESCAPE '^' AND query LIKE '%ORDER BY data.data^_file^_id%' ESCAPE '^'
+----
+2
 
 query I
 SELECT count(*) FROM meta.ducklake_snapshot WHERE snapshot_id = 2

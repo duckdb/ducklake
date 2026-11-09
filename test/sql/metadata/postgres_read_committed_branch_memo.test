@@ -1,0 +1,49 @@
+# name: test/sql/metadata/postgres_read_committed_branch_memo.test
+# description: a READ COMMITTED transaction sees a branch another connection adds between its expiry dry runs
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/postgres_read_committed_branch_memo', METADATA_CATALOG 'meta', META_ISOLATION_LEVEL 'READ COMMITTED', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+INSERT INTO dl.t VALUES (43)
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM ducklake_expire_snapshots('dl', versions => [1], dry_run => true)
+----
+1
+
+statement ok con2
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 1, 1, NULL)
+
+query I con1
+SELECT count(*) FROM ducklake_expire_snapshots('dl', versions => [1], dry_run => true)
+----
+0
+
+statement ok con1
+ROLLBACK
+
+# a fresh transaction protects the fork snapshot of the branch
+query I
+SELECT count(*) FROM ducklake_expire_snapshots('dl', versions => [1], dry_run => true)
+----
+0

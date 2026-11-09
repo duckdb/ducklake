@@ -23,7 +23,8 @@ unique_ptr<QueryResult> QuackMetadataManager::Query(string &query) {
 	    SQLString::ToString(ducklake_catalog.MetadataDatabaseName().GetIdentifierName());
 	auto wrapper = StringUtil::Format("CALL system.main.quack_query_by_name(%s, %s)", metadata_catalog_name_literal,
 	                                  SQLString(query));
-	auto result = transaction.ExecuteRaw(std::move(wrapper));
+	// writers funnel through Execute, which drops the caches itself
+	auto result = transaction.ExecuteRaw(std::move(wrapper), false);
 	if (result->HasError()) {
 		// cleanup
 		string reset = "ROLLBACK; BEGIN TRANSACTION;";

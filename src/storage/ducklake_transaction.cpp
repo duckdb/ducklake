@@ -2367,23 +2367,9 @@ bool DuckLakeTransaction::InlinedFileDeletionsFlushed(TableIndex table_id) {
 	return state->flushed_inlined_file_deletions.count(table_id) > 0;
 }
 
-static bool QueryOnlyReads(const string &query) {
-	auto start = query.find_first_not_of(" \t\n\r");
-	if (start == string::npos) {
-		return true;
-	}
-	for (const char *prefix : {"SELECT", "WITH", "EXPLAIN", "FROM"}) {
-		idx_t len = strlen(prefix);
-		if (StringUtil::CIEquals(query.substr(start, len), prefix)) {
-			return true;
-		}
-	}
-	return false;
-}
-
-unique_ptr<QueryResult> DuckLakeTransaction::ExecuteRaw(string query) {
+unique_ptr<QueryResult> DuckLakeTransaction::ExecuteRaw(string query, bool invalidates_caches) {
 	auto &connection = GetConnection();
-	if (metadata_manager && !QueryOnlyReads(query)) {
+	if (invalidates_caches && metadata_manager) {
 		// the write can change what a repeated listing returns
 		metadata_manager->InvalidateFileListCache();
 	}

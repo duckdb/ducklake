@@ -218,6 +218,10 @@ public:
 	virtual bool CommitsEachStatement() const {
 		return false;
 	}
+	//! Whether metadata reads of one transaction share a snapshot, which parsed results need to outlive a statement
+	virtual bool MetadataReadsAreRepeatable() const {
+		return !CommitsEachStatement();
+	}
 	//! Whether transactions that started before a metadata table was dropped still read it
 	virtual bool DroppedTablesStayReadable() const;
 	//! Whether a commit inserts inlined rows after its batch instead of sending them as VALUES text in it
@@ -886,9 +890,7 @@ private:
 	static mutex metadata_managers_lock;
 	//! The global snapshot maximum read along with the latest snapshot
 	optional_idx global_snapshot_max;
-	//! The connection the maxima are read on, kept so retried commits do not construct one each
-	unique_ptr<Connection> maxima_connection;
-	//! Whether the catalog holds any branch besides main, read once per transaction
+	//! Whether the catalog holds any branch besides main, read once when reads are repeatable
 	optional_idx catalog_has_branches;
 	//! Parsed file listings keyed by their query, statements repeat identical listings several times
 	unordered_map<string, shared_ptr<vector<DuckLakeFileListEntry>>> file_list_cache;

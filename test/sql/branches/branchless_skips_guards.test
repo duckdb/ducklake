@@ -50,7 +50,7 @@ statement ok
 DELETE FROM dl.u
 
 statement ok
-CALL ducklake_create_branch('dl', 'dev')
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 5, 5, NULL)
 
 statement ok
 CALL truncate_duckdb_logs()
