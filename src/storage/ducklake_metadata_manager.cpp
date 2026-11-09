@@ -1073,7 +1073,9 @@ bool DuckLakeMetadataManager::HasDeleteFileVisibilityTable() {
 }
 
 bool DuckLakeMetadataManager::HasMetadataColumn(const string &table, const string &column) {
-	return !Query(StringUtil::Format("SELECT %s FROM {METADATA_CATALOG}.%s LIMIT 0", column, table))->HasError();
+	// a reference to a missing column fails to bind, which makes some catalogs reload their schema
+	auto result = Query(StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", table));
+	return !result->HasError() && ResultHasColumn(*result, column);
 }
 
 bool DuckLakeMetadataManager::HasAnyFileRangeColumns() {
