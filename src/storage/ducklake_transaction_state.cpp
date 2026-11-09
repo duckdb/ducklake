@@ -2425,10 +2425,10 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::DeleteOverwrittenDeleteFiles(
 		    overwritten_delete_files, relative_paths(overwritten_delete_files));
 		// a server side batch is frozen before its retries, so only client side commits skip the suppression
-		bool include_retro_suppression = !context.has_branches || context.has_branches();
+		bool include_branch_bookkeeping = !context.has_branches || context.has_branches();
 		batch_queries += DuckLakeMetadataManager::WriteNewDeleteFiles(
 		    file_list, table_relative_paths(file_list, &DuckLakeDeleteFileInfo::path), context.supports_v1_1_metadata,
-		    context.supports_v2_0_metadata, include_retro_suppression);
+		    context.supports_v2_0_metadata, include_branch_bookkeeping);
 
 		// write new inlined deletes (for inlined data tables)
 		auto inlined_deletes = GetNewInlinedDeletes(commit_state);

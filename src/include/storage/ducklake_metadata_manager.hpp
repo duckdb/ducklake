@@ -570,7 +570,7 @@ public:
 	//! Caller supplies one resolved path per new delete file, in the same order.
 	static string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
 	                                  const vector<DuckLakePath> &resolved_paths, bool write_row_group_count,
-	                                  bool write_visibility, bool include_retro_suppression = true);
+	                                  bool write_visibility, bool include_branch_bookkeeping = true);
 	static string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros);
 
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
@@ -600,7 +600,8 @@ public:
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor, const string &query,
 	                              bool branch_aware);
-	static string SnapshotAndStatsAndChangesQuery(bool include_exactness, bool branch_aware);
+	//! Portable keeps standard SQL for metadata servers that run the query themselves
+	static string SnapshotAndStatsAndChangesQuery(bool include_exactness, bool branch_aware, bool portable = false);
 	//! The query of the conflict check, which must read the latest snapshot and the table stats consistently
 	virtual string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const;
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
@@ -700,11 +701,16 @@ public:
 	//! The per file ranges a branch derives from its visibility events
 	static string VisibilityEventRanges(const string &visibility_table, const string &file_id_column,
 	                                    const string &chain_predicate, const string &prefix);
-	static string DataFileSource(bool branch_aware, idx_t branch_id, optional_idx fork_snapshot, const string &prefix);
-	static string DeleteFileSource(bool branch_aware, idx_t branch_id, optional_idx fork_snapshot,
-	                               const string &prefix);
+	//! A valid table id is pushed into the file scan and the visibility aggregate
+	static string DataFileSource(bool branch_aware, idx_t branch_id, optional_idx fork_snapshot, const string &prefix,
+	                             optional_idx table_id = optional_idx());
+	static string DeleteFileSource(bool branch_aware, idx_t branch_id, optional_idx fork_snapshot, const string &prefix,
+	                               optional_idx table_id = optional_idx());
 	string DataFiles() const;
 	string DeleteFiles() const;
+	//! The sources filtered to one table, pushed into the visibility aggregate
+	string DataFiles(TableIndex table_id) const;
+	string DeleteFiles(TableIndex table_id) const;
 	bool HasMetadataColumn(const string &table, const string &column);
 	bool HasAnyFileRangeColumns();
 	bool HasAllFileRangeColumns();

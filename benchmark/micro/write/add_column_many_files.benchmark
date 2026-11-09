@@ -18,6 +18,20 @@ include benchmark/micro/fixtures/delete_files.benchmark.in
 
 run
 ALTER TABLE lake.bg ADD COLUMN c INTEGER;
+ALTER TABLE lake.bg DROP COLUMN c;
+ALTER TABLE lake.bg ADD COLUMN c INTEGER;
+ALTER TABLE lake.bg DROP COLUMN c;
+ALTER TABLE lake.bg ADD COLUMN c INTEGER;
+ALTER TABLE lake.bg DROP COLUMN c;
+ALTER TABLE lake.bg ADD COLUMN c INTEGER;
+ALTER TABLE lake.bg DROP COLUMN c;
+ALTER TABLE lake.bg ADD COLUMN c INTEGER;
+ALTER TABLE lake.bg DROP COLUMN c;
+ALTER TABLE lake.bg ADD COLUMN c INTEGER;
+ALTER TABLE lake.bg DROP COLUMN c;
+ALTER TABLE lake.bg ADD COLUMN c INTEGER;
+ALTER TABLE lake.bg DROP COLUMN c;
+ALTER TABLE lake.bg ADD COLUMN c INTEGER;
 
 include benchmark/micro/fixtures/restore_cleanup_warm.benchmark.in
 
@@ -25,4 +39,4 @@ include benchmark/micro/fixtures/restore_cleanup_warm.benchmark.in
 result_query II
 SELECT count(*), max(column_id) FROM __ducklake_metadata_lake.ducklake_column c JOIN __ducklake_metadata_lake.ducklake_table t USING (table_id) WHERE t.table_name = 'bg'
 ----
-2	2
+2	9

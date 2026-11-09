@@ -554,7 +554,7 @@ string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnaps
                                                                    bool include_exactness) const {
 	// one statement reads the latest snapshot and the table stats from the same state at any isolation level
 	auto remote_query =
-	    SnapshotAndStatsAndChangesQuery(include_exactness, transaction.GetCatalog().SupportsBranching());
+	    SnapshotAndStatsAndChangesQuery(include_exactness, transaction.GetCatalog().SupportsBranching(), true);
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	SubstituteSnapshotPlaceholders(snapshot, remote_query);
