@@ -249,7 +249,9 @@ public:
 	virtual string CommitErrorHint(const string &message) const;
 	//! Whether a read on a second connection can block a concurrent commit of the metadata catalog
 	bool ConcurrentReadsBlockCommits() const;
-	//! Whether the catalog holds any branch besides main, read once per transaction
+	//! Whether reads in the metadata transaction block concurrent commits, probed once the metadata is attached
+	bool DetectConcurrentReadsBlockCommits();
+	//! Whether the catalog holds any branch besides main, memoized while metadata reads are repeatable
 	bool HasBranches();
 	//! Drops the cached file listings, called when the transaction writes metadata
 	void InvalidateFileListCache();

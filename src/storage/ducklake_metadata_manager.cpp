@@ -126,17 +126,34 @@ string DuckLakeMetadataManager::CommitErrorHint(const string &message) const {
 	return rule->hint;
 }
 
-bool DuckLakeMetadataManager::ConcurrentReadsBlockCommits() const {
-	// the registered SQLite profile predates the field, so the catalog type carries the default
-	bool blocks = GetMetadataProfile().concurrent_reads_block_commits ||
-	              StringUtil::CIEquals(transaction.GetCatalog().MetadataType(), "sqlite");
-	if (!blocks) {
+bool DuckLakeMetadataManager::DetectConcurrentReadsBlockCommits() {
+	auto &catalog = transaction.GetCatalog();
+	// the SQLite profile leaves the field unset, so the attached catalog type decides
+	bool is_sqlite = StringUtil::CIEquals(catalog.MetadataCatalogType(), "sqlite");
+	if (!GetMetadataProfile().concurrent_reads_block_commits && !is_sqlite) {
 		return false;
 	}
+	if (!is_sqlite || catalog.GetAttached().IsReadOnly()) {
+		// a read only attach never commits, and the pragma counts as a write that a read only catalog refuses
+		return true;
+	}
 	// WAL readers do not block commits, and a write transaction fails on a stale snapshot instead
-	auto &parameters = transaction.GetCatalog().MetadataParameters();
-	auto parameter = parameters.find("journal_mode");
-	return parameter == parameters.end() || !StringUtil::CIEquals(parameter->second.ToString(), "wal");
+	// a connection of its own keeps a refused probe from aborting the metadata transaction
+	string query = "SELECT journal_mode FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, 'PRAGMA journal_mode')";
+	SubstituteCatalogPlaceholders(query);
+	Connection probe_connection(*transaction.GetConnection().context->db);
+	auto result = probe_connection.Query(query);
+	if (result->HasError()) {
+		return true;
+	}
+	for (auto &row : *result) {
+		return !StringUtil::CIEquals(row.GetValue<string>(0), "wal");
+	}
+	return true;
+}
+
+bool DuckLakeMetadataManager::ConcurrentReadsBlockCommits() const {
+	return transaction.GetCatalog().ConcurrentReadsBlockCommits();
 }
 
 bool DuckLakeMetadataManager::HasBranches() {

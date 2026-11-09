@@ -1,0 +1,67 @@
+# name: test/sql/branches/sqlite_wal_persistent_branch_gap_moved_lineage.test
+# description: a catalog created in WAL mode stays WAL when attached without the option, so the maxima read must not assume a blocking reader
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+set ignore_error_messages
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/wal_persist.db' AS dl (DATA_PATH '{TEST_DIR}/wal_persist', METADATA_CATALOG 'meta', META_JOURNAL_MODE 'wal', DUCKLAKE_VERSION '2.0-dev1')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/wal_persist.db' AS dl (DATA_PATH '{TEST_DIR}/wal_persist', METADATA_CATALOG 'meta')
+
+query I
+SELECT journal_mode FROM sqlite_query('meta', 'PRAGMA journal_mode')
+----
+wal
+
+statement ok
+SET ducklake_max_retry_count = 0
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT id FROM dl.current_snapshot()
+----
+1
+
+statement ok con1
+CREATE TABLE dl.u(i INTEGER)
+
+statement ok con2
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 1, 1, NULL)
+
+statement ok con2
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 1
+
+statement ok con2
+INSERT INTO meta.ducklake_snapshot_changes VALUES (100, NULL, NULL, NULL, NULL)
+
+statement ok con2
+CREATE TABLE dl.v(i INTEGER)
+
+query I con2
+SELECT id FROM dl.current_snapshot()
+----
+101
+
+statement ok con1
+COMMIT
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+102
