@@ -38,7 +38,7 @@ SELECT files_processed, files_created FROM ducklake_rewrite_data_files('lake', '
 
 # the 60 deleted rows left with the rewritten file
 statement ok
-SET VARIABLE stored_rows = (SELECT SUM(record_count) FROM meta.ducklake_data_file WHERE table_id = getvariable('t_id') AND end_snapshot IS NULL)
+SET VARIABLE stored_rows = (SELECT SUM(record_count) FROM meta.ducklake_data_file df WHERE df.table_id = getvariable('t_id') AND NOT EXISTS (SELECT 1 FROM meta.ducklake_file_visibility v WHERE v.data_file_id = df.data_file_id AND v.is_delete))
 
 query II
 SELECT record_count, record_count = getvariable('stored_rows') FROM meta.ducklake_table_stats WHERE table_id = getvariable('t_id')

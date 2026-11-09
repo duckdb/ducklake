@@ -400,6 +400,8 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				                            "replaced the inline file ranges are missing");
 			}
 		} else {
+			// the additions change the metadata schema, which a kept cache would still miss
+			metadata_cache_stale = true;
 			try {
 				transaction.GetMetadataManager().AddV2_0Dev1Additions();
 				// commit now so a concurrent heal surfaces inside the attach retry scope
