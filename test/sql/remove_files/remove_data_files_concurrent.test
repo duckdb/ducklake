@@ -133,3 +133,37 @@ SELECT min(i), max(i) FROM ducklake.t2 WHERE i = 25
 
 statement ok con1
 ROLLBACK
+
+# a whole-file drop with recomputed stats and an inlined deletion in another table still advances the cache key
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM ducklake.t
+----
+20
+
+statement ok con2
+BEGIN
+
+statement ok con2
+DELETE FROM ducklake.t WHERE i >= 10
+
+statement ok con2
+DELETE FROM ducklake.t2 WHERE i = 1
+
+statement ok con2
+COMMIT
+
+query II con2
+SELECT min(i), max(i) FROM ducklake.t
+----
+0	9
+
+query II con1
+SELECT min(i), max(i) FROM ducklake.t WHERE i = 15
+----
+15	15
+
+statement ok con1
+ROLLBACK

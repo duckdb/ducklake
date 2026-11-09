@@ -1451,7 +1451,7 @@ bool DuckLakeTransactionState::TryRecomputeGlobalStatsAfterDrop(TableIndex table
 	auto snapshot = context.get_snapshot();
 	// the rows already deleted from the dropped files are not part of the net row count of the table
 	// (dropped_ids spans every table of the transaction, the query only counts the files of this table)
-	// the net row count reads the inlined deletions from the local delete files once they are flushed
+	// exclude flushed inlined deletions from both row counts
 	Identifier inlined_deletion_table;
 	bool flushed_inlined_deletions =
 	    flushed_inlined_file_deletions.find(table_id) != flushed_inlined_file_deletions.end();
@@ -1698,8 +1698,7 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		bool adds_fields = added_field_stats.find(table_id) != added_field_stats.end();
 		if (clear_column_stats && current_stats && !current_stats->record_count_unknown && !adds_fields &&
 		    !DeletesRemainingFiles(table_changes, dropped_files)) {
-			// the new data of this transaction is merged below, on top of the stats of the remaining files
-			// (a field added by the transaction is not in the committed schema the recompute reads)
+			// merge the new data on top of the recomputed stats of the remaining files
 			DuckLakeTableStats recomputed;
 			if (TryRecomputeGlobalStatsAfterDrop(table_id, dropped_row_count, context, recomputed)) {
 				new_globals.stats = std::move(recomputed);

@@ -298,7 +298,7 @@ EXPLAIN ANALYZE SELECT min(i), max(i) FROM ducklake.t4
 ----
 analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
 
-# a column added with a default in the transaction that removes a file keeps the default in its stats
+# an added default stays visible after removing a file and inserting rows
 statement ok
 CREATE TABLE ducklake.t5(i INTEGER);
 
