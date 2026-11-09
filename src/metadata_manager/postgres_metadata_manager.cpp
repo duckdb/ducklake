@@ -411,7 +411,7 @@ bool PostgresMetadataManager::InlinedDeletionTableExists(const Identifier &table
 }
 
 vector<Identifier> PostgresMetadataManager::ExistingMetadataTables(const vector<Identifier> &table_names) {
-	// one round trip for every name, a lookup through the catalog costs several per table
+	// one query lists all names at once, a lookup through the catalog costs several statements per table
 	vector<Identifier> result;
 	if (table_names.empty()) {
 		return result;

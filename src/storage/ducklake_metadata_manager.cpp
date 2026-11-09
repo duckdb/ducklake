@@ -6065,7 +6065,7 @@ AND NOT EXISTS (
 	auto deleted_table_ids = GenerateIDList(cleanup_tables);
 
 	auto read_cleanup_files = [&](QueryResult &files) {
-		// every dropped table version has an id of its own, so their paths are read together, not one by one
+		// each CREATE OR REPLACE gives the table a new id, a rename keeps it, so the paths are read for all ids at once
 		struct UnusedFile {
 			DataFileIndex id;
 			TableIndex table_id;
