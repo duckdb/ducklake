@@ -410,6 +410,31 @@ bool PostgresMetadataManager::InlinedDeletionTableExists(const Identifier &table
 	return result->Fetch() != nullptr;
 }
 
+vector<Identifier> PostgresMetadataManager::ExistingMetadataTables(const vector<Identifier> &table_names) {
+	// one round trip for every name, a lookup through the catalog costs several per table
+	vector<Identifier> result;
+	if (table_names.empty()) {
+		return result;
+	}
+	auto &catalog = transaction.GetCatalog();
+	vector<string> name_literals;
+	for (auto &table_name : table_names) {
+		name_literals.push_back(SQLString::ToString(table_name.GetIdentifierName()));
+	}
+	auto remote_query = StringUtil::Format(
+	    "SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = %s AND tablename IN (%s)",
+	    SQLString::ToString(catalog.MetadataSchemaName().GetIdentifierName()), StringUtil::Join(name_literals, ", "));
+	auto query =
+	    StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
+	                       SQLString::ToString(remote_query));
+	auto query_result = DuckLakeMetadataManager::Query(query);
+	query_result->ThrowIfError("Failed to look up DuckLake inlined-deletion tables: ");
+	for (auto &row : *query_result) {
+		result.push_back(row.GetValue<Identifier>(0));
+	}
+	return result;
+}
+
 void PostgresMetadataManager::MigrateInlinedDataTypes() {
 	auto columns = DuckLakeMetadataManager::Query(GetInlinedTableColumnsSql());
 	columns->ThrowIfError("Failed to read the columns of inlined-data tables while migrating: ");

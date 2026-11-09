@@ -43,6 +43,7 @@ public:
 	string GetColumnTypeInternal(const LogicalType &type) override;
 	string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const override;
 	bool InlinedDeletionTableExists(const Identifier &table_name) override;
+	vector<Identifier> ExistingMetadataTables(const vector<Identifier> &table_names) override;
 	void MigrateInlinedDataTypes() override;
 	bool IsRetryableCommitError(const string &message) const override;
 	string CommitErrorWithoutQuery(const string &message) const override;
