@@ -16,6 +16,25 @@ include benchmark/micro/fixtures/delete_files.benchmark.in
 
 run
 SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
+SELECT count(*) FROM ducklake_table_changes('lake', 'main', 'bg', 4, 4);
 
 result I
 0

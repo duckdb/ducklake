@@ -12,6 +12,10 @@ include benchmark/micro/fixtures/snap100k.benchmark.in
 
 run
 SELECT * FROM ducklake_snapshots('lake') LIMIT 10;
+SELECT * FROM ducklake_snapshots('lake') LIMIT 10;
+SELECT * FROM ducklake_snapshots('lake') LIMIT 10;
+SELECT * FROM ducklake_snapshots('lake') LIMIT 10;
+SELECT * FROM ducklake_snapshots('lake') LIMIT 10;
 
 result_query I
 SELECT count(*) FROM __answer
