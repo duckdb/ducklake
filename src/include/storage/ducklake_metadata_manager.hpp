@@ -666,6 +666,8 @@ public:
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	//! The tables with data files that are not dropped
 	unordered_set<idx_t> GetTablesWithLiveDataFiles();
+	//! The tables a delete rewrite can touch, which hold live delete files or inlined deletions
+	unordered_set<idx_t> GetTablesWithRewriteCandidates();
 	//! Returns the rows the option is expected to have after it is written
 	virtual idx_t SetConfigOption(const DuckLakeConfigOption &option);
 	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);
@@ -922,6 +924,8 @@ private:
 	unordered_map<string, shared_ptr<vector<DuckLakeFileListEntry>>> file_list_cache;
 	//! Parsed deletion scans of table_changes, which executes its queries twice per call
 	unordered_map<string, shared_ptr<vector<DuckLakeDeleteScanEntry>>> delete_scan_cache;
+	//! Net data file row counts, which every filtered count of a statement reads again
+	unordered_map<string, optional_idx> row_count_cache;
 
 	unordered_set<idx_t> GetFileIdsWithInlinedDeletions(TableIndex table_id, DuckLakeSnapshot snapshot);
 	unique_ptr<QueryResult> ReadInlinedDataChanges(DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot,

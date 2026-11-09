@@ -921,7 +921,10 @@ static unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableF
 	bool skip_tables_without_files = tables.size() > 1;
 	unordered_set<idx_t> tables_with_files;
 	if (skip_tables_without_files) {
-		tables_with_files = transaction.GetMetadataManager().GetTablesWithLiveDataFiles();
+		// a delete rewrite only touches tables with live delete files or inlined deletions
+		tables_with_files = type == CompactionType::REWRITE_DELETES
+		                        ? transaction.GetMetadataManager().GetTablesWithRewriteCandidates()
+		                        : transaction.GetMetadataManager().GetTablesWithLiveDataFiles();
 	}
 	vector<unique_ptr<LogicalOperator>> compactions;
 	for (auto &table_ref : tables) {

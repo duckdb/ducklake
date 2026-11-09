@@ -85,11 +85,15 @@ COMMIT
 statement ok
 CALL disable_logging()
 
+# the first read reuses the listing block one cached for the unchanged head, the expiry drops it
 query I
-SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%ducklake^_data^_file%' ESCAPE '^' AND query LIKE '%ORDER BY data.data^_file^_id%' ESCAPE '^'
+SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite') THEN
+    (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+     WHERE query LIKE '%ducklake^_data^_file%' ESCAPE '^' AND query LIKE '%ORDER BY data.data^_file^_id%' ESCAPE '^') = 1
+    ELSE (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+     WHERE query LIKE '%ducklake^_data^_file%' ESCAPE '^' AND query LIKE '%ORDER BY data.data^_file^_id%' ESCAPE '^') = 2 END
 ----
-2
+true
 
 query I
 SELECT count(*) FROM meta.ducklake_snapshot WHERE snapshot_id = 2

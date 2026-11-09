@@ -1746,4 +1746,40 @@ bool DuckLakeCatalog::UnregisterCatalog() {
 	return metadata_catalog_unused;
 }
 
+void DuckLakeCatalog::ObserveListingHead(idx_t head_snapshot_id) {
+	lock_guard<mutex> guard(listing_cache_lock);
+	if (listing_cache_head.IsValid() && listing_cache_head.GetIndex() == head_snapshot_id) {
+		return;
+	}
+	listing_cache.clear();
+	listing_cache_head = head_snapshot_id;
+}
+
+shared_ptr<vector<DuckLakeFileListEntry>> DuckLakeCatalog::TryGetCachedListing(const string &key, idx_t snapshot_id) {
+	lock_guard<mutex> guard(listing_cache_lock);
+	if (!listing_cache_head.IsValid() || listing_cache_head.GetIndex() != snapshot_id) {
+		return nullptr;
+	}
+	auto entry = listing_cache.find(key);
+	return entry == listing_cache.end() ? nullptr : entry->second;
+}
+
+void DuckLakeCatalog::StoreCachedListing(const string &key, idx_t snapshot_id,
+                                         shared_ptr<vector<DuckLakeFileListEntry>> entries) {
+	lock_guard<mutex> guard(listing_cache_lock);
+	if (!listing_cache_head.IsValid() || listing_cache_head.GetIndex() != snapshot_id) {
+		return;
+	}
+	if (listing_cache.size() >= 256) {
+		listing_cache.clear();
+	}
+	listing_cache.emplace(key, std::move(entries));
+}
+
+void DuckLakeCatalog::InvalidateListingCache() {
+	lock_guard<mutex> guard(listing_cache_lock);
+	listing_cache.clear();
+	listing_cache_head = optional_idx();
+}
+
 } // namespace duckdb

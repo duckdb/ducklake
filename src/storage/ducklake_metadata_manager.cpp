@@ -1563,16 +1563,27 @@ idx_t DuckLakeMetadataManager::GetNetDataFileRowCount(TableIndex table_id, DuckL
 }
 
 optional_idx DuckLakeMetadataManager::GetNetDataFileRowCountForStats(TableIndex table_id, DuckLakeSnapshot snapshot) {
+	// every filtered count of a statement reads this again, so reuse it until the transaction writes
+	bool cacheable = !ShowsConcurrentCommits();
+	auto cache_key = StringUtil::Format("rowcount/%d/%d", table_id.index, snapshot.snapshot_id);
+	if (cacheable) {
+		auto cached = row_count_cache.find(cache_key);
+		if (cached != row_count_cache.end()) {
+			return cached->second;
+		}
+	}
 	auto query = GetNetDataFileRowCountSql(table_id, GetInlinedDeletionTableName(table_id, snapshot),
 	                                       transaction.GetCatalog().SupportsBranching(), true);
 	auto result = Query(snapshot, query);
 	result->ThrowIfError("Failed to get exact data file row count from DuckLake: ");
+	optional_idx count;
 	for (auto &row : *result) {
-		return OptIdx(row, 0);
+		count = OptIdx(row, 0);
 	}
-	// LCOV_EXCL_START
-	return optional_idx();
-	// LCOV_EXCL_STOP
+	if (cacheable) {
+		row_count_cache.emplace(std::move(cache_key), count);
+	}
+	return count;
 }
 
 string DuckLakeMetadataManager::GetNetInlinedRowCountSql(const Identifier &inlined_table_name,
@@ -3032,6 +3043,14 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 			AttachInlinedFileDeletions(table_id, snapshot, include_local_changes, files);
 			return files;
 		}
+		// repeated reads of an unchanged head share the parsed listing across transactions
+		auto shared_listing = transaction.GetCatalog().TryGetCachedListing(cache_key, snapshot.snapshot_id);
+		if (shared_listing) {
+			file_list_cache.emplace(cache_key, shared_listing);
+			auto files = *shared_listing;
+			AttachInlinedFileDeletions(table_id, snapshot, include_local_changes, files);
+			return files;
+		}
 	}
 	auto result = Query(snapshot, query);
 	result->ThrowIfError("Failed to get data file list from DuckLake: ");
@@ -3079,7 +3098,9 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 		files.push_back(std::move(file_entry));
 	}
 	if (cacheable) {
-		file_list_cache.emplace(std::move(cache_key), make_shared_ptr<vector<DuckLakeFileListEntry>>(files));
+		auto parsed = make_shared_ptr<vector<DuckLakeFileListEntry>>(files);
+		transaction.GetCatalog().StoreCachedListing(cache_key, snapshot.snapshot_id, parsed);
+		file_list_cache.emplace(std::move(cache_key), std::move(parsed));
 	}
 	AttachInlinedFileDeletions(table_id, snapshot, include_local_changes, files);
 	return files;
@@ -4722,6 +4743,8 @@ void DuckLakeMetadataManager::ClearInlinedTableCaches() {
 void DuckLakeMetadataManager::InvalidateFileListCache() {
 	file_list_cache.clear();
 	delete_scan_cache.clear();
+	row_count_cache.clear();
+	transaction.GetCatalog().InvalidateListingCache();
 }
 
 map<idx_t, set<idx_t>> DuckLakeMetadataManager::ReadInlinedFileDeletions(TableIndex table_id, DuckLakeSnapshot snapshot,
@@ -7305,6 +7328,19 @@ string DuckLakeMetadataManager::InsertNewSchema(const DuckLakeSnapshot &snapshot
 		                             snapshot.snapshot_id, snapshot.schema_version, table_id.index);
 	}
 	return result;
+}
+
+unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithRewriteCandidates() {
+	auto result = Query("SELECT DISTINCT table_id FROM " + DeleteFiles() +
+	                    " WHERE end_snapshot IS NULL "
+	                    "UNION SELECT DISTINCT table_id FROM {METADATA_CATALOG}.ducklake_inlined_data_tables "
+	                    "WHERE table_name LIKE 'ducklake^_inlined^_delete^_%' ESCAPE '^'");
+	result->ThrowIfError("Failed to get the tables with rewrite candidates from DuckLake: ");
+	unordered_set<idx_t> table_ids;
+	for (auto &row : *result) {
+		table_ids.insert(row.GetValue<idx_t>(0));
+	}
+	return table_ids;
 }
 
 unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithLiveDataFiles() {

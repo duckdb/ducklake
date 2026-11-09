@@ -382,6 +382,15 @@ public:
 		attached_branch_id = branch_id;
 		attached_branch_fork = fork_snapshot;
 	}
+	//! Observes the head snapshot a transaction loaded, a moved head drops the cached listings
+	void ObserveListingHead(idx_t head_snapshot_id);
+	//! Returns the cached parsed listing when the key matches the observed head, nullptr otherwise
+	shared_ptr<vector<DuckLakeFileListEntry>> TryGetCachedListing(const string &key, idx_t snapshot_id);
+	//! Stores a parsed listing read at the observed head
+	void StoreCachedListing(const string &key, idx_t snapshot_id, shared_ptr<vector<DuckLakeFileListEntry>> entries);
+	//! Drops the cached listings, called when a transaction writes metadata
+	void InvalidateListingCache();
+
 	//! Clips a read snapshot to the fork when attached at a branch
 	idx_t ClipToBranchFork(idx_t snapshot_id) const {
 		if (!OnBranch() || snapshot_id < attached_branch_fork.GetIndex()) {
@@ -554,6 +563,10 @@ private:
 	DuckLakeVersion ducklake_version = DuckLakeVersion::V1_0;
 	//! The branch the catalog is attached at and its fork snapshot, main by default
 	idx_t attached_branch_id = 0;
+	//! Parsed head listings shared across transactions, valid while the observed head is unchanged
+	mutex listing_cache_lock;
+	optional_idx listing_cache_head;
+	unordered_map<string, shared_ptr<vector<DuckLakeFileListEntry>>> listing_cache;
 	optional_idx attached_branch_fork;
 	bool branch_metadata_present = true;
 	//! A per-instance identifier used to scope ObjectCache keys.
