@@ -266,6 +266,58 @@ static void ThrowIfNegativeInterval(Vector &input_vec, idx_t row_count) {
 	}
 }
 
+//! The Parquet writer stores string bounds of at most this many bytes
+static constexpr idx_t MAX_STRING_STATISTICS_SIZE = 256;
+
+static bool IsCharacterStart(char c) {
+	return (c & 0xc0) != 0x80;
+}
+
+//! A prefix that ends at a character boundary stays a lower bound
+static string TruncateMin(const string &value) {
+	idx_t size = MAX_STRING_STATISTICS_SIZE;
+	for (; size > 0; size--) {
+		if (IsCharacterStart(value[size])) {
+			break;
+		}
+	}
+	return value.substr(0, size);
+}
+
+//! A prefix stays an upper bound when its last ASCII byte is incremented
+static bool TryTruncateMax(const string &value, string &result) {
+	idx_t increment_pos = MAX_STRING_STATISTICS_SIZE;
+	for (; increment_pos > 0; increment_pos--) {
+		if (static_cast<data_t>(value[increment_pos - 1]) < 0x7F) {
+			break;
+		}
+	}
+	if (increment_pos == 0) {
+		return false;
+	}
+	result = value.substr(0, increment_pos);
+	result[increment_pos - 1]++;
+	return true;
+}
+
+//! Inlined VARCHAR bounds are truncated like the bounds of a data file, so a long value does not grow every commit
+static void TruncateStringBounds(DuckLakeColumnStats &stats) {
+	if (stats.has_max && stats.max.size() > MAX_STRING_STATISTICS_SIZE) {
+		string truncated;
+		if (!TryTruncateMax(stats.max, truncated)) {
+			// the Parquet writer stores no bounds for such a column
+			stats.ClearBounds();
+			return;
+		}
+		stats.max = std::move(truncated);
+		stats.max_is_exact = false;
+	}
+	if (stats.has_min && stats.min.size() > MAX_STRING_STATISTICS_SIZE) {
+		stats.min = TruncateMin(stats.min);
+		stats.min_is_exact = false;
+	}
+}
+
 DuckLakeColumnStats GetVectorStats(Vector &input_vec, idx_t row_count) {
 	auto &type = input_vec.GetType();
 	Vector str_vector(LogicalType::VARCHAR, row_count);
@@ -276,6 +328,9 @@ DuckLakeColumnStats GetVectorStats(Vector &input_vec, idx_t row_count) {
 		result = TemplatedUpdateStats<string_t, StatsNumericFallbackOperator>(str_vector, type, row_count);
 	} else {
 		result = TemplatedUpdateStats<string_t, StatsFallbackOperator>(str_vector, type, row_count);
+	}
+	if (type.id() == LogicalTypeId::VARCHAR) {
+		TruncateStringBounds(result);
 	}
 	if (type.id() == LogicalTypeId::FLOAT) {
 		result.has_contains_nan = true;

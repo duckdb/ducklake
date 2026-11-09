@@ -1,0 +1,106 @@
+# name: test/sql/data_inlining/inlined_string_bounds_truncated.test
+# description: the VARCHAR bounds of inlined rows are truncated to 256 bytes like the bounds the Parquet writer stores
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_string_bounds_truncated', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (id INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 'B')
+
+# a long value with quotes becomes the max, a long value below the min becomes the min
+statement ok
+INSERT INTO dl.t VALUES (2, repeat('abcd''', 200)), (3, repeat('A', 300))
+
+query IIII
+SELECT length(min_value), length(max_value), min_is_exact, max_is_exact FROM meta.ducklake_table_column_stats WHERE column_id = 2
+----
+256	256	false	false
+
+# the truncated bounds still bound the values
+query IIII
+SELECT min_value = repeat('A', 256), max_value > repeat('abcd''', 200), min_value <= repeat('A', 300), max_value LIKE 'abcd''%' FROM meta.ducklake_table_column_stats WHERE column_id = 2
+----
+true	true	true	true
+
+query III
+SELECT count(*) FILTER (WHERE s = repeat('abcd''', 200)), count(*) FILTER (WHERE s = repeat('A', 300)), count(*) FILTER (WHERE s = 'B') FROM dl.t
+----
+1	1	1
+
+query I
+SELECT id FROM dl.t WHERE s > 'abcd'
+----
+2
+
+query I
+SELECT id FROM dl.t WHERE s < 'B'
+----
+3
+
+query II
+SELECT min(s) = repeat('A', 300), max(s) = repeat('abcd''', 200) FROM dl.t
+----
+true	true
+
+# the flushed file has the same bounds as the inlined rows had
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query II
+SELECT f.min_value = t.min_value, f.max_value = t.max_value FROM meta.ducklake_file_column_stats f, meta.ducklake_table_column_stats t WHERE f.column_id = 2 AND t.column_id = 2
+----
+true	true
+
+query IIII
+SELECT length(min_value), length(max_value), min_is_exact, max_is_exact FROM meta.ducklake_table_column_stats WHERE column_id = 2
+----
+256	256	false	false
+
+# a short value keeps exact bounds
+statement ok
+CREATE TABLE dl.short (s VARCHAR)
+
+statement ok
+INSERT INTO dl.short VALUES ('x'), (repeat('y', 256))
+
+query IIII
+SELECT min_value, length(max_value), min_is_exact, max_is_exact FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'short')
+----
+x	256	true	true
+
+# the max of a long value whose first 256 bytes cannot be incremented has no bound, like a Parquet file of it
+statement ok
+CREATE TABLE dl.wide (s VARCHAR)
+
+statement ok
+INSERT INTO dl.wide VALUES ('a'), (repeat('é', 300))
+
+query II
+SELECT min_value IS NULL, max_value IS NULL FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'wide')
+----
+true	true
+
+query II
+SELECT min(s), length(max(s)) FROM dl.wide
+----
+a	300
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'wide')
+
+query II
+SELECT min_value IS NULL, max_value IS NULL FROM meta.ducklake_file_column_stats WHERE data_file_id = (SELECT max(data_file_id) FROM meta.ducklake_data_file)
+----
+true	true
