@@ -24,7 +24,7 @@ statement ok
 INSERT INTO dl.t VALUES (2, repeat('abcd''', 200)), (3, repeat('A', 300))
 
 query IIII
-SELECT length(min_value), length(max_value), min_is_exact, max_is_exact FROM meta.ducklake_table_column_stats WHERE column_id = 2
+SELECT length(min_value), length(max_value), min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats WHERE column_id = 2
 ----
 256	256	false	false
 
@@ -64,7 +64,7 @@ SELECT f.min_value = t.min_value, f.max_value = t.max_value FROM meta.ducklake_f
 true	true
 
 query IIII
-SELECT length(min_value), length(max_value), min_is_exact, max_is_exact FROM meta.ducklake_table_column_stats WHERE column_id = 2
+SELECT length(min_value), length(max_value), min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats WHERE column_id = 2
 ----
 256	256	false	false
 
@@ -76,7 +76,7 @@ statement ok
 INSERT INTO dl.short VALUES ('x'), (repeat('y', 256))
 
 query IIII
-SELECT min_value, length(max_value), min_is_exact, max_is_exact FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'short')
+SELECT min_value, length(max_value), min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'short')
 ----
 x	256	true	true
 
@@ -113,7 +113,7 @@ statement ok
 INSERT INTO dl.utf8 VALUES ('a' || repeat('é', 200)), ('z' || repeat('é', 200))
 
 query IIII
-SELECT min_value = 'a' || repeat('é', 127), strlen(min_value), max_value, max_is_exact FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'utf8')
+SELECT min_value = 'a' || repeat('é', 127), strlen(min_value), max_value, max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'utf8')
 ----
 true	255	{	false
 
@@ -139,7 +139,7 @@ statement ok
 CALL ducklake_rewrite_data_files('dl', 'rw', delete_threshold => 0)
 
 query IIII
-SELECT min_value, length(max_value), max_value = repeat('z', 255) || '{', max_is_exact FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'rw') AND column_id = 2
+SELECT min_value, length(max_value), max_value = repeat('z', 255) || '{', max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'rw') AND column_id = 2
 ----
 v	256	true	false
 
@@ -153,7 +153,7 @@ statement ok
 ALTER TABLE dl.short ADD COLUMN d VARCHAR DEFAULT 'wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww'
 
 query IIII
-SELECT strlen(min_value), max_value = repeat('w', 255) || 'x', min_is_exact, max_is_exact FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'short') AND column_id = (SELECT column_id FROM meta.ducklake_column WHERE column_name = 'd')
+SELECT strlen(min_value), max_value = repeat('w', 255) || 'x', min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'short') AND column_id = (SELECT column_id FROM meta.ducklake_column WHERE column_name = 'd')
 ----
 256	true	false	false
 
@@ -176,7 +176,7 @@ statement ok
 INSERT INTO dl.short VALUES ('m', 'm')
 
 query III
-SELECT strlen(max_value), max_value = repeat('z', 255) || '{', max_is_exact FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'short') AND column_id = 1
+SELECT strlen(max_value), max_value = repeat('z', 255) || '{', max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'short') AND column_id = 1
 ----
 256	true	false
 
@@ -205,7 +205,7 @@ statement ok
 CALL ducklake_rewrite_data_files('dl', 'files', delete_threshold => 0)
 
 query III
-SELECT strlen(max_value), max_value = repeat('z', 255) || '{', max_is_exact FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'files') AND column_id = 2
+SELECT strlen(max_value), max_value = repeat('z', 255) || '{', max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'files') AND column_id = 2
 ----
 256	true	false
 
@@ -237,7 +237,7 @@ statement ok
 CALL ducklake_rewrite_data_files('dl', 'files2', delete_threshold => 0)
 
 query III
-SELECT strlen(max_value), max_value = repeat('z', 255) || '{', max_is_exact FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'files2') AND column_id = 2
+SELECT strlen(max_value), max_value = repeat('z', 255) || '{', max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'files2') AND column_id = 2
 ----
 256	true	false
 
