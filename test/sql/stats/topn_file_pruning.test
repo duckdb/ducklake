@@ -63,8 +63,9 @@ SELECT * FROM ducklake.events ORDER BY timestamp ASC LIMIT 2
 2026-01-01 00:00:01	a
 
 # Test combined Top-N with WHERE clause - both should contribute to pruning
+# A different bound keeps the logged listing below out of the cache.
 query II
-EXPLAIN ANALYZE SELECT * FROM ducklake.events WHERE timestamp > TIMESTAMP '2026-01-02 00:00:00' ORDER BY timestamp DESC LIMIT 5
+EXPLAIN ANALYZE SELECT * FROM ducklake.events WHERE timestamp > TIMESTAMP '2026-01-02 00:00:01' ORDER BY timestamp DESC LIMIT 5
 ----
 analyzed_plan	<REGEX>:.*optional: Dynamic Filter.*
 
