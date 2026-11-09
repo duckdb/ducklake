@@ -99,3 +99,40 @@ query I
 SELECT count(*) FROM meta.ducklake_snapshot WHERE snapshot_id = 2
 ----
 0
+
+# an orphan file dry run between identical listings only reads, so the second read keeps the cached listing
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+statement ok
+BEGIN
+
+query I
+SELECT sum(i) FROM dl.t
+----
+4950
+
+statement ok
+CALL ducklake_delete_orphaned_files('dl', dry_run => true, cleanup_all => true)
+
+query I
+SELECT sum(i) FROM dl.t
+----
+4950
+
+statement ok
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite', 'postgres') THEN
+    (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+     WHERE query LIKE '%ducklake^_data^_file%' ESCAPE '^' AND query LIKE '%ORDER BY data.data^_file^_id%' ESCAPE '^')
+    ELSE 1 END
+----
+1

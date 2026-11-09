@@ -6711,7 +6711,7 @@ WHERE (suffix(filename, '.parquet') OR suffix(filename, '.puffin'))
 %s)",
 	                                filter);
 	SubstituteCatalogPlaceholders(query);
-	auto res = transaction.ExecuteRaw(query);
+	auto res = transaction.ExecuteRaw(query, false);
 	res->ThrowIfError("Failed to get files scheduled for deletion from DuckLake: ");
 	transaction_manager.GetWrittenFiles(written_files);
 	for (auto &path : written_files) {
@@ -7447,10 +7447,10 @@ bool DuckLakeMetadataManager::ResetConfigOption(const DuckLakeConfigOption &opti
 	string scope_id;
 	string scope_filter;
 	ConfigOptionScope(option, scope, scope_id, scope_filter);
-	auto result = Query(StringUtil::Format(R"(
+	auto result = Execute(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND %s
 )",
-	                                       SQLString(option.option.key), scope_filter));
+	                                         SQLString(option.option.key), scope_filter));
 	result->ThrowIfError("Failed to reset config option in DuckLake: ");
 	return result->Fetch()->GetValue(0, 0).GetValue<idx_t>() > 0;
 }

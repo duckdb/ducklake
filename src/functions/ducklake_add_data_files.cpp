@@ -279,7 +279,8 @@ SELECT
     )) AS parquet_schema
 FROM parquet_full_metadata(%s)
 )",
-	                                                        SQLString(glob)));
+	                                                        SQLString(glob)),
+	                                     false);
 	result->ThrowIfError("Failed to add data files to DuckLake: ");
 
 	using ParquetFileRow = VectorStructType<string_t, int64_t, uint64_t, uint64_t, int64_t>;
