@@ -182,10 +182,13 @@
     {
       "reason": "Inserts branch rows into the 2.0 branch table, which a 1.0 catalog does not have",
       "paths": [
+        "test/sql/branches/branch_gap_allocators.test",
         "test/sql/branches/branch_gap_late_snapshot.test",
         "test/sql/time_travel/at_timestamp_gap_without_expiry.test",
         "test/sql/branches/branchless_skips_guards.test",
         "test/sql/branches/branch_gap_moved_lineage.test",
+        "test/sql/branches/branch_listing_after_main_flush.test",
+        "test/sql/branches/branch_listing_overlapping_flush.test",
         "test/sql/branches/branch_gap_tag_commit.test",
         "test/sql/branches/branch_only_file_attach.test",
         "test/sql/cleanup/expire_restarted_commit_cleanup.test"

@@ -3062,7 +3062,8 @@ vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLake
 			return files;
 		}
 		// repeated reads of an unchanged head share the parsed listing across transactions
-		auto shared_listing = transaction.GetCatalog().TryGetCachedListing(cache_key, snapshot.snapshot_id);
+		auto shared_listing =
+		    transaction.GetCatalog().TryGetCachedListing(cache_key, snapshot.snapshot_id, global_snapshot_max);
 		if (shared_listing) {
 			file_list_cache.emplace(cache_key, shared_listing);
 			auto files = *shared_listing;

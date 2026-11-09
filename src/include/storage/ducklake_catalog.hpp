@@ -390,11 +390,13 @@ public:
 		attached_branch_fork = fork_snapshot;
 	}
 	//! Observes the head snapshot a transaction loaded, a moved head drops the cached listings
-	void ObserveListingHead(idx_t head_snapshot_id);
+	void ObserveListingHead(idx_t head_snapshot_id, optional_idx global_snapshot_max);
 	//! Returns the cached parsed listing when the key matches the observed head, nullptr otherwise
-	shared_ptr<vector<DuckLakeFileListEntry>> TryGetCachedListing(const string &key, idx_t snapshot_id);
+	shared_ptr<vector<DuckLakeFileListEntry>> TryGetCachedListing(const string &key, idx_t snapshot_id,
+	                                                              optional_idx global_snapshot_max);
 	//! Stores a parsed listing read at the observed head
-	void StoreCachedListing(const string &key, idx_t snapshot_id, shared_ptr<vector<DuckLakeFileListEntry>> entries);
+	void StoreCachedListing(const string &key, idx_t snapshot_id, optional_idx global_snapshot_max,
+	                        shared_ptr<vector<DuckLakeFileListEntry>> entries);
 	//! Drops the cached listings, called when a transaction writes metadata
 	void InvalidateListingCache();
 
@@ -574,6 +576,9 @@ private:
 	//! Parsed head listings shared across transactions, valid while the observed head is unchanged
 	mutex listing_cache_lock;
 	optional_idx listing_cache_head;
+	optional_idx listing_cache_global_max;
+	//! Whether the cached listings were read at this head and global maximum, with the lock held
+	bool ListingCacheMatches(idx_t snapshot_id, optional_idx global_snapshot_max) const;
 	unordered_map<string, shared_ptr<vector<DuckLakeFileListEntry>>> listing_cache;
 	optional_idx attached_branch_fork;
 	bool branch_metadata_present = true;
