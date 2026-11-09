@@ -1,5 +1,5 @@
 # name: benchmark/micro/write/insert_inlined_long_string_bound.benchmark
-# description: Inline a 4 MB string with quotes that becomes the bound of its column, then ten small inserts, including the commits
+# description: Inline a 4 MB quoted string that becomes the bound of its column, then commit ten small inserts
 # group: [write]
 
 name Insert Inlined Long String Bound
