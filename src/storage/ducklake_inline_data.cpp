@@ -277,6 +277,7 @@ DuckLakeColumnStats GetVectorStats(Vector &input_vec, idx_t row_count) {
 	} else {
 		result = TemplatedUpdateStats<string_t, StatsFallbackOperator>(str_vector, type, row_count);
 	}
+	result.TruncateStringBounds();
 	if (type.id() == LogicalTypeId::FLOAT) {
 		result.has_contains_nan = true;
 		result.contains_nan = VectorContainsNaN<float>(input_vec, row_count);

@@ -1,0 +1,247 @@
+# name: test/sql/data_inlining/inlined_string_bounds_truncated.test
+# description: the VARCHAR bounds of inlined rows are truncated to 256 bytes like the bounds the Parquet writer stores
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/inlined_string_bounds_truncated.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_string_bounds_truncated', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (id INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 'B')
+
+# a long value with quotes becomes the max, a long value below the min becomes the min
+statement ok
+INSERT INTO dl.t VALUES (2, repeat('abcd''', 200)), (3, repeat('A', 300))
+
+query IIII
+SELECT length(min_value), length(max_value), min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats WHERE column_id = 2
+----
+256	256	false	false
+
+# the truncated bounds still bound the values
+query IIII
+SELECT min_value = repeat('A', 256), max_value > repeat('abcd''', 200), min_value <= repeat('A', 300), max_value LIKE 'abcd''%' FROM meta.ducklake_table_column_stats WHERE column_id = 2
+----
+true	true	true	true
+
+query III
+SELECT count(*) FILTER (WHERE s = repeat('abcd''', 200)), count(*) FILTER (WHERE s = repeat('A', 300)), count(*) FILTER (WHERE s = 'B') FROM dl.t
+----
+1	1	1
+
+query I
+SELECT id FROM dl.t WHERE s > 'abcd'
+----
+2
+
+query I
+SELECT id FROM dl.t WHERE s < 'B'
+----
+3
+
+query II
+SELECT min(s) = repeat('A', 300), max(s) = repeat('abcd''', 200) FROM dl.t
+----
+true	true
+
+# the flushed file has the same bounds as the inlined rows had
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query II
+SELECT f.min_value = t.min_value, f.max_value = t.max_value FROM meta.ducklake_file_column_stats f, meta.ducklake_table_column_stats t WHERE f.column_id = 2 AND t.column_id = 2
+----
+true	true
+
+query IIII
+SELECT length(min_value), length(max_value), min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats WHERE column_id = 2
+----
+256	256	false	false
+
+# a short value keeps exact bounds
+statement ok
+CREATE TABLE dl.short (s VARCHAR)
+
+statement ok
+INSERT INTO dl.short VALUES ('x'), (repeat('y', 256))
+
+query IIII
+SELECT min_value, length(max_value), min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'short')
+----
+x	256	true	true
+
+# the max of a long value whose first 256 bytes cannot be incremented has no bound, like a Parquet file of it
+statement ok
+CREATE TABLE dl.wide (s VARCHAR)
+
+statement ok
+INSERT INTO dl.wide VALUES ('a'), (repeat('é', 300))
+
+query II
+SELECT min_value IS NULL, max_value IS NULL FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'wide')
+----
+true	true
+
+query II
+SELECT min(s), length(max(s)) FROM dl.wide
+----
+a	300
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'wide')
+
+query II
+SELECT min_value IS NULL, max_value IS NULL FROM meta.ducklake_file_column_stats WHERE data_file_id = (SELECT max(data_file_id) FROM meta.ducklake_data_file)
+----
+true	true
+
+# a long value with multi byte characters is cut at a character boundary, its max ends at the incremented ASCII byte
+statement ok
+CREATE TABLE dl.utf8 (s VARCHAR)
+
+statement ok
+INSERT INTO dl.utf8 VALUES ('a' || repeat('é', 200)), ('z' || repeat('é', 200))
+
+query IIII
+SELECT min_value = 'a' || repeat('é', 127), strlen(min_value), max_value, max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'utf8')
+----
+true	255	{	false
+
+query II
+SELECT count(*) FILTER (WHERE s = 'a' || repeat('é', 200)), count(*) FILTER (WHERE s > 'z') FROM dl.utf8
+----
+1	1
+
+# a rewrite recomputes the bounds from the inlined rows and truncates them as well
+statement ok
+CREATE TABLE dl.rw (i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO dl.rw SELECT range, 'v' FROM range(100)
+
+statement ok
+INSERT INTO dl.rw VALUES (1000, repeat('z', 300))
+
+statement ok
+DELETE FROM dl.rw WHERE i < 50
+
+statement ok
+CALL ducklake_rewrite_data_files('dl', 'rw', delete_threshold => 0)
+
+query IIII
+SELECT min_value, length(max_value), max_value = repeat('z', 255) || '{', max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'rw') AND column_id = 2
+----
+v	256	true	false
+
+query III
+SELECT count(*), min(s), length(max(s)) FROM dl.rw
+----
+51	v	300
+
+# the default of an added column is a bound of the older rows
+statement ok
+ALTER TABLE dl.short ADD COLUMN d VARCHAR DEFAULT 'wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwww'
+
+query IIII
+SELECT strlen(min_value), max_value = repeat('w', 255) || 'x', min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'short') AND column_id = (SELECT column_id FROM meta.ducklake_column WHERE column_name = 'd')
+----
+256	true	false	false
+
+query I
+SELECT count(*) FROM dl.short WHERE d = repeat('w', 300)
+----
+2
+
+# a bound stored whole by an older version is cut at the next commit that touches the table
+statement ok
+UPDATE meta.ducklake_table_column_stats SET max_value = repeat('z', 300), max_is_exact = true WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'short') AND column_id = 1
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_CATALOG 'meta')
+
+statement ok
+INSERT INTO dl.short VALUES ('m', 'm')
+
+query III
+SELECT strlen(max_value), max_value = repeat('z', 255) || '{', max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'short') AND column_id = 1
+----
+256	true	false
+
+query II
+SELECT count(*), max(s) = repeat('y', 256) FROM dl.short
+----
+3	true
+
+# a data file with longer bounds, as another writer leaves them, is cut when a rewrite recomputes the table bounds
+statement ok
+CREATE TABLE dl.files (i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO dl.files SELECT range, 'f' FROM range(100)
+
+statement ok
+INSERT INTO dl.files SELECT range, 'g' FROM range(100, 200)
+
+statement ok
+UPDATE meta.ducklake_file_column_stats SET max_value = repeat('z', 300), max_is_exact = true WHERE data_file_id = (SELECT max(data_file_id) FROM meta.ducklake_data_file WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'files')) AND column_id = 2
+
+statement ok
+DELETE FROM dl.files WHERE i < 50
+
+statement ok
+CALL ducklake_rewrite_data_files('dl', 'files', delete_threshold => 0)
+
+query III
+SELECT strlen(max_value), max_value = repeat('z', 255) || '{', max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'files') AND column_id = 2
+----
+256	true	false
+
+query II
+SELECT count(*), max(s) FROM dl.files
+----
+150	g
+
+# the same when the file with the longer bounds is merged into the bounds of an earlier file
+statement ok
+CREATE TABLE dl.files2 (i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO dl.files2 SELECT range, 'f' FROM range(100)
+
+statement ok
+INSERT INTO dl.files2 SELECT range, 'g' FROM range(100, 200)
+
+statement ok
+INSERT INTO dl.files2 SELECT range, 'h' FROM range(200, 300)
+
+statement ok
+UPDATE meta.ducklake_file_column_stats SET max_value = repeat('z', 300), max_is_exact = true WHERE data_file_id = (SELECT data_file_id FROM meta.ducklake_data_file WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'files2') ORDER BY data_file_id OFFSET 1 LIMIT 1) AND column_id = 2
+
+statement ok
+DELETE FROM dl.files2 WHERE i >= 250
+
+statement ok
+CALL ducklake_rewrite_data_files('dl', 'files2', delete_threshold => 0)
+
+query III
+SELECT strlen(max_value), max_value = repeat('z', 255) || '{', max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'files2') AND column_id = 2
+----
+256	true	false
+
+query II
+SELECT count(*), max(s) FROM dl.files2
+----
+250	h

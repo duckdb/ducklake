@@ -118,6 +118,7 @@ DuckLakeColumnStats DuckLakeColumnStats::FromConstant(const LogicalType &type, c
 		stats.min = stats.max = value.ToString();
 		stats.has_min = stats.has_max = true;
 		stats.min_is_exact = stats.max_is_exact = true;
+		stats.TruncateStringBounds();
 	}
 	return stats;
 }
@@ -163,6 +164,60 @@ void DuckLakeMissingField::AddStats(idx_t count, map<FieldIndex, DuckLakeColumnS
 		return;
 	}
 	result.emplace(field_index, std::move(unknown_stats));
+}
+
+//! The Parquet writer stores string bounds of at most this many bytes
+static constexpr idx_t MAX_STRING_STATISTICS_SIZE = 256;
+
+static bool IsCharacterStart(char c) {
+	return (c & 0xc0) != 0x80;
+}
+
+//! A prefix that ends at a character boundary stays a lower bound
+static string TruncateMin(const string &value) {
+	idx_t size = MAX_STRING_STATISTICS_SIZE;
+	for (; size > 0; size--) {
+		if (IsCharacterStart(value[size])) {
+			break;
+		}
+	}
+	return value.substr(0, size);
+}
+
+//! A prefix stays an upper bound when its last ASCII byte is incremented
+static bool TryTruncateMax(const string &value, string &result) {
+	idx_t increment_pos = MAX_STRING_STATISTICS_SIZE;
+	for (; increment_pos > 0; increment_pos--) {
+		if (static_cast<data_t>(value[increment_pos - 1]) < 0x7F) {
+			break;
+		}
+	}
+	if (increment_pos == 0) {
+		return false;
+	}
+	result = value.substr(0, increment_pos);
+	result[increment_pos - 1]++;
+	return true;
+}
+
+void DuckLakeColumnStats::TruncateStringBounds() {
+	if (type.id() != LogicalTypeId::VARCHAR) {
+		return;
+	}
+	if (has_max && max.size() > MAX_STRING_STATISTICS_SIZE) {
+		string truncated;
+		if (!TryTruncateMax(max, truncated)) {
+			// the Parquet writer stores no bounds for such a column
+			ClearBounds();
+			return;
+		}
+		max = std::move(truncated);
+		max_is_exact = false;
+	}
+	if (has_min && min.size() > MAX_STRING_STATISTICS_SIZE) {
+		min = TruncateMin(min);
+		min_is_exact = false;
+	}
 }
 
 void DuckLakeColumnStats::ClearBounds() {
@@ -303,6 +358,8 @@ static void MergeExtraStats(unique_ptr<DuckLakeColumnExtraStats> &extra_stats, c
 }
 
 void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
+	// bounds stored by older versions can be longer than the ones written now
+	TruncateStringBounds();
 	// the null state has to be read before the counts of the source are added to it
 	bool adopt_bounds = !bounds_unknown && has_num_values && has_null_count && num_values == null_count;
 	bool types_differ = type != new_stats.type;
@@ -359,13 +416,15 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		MergeBound(new_stats, true);
 		MergeBound(new_stats, false);
 	}
+	// the source can be a file written by another writer, which stores longer bounds
+	TruncateStringBounds();
 	MergeExtraStats(extra_stats, new_stats);
 }
 
 void DuckLakeTableStats::MergeStats(FieldIndex col_id, const DuckLakeColumnStats &file_stats) {
 	auto entry = column_stats.find(col_id);
 	if (entry == column_stats.end()) {
-		column_stats.insert(make_pair(col_id, file_stats));
+		column_stats.insert(make_pair(col_id, file_stats)).first->second.TruncateStringBounds();
 		return;
 	}
 	// merge the stats
