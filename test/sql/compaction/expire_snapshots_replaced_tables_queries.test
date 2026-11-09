@@ -77,7 +77,7 @@ SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%duck
 
 # no inlined deletion table exists, so none is dropped
 query I
-SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE 'DROP TABLE IF EXISTS%ducklake_inlined_delete_%'
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%DROP TABLE IF EXISTS%ducklake_inlined_delete_%'
 ----
 0
 
