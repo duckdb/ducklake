@@ -1,0 +1,95 @@
+# name: test/sql/compaction/expire_snapshots_replaced_tables_inlined_deletes.test
+# description: expiring snapshots drops the inlined deletion table of a replaced table and cleans up its files, and drops none for a dropped table that was never deleted from
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/expire_snapshots_replaced_tables_inlined_deletes', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 5)
+
+statement ok
+CREATE TABLE lake.t AS SELECT range AS v FROM range(100)
+
+statement ok
+CREATE TABLE lake.u AS SELECT range AS v FROM range(100)
+
+# an inlined deletion on t only
+statement ok
+DELETE FROM lake.t WHERE v = 7
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_delete_1
+----
+1
+
+statement ok
+CREATE OR REPLACE TABLE lake.t AS SELECT range AS v FROM range(10)
+
+statement ok
+DROP TABLE lake.u
+
+query I
+SELECT count(*) FROM meta.ducklake_table WHERE end_snapshot IS NOT NULL
+----
+2
+
+statement ok
+SET VARIABLE expired = (SELECT list(snapshot_id ORDER BY snapshot_id) FROM lake.snapshots() WHERE snapshot_id < (SELECT max(snapshot_id) FROM lake.snapshots()))
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+statement ok
+CALL ducklake_expire_snapshots('lake', versions => getvariable('expired'))
+
+statement ok
+CALL disable_logging()
+
+# the deletion table of the replaced t is dropped, the one of u never existed
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%DROP TABLE IF EXISTS%ducklake_inlined_delete_1%'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%DROP TABLE IF EXISTS%ducklake_inlined_delete_2%'
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name LIKE 'ducklake_inlined_delete_%'
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_files_scheduled_for_deletion
+----
+2
+
+statement ok
+CALL ducklake_cleanup_old_files('lake', cleanup_all => true)
+
+query I
+SELECT count(*) FROM meta.ducklake_files_scheduled_for_deletion
+----
+0
+
+# only the file of the new t remains on disk
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/expire_snapshots_replaced_tables_inlined_deletes/**/*.parquet')
+----
+1
+
+query I
+SELECT count(*) FROM lake.t
+----
+10

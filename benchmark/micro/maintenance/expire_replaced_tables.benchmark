@@ -1,0 +1,29 @@
+# name: benchmark/micro/maintenance/expire_replaced_tables.benchmark
+# description: Expire 51 of 52 snapshots of a lake whose 10 tables were replaced 50 times, which schedules 500 files
+# group: [maintenance]
+
+name Expire Replaced Tables
+group micro
+subgroup maintenance
+
+require ducklake
+
+require parquet
+
+argument work expire_replaced_work
+
+include benchmark/micro/fixtures/replaced_tables.benchmark.in
+
+run
+BEGIN;
+SELECT count(*) AS expired FROM ducklake_expire_snapshots('lake', older_than => TIMESTAMPTZ '2999-01-01');
+
+# Roll back so every run expires the same 51 snapshots
+cleanup
+@rollback ${lake}_pristine TO ${work}
+
+# The dry run lists the files the expiry scheduled in the open transaction, one per dropped table version
+result_query II
+SELECT expired, (SELECT count(*) FROM ducklake_cleanup_old_files('lake', cleanup_all => true, dry_run => true)) FROM __answer
+----
+51	500
