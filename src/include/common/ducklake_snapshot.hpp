@@ -42,6 +42,9 @@ struct DuckLakeSnapshotMaxima {
 	optional_idx lineage_head;
 	//! The newest snapshot of a branch, set when any branch committed, so id gaps can exist
 	optional_idx branch_max;
+	//! The highest allocators of any snapshot, a commit past a branch gap allocates past them
+	optional_idx next_catalog_id;
+	optional_idx next_file_id;
 };
 
 } // namespace duckdb

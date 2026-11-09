@@ -1,0 +1,81 @@
+# name: test/sql/branches/branch_gap_allocators.test
+# description: a main commit after a branch snapshot with a higher id keeps the schema version of main and allocates past the branch
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+query III
+SELECT snapshot_id, schema_version, next_file_id FROM meta.ducklake_snapshot WHERE branch_id = 0 ORDER BY snapshot_id DESC LIMIT 1
+----
+2	1	1
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2, 2, NULL)
+
+# a branch snapshot with a higher id, a higher schema version and higher allocators
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) VALUES (100, NOW(), 7, 50, 60, 1)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (100, NULL, NULL, NULL, NULL)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+# the new main snapshot follows the global head, keeps the schema version of main and allocates past the branch
+query IIII
+SELECT snapshot_id, schema_version, next_catalog_id >= 50, next_file_id >= 61 FROM meta.ducklake_snapshot WHERE branch_id = 0 ORDER BY snapshot_id DESC LIMIT 1
+----
+101	1	true	true
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM dl.t
+----
+2
+
+statement ok con1
+INSERT INTO dl.t VALUES (3)
+
+# another branch snapshot appears while con1 holds its read
+statement ok con2
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) VALUES (200, NOW(), 9, 70, 80, 1)
+
+statement ok con2
+INSERT INTO meta.ducklake_snapshot_changes VALUES (200, NULL, NULL, NULL, NULL)
+
+statement ok con1
+COMMIT
+
+query IIII
+SELECT snapshot_id, schema_version, next_catalog_id >= 70, next_file_id >= 81 FROM meta.ducklake_snapshot WHERE branch_id = 0 ORDER BY snapshot_id DESC LIMIT 1
+----
+201	1	true	true
+
+query I
+SELECT sum(i) FROM dl.t
+----
+6

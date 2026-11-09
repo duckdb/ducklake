@@ -2848,7 +2848,16 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 					commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);
 					stats = &commit_stats_snapshot.stats;
 				} else if (!lineage_moved && branch_gap) {
-					commit_stats_snapshot.snapshot.snapshot_id = maxima.global_max.GetIndex();
+					// the branch snapshots in the gap allocated ids as well
+					commit_snapshot.snapshot_id = maxima.global_max.GetIndex();
+					if (maxima.next_catalog_id.IsValid()) {
+						commit_snapshot.next_catalog_id =
+						    MaxValue(commit_snapshot.next_catalog_id, maxima.next_catalog_id.GetIndex());
+					}
+					if (maxima.next_file_id.IsValid()) {
+						commit_snapshot.next_file_id =
+						    MaxValue(commit_snapshot.next_file_id, maxima.next_file_id.GetIndex());
+					}
 				}
 			} else if (check_conflicts) {
 				commit_stats_snapshot = CheckForConflicts(transaction_snapshot, attempt_changes, context);

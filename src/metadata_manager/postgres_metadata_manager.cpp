@@ -533,9 +533,7 @@ static string PostgresQuery(const string &remote_query) {
 }
 
 string PostgresMetadataManager::GetSnapshotMaximaQuery() const {
-	string remote_query = "SELECT MAX(snapshot_id), MAX(CASE WHEN branch_id = 0 THEN snapshot_id END), "
-	                      "MAX(CASE WHEN branch_id <> 0 THEN snapshot_id END) "
-	                      "FROM {METADATA_CATALOG}.ducklake_snapshot";
+	auto remote_query = SnapshotMaximaSql();
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	return PostgresQuery(remote_query);

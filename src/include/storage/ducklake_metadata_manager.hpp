@@ -376,6 +376,9 @@ public:
 	//! The newest snapshot of any branch and of the main lineage, read on a fresh connection
 	DuckLakeSnapshotMaxima GetSnapshotMaxima();
 	virtual string GetSnapshotMaximaQuery() const;
+	//! The maxima query with the catalog placeholder, shared with the server side commit
+	static string SnapshotMaximaSql();
+	static DuckLakeSnapshotMaxima ParseSnapshotMaxima(QueryResult &result);
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
 	//! Take the table sizes that stats rows lack from the live data files
 	static void FillMissingTableSizes(vector<DuckLakeGlobalStatsInfo> &stats,
