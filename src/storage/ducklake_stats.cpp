@@ -416,13 +416,15 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 		MergeBound(new_stats, true);
 		MergeBound(new_stats, false);
 	}
+	// the source can be a file written by another writer, which stores longer bounds
+	TruncateStringBounds();
 	MergeExtraStats(extra_stats, new_stats);
 }
 
 void DuckLakeTableStats::MergeStats(FieldIndex col_id, const DuckLakeColumnStats &file_stats) {
 	auto entry = column_stats.find(col_id);
 	if (entry == column_stats.end()) {
-		column_stats.insert(make_pair(col_id, file_stats));
+		column_stats.insert(make_pair(col_id, file_stats)).first->second.TruncateStringBounds();
 		return;
 	}
 	// merge the stats
