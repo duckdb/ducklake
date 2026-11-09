@@ -26,6 +26,18 @@
       ]
     },
     {
+      "reason": "Quack deletes expired snapshots when the transaction commits, so the gap is not visible inside the transaction",
+      "paths": [
+        "test/sql/time_travel/at_timestamp_expired_in_transaction.test"
+      ]
+    },
+    {
+      "reason": "Quack commits each statement, so a cached timestamp is checked again for concurrent expiries",
+      "paths": [
+        "test/sql/time_travel/at_timestamp_cached_no_rescan.test"
+      ]
+    },
+    {
       "reason": "Bespoke test starts and stops its own quack server",
       "paths": [
         "test/sql/quack/quack_basic.test"
@@ -48,6 +60,7 @@
         "test/sql/metadata/postgres_long_metadata_schema.test",
         "test/sql/retry/postgres_rollback_connection_loss.test",
         "test/sql/metadata/metadata_schema_scoped_attach.test",
+        "test/sql/metadata/postgres_attach_cache_clear.test",
         "test/sql/migration/postgres_concurrent_migration.test",
         "test/sql/retry/postgres_localized_conflict_retry.test",
         "test/sql/retry/postgres_commit_connection_loss.test",
@@ -62,6 +75,7 @@
         "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test",
         "test/sql/compaction/compaction_idle_metadata_transaction.test",
         "test/sql/compaction/postgres_expire_snapshots_time_zone.test",
+        "test/sql/retry/postgres_commit_error_query_text.test",
         "test/sql/settings/set_option_concurrent_insert.test",
         "test/sql/settings/set_option_concurrent_insert_read_committed.test",
         "test/sql/settings/set_option_concurrent_insert_expiry.test",
@@ -72,6 +86,7 @@
         "test/sql/issues/issue_843_postgres_legacy_inlined_types.test",
         "test/sql/metadata/ducklake_settings_postgres.test",
         "test/sql/metadata/metadata_schema_scoped_attach.test",
+        "test/sql/metadata/postgres_attach_cache_clear.test",
         "test/sql/metadata/postgres_cache_clear_scope.test",
         "test/sql/metadata/postgres_read_committed_branch_memo.test",
         "test/sql/metadata/postgres_read_committed_listing_cache.test",
@@ -82,6 +97,7 @@
         "test/sql/retry/postgres_commit_connection_loss.test",
         "test/sql/retry/postgres_localized_conflict_retry.test",
         "test/sql/retry/postgres_rollback_connection_loss.test",
+        "test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test"
       ]
     },

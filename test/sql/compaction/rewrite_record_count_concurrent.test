@@ -1,0 +1,104 @@
+# name: test/sql/compaction/rewrite_record_count_concurrent.test
+# description: A rewrite committed after a concurrent insert keeps the count above the live rows, the bounds are stale
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/rewrite_record_count_concurrent', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+# the other transaction changed the table, so the rewrite cannot recompute the stats and leaves the count alone
+statement ok
+CREATE TABLE lake.c (id INTEGER)
+
+statement ok
+INSERT INTO lake.c SELECT i FROM range(100) t(i)
+
+query I
+DELETE FROM lake.c WHERE id < 60
+----
+60
+
+statement ok
+SET VARIABLE c_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'c' AND end_snapshot IS NULL)
+
+statement ok con1
+BEGIN
+
+query II con1
+SELECT files_processed, files_created FROM ducklake_rewrite_data_files('lake', 'c', delete_threshold => 0.0)
+----
+1	1
+
+statement ok con2
+INSERT INTO lake.c SELECT i FROM range(100, 110) t(i)
+
+statement ok con1
+COMMIT
+
+query II
+SELECT count(*), sum(id) FROM lake.c
+----
+50	4225
+
+# MIN and MAX alone can be answered from the stored bounds, which still hold the deleted 0
+query II
+SELECT min(id), max(id) FROM lake.c
+----
+60	109
+
+# the count stays at 110 with the stale bounds, unless the commit recomputed the stats exactly (50 with minimum 60)
+query I
+SELECT CASE WHEN s.record_count = 110 THEN c.min_value = '0' WHEN s.record_count = 50 THEN c.min_value = '60' END
+FROM meta.ducklake_table_stats s JOIN meta.ducklake_table_column_stats c USING (table_id)
+WHERE s.table_id = getvariable('c_id') AND c.column_id = 1
+----
+true
+
+# a commit of another table during the rewrite makes the commit retry, the retry still refreshes the count
+statement ok
+CREATE TABLE lake.p (id INTEGER)
+
+statement ok
+INSERT INTO lake.p SELECT i FROM range(100) t(i)
+
+statement ok
+INSERT INTO lake.p SELECT i FROM range(100, 200) t(i)
+
+query I
+DELETE FROM lake.p WHERE id < 60 OR id = 150
+----
+61
+
+statement ok
+SET VARIABLE p_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'p' AND end_snapshot IS NULL)
+
+statement ok con1
+BEGIN
+
+query II con1
+SELECT files_processed, files_created FROM ducklake_rewrite_data_files('lake', 'p', delete_threshold => 0.5)
+----
+1	1
+
+statement ok con2
+INSERT INTO lake.c VALUES (500)
+
+statement ok con1
+COMMIT
+
+query III
+SELECT min(id), max(id), count(*) FROM lake.p
+----
+60	199	139
+
+query I
+SELECT record_count FROM meta.ducklake_table_stats WHERE table_id = getvariable('p_id')
+----
+140

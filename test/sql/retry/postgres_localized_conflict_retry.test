@@ -30,14 +30,15 @@ SET ducklake_retry_wait_ms = 1
 statement ok
 CREATE TABLE dl.t (i INT)
 
-# the next snapshot insert fails once with the Polish message for a duplicate key
+# the next snapshot insert fails once with the Polish message for a duplicate key, whose detail has a quote and a colon
 statement ok
 CALL postgres_execute('pg', 'CREATE SEQUENCE localized_retry.attempts;
 CREATE FUNCTION localized_retry.fail_once() RETURNS trigger AS $$
 BEGIN
 	IF nextval(''localized_retry.attempts'') = 1 THEN
 		RAISE unique_violation USING MESSAGE =
-			''podwójna wartość klucza narusza ograniczenie unikalności "ducklake_snapshot_pkey"'';
+			''podwójna wartość klucza narusza ograniczenie unikalności "ducklake_snapshot_pkey"'',
+			DETAIL = ''Klucz "snapshot_id": zajęty'';
 	END IF;
 	RETURN NEW;
 END $$ LANGUAGE plpgsql;

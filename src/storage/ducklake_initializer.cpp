@@ -8,6 +8,7 @@
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/types/uuid.hpp"
 #include "duckdb/main/connection.hpp"
+#include "duckdb/main/database_manager.hpp"
 #include "duckdb/main/extension_helper.hpp"
 #include "duckdb/storage/storage_manager.hpp"
 
@@ -114,7 +115,10 @@ void DuckLakeInitializer::Initialize() {
 	auto &current_metadata_manager = transaction.GetMetadataManager();
 	// probe the metadata server for optional capabilities (e.g. server-side commit retries) once per attach
 	current_metadata_manager.ProbeServerCapabilities();
-	current_metadata_manager.ClearCache();
+	// an attach at a branch reads through the fork, which a cache kept from another attach does not
+	if (metadata_cache_stale || !options.branch_name.empty()) {
+		current_metadata_manager.ClearCache();
+	}
 	if (!options.branch_name.empty() && !catalog.SupportsBranching()) {
 		ThrowUnsupportedByVersion(catalog.GetDuckLakeVersion(), "branches");
 	}
@@ -185,6 +189,10 @@ void DuckLakeInitializer::RestartMetadataTransaction(DuckLakeTransaction &transa
 }
 
 void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction) {
+	// ATTACH OR REPLACE may reuse an attached catalog and its cached table definitions.
+	if (DatabaseManager::Get(context).GetDatabase(catalog.MetadataDatabaseName())) {
+		metadata_cache_stale = true;
+	}
 	const string attach_query =
 	    "ATTACH OR REPLACE {METADATA_PATH} AS {METADATA_CATALOG_NAME_IDENTIFIER}" + GetAttachOptions();
 	auto result = transaction.GetMetadataManager().AttachMetadata(attach_query);
@@ -192,7 +200,11 @@ void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction) {
 	                     catalog.MetadataPath() + "\"");
 	// the extension of the metadata database registers its profile when the ATTACH loads it
 	auto catalog_type = transaction.GetMetadataCatalog().GetCatalogType();
+	catalog.SetMetadataCatalogType(catalog_type);
 	catalog.SetMetadataProfile(DuckLakeMetadataProfiles::Get(*context.db).Find(catalog_type));
+	// the connection was opened before the profile was known
+	DuckLakeUtil::ResetExtensionSettings(*transaction.GetConnection().context,
+	                                     catalog.MetadataProfile().reset_settings);
 	// a rollback of the transaction can undo the attach and the creation or migration of the catalog
 	transaction.MarkMetadataWritten();
 }
@@ -228,6 +240,7 @@ void DuckLakeInitializer::InitializeDataPath() {
 }
 
 void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction, bool has_explicit_schema) {
+	metadata_cache_stale = true;
 	// without a version in the ATTACH, the ducklake_default_version setting or else the latest version
 	auto version = options.ducklake_version;
 	Value setting_val;
@@ -284,6 +297,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			}
 			if (catalog_version < target_version) {
 				catalog.VerifyWritable();
+				metadata_cache_stale = true;
 			}
 			migrating = catalog_version < target_version;
 			if (catalog_version == DuckLakeVersion::V0_1) {
