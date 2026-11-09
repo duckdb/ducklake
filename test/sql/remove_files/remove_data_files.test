@@ -211,3 +211,37 @@ query I
 SELECT count(*) FROM ducklake.t
 ----
 5
+
+# a committed file removed and added again in one transaction can be removed again
+statement ok
+SET VARIABLE readd = (SELECT data_file FROM ducklake_list_files('ducklake', 't'))
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't', getvariable('readd'))
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', getvariable('readd'), ignore_extra_columns => true)
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+5
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't', getvariable('readd'))
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+0
+
+statement ok
+ROLLBACK
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+5

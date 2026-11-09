@@ -297,3 +297,114 @@ query II
 EXPLAIN ANALYZE SELECT min(i), max(i) FROM ducklake.t4
 ----
 analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# a column added with a default in the transaction that removes a file keeps the default in its stats
+statement ok
+CREATE TABLE ducklake.t5(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.t5 FROM range(10);
+
+statement ok
+INSERT INTO ducklake.t5 FROM range(10, 20);
+
+statement ok
+SET VARIABLE t5_file = (SELECT filename FROM ducklake.t5 WHERE i = 16)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't5', getvariable('t5_file'))
+
+statement ok
+ALTER TABLE ducklake.t5 ADD COLUMN j INTEGER DEFAULT 42
+
+statement ok
+INSERT INTO ducklake.t5 VALUES (100, 100)
+
+statement ok
+COMMIT
+
+query III
+SELECT min(j), max(j), count(*) FROM ducklake.t5
+----
+42	100	11
+
+query I
+SELECT count(*) FROM ducklake.t5 WHERE j = 42
+----
+10
+
+# flushing the inlined deletions of the removed file in the removing transaction keeps the stats exact
+statement ok
+CREATE TABLE ducklake.t6(i INTEGER);
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 5, table_name => 't6')
+
+statement ok
+INSERT INTO ducklake.t6 FROM range(10);
+
+statement ok
+INSERT INTO ducklake.t6 FROM range(10, 20);
+
+statement ok
+SET VARIABLE t6_file = (SELECT filename FROM ducklake.t6 WHERE i = 16)
+
+statement ok
+DELETE FROM ducklake.t6 WHERE i = 15
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't6')
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't6', getvariable('t6_file'))
+
+statement ok
+COMMIT
+
+query III
+SELECT min(i), max(i), count(*) FROM ducklake.t6
+----
+0	9	10
+
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats WHERE table_id = 6
+----
+0	9	true	true
+
+# a flushed deletion of a remaining file leaves deleted rows, so the stats are cleared
+statement ok
+INSERT INTO ducklake.t6 FROM range(20, 30);
+
+statement ok
+DELETE FROM ducklake.t6 WHERE i = 5
+
+statement ok
+SET VARIABLE t6_file = (SELECT filename FROM ducklake.t6 WHERE i = 26)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't6')
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't6', getvariable('t6_file'))
+
+statement ok
+COMMIT
+
+query III
+SELECT min(i), max(i), count(*) FROM ducklake.t6
+----
+0	9	9
+
+query I
+SELECT count(*) FROM dl.ducklake_table_column_stats WHERE table_id = 6
+----
+0

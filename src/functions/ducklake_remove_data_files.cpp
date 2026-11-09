@@ -63,14 +63,15 @@ static void DuckLakeRemoveDataFilesExecute(ClientContext &context, TableFunction
 		committed_files = metadata_manager.GetExtendedFilesForTable(table, transaction.GetSnapshot());
 	}
 	auto local_files = transaction.GetTransactionLocalFiles(table_id);
+	// the local files are listed once, so a path removed by this call is not a data file of the table anymore
 	set<string> removed_paths;
 	for (auto &path : bind_data.paths) {
 		bool found = false;
-		// a path listed twice is no longer a data file of the table the second time
-		bool removed = transaction.FileIsDropped(path) || removed_paths.find(path) != removed_paths.end();
+		bool removed = removed_paths.find(path) != removed_paths.end();
 		if (!removed) {
 			for (auto &file : committed_files) {
-				if (file.file.path != path) {
+				// a committed file dropped earlier in the transaction can be registered again as a local file
+				if (file.file.path != path || transaction.FileIsDropped(path)) {
 					continue;
 				}
 				// the file keeps serving older snapshots, it is only ended at the commit snapshot
