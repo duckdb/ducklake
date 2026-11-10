@@ -105,6 +105,10 @@ void DuckLakeInitializer::Initialize() {
 		} catch (std::exception &ex) {
 			// another attach may have created the same DuckLake at the same time
 			ErrorData error(ex);
+			if (error.Type() == ExceptionType::INTERRUPT) {
+				error.Throw();
+			}
+			context.BlockingInterruptCheck();
 			RestartMetadataTransaction(transaction);
 			if (!DuckLakeIsInitialized(transaction)) {
 				error.Throw();
@@ -159,14 +163,22 @@ void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &t
 				first_error = error;
 			}
 		}
+		context.BlockingInterruptCheck();
 		if (waited_ms >= MAX_WAIT_MS || attempt >= retry_config.max_retry_count) {
 			first_error.Throw();
 		}
 		auto wait_ms = retry_config.WaitMs(attempt, MAX_WAIT_MS - waited_ms);
 #ifndef DUCKDB_NO_THREADS
-		ThreadUtil::SleepMs(wait_ms, context);
+		// SleepMs observes explicit interrupts, but a caller deadline can also expire during the wait.
+		for (idx_t remaining_ms = wait_ms; remaining_ms > 0;) {
+			auto sleep_ms = MinValue<idx_t>(remaining_ms, 50);
+			ThreadUtil::SleepMs(sleep_ms, context);
+			context.BlockingInterruptCheck();
+			remaining_ms -= sleep_ms;
+		}
 #endif
 		waited_ms += wait_ms;
+		context.BlockingInterruptCheck();
 		RestartMetadataTransaction(transaction);
 	}
 }
