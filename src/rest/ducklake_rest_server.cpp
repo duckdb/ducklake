@@ -87,7 +87,7 @@ string DuckLakeRESTPlans::Add(shared_ptr<DuckLakeRESTPlan> plan) {
 	lock_guard<mutex> guard(lock);
 	for (auto entry = plans.begin(); entry != plans.end();) {
 		if (plan->created - entry->second->created > std::chrono::seconds(PLAN_EXPIRATION_SECONDS)) {
-			entry = plans.erase(entry);
+			entry = plans.erase(entry); // LCOV_EXCL_LINE: plans expire after PLAN_EXPIRATION_SECONDS
 		} else {
 			entry++;
 		}
@@ -113,8 +113,11 @@ shared_ptr<DuckLakeRESTPlan> DuckLakeRESTPlans::Get(const string &id) {
 		return nullptr;
 	}
 	if (std::chrono::steady_clock::now() - entry->second->created > std::chrono::seconds(PLAN_EXPIRATION_SECONDS)) {
+		// LCOV_EXCL_START
+		// plans expire after PLAN_EXPIRATION_SECONDS
 		plans.erase(entry);
 		return nullptr;
+		// LCOV_EXCL_STOP
 	}
 	return entry->second;
 }
@@ -246,14 +249,9 @@ int32_t DuckLakeRESTServer::HandleRequest(const RESTRoute &route, optional_ptr<c
 	}
 }
 
-idx_t DuckLakeRESTServer::Start(const string &host, idx_t port, idx_t thread_count) {
+idx_t DuckLakeRESTServer::Start(const string &host, idx_t port) {
 	server = make_uniq<duckdb_httplib::Server>();
 	server->set_tcp_nodelay(true);
-	if (thread_count > 0) {
-		server->new_task_queue = [thread_count]() {
-			return new duckdb_httplib::ThreadPool(thread_count);
-		};
-	}
 	for (auto &route : DuckLakeRESTAPI::GetRoutes()) {
 		for (bool with_prefix : {false, true}) {
 			if (with_prefix && route.no_prefix) {
@@ -326,11 +324,14 @@ void DuckLakeRESTServer::Stop() {
 	}
 }
 
+// LCOV_EXCL_START
+// serving until the server stops blocks the caller
 void DuckLakeRESTServer::Wait() {
 	if (server_thread.joinable()) {
 		server_thread.join();
 	}
 }
+// LCOV_EXCL_STOP
 
 //===--------------------------------------------------------------------===//
 // Registry
@@ -437,7 +438,8 @@ static map<string, string> ToStringMap(const Value &value) {
 	}
 	for (auto &entry : MapValue::GetChildren(value)) {
 		auto &children = StructValue::GetChildren(entry);
-		if (children[0].IsNull() || children[1].IsNull()) {
+		// a key of a map cannot be NULL
+		if (children[1].IsNull()) {
 			throw InvalidInputException("ducklake_rest_serve: the properties cannot be NULL");
 		}
 		result[StringValue::Get(children[0])] = StringValue::Get(children[1]);
@@ -467,6 +469,13 @@ static unique_ptr<FunctionData> DuckLakeRESTServeBind(ClientContext &context, Ta
 	auto overrides_val = GetNamedParameter(input, "overrides");
 	auto files_per_page_val = GetNamedParameter(input, "files_per_page");
 	auto page_size_val = GetNamedParameter(input, "page_size");
+	// the arguments are checked before a server starts
+	if (!page_size_val.IsNull() && page_size_val.GetValue<idx_t>() == 0) {
+		throw BinderException("ducklake_rest_serve: page_size has to be larger than 0");
+	}
+	if (!files_per_page_val.IsNull() && files_per_page_val.GetValue<idx_t>() == 0) {
+		throw BinderException("ducklake_rest_serve: files_per_page has to be larger than 0");
+	}
 
 	auto &registry = DuckLakeRESTServerRegistry::Get();
 	// a server that already listens on this address serves the catalog as well
@@ -498,18 +507,10 @@ static unique_ptr<FunctionData> DuckLakeRESTServeBind(ClientContext &context, Ta
 		server->SetToken(StringValue::Get(token_val));
 	}
 	if (!page_size_val.IsNull()) {
-		auto page_size = page_size_val.GetValue<idx_t>();
-		if (page_size == 0) {
-			throw BinderException("ducklake_rest_serve: page_size has to be larger than 0");
-		}
-		server->SetDefaultPageSize(page_size);
+		server->SetDefaultPageSize(page_size_val.GetValue<idx_t>());
 	}
 	if (!files_per_page_val.IsNull()) {
-		auto files_per_page = files_per_page_val.GetValue<idx_t>();
-		if (files_per_page == 0) {
-			throw BinderException("ducklake_rest_serve: files_per_page has to be larger than 0");
-		}
-		server->SetFilesPerPage(files_per_page);
+		server->SetFilesPerPage(files_per_page_val.GetValue<idx_t>());
 	}
 	if (!defaults_val.IsNull() || !overrides_val.IsNull()) {
 		server->SetClientProperties(ToStringMap(defaults_val), ToStringMap(overrides_val));
@@ -517,7 +518,7 @@ static unique_ptr<FunctionData> DuckLakeRESTServeBind(ClientContext &context, Ta
 	server->AddCatalog(prefix, std::move(db), catalog_name);
 	auto listen_uri = server->ListenURI() + "/" + prefix;
 	if (wait) {
-		server->Wait();
+		server->Wait(); // LCOV_EXCL_LINE
 	}
 
 	names.emplace_back("listen_uri");
@@ -565,9 +566,12 @@ static void ValidateResponse(const string &method, const string &path, int32_t s
 				DuckLakeRESTSerializer::Read<RESTErrorResponse>(document.Root());
 			}
 		} catch (std::exception &ex) {
+			// LCOV_EXCL_START
+			// the server conforms to the API, this finds responses that do not
 			throw IOException(
 			    "ducklake_rest_request: the response of \"%s %s\" does not match the DuckLake REST API: %s", method,
 			    route_path, ErrorData(ex).Message());
+			// LCOV_EXCL_STOP
 		}
 		return;
 	}

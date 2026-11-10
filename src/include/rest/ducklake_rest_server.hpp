@@ -124,7 +124,7 @@ public:
 	}
 
 	//! Binds the socket and starts serving in the background, returns the bound port
-	idx_t Start(const string &host, idx_t port, idx_t thread_count = 0);
+	idx_t Start(const string &host, idx_t port);
 	//! Requests have to carry the token as a bearer token, if it is set
 	void SetToken(string token_p) {
 		token = std::move(token_p);

@@ -423,19 +423,19 @@ struct ArrowIPCWriter {
 			return {ArrowIPCType::NULL_TYPE, empty_table()};
 		}
 		if (format == "b") {
-			return {ArrowIPCType::BOOL, empty_table()};
+			return {ArrowIPCType::BOOL, empty_table()}; // LCOV_EXCL_LINE
 		}
 		if (format == "u") {
 			return {ArrowIPCType::UTF8, empty_table()};
 		}
 		if (format == "U") {
-			return {ArrowIPCType::LARGE_UTF8, empty_table()};
+			return {ArrowIPCType::LARGE_UTF8, empty_table()}; // LCOV_EXCL_LINE
 		}
 		if (format == "z") {
 			return {ArrowIPCType::BINARY, empty_table()};
 		}
 		if (format == "Z") {
-			return {ArrowIPCType::LARGE_BINARY, empty_table()};
+			return {ArrowIPCType::LARGE_BINARY, empty_table()}; // LCOV_EXCL_LINE
 		}
 		if (format == "+s") {
 			return {ArrowIPCType::STRUCT, empty_table()};
@@ -444,7 +444,7 @@ struct ArrowIPCWriter {
 			return {ArrowIPCType::LIST, empty_table()};
 		}
 		if (format == "+L") {
-			return {ArrowIPCType::LARGE_LIST, empty_table()};
+			return {ArrowIPCType::LARGE_LIST, empty_table()}; // LCOV_EXCL_LINE
 		}
 		if (format == "+m") {
 			builder.StartTable();
@@ -452,9 +452,11 @@ struct ArrowIPCWriter {
 			return {ArrowIPCType::MAP, builder.EndTable()};
 		}
 		if (StringUtil::StartsWith(format, "+w:")) {
+			// LCOV_EXCL_START: DuckDB does not write this format
 			builder.StartTable();
 			builder.AddScalar<int32_t>(0, NumericCast<int32_t>(std::stoull(format.substr(3))), 0);
 			return {ArrowIPCType::FIXED_SIZE_LIST, builder.EndTable()};
+			// LCOV_EXCL_STOP
 		}
 		if (StringUtil::StartsWith(format, "w:")) {
 			builder.StartTable();
@@ -497,7 +499,7 @@ struct ArrowIPCWriter {
 			return integer(64, false);
 		}
 		if (format == "e") {
-			return floating(0);
+			return floating(0); // LCOV_EXCL_LINE
 		}
 		if (format == "f") {
 			return floating(1);
@@ -642,12 +644,14 @@ struct ArrowIPCWriter {
 		int64_t null_count = array.null_count;
 		auto validity = buffer_count > 0 ? reinterpret_cast<const uint8_t *>(array.buffers[0]) : nullptr;
 		if (validity && null_count < 0) {
+			// LCOV_EXCL_START: DuckDB sets the null count
 			null_count = 0;
 			for (idx_t i = 0; i < length; i++) {
 				if (!(validity[i / 8] & (1 << (i % 8)))) {
 					null_count++;
 				}
 			}
+			// LCOV_EXCL_STOP
 		}
 		if (!validity) {
 			null_count = 0;
@@ -672,6 +676,7 @@ struct ArrowIPCWriter {
 				                            NumericCast<idx_t>(data_length));
 			}
 		} else if (format == "U" || format == "Z" || format == "+L") {
+			// LCOV_EXCL_START: DuckDB does not write this format
 			auto offsets = reinterpret_cast<const uint8_t *>(array.buffers[1]);
 			layout.buffers.emplace_back(offsets, Bytes(length + 1, 8));
 			if (buffer_count == 3) {
@@ -682,8 +687,11 @@ struct ArrowIPCWriter {
 				layout.buffers.emplace_back(reinterpret_cast<const uint8_t *>(array.buffers[2]),
 				                            NumericCast<idx_t>(data_length));
 			}
+			// LCOV_EXCL_STOP
 		} else if (format == "b") {
+			// LCOV_EXCL_START: DuckDB does not write this format
 			layout.buffers.emplace_back(reinterpret_cast<const uint8_t *>(array.buffers[1]), (length + 7) / 8);
+			// LCOV_EXCL_STOP
 		} else {
 			layout.buffers.emplace_back(reinterpret_cast<const uint8_t *>(array.buffers[1]),
 			                            Bytes(length, ArrowValueWidth(format)));
@@ -713,7 +721,7 @@ struct ArrowSchemaHolder {
 };
 
 void ReleaseArrowSchemaChild(ArrowSchema *schema) {
-	schema->release = nullptr;
+	schema->release = nullptr; // LCOV_EXCL_LINE
 }
 
 void ReleaseArrowSchemaRoot(ArrowSchema *schema) {
@@ -731,7 +739,7 @@ struct ArrowArrayHolder {
 };
 
 void ReleaseArrowArrayChild(ArrowArray *array) {
-	array->release = nullptr;
+	array->release = nullptr; // LCOV_EXCL_LINE
 }
 
 void ReleaseArrowArrayRoot(ArrowArray *array) {
@@ -778,39 +786,49 @@ struct ArrowIPCReader {
 		case ArrowIPCType::NULL_TYPE:
 			format = "n";
 			break;
+		// LCOV_EXCL_START: only other Arrow producers write this type
 		case ArrowIPCType::BOOL:
 			format = "b";
 			break;
+		// LCOV_EXCL_STOP
 		case ArrowIPCType::UTF8:
 			format = "u";
 			break;
+		// LCOV_EXCL_START: only other Arrow producers write this type
 		case ArrowIPCType::LARGE_UTF8:
 			format = "U";
 			break;
+		// LCOV_EXCL_STOP
 		case ArrowIPCType::BINARY:
 			format = "z";
 			break;
+		// LCOV_EXCL_START: only other Arrow producers write this type
 		case ArrowIPCType::LARGE_BINARY:
 			format = "Z";
 			break;
+		// LCOV_EXCL_STOP
 		case ArrowIPCType::STRUCT:
 			format = "+s";
 			break;
 		case ArrowIPCType::LIST:
 			format = "+l";
 			break;
+		// LCOV_EXCL_START: only other Arrow producers write this type
 		case ArrowIPCType::LARGE_LIST:
 			format = "+L";
 			break;
+		// LCOV_EXCL_STOP
 		case ArrowIPCType::MAP:
 			format = "+m";
 			if (type_table.Get<uint8_t>(0, 0)) {
-				node.flags |= ARROW_FLAG_MAP_KEYS_SORTED;
+				node.flags |= ARROW_FLAG_MAP_KEYS_SORTED; // LCOV_EXCL_LINE
 			}
 			break;
+		// LCOV_EXCL_START: only other Arrow producers write this type
 		case ArrowIPCType::FIXED_SIZE_LIST:
 			format = "+w:" + to_string(type_table.Get<int32_t>(0, 0));
 			break;
+		// LCOV_EXCL_STOP
 		case ArrowIPCType::FIXED_SIZE_BINARY:
 			format = "w:" + to_string(type_table.Get<int32_t>(0, 0));
 			break;
@@ -835,7 +853,7 @@ struct ArrowIPCReader {
 			format = "d:" + to_string(type_table.Get<int32_t>(0, 0)) + "," + to_string(type_table.Get<int32_t>(1, 0));
 			auto bits = type_table.Get<int32_t>(2, 128);
 			if (bits != 128) {
-				format += "," + to_string(bits);
+				format += "," + to_string(bits); // LCOV_EXCL_LINE
 			}
 			break;
 		}

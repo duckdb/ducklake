@@ -196,28 +196,29 @@ static unique_ptr<ColumnDataCollection> RemoteSnapshotsToCollection(ClientContex
 	auto collection = make_uniq<ColumnDataCollection>(context, types);
 	ColumnDataAppendState append_state;
 	collection->InitializeAppend(append_state);
-	DataChunk chunk;
-	chunk.Initialize(context, types);
+	vector<reference<const DuckLakeSnapshotInfo>> visible;
 	for (auto &snapshot : snapshots) {
-		if (snapshot.id > newest_snapshot_id) {
-			continue;
-		}
-		auto row = chunk.size();
-		chunk.SetValue(0, row, Value::BIGINT(NumericCast<int64_t>(snapshot.id)));
-		chunk.SetValue(1, row, Value::TIMESTAMPTZ(snapshot.time));
-		chunk.SetValue(2, row, Value::BIGINT(NumericCast<int64_t>(snapshot.schema_version)));
-		chunk.SetValue(3, row, Value(snapshot.change_info.changes_made));
-		chunk.SetValue(4, row, snapshot.author.DefaultCastAs(LogicalType::VARCHAR));
-		chunk.SetValue(5, row, snapshot.commit_message.DefaultCastAs(LogicalType::VARCHAR));
-		chunk.SetValue(6, row, snapshot.commit_extra_info.DefaultCastAs(LogicalType::VARCHAR));
-		chunk.SetValue(7, row, Value::BIGINT(NumericCast<int64_t>(snapshot.next_file_id)));
-		chunk.SetCardinality(row + 1);
-		if (chunk.size() == STANDARD_VECTOR_SIZE) {
-			collection->Append(append_state, chunk);
-			chunk.Reset();
+		if (snapshot.id <= newest_snapshot_id) {
+			visible.push_back(snapshot);
 		}
 	}
-	if (chunk.size() > 0) {
+	DataChunk chunk;
+	chunk.Initialize(context, types);
+	for (idx_t start = 0; start < visible.size(); start += STANDARD_VECTOR_SIZE) {
+		auto count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, visible.size() - start);
+		chunk.Reset();
+		for (idx_t row = 0; row < count; row++) {
+			auto &snapshot = visible[start + row].get();
+			chunk.data[0].Append(Value::BIGINT(NumericCast<int64_t>(snapshot.id)));
+			chunk.data[1].Append(Value::TIMESTAMPTZ(snapshot.time));
+			chunk.data[2].Append(Value::BIGINT(NumericCast<int64_t>(snapshot.schema_version)));
+			chunk.data[3].Append(Value(snapshot.change_info.changes_made));
+			chunk.data[4].Append(snapshot.author.DefaultCastAs(LogicalType::VARCHAR));
+			chunk.data[5].Append(snapshot.commit_message.DefaultCastAs(LogicalType::VARCHAR));
+			chunk.data[6].Append(snapshot.commit_extra_info.DefaultCastAs(LogicalType::VARCHAR));
+			chunk.data[7].Append(Value::BIGINT(NumericCast<int64_t>(snapshot.next_file_id)));
+		}
+		chunk.CheckCardinality(count);
 		collection->Append(append_state, chunk);
 	}
 	return collection;

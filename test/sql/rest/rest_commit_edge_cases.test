@@ -1,0 +1,192 @@
+# name: test/sql/rest/rest_commit_edge_cases.test
+# description: Requests of the DuckLake REST API that the server rejects or that use optional members
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+# compactions of the tables of a schema, or of a table of a schema in a time range
+query II
+SELECT status, response->>'$.results[0].table_name' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/compactions',
+'{"type": "flush_inlined_data", "schema_name": "main"}')
+----
+200	t
+
+query II
+SELECT status, json_array_length(response->'$.results') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/compactions',
+'{"type": "merge_adjacent", "schema_name": "main", "table_name": "t", "newer_than": "2000-01-01 00:00:00+00", "older_than": "2100-01-01 00:00:00+00"}')
+----
+200	0
+
+query I
+FROM dl.t ORDER BY i
+----
+1
+2
+
+# a schema needs a name
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"create_schema": {"placeholder_id": -1, "schema_name": ""}}]}')
+----
+400	create_schema requires a schema_name
+
+# placeholders refer to entries created by the transaction
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"alter": {"entry_id": -7, "alter": {"set_comment": {"entry_type": "TABLE_ENTRY", "comment": "c"}}}}]}')
+----
+400	Placeholder id -7 does not refer to an entry created in this transaction
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"delete_data": {"table_id": -7, "inlined_row_ids": [0]}}]}')
+----
+400	Placeholder id -7 does not refer to an entry created in this transaction
+
+# tables that do not exist
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"set_option": {"option": {"key": "data_inlining_row_limit", "value": "5", "table_id": 999}}}]}')
+----
+404	Table with id 999 does not exist
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"create_table": {"placeholder_id": -1, "schema_id": 0, "table_name": "gone", "columns": [{"column_name": "i", "column_type": {"id": "int32"}}]}},
+  {"drop": {"entry_type": "table", "entry_id": -1}},
+  {"delete_data": {"table_id": -1, "inlined_row_ids": [0]}}]}')
+----
+404
+
+# views are written in the dialect of DuckDB
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"create_view": {"placeholder_id": -1, "schema_id": 0, "view_name": "v", "dialect": "spark", "sql": "SELECT 1"}}]}')
+----
+501	Unsupported view dialect "spark"
+
+# tables and views with comments
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"create_table": {"placeholder_id": -1, "schema_id": 0, "table_name": "commented", "comment": "a table", "columns": [{"column_name": "i", "column_type": {"id": "int32"}}]}},
+  {"create_view": {"placeholder_id": -2, "schema_id": 0, "view_name": "commented_view", "sql": "SELECT 42 AS x", "comment": "a view"}}]}')
+----
+200
+
+query II
+SELECT table_name, comment FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 'commented'
+UNION ALL
+SELECT view_name, comment FROM duckdb_views() WHERE database_name = 'dl' AND view_name = 'commented_view'
+ORDER BY 1
+----
+commented	a table
+commented_view	a view
+
+# only tables and views are altered
+statement ok
+CREATE MACRO dl.add_one(x) AS x + 1
+
+statement ok rest_db:rest_server_con
+SET VARIABLE macro_id = (SELECT macro_id FROM __ducklake_metadata_rest_lake.ducklake_macro WHERE macro_name = 'add_one')
+
+set variable macro_id <variable:rest_server_con:macro_id>
+
+query II
+SELECT status, response->>'$.error.message' LIKE '%is not a table or a view%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"alter": {"entry_id": {macro_id}, "alter": {"set_comment": {"entry_type": "TABLE_ENTRY", "comment": "c"}}}}]}')
+----
+400	true
+
+# files refer to partitionings and name maps of the transaction that it created
+query II
+SELECT status, response->>'$.error.message' LIKE '%refers to a partitioning that was not set in this transaction%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"insert_files": {"table_id": 1, "files": [{"path": "x.parquet", "record_count": 1, "file_size_bytes": 10, "partition_id": 9223372036854775808}]}}]}')
+----
+400	true
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"insert_files": {"table_id": 1, "files": [{"path": "x.parquet", "record_count": 1, "file_size_bytes": 10, "mapping_id": 9223372036854775808}]}}]}')
+----
+400	Name map 9223372036854775808 does not refer to a name map created in this transaction
+
+# deletes of a thousand inlined rows
+statement ok
+CREATE TABLE dl.many(i INTEGER)
+
+statement ok
+INSERT INTO dl.many VALUES (1), (2), (3)
+
+statement ok
+SET VARIABLE many_id = (SELECT table_id FROM ducklake_table_info('dl') WHERE table_name = 'many')
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"delete_data": {"table_id": ' || getvariable('many_id') || ', "inlined_row_ids": ' || range(1000)::VARCHAR || '}}]}')
+----
+200
+
+query I
+SELECT count(*) FROM dl.many
+----
+0
+
+# a partitioned table that is created and written in one transaction
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl_files (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE dl_files.p(i INTEGER, j INTEGER)
+
+statement ok
+ALTER TABLE dl_files.p SET PARTITIONED BY (j)
+
+statement ok
+INSERT INTO dl_files.p VALUES (1, 10), (2, 20)
+
+statement ok
+COMMIT
+
+query II
+FROM dl_files.p ORDER BY i
+----
+1	10
+2	20
+
+# min and max are only answered from exact statistics
+statement ok
+CREATE TABLE dl_files.strs(long_s VARCHAR, null_s VARCHAR)
+
+statement ok
+INSERT INTO dl_files.strs VALUES (repeat('x', 300) || 'a', NULL), (repeat('x', 300) || 'b', NULL)
+
+statement ok
+SET VARIABLE strs_id = (SELECT table_id FROM ducklake_table_info('dl_files') WHERE table_name = 'strs')
+
+query IIII
+SELECT status, response->>'$.aggregate_results[0].answered', response->>'$.aggregate_results[1].answered', json_array_length(response->'$.files')
+FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/' || getvariable('strs_id') || '/scan', '{"aggregates": [
+  {"function": "max", "column_id": 1}, {"function": "min", "column_id": 2}]}')
+----
+200	false	false	1
+
+query II
+SELECT max(long_s) = repeat('x', 300) || 'b', min(null_s) FROM dl_files.strs
+----
+true	NULL
+
+include test/template/rest_teardown.test_template

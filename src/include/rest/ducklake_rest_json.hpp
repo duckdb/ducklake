@@ -44,7 +44,6 @@ public:
 	bool IsObject() const;
 	bool IsArray() const;
 	bool IsString() const;
-	bool Has(const string &key) const;
 	//! Throws if the key is missing
 	RESTJsonIn Get(const string &key) const;
 	//! Returns a null value if the key is missing
@@ -62,9 +61,7 @@ public:
 	string Str(const string &key, const string &default_value) const;
 	idx_t UInt(const string &key) const;
 	idx_t UInt(const string &key, idx_t default_value) const;
-	int64_t Int(const string &key) const;
-	bool Bool(const string &key, bool default_value = false) const;
-	optional_idx Opt(const string &key) const;
+	bool Bool(const string &key, bool default_value) const;
 
 	JSONValue val;
 };

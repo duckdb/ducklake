@@ -348,9 +348,6 @@ DuckLakeCatalog::~DuckLakeCatalog() {
 }
 
 void DuckLakeCatalog::ConnectREST() {
-	if (rest_client) {
-		return;
-	}
 	auto url = MetadataPath();
 	if (StringUtil::StartsWith(url, "rest:")) {
 		url = url.substr(5);
@@ -373,7 +370,9 @@ void DuckLakeCatalog::ConnectREST() {
 
 DuckLakeRESTClient &DuckLakeCatalog::GetRESTClient() {
 	if (!rest_client) {
+		// LCOV_EXCL_START
 		throw InternalException("The REST catalog is not connected to its server");
+		// LCOV_EXCL_STOP
 	}
 	return *rest_client;
 }

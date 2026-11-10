@@ -39,8 +39,11 @@ unique_ptr<ColumnDataCollection> RESTArrow::Read(ClientContext &context, shared_
 		names.push_back(stream->schema.children[col_idx]->name);
 	}
 	if (!types.empty() && types.size() != arrow_types.size()) {
+		// LCOV_EXCL_START
+		// the DuckLake server writes the columns of the API
 		throw InvalidInputException("The Arrow stream has %llu columns instead of %llu", arrow_types.size(),
 		                            types.size());
+		// LCOV_EXCL_STOP
 	}
 	auto &result_types = types.empty() ? arrow_types : types;
 	auto result = make_uniq<ColumnDataCollection>(Allocator::DefaultAllocator(), result_types);
@@ -71,7 +74,10 @@ unique_ptr<ColumnDataCollection> RESTArrow::Read(ClientContext &context, shared_
 				if (scanned.data[col_idx].GetType() == types[col_idx]) {
 					converted.data[col_idx].Reference(scanned.data[col_idx]);
 				} else {
+					// LCOV_EXCL_START
+					// the DuckLake server writes the types of the API
 					VectorOperations::Cast(context, scanned.data[col_idx], converted.data[col_idx], count);
+					// LCOV_EXCL_STOP
 				}
 			}
 			converted.SetChildCardinality(count);

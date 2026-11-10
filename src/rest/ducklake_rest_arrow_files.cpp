@@ -22,7 +22,7 @@ using PartitionValueRow = VectorStructType<uint64_t, string_t>;
 LogicalType FileType() {
 	child_list_t<LogicalType> children;
 	children.emplace_back("path", LogicalType::VARCHAR);
-	children.emplace_back("encryption_key", LogicalType::VARCHAR);
+	children.emplace_back("encryption_key", LogicalType::BLOB);
 	children.emplace_back("file_size_bytes", LogicalType::UBIGINT);
 	children.emplace_back("footer_size", LogicalType::UBIGINT);
 	children.emplace_back("format", LogicalType::VARCHAR);

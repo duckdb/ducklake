@@ -199,9 +199,6 @@ RESTSnapshotData DuckLakeRESTEndpoints::GetLatestSnapshot(DuckLakeRESTRequest &r
 RESTSnapshotData DuckLakeRESTEndpoints::GetSnapshotAt(DuckLakeRESTRequest &request,
                                                       const RESTGetSnapshotAtRequest &parameters) {
 	Value value;
-	if (parameters.unit != "version" && parameters.unit != "timestamp") {
-		throw InvalidInputException("\"%s\" is not a valid AtUnit", parameters.unit);
-	}
 	if (parameters.unit == "version") {
 		idx_t snapshot_id;
 		if (TryCast::Operation<string_t, idx_t>(string_t(parameters.value), snapshot_id)) {
@@ -387,7 +384,7 @@ ReadInlinedRows(DuckLakeRESTRequest &request, DuckLakeTableEntry &table, DuckLak
 		auto table_at_version = request.catalog->GetTableAtSchemaVersion(*request.transaction, table.GetTableId(),
 		                                                                 inlined_table.schema_version);
 		if (!table_at_version) {
-			continue;
+			continue; // LCOV_EXCL_LINE: every schema version of an inlined table has its table
 		}
 		vector<string> columns;
 		for (idx_t i = 0; i < DuckLakeInlinedColNames::COLUMN_COUNT; i++) {
@@ -429,7 +426,7 @@ ReadInlinedRows(DuckLakeRESTRequest &request, DuckLakeTableEntry &table, DuckLak
 		}
 	}
 	if (!collection) {
-		return nullptr;
+		return nullptr; // LCOV_EXCL_LINE: the first inlined table creates the collection
 	}
 	result->rows = RESTRows(std::move(collection));
 	return result;
@@ -853,9 +850,7 @@ DuckLakeSchemaEntry &DuckLakeRESTCommit::GetSchema(const vector<string> &schema_
 	for (auto &name : schema_path) {
 		path.emplace_back(name);
 	}
-	if (path.empty()) {
-		path.emplace_back(*catalog.GetDefaultSchema());
-	}
+	D_ASSERT(!path.empty());
 	auto schema = catalog.GetSchema(catalog.GetCatalogTransaction(context), path, OnEntryNotFound::THROW_EXCEPTION);
 	return schema->Cast<DuckLakeSchemaEntry>();
 }
@@ -866,9 +861,7 @@ QualifiedName DuckLakeRESTCommit::GetEntryQualifiedName(const vector<string> &sc
 	for (auto &schema_name : schema_path) {
 		path.emplace_back(schema_name);
 	}
-	if (path.size() == 1) {
-		path.emplace_back(*catalog.GetDefaultSchema());
-	}
+	D_ASSERT(path.size() > 1);
 	return QualifiedName(std::move(path), Identifier(name));
 }
 
@@ -1037,7 +1030,10 @@ void DuckLakeRESTCommit::CreateTable(RESTCreateTableRequest &parameters) {
 	auto entry = schema.CreateTableExtended(catalog.GetCatalogTransaction(context), bound_info, std::move(uuid),
 	                                        std::move(path));
 	if (!entry) {
+		// LCOV_EXCL_START
+		// a conflict throws, as the request has no IF NOT EXISTS
 		throw CatalogException("Table \"%s\" already exists", parameters.table_name);
+		// LCOV_EXCL_STOP
 	}
 	AddCreatedEntry(entry, parameters.placeholder_id);
 	auto &table = entry->Cast<DuckLakeTableEntry>();
@@ -1280,11 +1276,9 @@ void DuckLakeRESTCommit::RemapNameMap(DuckLakeDataFile &file) {
 void DuckLakeRESTCommit::InsertRows(RESTInsertRowsRequest &parameters) {
 	auto &table = GetTable(GetTableId(parameters.table_id));
 	auto new_data = make_uniq<DuckLakeInlinedData>();
-	if (parameters.rows.owned_rows) {
-		new_data->data = std::move(parameters.rows.owned_rows);
-	} else {
-		new_data->data = make_uniq<ColumnDataCollection>(Allocator::DefaultAllocator(), parameters.rows.rows->Types());
-	}
+	// the server reads the rows of a request into a collection of its own
+	D_ASSERT(parameters.rows.owned_rows);
+	new_data->data = std::move(parameters.rows.owned_rows);
 	new_data->row_ids = std::move(parameters.row_ids);
 	new_data->column_stats = std::move(parameters.column_stats);
 	if (table.GetInlinedDataTables().empty() ||
@@ -1351,7 +1345,7 @@ RESTCommitTransactionResponse DuckLakeRESTCommit::Run(const RESTCommitTransactio
 	for (auto &entry : transaction_ref->GetCommittedEntryOids()) {
 		auto placeholder = entry_placeholders.find(entry.second);
 		if (placeholder == entry_placeholders.end()) {
-			continue;
+			continue; // LCOV_EXCL_LINE: the create requests record the entries that get an id
 		}
 		RESTCreatedEntry created_entry;
 		created_entry.placeholder_id = placeholder->second;

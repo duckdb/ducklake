@@ -5929,10 +5929,7 @@ vector<string> DuckLakeMetadataManager::GetKnownFilePaths() {
 
 vector<string> DuckLakeMetadataManager::GetMetadataTableNames() {
 	auto &catalog = transaction.GetCatalog();
-	auto schema_name = catalog.MetadataSchemaName();
-	if (schema_name.empty()) {
-		schema_name = transaction.GetDefaultSchemaName();
-	}
+	auto &schema_name = catalog.MetadataSchemaName();
 	auto &context = *transaction.GetConnection().context;
 	auto &metadata_catalog = Catalog::GetCatalog(context, Identifier(catalog.MetadataDatabaseName()));
 	auto &schema = metadata_catalog.GetSchema(context, schema_name);

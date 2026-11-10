@@ -658,7 +658,10 @@ void DuckLakeUtil::ResetExtensionSettings(ClientContext &context, const vector<s
 void DuckLakeUtil::SetExtensionSetting(ClientContext &context, const string &name, const Value &value) {
 	ExtensionOption option;
 	if (!DBConfig::GetConfig(context).TryGetExtensionOption(Identifier(name), option)) {
+		// LCOV_EXCL_START
+		// the settings are registered by the extension itself
 		return;
+		// LCOV_EXCL_STOP
 	}
 	PhysicalSet::SetExtensionVariable(context, option, SetScope::SESSION, value);
 }

@@ -877,7 +877,7 @@ read it.
 | `footer_size` | `uint64` (optional) | The size of the footer. |
 | `row_group_count` | `uint64` (optional) | The number of row groups. |
 | `partition_id` | `uint64` (optional) | The partitioning the file was written for. Partitionings set in the transaction are referred to by the `partition_id` of their request. |
-| `encryption_key` | `string` (default `""`) | The key the file is encrypted with, if any. |
+| `encryption_key` | `base64` (default `""`) | The key the file is encrypted with, if any. |
 | `mapping_id` | `uint64` (optional) | The name map of the file. Name maps created in the transaction are referred to by the `mapping_id` of their request. |
 | `column_stats` | list of [`ColumnStats`](#columnstats) (default `[]`) | Each entry has an additional field `column_id`. The statistics of the columns of the file. |
 | `partition_values` | list of [`FilePartitionValue`](#filepartitionvalue) (default `[]`) | The values of the partition keys. |
@@ -897,7 +897,7 @@ A delete file written by a client, which replaces the previous delete file of it
 | `file_size_bytes` | `uint64` | The size of the delete file. |
 | `footer_size` | `uint64` (default `0`) | The size of the footer of the delete file. |
 | `row_group_count` | `uint64` (optional) | The number of row groups of the delete file. |
-| `encryption_key` | `string` (default `""`) | The key the file is encrypted with, if any. |
+| `encryption_key` | `base64` (default `""`) | The key the file is encrypted with, if any. |
 | `begin_snapshot` | `uint64` (optional) | The snapshot of the deletes, if it is not the snapshot of the commit. |
 | `max_snapshot` | `uint64` (optional) | The last snapshot whose deletes the file holds, for partial delete files. |
 
@@ -991,7 +991,7 @@ A file that a client reads.
 | Field | Type | Description |
 |-------|------|-------------|
 | `path` | `path` | The absolute path of the file. |
-| `encryption_key` | `string` (default `""`) | The key the file is encrypted with, if any. |
+| `encryption_key` | `base64` (default `""`) | The key the file is encrypted with, if any. |
 | `file_size_bytes` | `uint64` (default `0`) | The size of the file. |
 | `footer_size` | `uint64` (optional) | The size of the footer of the file. |
 | `format` | [`FileFormat`](#fileformat) (default `"parquet"`) | The format of the file. |

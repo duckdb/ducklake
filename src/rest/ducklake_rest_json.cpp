@@ -43,10 +43,6 @@ bool RESTJsonIn::IsString() const {
 	return val.IsValid() && val.IsString();
 }
 
-bool RESTJsonIn::Has(const string &key) const {
-	return IsObject() && val.GetMember(key).IsValid();
-}
-
 RESTJsonIn RESTJsonIn::Get(const string &key) const {
 	if (!IsObject()) {
 		throw InvalidInputException("DuckLake REST: expected a JSON object when reading \"%s\"", key);
@@ -100,12 +96,9 @@ idx_t RESTJsonIn::UInt() const {
 	if (!val.IsValid() || !val.IsInteger()) {
 		throw InvalidInputException("DuckLake REST: expected a JSON integer");
 	}
+	// the parser stores the integers that are not negative as unsigned
 	if (val.GetType() == JSONValueType::SIGNED_INTEGER) {
-		auto result = val.GetSignedInteger();
-		if (result < 0) {
-			throw InvalidInputException("DuckLake REST: expected a non-negative JSON integer");
-		}
-		return UnsafeNumericCast<idx_t>(result);
+		throw InvalidInputException("DuckLake REST: expected a non-negative JSON integer");
 	}
 	return val.GetUnsignedInteger();
 }
@@ -152,18 +145,9 @@ idx_t RESTJsonIn::UInt(const string &key, idx_t default_value) const {
 	return entry.IsNull() ? default_value : entry.UInt();
 }
 
-int64_t RESTJsonIn::Int(const string &key) const {
-	return Get(key).Int();
-}
-
 bool RESTJsonIn::Bool(const string &key, bool default_value) const {
 	auto entry = TryGet(key);
 	return entry.IsNull() ? default_value : entry.Bool();
-}
-
-optional_idx RESTJsonIn::Opt(const string &key) const {
-	auto entry = TryGet(key);
-	return entry.IsNull() ? optional_idx() : optional_idx(entry.UInt());
 }
 
 //===--------------------------------------------------------------------===//
@@ -178,7 +162,10 @@ JSONMutableValue RESTJson::TypeToJson(JSONWriter &writer, const LogicalType &typ
 	switch (ducklake_type.id()) {
 	case LogicalTypeId::GEOMETRY:
 		if (GeoType::HasCRS(ducklake_type)) {
+			// LCOV_EXCL_START
+			// DuckLake does not keep the CRS of a geometry column
 			result.AddString("crs", GeoType::GetCRS(ducklake_type).GetDefinition());
+			// LCOV_EXCL_STOP
 		}
 		break;
 	case LogicalTypeId::DECIMAL:

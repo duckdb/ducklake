@@ -529,10 +529,6 @@ vector<DuckLakeInlinedTableInfo> DuckLakeTableEntry::GetInlinedDataTables(DuckLa
 	return result;
 }
 
-idx_t DuckLakeTableEntry::GetNetInlinedRowCount(DuckLakeTransaction &transaction) {
-	return GetNetInlinedRowCount(transaction, transaction.GetSnapshot());
-}
-
 idx_t DuckLakeTableEntry::GetNetInlinedRowCount(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
 	auto &metadata_manager = transaction.GetMetadataManager();
 	idx_t total = 0;

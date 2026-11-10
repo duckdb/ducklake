@@ -276,6 +276,11 @@ struct RESTPathCodec : public RESTCodec<RESTPathCodec> {
 	static void Read(RESTJsonIn in, string &result);
 };
 
+struct RESTBase64Codec : public RESTCodec<RESTBase64Codec> {
+	static JSONMutableValue Write(JSONWriter &writer, const string &value);
+	static void Read(RESTJsonIn in, string &result);
+};
+
 struct RESTBoolCodec : public RESTCodec<RESTBoolCodec> {
 	static JSONMutableValue Write(JSONWriter &writer, bool value) {
 		return writer.CreateBoolean(value);

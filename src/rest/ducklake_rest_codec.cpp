@@ -1,5 +1,6 @@
 #include "rest/ducklake_rest_codec.hpp"
 
+#include "duckdb/common/types/blob.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 
 namespace duckdb {
@@ -44,7 +45,7 @@ RESTRows::~RESTRows() {
 static string WithTrailingSeparator(string path) {
 	// local paths on Windows end in a backslash
 	if (!path.empty() && path.back() != '/' && path.back() != '\\') {
-		path += '/';
+		path += '/'; // LCOV_EXCL_LINE: the data paths of the catalog end in a separator
 	}
 	return path;
 }
@@ -64,7 +65,7 @@ string RESTPathMapper::Map(const string &path, const string &from, const string 
 		return path;
 	}
 	if (path.size() == prefix.size()) {
-		return to.substr(0, to.size() - 1);
+		return to.substr(0, to.size() - 1); // LCOV_EXCL_LINE: the paths of the API are below the data path
 	}
 	if (path[prefix.size()] == '/' || path[prefix.size()] == '\\') {
 		return to + path.substr(prefix.size() + 1);
@@ -105,6 +106,14 @@ void RESTPathCodec::Read(RESTJsonIn in, string &result) {
 	if (mapper) {
 		result = mapper->ToClient(result);
 	}
+}
+
+JSONMutableValue RESTBase64Codec::Write(JSONWriter &writer, const string &value) {
+	return writer.CreateString(Blob::ToBase64(string_t(value)));
+}
+
+void RESTBase64Codec::Read(RESTJsonIn in, string &result) {
+	result = Blob::FromBase64(string_t(in.Str()));
 }
 
 JSONMutableValue RESTTimestampCodec::Write(JSONWriter &writer, timestamp_tz_t value) {

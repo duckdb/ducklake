@@ -39,6 +39,7 @@ ENDPOINT_KINDS = ["read", "command", "transaction", "commit"]
 PRIMITIVES = {
     "string": ("RESTStringCodec", "string", "string", "string"),
     "path": ("RESTPathCodec", "string", "string", "path"),
+    "base64": ("RESTBase64Codec", "string", "string", "base64 string"),
     "bool": ("RESTBoolCodec", "bool", "RESTOptional<bool>", "boolean"),
     "uint64": ("RESTUInt64Codec", "idx_t", "optional_idx", "unsigned integer"),
     "int64": ("RESTInt64Codec", "int64_t", "RESTOptional<int64_t>", "integer"),
@@ -482,7 +483,12 @@ class Spec:
         return result
 
     def serialized(self, obj):
-        """Whether an object has serializers of its own: a mixin that no field refers to is only part of others"""
+        """Whether an object has serializers of its own: a mixin that no field refers to is only part of others, and the
+        types of Arrow tables are not part of any JSON document"""
+        if not hasattr(self, "_arrow_only_types"):
+            self._arrow_only_types = arrow_only_types(self)
+        if obj.name in self._arrow_only_types:
+            return False
         if not obj.mixin:
             return True
         for other in self.all_objects():
@@ -619,7 +625,7 @@ class Spec:
                 return str(int(value))
             if expr.name == "double":
                 return repr(float(value))
-            if expr.name in ("string", "path"):
+            if expr.name in ("string", "path", "base64"):
                 return f"string({cpp_string(value)})"
         if expr.kind == "named":
             entry = self.types[expr.name]
@@ -1736,7 +1742,9 @@ def generate_header(spec):
     lines.append(
         "\t//! Maps the paths of the requests and responses to and from the data path of the server, if set"
     )
-    lines.append("\tvirtual optional_ptr<const RESTPathMapper> GetPathMapper() const = 0;")
+    lines.append(
+        "\tvirtual optional_ptr<const RESTPathMapper> GetPathMapper() const = 0;"
+    )
     lines.append("")
     lines.append(
         "\t//! Sends the JSON body of a request to an endpoint, returns the body of the response, which is JSON unless"

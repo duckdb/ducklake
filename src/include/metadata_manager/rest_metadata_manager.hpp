@@ -83,7 +83,6 @@ public:
 	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) override;
 	vector<DuckLakeSnapshotTagInfo> GetSnapshotTags(bool with_snapshot_time = true) override;
 	vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &older_than) override;
-	vector<string> GetMetadataTableNames() override;
 	unique_ptr<QueryResult> ReadMetadataTable(const string &table_name) override;
 	vector<string> GetKnownFilePaths() override;
 	idx_t SetConfigOption(const DuckLakeConfigOption &option) override;

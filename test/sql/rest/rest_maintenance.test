@@ -142,6 +142,25 @@ SELECT count(*), sum(i) FROM dl.t
 ----
 10	55
 
+# the options of a compaction are checked by the client
+statement error
+CALL ducklake_merge_adjacent_files('dl', '')
+----
+Table with name "" does not exist
+
+statement error
+CALL ducklake_merge_adjacent_files('dl', max_compacted_files => -1)
+----
+The max_compacted_files option must not be negative
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl', 't', newer_than => TIMESTAMPTZ '2000-01-01 00:00:00+00', older_than => now())
+
+query II
+SELECT count(*), sum(i) FROM dl.t
+----
+10	55
+
 statement ok
 DETACH dl
 

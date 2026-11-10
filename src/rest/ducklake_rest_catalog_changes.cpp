@@ -172,8 +172,11 @@ unique_ptr<RESTAlteration> DuckLakeRESTCatalogChanges::WriteAlter(const AlterInf
 		default:
 			break;
 		}
+		// LCOV_EXCL_START
+		// the catalog refuses the other alters of a DuckLake table before they are written
 		throw NotImplementedException("DuckLake REST catalogs do not support ALTER TABLE type %s",
 		                              EnumUtil::ToString(alter.alter_table_type));
+		// LCOV_EXCL_STOP
 	}
 	case AlterType::ALTER_VIEW: {
 		auto &alter = info.Cast<AlterViewInfo>();
@@ -200,7 +203,7 @@ unique_ptr<RESTAlteration> DuckLakeRESTCatalogChanges::WriteAlter(const AlterInf
 		return std::move(result);
 	}
 	default:
-		break;
+		break; // LCOV_EXCL_LINE: the alter target of the other types is null
 	}
 	throw NotImplementedException("DuckLake REST catalogs do not support ALTER type %s", EnumUtil::ToString(info.type));
 }

@@ -264,7 +264,6 @@ struct DuckLakeRESTSerializer {
 	static JSONMutableValue Write(JSONWriter &writer, const RESTFileRowDeletes &value);
 	static JSONMutableValue Write(JSONWriter &writer, const DuckLakeGlobalColumnStatsInfo &value);
 	static JSONMutableValue Write(JSONWriter &writer, const DuckLakeGlobalStatsInfo &value);
-	static JSONMutableValue Write(JSONWriter &writer, const RESTInlinedRows &value);
 	static JSONMutableValue Write(JSONWriter &writer, const DuckLakeMacroImplementation &value);
 	static JSONMutableValue Write(JSONWriter &writer, const DuckLakeMacroInfo &value);
 	static JSONMutableValue Write(JSONWriter &writer, const DuckLakeMacroParameters &value);
@@ -281,7 +280,6 @@ struct DuckLakeRESTSerializer {
 	static JSONMutableValue Write(JSONWriter &writer, const RESTRenameTable &value);
 	static JSONMutableValue Write(JSONWriter &writer, const RESTRenameView &value);
 	static JSONMutableValue Write(JSONWriter &writer, const RESTResetOptions &value);
-	static JSONMutableValue Write(JSONWriter &writer, const RESTResultColumn &value);
 	static JSONMutableValue Write(JSONWriter &writer, const RESTRetryConfig &value);
 	static JSONMutableValue Write(JSONWriter &writer, const RESTScanFilters &value);
 	static JSONMutableValue Write(JSONWriter &writer, const DuckLakeSchemaInfo &value);
@@ -389,8 +387,6 @@ DuckLakeGlobalColumnStatsInfo DuckLakeRESTSerializer::Read(RESTJsonIn in);
 template <>
 DuckLakeGlobalStatsInfo DuckLakeRESTSerializer::Read(RESTJsonIn in);
 template <>
-RESTInlinedRows DuckLakeRESTSerializer::Read(RESTJsonIn in);
-template <>
 DuckLakeMacroImplementation DuckLakeRESTSerializer::Read(RESTJsonIn in);
 template <>
 DuckLakeMacroInfo DuckLakeRESTSerializer::Read(RESTJsonIn in);
@@ -422,8 +418,6 @@ template <>
 RESTRenameView DuckLakeRESTSerializer::Read(RESTJsonIn in);
 template <>
 RESTResetOptions DuckLakeRESTSerializer::Read(RESTJsonIn in);
-template <>
-RESTResultColumn DuckLakeRESTSerializer::Read(RESTJsonIn in);
 template <>
 RESTRetryConfig DuckLakeRESTSerializer::Read(RESTJsonIn in);
 template <>

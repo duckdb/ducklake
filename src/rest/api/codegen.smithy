@@ -74,6 +74,7 @@ enum wireType {
     LOGICAL_TYPE = "logical_type"
     ROWS = "rows"
     PATH = "path"
+    BASE64 = "base64"
 }
 
 /// The sections of the reference documentation.

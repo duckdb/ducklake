@@ -33,6 +33,8 @@ bool RESTInlinedField::Covers(const RESTInlinedField &other) const {
 	if (other.all) {
 		return false;
 	}
+	// LCOV_EXCL_START
+	// a scan reads all columns or the columns that its file list fetched
 	for (auto &entry : other.fields) {
 		auto field = fields.find(entry.first);
 		if (field == fields.end() || !field->second.Covers(entry.second)) {
@@ -40,6 +42,7 @@ bool RESTInlinedField::Covers(const RESTInlinedField &other) const {
 		}
 	}
 	return true;
+	// LCOV_EXCL_STOP
 }
 
 bool RESTInlinedProjection::Covers(const RESTInlinedProjection &other) const {
@@ -148,12 +151,12 @@ shared_ptr<RESTCachedInlinedRows> RESTInlinedRowsCache::Find(const RESTInlinedRo
 	lock_guard<mutex> guard(lock);
 	auto entry = responses.find(key);
 	if (entry == responses.end()) {
-		return nullptr;
+		return nullptr; // LCOV_EXCL_LINE: the file list fetches the rows before they are read
 	}
 	for (idx_t i = entry->second.size(); i > 0; i--) {
 		auto &rows = entry->second[i - 1]->rows;
 		if (!rows) {
-			continue;
+			continue; // LCOV_EXCL_LINE
 		}
 		bool has_columns = true;
 		for (auto &column : columns_to_read) {
@@ -166,7 +169,7 @@ shared_ptr<RESTCachedInlinedRows> RESTInlinedRowsCache::Find(const RESTInlinedRo
 			return rows;
 		}
 	}
-	return nullptr;
+	return nullptr; // LCOV_EXCL_LINE
 }
 
 } // namespace duckdb

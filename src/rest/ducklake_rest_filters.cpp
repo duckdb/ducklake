@@ -55,7 +55,7 @@ static string ColumnSQL(const DuckLakeTableEntry &table, idx_t field_index) {
 			return StringUtil::Join(quoted, ".");
 		}
 	}
-	return string();
+	return string(); // LCOV_EXCL_LINE: pushed down filters are on fields of the table
 }
 
 static string ComparisonOperator(ExpressionType type) {
@@ -78,9 +78,6 @@ static string ComparisonOperator(ExpressionType type) {
 }
 
 static string ConstantSQL(const Value &value) {
-	if (value.IsNull()) {
-		return string();
-	}
 	return ConstantExpression::FromValue(value)->ToString();
 }
 
@@ -118,12 +115,8 @@ static string FilterExpressionSQL(const Expression &expr, const string &column) 
 					return string();
 				}
 				auto &constant = children[i]->Cast<BoundConstantExpression>().GetValue();
-				// a NULL in an IN list never matches, but it stays part of the list
-				auto value = constant.IsNull() ? string("NULL") : ConstantSQL(constant);
-				if (value.empty()) {
-					return string();
-				}
-				values.push_back(std::move(value));
+				// a NULL in an IN list never matches, but it stays part of the list as a plain NULL
+				values.push_back(constant.IsNull() ? string("NULL") : ConstantSQL(constant));
 			}
 			return values.empty() ? string() : column + " IN (" + StringUtil::Join(values, ", ") + ")";
 		}
@@ -163,14 +156,14 @@ static string ColumnFilterSQL(const ColumnFilterInfo &filter, const DuckLakeTabl
 	}
 	auto column = ColumnSQL(table, filter.column_field_index);
 	if (column.empty()) {
-		return string();
+		return string(); // LCOV_EXCL_LINE
 	}
 	try {
 		return FilterExpressionSQL(*filter.table_filter->expr, column);
-	} catch (ConversionException &) {
+	} catch (ConversionException &) { // LCOV_EXCL_START
 		// a constant that cannot be printed, e.g. a timestamp outside the printable range
 		return string();
-	}
+	} // LCOV_EXCL_STOP
 }
 
 static string FilterNodeSQL(const DuckLakeFilterNode &node, const DuckLakeTableEntry &table) {
@@ -196,7 +189,7 @@ static string FilterNodeSQL(const DuckLakeFilterNode &node, const DuckLakeTableE
 		return StringUtil::Join(children, is_or ? " OR " : " AND ");
 	}
 	default:
-		return string();
+		return string(); // LCOV_EXCL_LINE
 	}
 }
 
@@ -313,17 +306,36 @@ static Value FoldConstant(ClientContext &context, const ParsedExpression &expr) 
 	}
 }
 
-//! The constant as a value of the field, if DuckDB compares the two in the type of the field
+//! Whether a cast to the type depends on the time zone of the session
+static bool DependsOnTimeZone(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::TIMESTAMP_TZ:
+	case LogicalTypeId::TIMESTAMP_TZ_NS:
+	case LogicalTypeId::TIME_TZ:
+		return true;
+	default:
+		return false;
+	}
+}
+
+//! The constant as a value of the field, if DuckDB compares the two in the type of the field. The binder resolves
+//! types of equal priority by the order of the operands, the field is on the left unless field_on_right is set
 static bool TryCastToField(ClientContext &context, const Value &value, const LogicalType &type,
-                           ExpressionType comparison_type, Value &result) {
+                           ExpressionType comparison_type, bool field_on_right, Value &result) {
 	if (value.type() == type) {
 		result = value;
 		return true;
 	}
 	// a comparison casts the field to the common type, which only keeps the order of the field if it is invertible
 	LogicalType common_type;
-	if (!BoundComparisonExpression::TryBindComparison(context, type, value.type(), common_type, comparison_type) ||
-	    (common_type != type && !BoundCastExpression::CastIsInvertible(type, common_type))) {
+	auto &left_type = field_on_right ? value.type() : type;
+	auto &right_type = field_on_right ? type : value.type();
+	if (!BoundComparisonExpression::TryBindComparison(context, left_type, right_type, common_type, comparison_type)) {
+		return false;
+	}
+	// a conversion to a type with a time zone is not one-to-one in every zone, e.g. a skipped day
+	if (common_type != type &&
+	    (!BoundCastExpression::CastIsInvertible(type, common_type) || DependsOnTimeZone(common_type))) {
 		return false;
 	}
 	auto casted = value.TryCastAs(context, type, nullptr, true);
@@ -354,14 +366,17 @@ public:
 				return nullptr;
 			}
 			Value value;
+			bool field_on_right = false;
 			if (comparison.Left().GetExpressionClass() == ExpressionClass::COLUMN_REF) {
 				value = FoldConstant(context, comparison.Right());
 			} else if (comparison.Right().GetExpressionClass() == ExpressionClass::COLUMN_REF) {
 				value = FoldConstant(context, comparison.Left());
 				comparison_type = FlipComparisonExpression(comparison_type);
+				field_on_right = true;
 			}
 			Value field_value;
-			if (value.IsNull() || !TryCastToField(context, value, field.Type(), comparison_type, field_value)) {
+			if (value.IsNull() ||
+			    !TryCastToField(context, value, field.Type(), comparison_type, field_on_right, field_value)) {
 				return nullptr;
 			}
 			auto column = make_uniq<BoundReferenceExpression>(field.Type(), 0ULL);
@@ -390,13 +405,10 @@ public:
 					auto value = FoldConstant(context, *children[i]);
 					Value field_value;
 					if (value.IsNull() ||
-					    !TryCastToField(context, value, field.Type(), ExpressionType::COMPARE_IN, field_value)) {
+					    !TryCastToField(context, value, field.Type(), ExpressionType::COMPARE_IN, false, field_value)) {
 						return nullptr;
 					}
 					values.push_back(std::move(field_value));
-				}
-				if (values.empty()) {
-					return nullptr;
 				}
 				auto column = make_uniq<BoundReferenceExpression>(field.Type(), 0ULL);
 				return ExpressionFilter::CreateInExpression(std::move(column), std::move(values));
@@ -439,7 +451,7 @@ public:
 		}
 		auto field = table.GetFieldData().GetByFieldIndex(FieldIndex(*field_indexes.begin()));
 		if (!field) {
-			return nullptr;
+			return nullptr; // LCOV_EXCL_LINE: CollectFields found the field
 		}
 		auto bound = BindColumnFilter(expr, *field);
 		if (!bound) {

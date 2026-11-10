@@ -46,7 +46,7 @@ vector<RESTMultipartPart> RESTMultipart::Parse(const string &body, const string 
 	}
 	auto boundary = content_type.substr(boundary_start + 9);
 	if (!boundary.empty() && boundary.front() == '"') {
-		boundary = boundary.substr(1, boundary.find('"', 1) - 1);
+		boundary = boundary.substr(1, boundary.find('"', 1) - 1); // LCOV_EXCL_LINE: DuckDB does not quote it
 	}
 	auto delimiter = "--" + boundary;
 	vector<RESTMultipartPart> parts;
@@ -70,7 +70,7 @@ vector<RESTMultipartPart> RESTMultipart::Parse(const string &body, const string 
 		for (auto &line : StringUtil::Split(headers, "\r\n")) {
 			auto colon = line.find(':');
 			if (colon == string::npos) {
-				continue;
+				continue; // LCOV_EXCL_LINE: DuckDB writes headers with a colon
 			}
 			auto key = StringUtil::Lower(line.substr(0, colon));
 			auto value = line.substr(colon + 1);

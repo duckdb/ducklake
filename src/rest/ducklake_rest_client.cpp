@@ -97,7 +97,7 @@ int32_t DuckLakeRESTClient::Send(const string &method, const string &target, con
 		if (attempt == 0 && reused && closed && idempotent) {
 			// the server closed the connection while it was idle: the request is sent again on a new connection. Other
 			// requests are not, as the server might have applied them
-			continue;
+			continue; // LCOV_EXCL_LINE: httplib reconnects the idle connections it finds closed
 		}
 		throw IOException("Failed to send DuckLake REST request \"%s %s\" to %s: %s", method, target, server_url,
 		                  duckdb_httplib::to_string(error));
@@ -132,11 +132,14 @@ string DuckLakeRESTClient::GetProperty(const string &name, const string &client_
 	if (override_entry != overrides.end()) {
 		return override_entry->second;
 	}
+	// LCOV_EXCL_START
+	// the DuckLake server overrides the properties that the client reads
 	if (!client_value.empty()) {
 		return client_value;
 	}
 	auto default_entry = defaults.find(name);
 	return default_entry != defaults.end() ? default_entry->second : string();
+	// LCOV_EXCL_STOP
 }
 
 RESTHttpResponse DuckLakeRESTClient::Call(const string &endpoint, const string &json, bool idempotent,
@@ -166,9 +169,10 @@ RESTHttpResponse DuckLakeRESTClient::Call(const string &endpoint, const string &
 		try {
 			RESTJsonReader document(response);
 			error = DuckLakeRESTSerializer::Read<RESTErrorResponse>(document.Root());
-		} catch (std::exception &) {
+		} catch (std::exception &) { // LCOV_EXCL_START
+			// the DuckLake server sends the errors as JSON
 			throw IOException("DuckLake REST request \"%s %s\" failed with status %d", route.method, target, status);
-		}
+		} // LCOV_EXCL_STOP
 		auto type = Exception::StringToExceptionType(error.error.type);
 		ErrorData(type, error.error.message).Throw();
 	}

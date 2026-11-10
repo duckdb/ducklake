@@ -551,7 +551,7 @@ structure FileData {
     path: DataPath
 
     /// The key the file is encrypted with, if any.
-    encryption_key: String = ""
+    encryption_key: Base64Binary = ""
 
     /// The size of the file.
     file_size_bytes: UInt64 = 0
@@ -706,7 +706,7 @@ structure DeleteFile {
     row_group_count: UInt64
 
     /// The key the file is encrypted with, if any.
-    encryption_key: String = ""
+    encryption_key: Base64Binary = ""
 
     /// The snapshot of the deletes, if it is not the snapshot of the commit.
     begin_snapshot: UInt64
@@ -756,7 +756,7 @@ structure DataFile {
     partition_id: UInt64
 
     /// The key the file is encrypted with, if any.
-    encryption_key: String = ""
+    encryption_key: Base64Binary = ""
 
     /// The name map of the file. Name maps created in the transaction are referred to by the `mapping_id` of their
     /// request.

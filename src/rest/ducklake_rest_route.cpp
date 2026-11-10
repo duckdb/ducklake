@@ -58,7 +58,7 @@ string RESTRoute::ClientTarget(const string &request_json, const string &prefix,
 			continue;
 		}
 		if (member.second.IsNull()) {
-			continue;
+			continue; // LCOV_EXCL_LINE: the client leaves out null members
 		}
 		if (parameter->query_name.empty()) {
 			target = StringUtil::Replace(target, "{" + parameter->name + "}", UrlEncode(ScalarText(member.second)));
@@ -66,9 +66,12 @@ string RESTRoute::ClientTarget(const string &request_json, const string &prefix,
 		}
 		vector<string> values;
 		if (member.second.IsArray()) {
+			// LCOV_EXCL_START
+			// the list parameters are the ids of snapshot tags, which a REST catalog refuses
 			for (auto &item : member.second.Items()) {
 				values.push_back(ScalarText(item));
 			}
+			// LCOV_EXCL_STOP
 		} else {
 			values.push_back(ScalarText(member.second));
 		}
@@ -79,8 +82,10 @@ string RESTRoute::ClientTarget(const string &request_json, const string &prefix,
 	}
 	if (method == "GET") {
 		if (remaining_count != 0) {
+			// LCOV_EXCL_START
 			throw InternalException("DuckLake REST: the request of \"%s\" has members that are not parameters",
 			                        endpoint);
+			// LCOV_EXCL_STOP
 		}
 		body.clear();
 	} else {
@@ -125,6 +130,8 @@ static JSONMutableValue ParameterToJson(JSONWriter &writer, const RESTRouteParam
 		}
 		return writer.CreateUnsignedInteger(result);
 	}
+	// LCOV_EXCL_START
+	// no route of the API has an integer parameter that can be negative
 	case RESTParameterType::INT: {
 		int64_t result;
 		if (!TryCast::Operation<string_t, int64_t>(string_t(value), result)) {
@@ -132,6 +139,7 @@ static JSONMutableValue ParameterToJson(JSONWriter &writer, const RESTRouteParam
 		}
 		return writer.CreateSignedInteger(result);
 	}
+	// LCOV_EXCL_STOP
 	case RESTParameterType::BOOL:
 		if (value != "true" && value != "false") {
 			ThrowInvalidParameter(parameter.name, value);
@@ -150,8 +158,10 @@ string RESTRoute::ServerRequest(const vector<string> &path_values, const vector<
 	for (auto &parameter : parameters) {
 		if (parameter.query_name.empty()) {
 			if (path_index >= path_values.size()) {
+				// LCOV_EXCL_START
 				throw InternalException("DuckLake REST: the path of \"%s\" has no value for \"%s\"", endpoint,
 				                        parameter.name);
+				// LCOV_EXCL_STOP
 			}
 			result.Add(parameter.name, ParameterToJson(writer.writer, parameter, path_values[path_index++]));
 			continue;

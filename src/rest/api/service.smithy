@@ -98,6 +98,10 @@ union CommitRequest {
 @wireType("path")
 string DataPath
 
+/// Binary data, such as the key of an encrypted file, as a base64 string.
+@wireType("base64")
+string Base64Binary
+
 /// An unsigned integer.
 @wireType("uint64")
 long UInt64

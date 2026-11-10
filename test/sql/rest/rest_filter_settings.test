@@ -76,4 +76,55 @@ SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request
 ----
 200	0
 
+# the binder resolves types of equal priority by the order of the operands
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/2/scan', '{"filters": {"expressions": ["1 = v"]}}')
+----
+200	1
+
+statement ok rest_db:rest_server_con
+SET GLOBAL TimeZone='Etc/GMT+5'
+
+statement ok rest_db:rest_server_con
+CREATE TABLE rest_lake.tt(tt TIMETZ)
+
+statement ok rest_db:rest_server_con
+INSERT INTO rest_lake.tt VALUES (TIMETZ '15:00:00+00')
+
+query I rest_db:rest_server_con
+SELECT TIME '15:00:00' = tt FROM rest_lake.tt
+----
+true
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/3/scan', '{"filters":{"expressions":["TIME ''15:00:00'' = tt"]}}')
+----
+200	1
+
+# a DATE converts to a TIMESTAMPTZ in the time zone, where a day can be skipped
+statement ok rest_db:rest_server_con
+SET GLOBAL TimeZone='Pacific/Apia'
+
+statement ok rest_db:rest_server_con
+CREATE TABLE rest_lake.d(d DATE)
+
+statement ok rest_db:rest_server_con
+INSERT INTO rest_lake.d VALUES (DATE '2011-12-30')
+
+query I rest_db:rest_server_con
+SELECT d = TIMESTAMPTZ '2011-12-30 10:00:00+00' FROM rest_lake.d
+----
+true
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/4/scan', '{"filters":{"expressions":["d = TIMESTAMPTZ ''2011-12-30 10:00:00+00''"]}}')
+----
+200	1
+
+# a DATE constant still prunes a DATE field
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/4/scan', '{"filters":{"expressions":["d > DATE ''2012-01-01''"]}}')
+----
+200	0
+
 include test/template/rest_teardown.test_template

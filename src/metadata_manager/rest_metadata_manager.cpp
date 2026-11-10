@@ -65,13 +65,6 @@ static int64_t ToRequestId(idx_t id) {
 	return NumericCast<int64_t>(id);
 }
 
-static idx_t FromRequestId(int64_t id) {
-	if (id < 0) {
-		return DuckLakeConstants::TRANSACTION_LOCAL_ID_START + NumericCast<idx_t>(-id - 1);
-	}
-	return NumericCast<idx_t>(id);
-}
-
 DuckLakeRESTClient &RESTMetadataManager::GetClient() {
 	return transaction.GetCatalog().GetRESTClient();
 }
@@ -87,9 +80,12 @@ unique_ptr<QueryResult> RESTMetadataManager::AttachMetadata(const string &attach
 	throw InternalException("REST catalogs have no metadata database to attach");
 }
 
+// LCOV_EXCL_START
+// the initializer does not initialize the metadata of a remote catalog
 bool RESTMetadataManager::MetadataExists() {
 	return true;
 }
+// LCOV_EXCL_STOP
 
 void RESTMetadataManager::InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption) {
 	throw InvalidInputException("DuckLake REST catalogs are initialized by the server");
@@ -110,10 +106,10 @@ static void ApplyOptionChange(DuckLakeMetadata &metadata, const RESTOptionSettin
 	tag.value = option.value;
 	if (option.table_id.has_value) {
 		DuckLakeTableSetting setting;
-		setting.table_id = TableIndex(FromRequestId(option.table_id.value));
+		setting.table_id = TableIndex(NumericCast<idx_t>(option.table_id.value));
 		setting.tag = tag;
 		ApplyOptionChange(metadata.table_settings, std::move(setting), reset, [&](const DuckLakeTableSetting &entry) {
-			return entry.table_id == TableIndex(FromRequestId(option.table_id.value)) && entry.tag.key == tag.key;
+			return entry.table_id == TableIndex(NumericCast<idx_t>(option.table_id.value)) && entry.tag.key == tag.key;
 		});
 	} else if (option.schema_id.IsValid()) {
 		DuckLakeSchemaSetting setting;
@@ -146,6 +142,8 @@ static unique_ptr<QueryResult> ThrowSQLNotSupported(const string &query) {
 	throw NotImplementedException("DuckLake REST catalogs do not support metadata queries in SQL: %s", query);
 }
 
+// LCOV_EXCL_START
+// no metadata query reaches a remote metadata manager
 unique_ptr<QueryResult> RESTMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
 	return ThrowSQLNotSupported(query);
 }
@@ -165,6 +163,7 @@ unique_ptr<QueryResult> RESTMetadataManager::Query(DuckLakeSnapshot snapshot, st
 unique_ptr<QueryResult> RESTMetadataManager::Query(string &query) {
 	return ThrowSQLNotSupported(query);
 }
+// LCOV_EXCL_STOP
 
 //===--------------------------------------------------------------------===//
 // Reads
@@ -254,8 +253,10 @@ DuckLakeCatalogInfo RESTMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot 
 	auto response = GetSnapshotData(snapshot, true, false);
 	client.loaded_metadata_version = snapshot.schema_version;
 	if (!response.catalog) {
+		// LCOV_EXCL_START
 		throw InvalidInputException("DuckLake REST: the server did not return the catalog of snapshot %llu",
 		                            snapshot.snapshot_id);
+		// LCOV_EXCL_STOP
 	}
 	return std::move(*response.catalog);
 }
@@ -310,13 +311,14 @@ static void AddPages(DuckLakeCatalog &catalog, const vector<string> &page_tokens
 			}
 			try {
 				results[page] = fetch_page(page_tokens[page]);
-			} catch (...) {
+			} catch (...) { // LCOV_EXCL_START
+				// a page fails, e.g. as the server stopped
 				lock_guard<mutex> guard(error_lock);
 				if (!error) {
 					error = std::current_exception();
 				}
 				failed = true;
-			}
+			} // LCOV_EXCL_STOP
 		}
 	};
 	vector<std::thread> threads;
@@ -328,7 +330,7 @@ static void AddPages(DuckLakeCatalog &catalog, const vector<string> &page_tokens
 		thread.join();
 	}
 	if (error) {
-		std::rethrow_exception(error);
+		std::rethrow_exception(error); // LCOV_EXCL_LINE
 	}
 	for (auto &result : results) {
 		catalog.AddNameMaps(std::move(result.column_mappings));
@@ -424,9 +426,7 @@ vector<DuckLakeFileListExtendedEntry>
 RESTMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                                               const FilterPushdownInfo *filter_info,
                                               optional_ptr<const vector<DuckLakeProjectedColumn>> projection) {
-	if (IsTransactionLocal(table.GetTableId())) {
-		return {};
-	}
+	D_ASSERT(!IsTransactionLocal(table.GetTableId()));
 	RESTSelectRequest request;
 	request.snapshot = snapshot;
 	request.table_id = table.GetTableId().index;
@@ -494,7 +494,7 @@ unique_ptr<QueryResult> RESTMetadataManager::ReadCachedInlinedRows(RESTInlinedRo
 	idx_t start_snapshot_id = kind == RESTInlinedRowsKind::SCAN ? 0 : start_snapshot.snapshot_id;
 	RESTInlinedRowsKey key {kind, start_snapshot_id, snapshot.snapshot_id, handle.table_id.index};
 	auto rows_ptr = inlined_rows_cache.Find(key, columns_to_read);
-	if (!rows_ptr) {
+	if (!rows_ptr) { // LCOV_EXCL_START
 		// the rows usually came along with the file list of the scan. Otherwise (or if they came with other
 		// columns) the server returns all columns, which are read from the response itself: the cache can have
 		// changed in the meantime
@@ -504,7 +504,7 @@ unique_ptr<QueryResult> RESTMetadataManager::ReadCachedInlinedRows(RESTInlinedRo
 			throw InvalidInputException("DuckLake REST: the server did not return the inlined rows of \"%s\"",
 			                            inlined_table_name);
 		}
-	}
+	} // LCOV_EXCL_STOP
 	// scans of the table can read the rows at the same time
 	lock_guard<mutex> read_guard(rows_ptr->read_lock);
 	auto &rows = rows_ptr->rows;
@@ -560,7 +560,10 @@ unique_ptr<QueryResult> RESTMetadataManager::ReadCachedInlinedRows(RESTInlinedRo
 			if (source.GetType() == types[i]) {
 				projected.data[i].Reference(source);
 			} else {
+				// LCOV_EXCL_START
+				// the server returns the rows in the types of the snapshot
 				VectorOperations::DefaultCast(source, projected.data[i], chunk.size());
+				// LCOV_EXCL_STOP
 			}
 		}
 		projected.SetCardinality(chunk.size());
@@ -594,9 +597,7 @@ unique_ptr<QueryResult> RESTMetadataManager::ReadInlinedDataDeletions(DuckLakeSn
 }
 
 optional_idx RESTMetadataManager::GetNetRowCount(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot) {
-	if (IsTransactionLocal(table.GetTableId())) {
-		return 0;
-	}
+	D_ASSERT(!IsTransactionLocal(table.GetTableId()));
 	// the server counts the rows from its statistics
 	RESTSelectRequest request;
 	request.table_id = table.GetTableId().index;
@@ -643,11 +644,14 @@ vector<DuckLakeSnapshotInfo> RESTMetadataManager::GetAllSnapshots(const DuckLake
 	request.exclude_latest = filter.exclude_latest;
 	request.older_than = filter.older_than;
 	if (filter.has_snapshot_ids) {
+		// LCOV_EXCL_START
+		// expiring snapshots and snapshot tags filter by id, a REST catalog refuses both
 		if (filter.snapshot_ids.empty()) {
 			// the snapshot ids are query parameters, which cannot express an empty list
 			return {};
 		}
 		request.snapshot_ids = filter.snapshot_ids;
+		// LCOV_EXCL_STOP
 	}
 	vector<DuckLakeSnapshotInfo> result;
 	while (true) {
@@ -668,7 +672,7 @@ vector<DuckLakeSnapshotInfo> RESTMetadataManager::GetAllSnapshots(const DuckLake
 }
 
 void RESTMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
-	ThrowMaintenanceOnServer("expiring snapshots");
+	ThrowMaintenanceOnServer("expiring snapshots"); // LCOV_EXCL_LINE: the bind of the expiry refuses REST catalogs
 }
 
 vector<DuckLakeSnapshotTagInfo> RESTMetadataManager::GetSnapshotTags(bool with_snapshot_time) {
@@ -677,10 +681,6 @@ vector<DuckLakeSnapshotTagInfo> RESTMetadataManager::GetSnapshotTags(bool with_s
 
 vector<DuckLakeFileForCleanup> RESTMetadataManager::GetOldFilesForCleanup(const string &older_than) {
 	ThrowMaintenanceOnServer("cleaning up files");
-}
-
-vector<string> RESTMetadataManager::GetMetadataTableNames() {
-	throw NotImplementedException("DuckLake REST catalogs do not have metadata tables to read");
 }
 
 unique_ptr<QueryResult> RESTMetadataManager::ReadMetadataTable(const string &table_name) {
@@ -804,9 +804,7 @@ vector<DuckLakeFileListEntry>
 RESTMetadataManager::GetTableInsertions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot,
                                         DuckLakeSnapshot snapshot,
                                         optional_ptr<const vector<DuckLakeProjectedColumn>> projection) {
-	if (IsTransactionLocal(table.GetTableId())) {
-		return {};
-	}
+	D_ASSERT(!IsTransactionLocal(table.GetTableId()));
 	return std::move(GetTableChanges(table, start_snapshot, snapshot, "insertions", projection).insertions);
 }
 
@@ -814,14 +812,12 @@ vector<DuckLakeDeleteScanEntry>
 RESTMetadataManager::GetTableDeletions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot,
                                        DuckLakeSnapshot snapshot, bool include_local_changes,
                                        optional_ptr<const vector<DuckLakeProjectedColumn>> projection) {
-	if (IsTransactionLocal(table.GetTableId())) {
-		return {};
-	}
+	D_ASSERT(!IsTransactionLocal(table.GetTableId()));
 	return std::move(GetTableChanges(table, start_snapshot, snapshot, "deletions", projection).deletions);
 }
 
 void RESTMetadataManager::RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files) {
-	ThrowMaintenanceOnServer("cleaning up files");
+	ThrowMaintenanceOnServer("cleaning up files"); // LCOV_EXCL_LINE: finding the files to clean up throws first
 }
 
 //===--------------------------------------------------------------------===//

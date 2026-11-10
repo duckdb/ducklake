@@ -491,7 +491,7 @@ JSONMutableValue DuckLakeRESTSerializer::Write(JSONWriter &writer, const DuckLak
 	                                   !RESTIsNull(value.row_group_count));
 	RESTWriteOptional<RESTUInt64Codec>(writer, result, "partition_id", value.partition_id,
 	                                   !RESTIsNull(value.partition_id));
-	result.Add("encryption_key", RESTWriteValue<RESTStringCodec>(writer, value.encryption_key));
+	result.Add("encryption_key", RESTWriteValue<RESTBase64Codec>(writer, value.encryption_key));
 	RESTWriteOptional<RESTUInt64Codec>(writer, result, "mapping_id", value.mapping_id, !RESTIsNull(value.mapping_id));
 	{
 		auto entries = writer.CreateArray();
@@ -519,7 +519,7 @@ DuckLakeDataFile DuckLakeRESTSerializer::Read(RESTJsonIn in) {
 	RESTReadOptional<RESTUInt64Codec>(in, "footer_size", result.footer_size);
 	RESTReadOptional<RESTUInt64Codec>(in, "row_group_count", result.row_group_count);
 	RESTReadOptional<RESTUInt64Codec>(in, "partition_id", result.partition_id);
-	RESTReadOptional<RESTStringCodec>(in, "encryption_key", result.encryption_key, string(""));
+	RESTReadOptional<RESTBase64Codec>(in, "encryption_key", result.encryption_key, string(""));
 	RESTReadOptional<RESTUInt64Codec>(in, "mapping_id", result.mapping_id);
 	for (auto &item : in.TryGet("column_stats").Items()) {
 		using map_t = decltype(result.column_stats);
@@ -545,7 +545,7 @@ JSONMutableValue DuckLakeRESTSerializer::Write(JSONWriter &writer, const DuckLak
 	result.Add("footer_size", RESTWriteValue<RESTUInt64Codec>(writer, value.footer_size));
 	RESTWriteOptional<RESTUInt64Codec>(writer, result, "row_group_count", value.row_group_count,
 	                                   !RESTIsNull(value.row_group_count));
-	result.Add("encryption_key", RESTWriteValue<RESTStringCodec>(writer, value.encryption_key));
+	result.Add("encryption_key", RESTWriteValue<RESTBase64Codec>(writer, value.encryption_key));
 	RESTWriteOptional<RESTUInt64Codec>(writer, result, "begin_snapshot", value.begin_snapshot,
 	                                   !RESTIsNull(value.begin_snapshot));
 	RESTWriteOptional<RESTUInt64Codec>(writer, result, "max_snapshot", value.max_snapshot,
@@ -565,7 +565,7 @@ DuckLakeDeleteFile DuckLakeRESTSerializer::Read(RESTJsonIn in) {
 	RESTReadValue<RESTUInt64Codec>(in.Get("file_size_bytes"), result.file_size_bytes);
 	RESTReadOptional<RESTUInt64Codec>(in, "footer_size", result.footer_size, 0);
 	RESTReadOptional<RESTUInt64Codec>(in, "row_group_count", result.row_group_count);
-	RESTReadOptional<RESTStringCodec>(in, "encryption_key", result.encryption_key, string(""));
+	RESTReadOptional<RESTBase64Codec>(in, "encryption_key", result.encryption_key, string(""));
 	RESTReadOptional<RESTUInt64Codec>(in, "begin_snapshot", result.begin_snapshot);
 	RESTReadOptional<RESTUInt64Codec>(in, "max_snapshot", result.max_snapshot);
 	return result;
@@ -717,7 +717,7 @@ DuckLakeFileColumnStats DuckLakeRESTSerializer::Read(RESTJsonIn in) {
 JSONMutableValue DuckLakeRESTSerializer::Write(JSONWriter &writer, const DuckLakeFileData &value) {
 	auto result = writer.CreateObject();
 	result.Add("path", RESTWriteValue<RESTPathCodec>(writer, value.path));
-	result.Add("encryption_key", RESTWriteValue<RESTStringCodec>(writer, value.encryption_key));
+	result.Add("encryption_key", RESTWriteValue<RESTBase64Codec>(writer, value.encryption_key));
 	result.Add("file_size_bytes", RESTWriteValue<RESTUInt64Codec>(writer, value.file_size_bytes));
 	RESTWriteOptional<RESTUInt64Codec>(writer, result, "footer_size", value.footer_size,
 	                                   !RESTIsNull(value.footer_size));
@@ -733,7 +733,7 @@ DuckLakeFileData DuckLakeRESTSerializer::Read(RESTJsonIn in) {
 	RESTExpectObject(in, "FileData");
 	DuckLakeFileData result;
 	RESTReadValue<RESTPathCodec>(in.Get("path"), result.path);
-	RESTReadOptional<RESTStringCodec>(in, "encryption_key", result.encryption_key, string(""));
+	RESTReadOptional<RESTBase64Codec>(in, "encryption_key", result.encryption_key, string(""));
 	RESTReadOptional<RESTUInt64Codec>(in, "file_size_bytes", result.file_size_bytes, 0);
 	RESTReadOptional<RESTUInt64Codec>(in, "footer_size", result.footer_size);
 	RESTReadOptional<RESTFileFormatCodec>(in, "format", result.format, DeleteFileFormat::PARQUET);
@@ -944,18 +944,6 @@ DuckLakeGlobalStatsInfo DuckLakeRESTSerializer::Read(RESTJsonIn in) {
 	result.missing_table_size = !RESTReadOptional<RESTUInt64Codec>(in, "file_size_bytes", result.table_size_bytes);
 	RESTReadOptional<RESTListCodec<RESTObjectCodec<DuckLakeGlobalColumnStatsInfo>>>(in, "column_stats",
 	                                                                                result.column_stats);
-	return result;
-}
-
-JSONMutableValue DuckLakeRESTSerializer::Write(JSONWriter &writer, const RESTInlinedRows &value) {
-	auto result = writer.CreateObject();
-	return result;
-}
-
-template <>
-RESTInlinedRows DuckLakeRESTSerializer::Read(RESTJsonIn in) {
-	RESTExpectObject(in, "InlinedRows");
-	RESTInlinedRows result;
 	return result;
 }
 
@@ -1253,22 +1241,6 @@ RESTResetOptions DuckLakeRESTSerializer::Read(RESTJsonIn in) {
 	RESTExpectObject(in, "ResetOptions");
 	RESTResetOptions result;
 	RESTReadOptional<RESTListCodec<RESTStringCodec>>(in, "options", result.options);
-	return result;
-}
-
-JSONMutableValue DuckLakeRESTSerializer::Write(JSONWriter &writer, const RESTResultColumn &value) {
-	auto result = writer.CreateObject();
-	result.Add("name", RESTWriteValue<RESTStringCodec>(writer, value.name));
-	result.Add("type", RESTWriteValue<RESTLogicalTypeCodec>(writer, value.type));
-	return result;
-}
-
-template <>
-RESTResultColumn DuckLakeRESTSerializer::Read(RESTJsonIn in) {
-	RESTExpectObject(in, "ResultColumn");
-	RESTResultColumn result;
-	RESTReadValue<RESTStringCodec>(in.Get("name"), result.name);
-	RESTReadValue<RESTLogicalTypeCodec>(in.Get("type"), result.type);
 	return result;
 }
 

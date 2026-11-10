@@ -30,3 +30,8 @@ statement error
 SELECT * FROM ducklake_metadata_table('ducklake', 'ducklake_does_not_exist')
 ----
 is not a table of the DuckLake metadata catalog
+
+statement error
+SELECT * FROM ducklake_metadata_table('ducklake', NULL)
+----
+the table name cannot be NULL

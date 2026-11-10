@@ -429,7 +429,10 @@ optional_ptr<CatalogEntry> GetAlterTarget(DuckLakeSchemaEntry &schema, CatalogTr
 		type = info.Cast<SetColumnCommentInfo>().catalog_entry_type;
 		break;
 	default:
+		// LCOV_EXCL_START
+		// Alter refuses the other types
 		return nullptr;
+		// LCOV_EXCL_STOP
 	}
 	if (type == CatalogType::TABLE_ENTRY || type == CatalogType::INVALID) {
 		auto table = TryGetAlterEntry<DuckLakeTableEntry>(schema, catalog_transaction, info);
