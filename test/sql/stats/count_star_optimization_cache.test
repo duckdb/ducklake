@@ -1,0 +1,43 @@
+# name: test/sql/stats/count_star_optimization_cache.test
+# description: Repeated COUNT(*) at one snapshot computes the row count of each table once
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/count_star_cache', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT i FROM range(500) t(i);
+
+statement ok
+CREATE TABLE ducklake.u AS SELECT i FROM range(7) t(i);
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT COUNT(*) FROM ducklake.t;
+----
+500
+
+query I
+SELECT COUNT(*) FROM ducklake.t;
+----
+500
+
+query I
+SELECT COUNT(*) FROM ducklake.u;
+----
+7
+
+query I
+SELECT COUNT(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%SUM(record_count)%';
+----
+2

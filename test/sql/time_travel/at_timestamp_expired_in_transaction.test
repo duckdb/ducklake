@@ -1,0 +1,75 @@
+# name: test/sql/time_travel/at_timestamp_expired_in_transaction.test
+# description: A timestamp resolved in a transaction is checked again after the transaction expires snapshots
+# group: [time_travel]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/at_timestamp_expired_in_transaction.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS l (DATA_PATH '{DATA_PATH}/at_timestamp_expired_in_transaction', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE l.t(a INT)
+
+statement ok
+INSERT INTO l.t VALUES (1)
+
+statement ok
+INSERT INTO l.t VALUES (2)
+
+statement ok
+INSERT INTO l.t VALUES (3)
+
+statement ok
+SET VARIABLE t1 = (SELECT snapshot_time FROM l.snapshots() WHERE snapshot_id = 1)
+
+statement ok
+SET VARIABLE t3 = (SELECT snapshot_time FROM l.snapshots() WHERE snapshot_id = 3)
+
+statement ok
+BEGIN
+
+# the transaction resolves both timestamps, to snapshot 1 and to snapshot 3
+query I
+SELECT count(*) FROM l.t AT (TIMESTAMP => getvariable('t1'))
+----
+0
+
+query I
+SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => getvariable('t3'))
+----
+[1, 2]
+
+# the catalog deletes the expired snapshots at once, so the transaction sees the gap it made
+statement ok
+CALL ducklake_expire_snapshots('l', versions => [2, 3])
+
+query I
+SELECT list(a ORDER BY a) FROM l.t AT (VERSION => 4)
+----
+[1, 2, 3]
+
+# snapshot 1 remains, but the time at which it was current is refused now
+statement error
+SELECT count(*) FROM l.t AT (TIMESTAMP => getvariable('t1'))
+----
+snapshots 2 to 3 were expired
+
+statement ok
+ROLLBACK
+
+# the rollback undoes the expiry, which took no snapshot id
+query I
+SELECT list(snapshot_id) FROM l.snapshots()
+----
+[0, 1, 2, 3, 4]
+
+query I
+SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => getvariable('t3'))
+----
+[1, 2]

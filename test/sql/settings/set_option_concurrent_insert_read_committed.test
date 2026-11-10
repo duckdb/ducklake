@@ -1,0 +1,151 @@
+# name: test/sql/settings/set_option_concurrent_insert_read_committed.test
+# description: two transactions that set a new option at once on a Postgres catalog at READ COMMITTED store it once
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+# a retried commit on 1.1 does not expire again
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/set_option_read_committed', META_ISOLATION_LEVEL 'READ COMMITTED', DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+CREATE TABLE dl.u (i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL dl.set_option('parquet_compression', 'gzip', table_name => 't')
+
+statement ok con2
+BEGIN
+
+statement ok con2
+CALL dl.set_option('parquet_compression', 'zstd', table_name => 't')
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query IT
+SELECT count(*), max(value) FROM dl.options()
+WHERE option_name = 'parquet_compression' AND scope_entry = 'main.t'
+----
+1	zstd
+
+# a transaction that sets the option again counts the row of the other commit, which is still found
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL dl.set_option('target_file_size', '1MB', table_name => 't')
+
+statement ok con2
+BEGIN
+
+statement ok con2
+CALL dl.set_option('target_file_size', '2MB', table_name => 't')
+
+statement ok con1
+COMMIT
+
+statement ok con2
+CALL dl.set_option('target_file_size', '3MB', table_name => 't')
+
+statement ok con2
+COMMIT
+
+query IT
+SELECT count(*), max(value) FROM dl.options()
+WHERE option_name = 'target_file_size' AND scope_entry = 'main.t'
+----
+1	3000000
+
+# a transaction resets an option that another one removed while its set waited, and the option stays reset
+statement ok
+CALL dl.set_option('parquet_compression', 'zstd', table_name => 'u')
+
+concurrentloop threadid 0 2
+
+onlyif threadid=0
+statement ok
+BEGIN
+
+onlyif threadid=0
+statement ok
+ALTER TABLE dl.u RESET (parquet_compression)
+
+onlyif threadid=0
+statement ok
+SELECT sleep_ms(1500)
+
+onlyif threadid=0
+statement ok
+COMMIT
+
+onlyif threadid=1
+statement ok
+SELECT sleep_ms(500)
+
+onlyif threadid=1
+statement ok
+BEGIN
+
+onlyif threadid=1
+statement ok
+CALL dl.set_option('parquet_compression', 'gzip', table_name => 'u')
+
+onlyif threadid=1
+statement ok
+ALTER TABLE dl.u RESET (parquet_compression)
+
+onlyif threadid=1
+statement ok
+COMMIT
+
+endloop
+
+query I
+SELECT count(*) FROM dl.options() WHERE option_name = 'parquet_compression' AND scope_entry = 'main.u'
+----
+0
+
+# a retry would roll back the expiry of this transaction, so its commit fails instead
+statement ok con3
+BEGIN
+
+statement ok con3
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+statement ok con3
+CALL dl.set_option('parquet_row_group_size', 1000, table_name => 't')
+
+statement ok con1
+CALL dl.set_option('parquet_row_group_size', 2000, table_name => 't')
+
+statement error con3
+COMMIT
+----
+Run the transaction again
+
+query III
+SELECT (SELECT count(*) FROM dl.snapshots() WHERE snapshot_id = 1), count(*), max(value) FROM dl.options()
+WHERE option_name = 'parquet_row_group_size' AND scope_entry = 'main.t'
+----
+1	1	2000

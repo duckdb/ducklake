@@ -1,0 +1,47 @@
+# name: test/sql/quack/attach_keeps_quack_cache.test
+# description: an attach of an existing DuckLake on Quack keeps the Quack catalog cache, a new one clears it
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/attach_keeps_quack_cache')
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%quack_clear_cache%'
+----
+1
+
+statement ok
+CREATE TABLE lake.t AS SELECT 42 AS i
+
+statement ok
+DETACH lake
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/attach_keeps_quack_cache')
+
+query I
+SELECT i FROM lake.t
+----
+42
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%quack_clear_cache%'
+----
+0
+
+statement ok
+DETACH lake

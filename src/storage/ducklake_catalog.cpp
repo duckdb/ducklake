@@ -538,11 +538,17 @@ DuckLakeCatalogSet &DuckLakeCatalog::GetSchemaForSnapshot(DuckLakeTransaction &t
 	return catalog_set;
 }
 
-static unique_ptr<DuckLakeFieldId> TransformColumnType(const DuckLakeColumnInfo &col) {
+//! `parent_path` is the quoted path of the enclosing column (e.g. "s"), empty for a top-level column
+static unique_ptr<DuckLakeFieldId> TransformColumnType(const DuckLakeColumnInfo &col, const string &parent_path = "") {
 	DuckLakeColumnData col_data;
 	col_data.id = col.id;
+	const auto quoted_name = "\"" + col.name.GetIdentifierName() + "\"";
+	const auto path = parent_path.empty() ? quoted_name : parent_path + "." + quoted_name;
 	if (col.children.empty()) {
 		auto col_type = DuckLakeTypes::FromString(col.type);
+		if (DuckLakeTypes::IsNested(col_type)) {
+			throw InvalidInputException("Column %s has the nested type \"%s\" but no child columns", path, col.type);
+		}
 		col_data.initial_default = col.initial_default.DefaultCastAs(col_type);
 		if (!col.default_value.IsNull()) {
 			if (col.default_value_type == "literal") {
@@ -559,7 +565,7 @@ static unique_ptr<DuckLakeFieldId> TransformColumnType(const DuckLakeColumnInfo 
 	auto type = DuckLakeTypes::FromColumnInfo(col);
 	vector<unique_ptr<DuckLakeFieldId>> child_fields;
 	for (auto &child_col : col.children) {
-		child_fields.push_back(TransformColumnType(child_col));
+		child_fields.push_back(TransformColumnType(child_col, path));
 	}
 	return make_uniq<DuckLakeFieldId>(std::move(col_data), col.name, std::move(type), std::move(child_fields));
 }
@@ -1106,6 +1112,22 @@ shared_ptr<DuckLakeTableStats> DuckLakeCatalog::GetTableStats(DuckLakeTransactio
 	return shared_ptr<DuckLakeTableStats>(std::move(requested_entry), &raw->stats);
 }
 
+optional_idx DuckLakeCatalog::GetTableNetRowCount(DuckLakeTransaction &transaction, DuckLakeTableEntry &table) {
+	auto snapshot = transaction.GetSnapshot();
+	auto key = NetRowCountCacheKey(table.GetTableId());
+	auto cached = GetObjectCacheInstance().Get<DuckLakeTableNetRowCountCacheEntry>(key);
+	if (cached && cached->snapshot_id == snapshot.snapshot_id) {
+		return cached->row_count;
+	}
+	auto file_count = transaction.GetMetadataManager().GetNetDataFileRowCountForStats(table.GetTableId(), snapshot);
+	if (!file_count.IsValid()) {
+		return optional_idx();
+	}
+	auto row_count = file_count.GetIndex() + table.GetNetInlinedRowCount(transaction);
+	PutCacheEntry(std::move(key), make_shared_ptr<DuckLakeTableNetRowCountCacheEntry>(snapshot.snapshot_id, row_count));
+	return row_count;
+}
+
 idx_t DuckLakeCatalog::GetTableRecordCount(DuckLakeTransaction &transaction, TableIndex table_id) {
 	auto snapshot = transaction.GetSnapshot();
 	auto &cache = GetObjectCacheInstance();
@@ -1572,6 +1594,10 @@ string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) c
 
 string DuckLakeCatalog::RecordCountCacheKey(idx_t snapshot_id) const {
 	return StringUtil::Format("ducklake:%s:record_counts:%llu", instance_id, snapshot_id);
+}
+
+string DuckLakeCatalog::NetRowCountCacheKey(TableIndex table_id) const {
+	return StringUtil::Format("ducklake:%s:net_row_count:table:%llu", instance_id, table_id.index);
 }
 
 string DuckLakeCatalog::SchemaCacheKey(idx_t schema_version) const {

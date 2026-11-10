@@ -26,6 +26,18 @@
       ]
     },
     {
+      "reason": "Quack deletes expired snapshots when the transaction commits, so the gap is not visible inside the transaction",
+      "paths": [
+        "test/sql/time_travel/at_timestamp_expired_in_transaction.test"
+      ]
+    },
+    {
+      "reason": "Quack commits each statement, so a cached timestamp is checked again for concurrent expiries",
+      "paths": [
+        "test/sql/time_travel/at_timestamp_cached_no_rescan.test"
+      ]
+    },
+    {
       "reason": "Bespoke test starts and stops its own quack server",
       "paths": [
         "test/sql/quack/quack_basic.test"
@@ -52,6 +64,8 @@
         "test/sql/retry/postgres_localized_conflict_retry.test",
         "test/sql/retry/postgres_commit_connection_loss.test",
         "test/sql/concurrent/postgres_concurrent_attach_new.test",
+        "test/sql/concurrent/postgres_concurrent_attach_other_catalogs.test",
+        "test/sql/metadata/postgres_cache_clear_scope.test",
         "test/sql/concurrent/postgres_concurrent_attach_new_migrate.test",
         "test/sql/migration/postgres_dev_migration_failure.test",
         "test/sql/migration/postgres_dev1_migration_skips_present_ddl.test",
@@ -60,10 +74,17 @@
         "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test",
         "test/sql/compaction/compaction_idle_metadata_transaction.test",
         "test/sql/compaction/postgres_expire_snapshots_time_zone.test",
+        "test/sql/retry/postgres_commit_error_query_text.test",
+        "test/sql/settings/set_option_concurrent_insert.test",
+        "test/sql/settings/set_option_concurrent_insert_read_committed.test",
+        "test/sql/settings/set_option_concurrent_insert_expiry.test",
+        "test/sql/settings/set_option_read_committed_reset_race.test",
         "test/sql/tags/postgres_tags_read_committed.test",
         "test/sql/general/postgres_nul_byte_text.test",
         "test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test",
-        "test/sql/transaction/postgres_failed_rollback_releases_transaction.test"
+        "test/sql/transaction/postgres_failed_rollback_releases_transaction.test",
+        "test/sql/metadata/postgres_attach_cache_clear.test",
+        "test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test"
       ]
     },
     {
@@ -219,6 +240,13 @@
       "reason": "A quack catalog commits each statement, so its commits keep sending inlined rows as SQL text",
       "paths": [
         "test/sql/data_inlining/inlined_commit_append.test"
+      ]
+    },
+    {
+      "reason": "Quack expires snapshots when the transaction commits, so a cleanup in that transaction finds none of their files and a concurrent commit keeps the expiry",
+      "paths": [
+        "test/sql/cleanup/expire_cleanup_in_transaction.test",
+        "test/sql/cleanup/expire_cleanup_concurrent_commit.test"
       ]
     }
   ]

@@ -1,0 +1,45 @@
+# name: benchmark/micro/fixtures/rewrite_partial.benchmark.in
+# description: Fifty tables that each have one file with 60% positional deletes and one file with a single delete
+# group: [fixtures]
+
+argument lake rewrite_partial
+
+cache_file ${lake}_ready.marker
+
+# Two transactions create the files, then one the deletions
+load
+@create ${lake}_pristine
+@attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
+CALL lake.set_option('data_inlining_row_limit', 0);
+BEGIN;
+@for k in range(50)
+CREATE TABLE lake.p@{k} AS SELECT r AS id, r * 3 + @{k} AS v FROM range(2048) t(r);
+@end
+COMMIT; BEGIN;
+@for k in range(50)
+INSERT INTO lake.p@{k} SELECT 2048 + r, r FROM range(2048) t(r);
+@end
+COMMIT; BEGIN;
+@for k in range(50)
+DELETE FROM lake.p@{k} WHERE (id < 2048 AND id % 100 < 60) OR id = 3000;
+@end
+COMMIT;
+SELECT CASE WHEN (SELECT count(*) <> 100 FROM __ducklake_metadata_lake.ducklake_data_file WHERE end_snapshot IS NULL)
+OR (SELECT count(*) <> 100 FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL)
+OR (SELECT count(*) <> 2847 FROM lake.p49)
+THEN error('unexpected rewrite partial fixture') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+COPY (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+TO '${BENCHMARK_DIR}/${lake}_filecount.csv' (FORMAT CSV, HEADER false);
+@seal ${lake}_pristine
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/${lake}_ready.marker' (FORMAT CSV);
+DETACH DATABASE IF EXISTS lake;
+@copy ${lake}_pristine TO ${work}
+@attach ${work} AS lake
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+SELECT CASE WHEN (SELECT count(*) FROM glob('${BENCHMARK_DIR}/${lake}_files/**'))
+<> (SELECT column0 FROM read_csv('${BENCHMARK_DIR}/${lake}_filecount.csv', header = false))
+THEN error('the fixture files were not restored') END;
+
+include benchmark/micro/fixtures/restore_reload.benchmark.in

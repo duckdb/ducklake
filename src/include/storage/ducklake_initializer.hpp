@@ -40,6 +40,9 @@ private:
 	ClientContext &context;
 	DuckLakeCatalog &catalog;
 	DuckLakeOptions &options;
+	bool migrating = false;
+	//! Whether creation, migration, or catalog reuse requires clearing the metadata cache.
+	bool metadata_cache_stale = false;
 };
 
 } // namespace duckdb

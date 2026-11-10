@@ -1,0 +1,56 @@
+# name: test/sql/transaction/commit_retry_skips_catalog_load.test
+# description: A commit that retries after a concurrent schema change does not load the catalog of the latest snapshot
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/commit_retry_skips_catalog_load')
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE TABLE ducklake.t (i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (1), (2)
+
+statement ok con1
+CREATE TABLE ducklake.created (i INTEGER)
+
+statement ok con1
+COMMIT
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# the commit retries on the snapshot of the concurrent schema change
+statement ok con2
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+# only the schema of the transaction snapshot may load, not the one of the latest snapshot
+query II
+SELECT count(*) > 0, count(*) FILTER (WHERE query LIKE '%ducklake_macro%') <= 1 FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+true	true
+
+query III
+SELECT count(*), min(i), max(i) FROM ducklake.t
+----
+2	1	2

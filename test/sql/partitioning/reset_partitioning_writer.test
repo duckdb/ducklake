@@ -1,0 +1,58 @@
+# name: test/sql/partitioning/reset_partitioning_writer.test
+# description: Reset partitioning uses the unpartitioned writer even with a small target file size
+# group: [partitioning]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/reset_partitioning_writer.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET threads = 1
+
+statement ok
+SET partitioned_write_flush_threshold = 1
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake
+(DATA_PATH '{DATA_PATH}/reset_partitioning_writer', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CALL lake.set_option('parquet_row_group_size', 122880)
+
+statement ok
+CALL lake.set_option('parquet_compression', 'uncompressed')
+
+statement ok
+CALL lake.set_option('parquet_version', 1)
+
+statement ok
+CALL lake.set_option('target_file_size', '4KB')
+
+statement ok
+CREATE TABLE lake.t (i BIGINT) PARTITIONED BY (i)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE lake.t RESET PARTITIONED BY
+
+statement ok
+INSERT INTO lake.t SELECT i FROM range(4096) r(i)
+
+statement ok
+COMMIT
+
+query III
+SELECT count(*), min(i), max(i) FROM lake.t
+----
+4096	0	4095
+
+query I
+SELECT count(*) FROM ducklake_list_files('lake', 't')
+----
+1
