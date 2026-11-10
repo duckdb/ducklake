@@ -76,20 +76,20 @@ bool RESTMetadataManager::HasPendingChanges() const {
 //===--------------------------------------------------------------------===//
 // Initialization
 //===--------------------------------------------------------------------===//
+// LCOV_EXCL_START
+// the initializer does not initialize the metadata of a remote catalog
 unique_ptr<QueryResult> RESTMetadataManager::AttachMetadata(const string &attach_query) {
 	throw InternalException("REST catalogs have no metadata database to attach");
 }
 
-// LCOV_EXCL_START
-// the initializer does not initialize the metadata of a remote catalog
 bool RESTMetadataManager::MetadataExists() {
 	return true;
 }
-// LCOV_EXCL_STOP
 
 void RESTMetadataManager::InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption) {
 	throw InvalidInputException("DuckLake REST catalogs are initialized by the server");
 }
+// LCOV_EXCL_STOP
 
 //! Sets or resets an option of the metadata, as the server does when the transaction commits
 template <class SETTING, class MATCH>
@@ -138,12 +138,12 @@ DuckLakeMetadata RESTMetadataManager::LoadDuckLake() {
 //===--------------------------------------------------------------------===//
 // SQL
 //===--------------------------------------------------------------------===//
+// LCOV_EXCL_START
+// no metadata query reaches a remote metadata manager
 static unique_ptr<QueryResult> ThrowSQLNotSupported(const string &query) {
 	throw NotImplementedException("DuckLake REST catalogs do not support metadata queries in SQL: %s", query);
 }
 
-// LCOV_EXCL_START
-// no metadata query reaches a remote metadata manager
 unique_ptr<QueryResult> RESTMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
 	return ThrowSQLNotSupported(query);
 }
@@ -475,12 +475,15 @@ shared_ptr<RESTInlinedRowsResponse> RESTMetadataManager::FetchInlinedRows(const 
 		request.table_id = key.table_id;
 		inlined_data = std::move(GetClient().Select(request).inlined_data);
 	} else {
+		// LCOV_EXCL_START
+		// the change feed fetches the inlined rows that it reads
 		RESTTableChangesRequest request;
 		request.table_id = key.table_id;
 		request.start_snapshot = start_snapshot;
 		request.snapshot = snapshot;
 		request.changes = key.kind == RESTInlinedRowsKind::INSERTIONS ? "insertions" : "deletions";
 		inlined_data = std::move(GetClient().TableChanges(request).inlined_data);
+		// LCOV_EXCL_STOP
 	}
 	return inlined_rows_cache.Add(key, RESTInlinedProjection(), std::move(inlined_data));
 }
@@ -671,9 +674,12 @@ vector<DuckLakeSnapshotInfo> RESTMetadataManager::GetAllSnapshots(const DuckLake
 	                              what);
 }
 
+// LCOV_EXCL_START
+// the bind of the expiry refuses REST catalogs
 void RESTMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
-	ThrowMaintenanceOnServer("expiring snapshots"); // LCOV_EXCL_LINE: the bind of the expiry refuses REST catalogs
+	ThrowMaintenanceOnServer("expiring snapshots");
 }
+// LCOV_EXCL_STOP
 
 vector<DuckLakeSnapshotTagInfo> RESTMetadataManager::GetSnapshotTags(bool with_snapshot_time) {
 	throw NotImplementedException("DuckLake REST catalogs do not support snapshot tags");
@@ -723,7 +729,7 @@ vector<DuckLakeTableSizeInfo> RESTMetadataManager::GetTableSizes(DuckLakeSnapsho
 	auto data = GetSnapshotData(snapshot, true, false);
 	vector<DuckLakeTableSizeInfo> result;
 	if (!data.catalog) {
-		return result;
+		return result; // LCOV_EXCL_LINE: the server returns the catalog that the request includes
 	}
 	auto &client = GetClient();
 	for (auto &table : data.catalog->tables) {
@@ -816,9 +822,12 @@ RESTMetadataManager::GetTableDeletions(DuckLakeTableEntry &table, DuckLakeSnapsh
 	return std::move(GetTableChanges(table, start_snapshot, snapshot, "deletions", projection).deletions);
 }
 
+// LCOV_EXCL_START
+// finding the files to clean up throws first
 void RESTMetadataManager::RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files) {
-	ThrowMaintenanceOnServer("cleaning up files"); // LCOV_EXCL_LINE: finding the files to clean up throws first
+	ThrowMaintenanceOnServer("cleaning up files");
 }
+// LCOV_EXCL_STOP
 
 //===--------------------------------------------------------------------===//
 // Catalog Changes

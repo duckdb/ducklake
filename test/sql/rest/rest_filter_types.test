@@ -58,4 +58,26 @@ SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request
 ----
 200	1
 
+# a constant that is not a value of the field does not prune
+statement ok
+CREATE TABLE dl.i(i INTEGER)
+
+statement ok
+INSERT INTO dl.i VALUES (1)
+
+query I
+SELECT count(*) FROM dl.i WHERE i < 1e30 AND i IN (1e30, 1)
+----
+1
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/4/scan', '{"filters":{"expressions":["i < 1e30"]}}')
+----
+200	1
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/4/scan', '{"filters":{"expressions":["i IN (1e30, 1)"]}}')
+----
+200	1
+
 include test/template/rest_teardown.test_template

@@ -76,7 +76,7 @@ vector<RESTJsonIn> RESTJsonIn::Items() const {
 vector<pair<string, RESTJsonIn>> RESTJsonIn::Members() const {
 	vector<pair<string, RESTJsonIn>> result;
 	if (IsNull()) {
-		return result;
+		return result; // LCOV_EXCL_LINE: the readers check the type of a value first
 	}
 	if (!IsObject()) {
 		throw InvalidInputException("DuckLake REST: expected a JSON object");

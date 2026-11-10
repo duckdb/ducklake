@@ -170,7 +170,7 @@ private:
 
 	void PreAlign(idx_t length, idx_t alignment) {
 		if (length == 0) {
-			return;
+			return; // LCOV_EXCL_LINE: the parts of a DuckDB message are not empty
 		}
 		min_align = MaxValue<idx_t>(min_align, alignment);
 		Fill(Padding(used + length, alignment));
@@ -342,7 +342,7 @@ idx_t ArrowValueWidth(const string &format) {
 		throw InvalidInputException("Arrow IPC: empty format");
 	}
 	if (format == "b") {
-		return 0;
+		return 0; // LCOV_EXCL_LINE: DuckDB writes booleans as bool8
 	}
 	switch (format[0]) {
 	case 'c':
@@ -638,8 +638,10 @@ struct ArrowIPCWriter {
 			return;
 		}
 		if (NumericCast<idx_t>(array.n_buffers) != buffer_count) {
+			// LCOV_EXCL_START
 			throw InternalException("Arrow IPC: the array of the format \"%s\" has %lld buffers", format,
 			                        array.n_buffers);
+			// LCOV_EXCL_STOP
 		}
 		int64_t null_count = array.null_count;
 		auto validity = buffer_count > 0 ? reinterpret_cast<const uint8_t *>(array.buffers[0]) : nullptr;
@@ -657,9 +659,6 @@ struct ArrowIPCWriter {
 			null_count = 0;
 		}
 		layout.nodes.emplace_back(array.length, null_count);
-		if (buffer_count == 0) {
-			return;
-		}
 		// the validity is left out when there are no NULL values
 		layout.buffers.emplace_back(null_count > 0 ? validity : nullptr, null_count > 0 ? (length + 7) / 8 : 0);
 		if (format == "+s" || StringUtil::StartsWith(format, "+w:")) {
@@ -720,9 +719,12 @@ struct ArrowSchemaHolder {
 	}
 };
 
+// LCOV_EXCL_START
+// DuckDB releases the root only
 void ReleaseArrowSchemaChild(ArrowSchema *schema) {
-	schema->release = nullptr; // LCOV_EXCL_LINE
+	schema->release = nullptr;
 }
+// LCOV_EXCL_STOP
 
 void ReleaseArrowSchemaRoot(ArrowSchema *schema) {
 	delete static_cast<ArrowSchemaHolder *>(schema->private_data);
@@ -738,9 +740,12 @@ struct ArrowArrayHolder {
 	vector<unique_ptr<vector<ArrowArray *>>> child_lists;
 };
 
+// LCOV_EXCL_START
+// DuckDB releases the root only
 void ReleaseArrowArrayChild(ArrowArray *array) {
-	array->release = nullptr; // LCOV_EXCL_LINE
+	array->release = nullptr;
 }
+// LCOV_EXCL_STOP
 
 void ReleaseArrowArrayRoot(ArrowArray *array) {
 	delete static_cast<ArrowArrayHolder *>(array->private_data);
@@ -1063,7 +1068,7 @@ RESTArrowStream::RESTArrowStream() {
 RESTArrowStream::~RESTArrowStream() {
 	for (auto &batch : batches) {
 		if (batch.release) {
-			batch.release(&batch);
+			batch.release(&batch); // LCOV_EXCL_LINE: the scan consumes the batches
 		}
 	}
 	if (schema.release) {
@@ -1136,8 +1141,11 @@ unique_ptr<RESTArrowStream> RESTArrowIPC::Read(shared_ptr<const string> data, id
 	}
 	// the arrays of the stream are read in place, so the data has to be aligned
 	if (reinterpret_cast<uintptr_t>(data->data() + offset) % 8 != 0) {
+		// LCOV_EXCL_START
+		// the multipart writer aligns the parts
 		data = make_shared_ptr<const string>(data->substr(offset, size));
 		offset = 0;
+		// LCOV_EXCL_STOP
 	}
 	auto base = reinterpret_cast<const uint8_t *>(data->data()) + offset;
 	auto result = make_uniq<RESTArrowStream>();
@@ -1186,8 +1194,10 @@ unique_ptr<RESTArrowStream> RESTArrowIPC::Read(shared_ptr<const string> data, id
 			                          *result);
 			break;
 		default:
+			// LCOV_EXCL_START
 			throw NotImplementedException("Arrow IPC: messages of type %d are not supported",
 			                              static_cast<int>(header_type));
+			// LCOV_EXCL_STOP
 		}
 		position = body_position + NumericCast<idx_t>(body_length);
 	}

@@ -70,14 +70,14 @@ bool RESTInlinedRowsKey::operator<(const RESTInlinedRowsKey &other) const {
 static bool HasColumn(const RESTInlinedRows &rows, const string &column_to_read) {
 	auto expressions = Parser::GetBuiltinParser().ParseExpressionList(column_to_read);
 	if (expressions.size() != 1) {
-		return false;
+		return false; // LCOV_EXCL_LINE: the scan reads column names, optionally cast
 	}
 	optional_ptr<const ParsedExpression> column_ref = expressions[0].get();
 	if (column_ref->GetExpressionClass() == ExpressionClass::CAST) {
 		column_ref = column_ref->Cast<CastExpression>().Child();
 	}
 	if (column_ref->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
-		return false;
+		return false; // LCOV_EXCL_LINE
 	}
 	auto &name = column_ref->Cast<ColumnRefExpression>().GetColumnName();
 	for (auto &column : rows.columns) {
@@ -85,7 +85,7 @@ static bool HasColumn(const RESTInlinedRows &rows, const string &column_to_read)
 			return true;
 		}
 	}
-	return false;
+	return false; // LCOV_EXCL_LINE: the cached rows have the columns of the file list of the scan
 }
 
 bool RESTInlinedRowsCache::Covers(const RESTInlinedRowsKey &key, const RESTInlinedProjection &projection) const {
@@ -161,8 +161,10 @@ shared_ptr<RESTCachedInlinedRows> RESTInlinedRowsCache::Find(const RESTInlinedRo
 		bool has_columns = true;
 		for (auto &column : columns_to_read) {
 			if (!HasColumn(rows->rows, column)) {
+				// LCOV_EXCL_START
 				has_columns = false;
 				break;
+				// LCOV_EXCL_STOP
 			}
 		}
 		if (has_columns) {

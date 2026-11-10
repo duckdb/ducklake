@@ -58,7 +58,7 @@ vector<RESTMultipartPart> RESTMultipart::Parse(const string &body, const string 
 		}
 		position = body.find("\r\n", position);
 		if (position == string::npos) {
-			break;
+			break; // LCOV_EXCL_LINE: DuckDB ends the headers of a part with an empty line
 		}
 		position += 2;
 		auto headers_end = body.find("\r\n\r\n", position - 2);

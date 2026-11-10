@@ -57,7 +57,7 @@ RESTPathMapper::RESTPathMapper(string client_path_p, string server_path_p)
 
 string RESTPathMapper::Map(const string &path, const string &from, const string &to) {
 	if (from.empty() || to.empty()) {
-		return path;
+		return path; // LCOV_EXCL_LINE: a mapper is only set with both data paths
 	}
 	// the data path without its trailing separator, a path can continue it with either separator (e.g. on Windows)
 	auto prefix = from.substr(0, from.size() - 1);
@@ -70,7 +70,7 @@ string RESTPathMapper::Map(const string &path, const string &from, const string 
 	if (path[prefix.size()] == '/' || path[prefix.size()] == '\\') {
 		return to + path.substr(prefix.size() + 1);
 	}
-	return path;
+	return path; // LCOV_EXCL_LINE: a path that merely starts with the name of the data path
 }
 
 string RESTPathMapper::ToServer(const string &path) const {

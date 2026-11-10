@@ -436,9 +436,6 @@ public:
 	void AddNameMaps(vector<DuckLakeColumnMappingInfo> column_mappings);
 	//! The client of the REST server that serves the metadata, for REST catalogs
 	DuckLakeRESTClient &GetRESTClient();
-	DuckLakeOptions &GetOptions() {
-		return options;
-	}
 
 	shared_ptr<const DuckLakeNameMap> TryGetMappingById(DuckLakeTransaction &transaction, MappingIndex mapping_id);
 	MappingIndex TryGetCompatibleNameMap(DuckLakeTransaction &transaction, const DuckLakeNameMap &name_map);

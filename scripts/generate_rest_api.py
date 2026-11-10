@@ -52,7 +52,6 @@ PRIMITIVES = {
     ),
     "text": ("RESTTextCodec", "Value", "Value", "text"),
     "logical_type": ("RESTLogicalTypeCodec", "LogicalType", "LogicalType", "type"),
-    "json": ("RESTJsonCodec", "RESTJsonValue", "RESTJsonValue", "JSON"),
     "rows": ("RESTRowsCodec", "RESTRows", "RESTRows", "rows"),
     "commit_request": (
         "RESTCommitRequestCodec",
@@ -688,7 +687,6 @@ SMITHY_PRIMITIVES = {
     "smithy.api#Boolean": "bool",
     "smithy.api#Long": "int64",
     "smithy.api#Double": "double",
-    "smithy.api#Document": "json",
 }
 
 # member traits of the code generation, by the field properties they set

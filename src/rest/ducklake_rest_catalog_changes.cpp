@@ -170,7 +170,7 @@ unique_ptr<RESTAlteration> DuckLakeRESTCatalogChanges::WriteAlter(const AlterInf
 			return std::move(result);
 		}
 		default:
-			break;
+			break; // LCOV_EXCL_LINE
 		}
 		// LCOV_EXCL_START
 		// the catalog refuses the other alters of a DuckLake table before they are written
@@ -181,7 +181,7 @@ unique_ptr<RESTAlteration> DuckLakeRESTCatalogChanges::WriteAlter(const AlterInf
 	case AlterType::ALTER_VIEW: {
 		auto &alter = info.Cast<AlterViewInfo>();
 		if (alter.alter_view_type != AlterViewType::RENAME_VIEW) {
-			break;
+			break; // LCOV_EXCL_LINE: the other alters of a view are bound to the alters of its columns
 		}
 		auto result = make_uniq<RESTRenameView>();
 		result->new_name = alter.Cast<RenameViewInfo>().new_view_name.GetIdentifierName();

@@ -36,12 +36,6 @@ struct RESTOptional {
 	T value;
 };
 
-//! A JSON value that the specification leaves open, together with the document it lives in
-struct RESTJsonValue {
-	shared_ptr<RESTJsonReader> document;
-	RESTJsonIn value;
-};
-
 //! Rows of typed values, which are owned when they were read
 struct RESTRows {
 	RESTRows();
@@ -71,15 +65,6 @@ inline bool RESTIsNull(const string &value) {
 }
 inline bool RESTIsNull(const Value &value) {
 	return value.IsNull();
-}
-inline bool RESTIsNull(const LogicalType &value) {
-	return value.id() == LogicalTypeId::INVALID;
-}
-inline bool RESTIsNull(const RESTJsonValue &value) {
-	return value.value.IsNull();
-}
-inline bool RESTIsNull(const RESTRows &value) {
-	return !value.rows;
 }
 template <class T>
 bool RESTIsNull(const vector<T> &value) {
@@ -361,15 +346,6 @@ struct RESTLogicalTypeCodec : public RESTCodec<RESTLogicalTypeCodec> {
 	}
 	static void Read(RESTJsonIn in, LogicalType &result) {
 		result = RESTJson::TypeFromJson(in);
-	}
-};
-
-struct RESTJsonCodec : public RESTCodec<RESTJsonCodec> {
-	static JSONMutableValue Write(JSONWriter &writer, const RESTJsonValue &value) {
-		return writer.CreateCopy(value.value.val);
-	}
-	static void Read(RESTJsonIn in, RESTJsonValue &result) {
-		result.value = in;
 	}
 };
 
