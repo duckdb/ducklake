@@ -318,25 +318,21 @@ static bool DependsOnTimeZone(const LogicalType &type) {
 	}
 }
 
-//! The constant as a value of the field, if DuckDB compares the two in the type of the field. The binder resolves
-//! types of equal priority by the order of the operands, the field is on the left unless field_on_right is set
-static bool TryCastToField(ClientContext &context, const Value &value, const LogicalType &type,
-                           ExpressionType comparison_type, bool field_on_right, Value &result) {
+//! Whether a comparison that casts the field to the common type compares as the values of the field do
+static bool FieldKeepsOrder(const LogicalType &type, const LogicalType &common_type) {
+	if (common_type == type) {
+		return true;
+	}
+	// the cast keeps the order if it is invertible, but a cast to a type with a time zone is not one-to-one in every
+	// zone, e.g. a skipped day
+	return BoundCastExpression::CastIsInvertible(type, common_type) && !DependsOnTimeZone(common_type);
+}
+
+//! The constant as a value of the field, if it is one
+static bool CastConstantToField(ClientContext &context, const Value &value, const LogicalType &type, Value &result) {
 	if (value.type() == type) {
 		result = value;
 		return true;
-	}
-	// a comparison casts the field to the common type, which only keeps the order of the field if it is invertible
-	LogicalType common_type;
-	auto &left_type = field_on_right ? value.type() : type;
-	auto &right_type = field_on_right ? type : value.type();
-	if (!BoundComparisonExpression::TryBindComparison(context, left_type, right_type, common_type, comparison_type)) {
-		return false;
-	}
-	// a conversion to a type with a time zone is not one-to-one in every zone, e.g. a skipped day
-	if (common_type != type &&
-	    (!BoundCastExpression::CastIsInvertible(type, common_type) || DependsOnTimeZone(common_type))) {
-		return false;
 	}
 	auto casted = value.TryCastAs(context, type, nullptr, true);
 	if (!casted) {
@@ -349,6 +345,24 @@ static bool TryCastToField(ClientContext &context, const Value &value, const Log
 	}
 	result = std::move(*casted);
 	return true;
+}
+
+//! The constant as a value of the field, if DuckDB compares the two in the type of the field. The binder resolves
+//! types of equal priority by the order of the operands, the field is on the left unless field_on_right is set
+static bool TryCastToField(ClientContext &context, const Value &value, const LogicalType &type,
+                           ExpressionType comparison_type, bool field_on_right, Value &result) {
+	if (value.type() == type) {
+		result = value;
+		return true;
+	}
+	LogicalType common_type;
+	auto &left_type = field_on_right ? value.type() : type;
+	auto &right_type = field_on_right ? type : value.type();
+	if (!BoundComparisonExpression::TryBindComparison(context, left_type, right_type, common_type, comparison_type) ||
+	    !FieldKeepsOrder(type, common_type)) {
+		return false;
+	}
+	return CastConstantToField(context, value, type, result);
 }
 
 class DuckLakeRESTFilterBinder {
@@ -394,18 +408,31 @@ public:
 				return ExpressionFilter::CreateNullCheckExpression(
 				    make_uniq<BoundReferenceExpression>(field.Type(), 0ULL), expr.GetExpressionType());
 			case ExpressionType::COMPARE_IN: {
-				vector<Value> values;
+				// DuckDB compares the field and the elements in the common type of the whole list
+				vector<Value> constants;
+				auto common_type = field.Type();
 				for (idx_t i = 1; i < children.size(); i++) {
 					// a NULL never matches, but an element that is not a constant can match any row
 					if (children[i]->GetExpressionClass() == ExpressionClass::CONSTANT &&
 					    children[i]->Cast<ConstantExpression>().GetLiteral().ToValue().IsNull()) {
-						values.emplace_back(field.Type());
+						constants.emplace_back();
 						continue;
 					}
 					auto value = FoldConstant(context, *children[i]);
-					Value field_value;
 					if (value.IsNull() ||
-					    !TryCastToField(context, value, field.Type(), ExpressionType::COMPARE_IN, false, field_value)) {
+					    !BoundComparisonExpression::TryBindComparison(context, common_type, value.type(), common_type,
+					                                                  ExpressionType::COMPARE_IN)) {
+						return nullptr;
+					}
+					constants.push_back(std::move(value));
+				}
+				if (!FieldKeepsOrder(field.Type(), common_type)) {
+					return nullptr;
+				}
+				vector<Value> values;
+				for (auto &constant : constants) {
+					Value field_value(field.Type());
+					if (!constant.IsNull() && !CastConstantToField(context, constant, field.Type(), field_value)) {
 						return nullptr;
 					}
 					values.push_back(std::move(field_value));

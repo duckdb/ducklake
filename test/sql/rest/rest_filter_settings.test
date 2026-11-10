@@ -127,4 +127,27 @@ SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request
 ----
 200	0
 
+# an IN list compares in the common type of all its elements, here DOUBLE
+statement ok rest_db:rest_server_con
+CREATE TABLE rest_lake.u(x UBIGINT)
+
+statement ok rest_db:rest_server_con
+INSERT INTO rest_lake.u VALUES (9007199254740993)
+
+query I rest_db:rest_server_con
+SELECT count(*) FROM rest_lake.u WHERE x IN (9007199254740992::HUGEINT, 0::UHUGEINT)
+----
+1
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/5/scan', '{"filters":{"expressions":["x IN (9007199254740992::HUGEINT, 0::UHUGEINT)"]}}')
+----
+200	1
+
+# an IN list of values of the field still prunes
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/5/scan', '{"filters":{"expressions":["x IN (1::UBIGINT, 2::UBIGINT)"]}}')
+----
+200	0
+
 include test/template/rest_teardown.test_template
