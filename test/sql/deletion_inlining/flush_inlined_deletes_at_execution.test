@@ -1,0 +1,119 @@
+# name: test/sql/deletion_inlining/flush_inlined_deletes_at_execution.test
+# description: inlined file deletions are flushed when the flush runs, not when it is planned
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/flush_inlined_deletes_at_execution', DATA_INLINING_ROW_LIMIT 10, METADATA_CATALOG 'ducklake_meta')
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT i FROM range(20) t(i)
+
+statement ok
+DELETE FROM ducklake.t WHERE i < 3
+
+query II
+SELECT (SELECT count(*) FROM ducklake_meta.ducklake_inlined_delete_1), (SELECT count(*) FROM ducklake_meta.ducklake_delete_file)
+----
+3	0
+
+# the flush is a regular operator in the plan
+statement ok
+SET explain_output = 'physical_only'
+
+query II
+EXPLAIN CALL ducklake_flush_inlined_data('ducklake')
+----
+physical_plan	<REGEX>:.*Ducklake Flush Deletions.*
+
+statement ok
+SET explain_output = 'physical_only'
+
+# explaining does not flush
+query II
+SELECT (SELECT count(*) FROM ducklake_meta.ducklake_inlined_delete_1), (SELECT count(*) FROM ducklake_meta.ducklake_delete_file)
+----
+3	0
+
+# neither does preparing
+statement ok
+PREPARE flush AS SELECT * FROM ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT (SELECT count(*) FROM ducklake_meta.ducklake_inlined_delete_1), (SELECT count(*) FROM ducklake_meta.ducklake_delete_file)
+----
+3	0
+
+# an explain in a transaction leaves the flush to the call that follows
+statement ok
+BEGIN
+
+statement ok
+EXPLAIN CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+COMMIT
+
+query II
+SELECT (SELECT count(*) FROM ducklake_meta.ducklake_inlined_delete_1), (SELECT count(*) FROM ducklake_meta.ducklake_delete_file WHERE end_snapshot IS NULL)
+----
+0	1
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+17
+
+# the prepared flush runs against the deletions inlined since it was prepared
+statement ok
+DELETE FROM ducklake.t WHERE i BETWEEN 3 AND 5
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_inlined_delete_1
+----
+3
+
+statement ok
+EXECUTE flush
+
+query II
+SELECT (SELECT count(*) FROM ducklake_meta.ducklake_inlined_delete_1), (SELECT count(*) FROM ducklake_meta.ducklake_delete_file WHERE end_snapshot IS NULL)
+----
+0	1
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+14
+
+# EXPLAIN ANALYZE runs the query, so it flushes
+statement ok
+DELETE FROM ducklake.t WHERE i BETWEEN 6 AND 8
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_inlined_delete_1
+----
+3
+
+statement ok
+EXPLAIN ANALYZE CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_inlined_delete_1
+----
+0
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+11
