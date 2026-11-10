@@ -23,7 +23,7 @@ statement ok
 INSERT INTO dl.t VALUES (2)
 
 statement ok
-INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2, 2, NULL)
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
 
 # compact the two inserts into one file on main
 statement ok
@@ -59,8 +59,9 @@ INSERT INTO m.t VALUES (3)
 statement ok
 INSERT INTO m.t VALUES (4)
 
+# the event is dated at the first own snapshot id of the branch
 statement ok
-INSERT INTO meta.ducklake_file_visibility SELECT 1, v.table_id, v.data_file_id, v.snapshot_id, FALSE FROM meta.ducklake_file_visibility v JOIN meta.ducklake_data_file f ON v.data_file_id = f.data_file_id WHERE v.branch_id = 0 AND v.is_delete = FALSE AND NOT EXISTS (SELECT 1 FROM meta.ducklake_file_visibility d WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.data_file_id = v.data_file_id) AND f.record_count = 1 LIMIT 1
+INSERT INTO meta.ducklake_file_visibility SELECT 1, v.table_id, v.data_file_id, 3, FALSE FROM meta.ducklake_file_visibility v JOIN meta.ducklake_data_file f ON v.data_file_id = f.data_file_id WHERE v.branch_id = 0 AND v.is_delete = FALSE AND NOT EXISTS (SELECT 1 FROM meta.ducklake_file_visibility d WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.data_file_id = v.data_file_id) AND f.record_count = 1 LIMIT 1
 
 statement ok
 CALL ducklake_merge_adjacent_files('m')

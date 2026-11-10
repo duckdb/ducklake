@@ -1,0 +1,326 @@
+# name: test/sql/migration/dev1_snapshot_tables_heal.test
+# description: the snapshot tables of an older dev build are rebuilt with the branch key on a writable attach
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+# the branch and remap tables of the older dev build
+statement ok
+DROP TABLE meta.ducklake_branch
+
+statement ok
+CREATE TABLE meta.ducklake_branch(branch_id BIGINT PRIMARY KEY, branch_name VARCHAR, fork_branch_id BIGINT, fork_snapshot_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT)
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (0, 'main', NULL, NULL, 0, NULL)
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_remap
+
+statement ok
+CREATE TABLE meta.ducklake_snapshot_remap(merge_snapshot_id BIGINT, old_snapshot_id BIGINT, new_snapshot_id BIGINT)
+
+# the snapshot changes of the older dev build carry no branch
+statement ok
+CREATE TABLE meta.changes_backup(snapshot_id BIGINT, changes_made VARCHAR, author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR)
+
+statement ok
+INSERT INTO meta.changes_backup SELECT snapshot_id, changes_made, author, commit_message, commit_extra_info FROM meta.ducklake_snapshot_changes
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_changes
+
+statement ok
+CREATE TABLE meta.ducklake_snapshot_changes(snapshot_id BIGINT PRIMARY KEY, changes_made VARCHAR, author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes SELECT * FROM meta.changes_backup
+
+statement ok
+DROP TABLE meta.changes_backup
+
+statement ok
+ALTER TABLE meta.ducklake_schema_versions DROP COLUMN branch_id
+
+statement ok
+DETACH dl
+
+# the writable attach rebuilds the tables
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query IIII
+SELECT branch_id, branch_name, parent_id, parent_branch_snapshot FROM meta.ducklake_branch
+----
+0	main	NULL	NULL
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_snapshot_remap') ORDER BY column_index
+----
+branch_id	BIGINT
+merge_snapshot_id	BIGINT
+old_branch_id	BIGINT
+old_snapshot_id	BIGINT
+new_snapshot_id	BIGINT
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_snapshot_changes') ORDER BY column_index
+----
+snapshot_id	BIGINT
+changes_made	VARCHAR
+author	VARCHAR
+commit_message	VARCHAR
+commit_extra_info	VARCHAR
+branch_id	BIGINT
+
+# the rows are kept and belong to main
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
+----
+0	0
+1	0
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
+----
+0	0
+1	0
+
+query I
+SELECT changes_made FROM meta.ducklake_snapshot_changes WHERE snapshot_id = 0
+----
+created_schema:"main"
+
+query II
+SELECT begin_snapshot, branch_id FROM meta.ducklake_schema_versions
+----
+1	0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_snapshot_remap
+----
+0
+
+# the rebuilt tables are keyed by branch and snapshot
+statement error
+INSERT INTO meta.ducklake_snapshot SELECT snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id FROM meta.ducklake_snapshot WHERE snapshot_id = 1
+----
+constraint
+
+statement error
+INSERT INTO meta.ducklake_snapshot_changes SELECT snapshot_id, changes_made, author, commit_message, commit_extra_info, branch_id FROM meta.ducklake_snapshot_changes WHERE snapshot_id = 1
+----
+constraint
+
+statement error
+SELECT * FROM meta.ducklake_snapshot_rebuild
+----
+does not exist
+
+statement error
+SELECT * FROM meta.ducklake_snapshot_changes_rebuild
+----
+does not exist
+
+statement error
+SELECT * FROM meta.ducklake_snapshot_old
+----
+does not exist
+
+statement error
+SELECT * FROM meta.ducklake_snapshot_changes_old
+----
+does not exist
+
+# the healed catalog commits
+query I
+SELECT * FROM dl.t
+----
+42
+
+statement ok
+INSERT INTO dl.t VALUES (43)
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
+----
+0	0
+1	0
+2	0
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
+----
+0	0
+1	0
+2	0
+
+# a rebuild interrupted after copying the first row resumes without duplicating it
+statement ok
+CREATE TABLE meta.ducklake_snapshot_rebuild(snapshot_id BIGINT, snapshot_time TIMESTAMPTZ, schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT, branch_id BIGINT, PRIMARY KEY(branch_id, snapshot_id))
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_rebuild SELECT snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, 0 FROM meta.ducklake_snapshot WHERE snapshot_id = 0
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
+----
+0	0
+1	0
+2	0
+
+statement error
+SELECT * FROM meta.ducklake_snapshot_rebuild
+----
+does not exist
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+42
+43
+
+# a rebuild interrupted after renaming the old table resumes from the rebuilt table
+statement ok
+CREATE TABLE meta.ducklake_snapshot_changes_rebuild(snapshot_id BIGINT, changes_made VARCHAR, author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR, branch_id BIGINT, PRIMARY KEY(branch_id, snapshot_id))
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes_rebuild SELECT snapshot_id, changes_made, author, commit_message, commit_extra_info, branch_id FROM meta.ducklake_snapshot_changes
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_changes RENAME TO ducklake_snapshot_changes_old
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
+----
+0	0
+1	0
+2	0
+
+statement error
+SELECT * FROM meta.ducklake_snapshot_changes_old
+----
+does not exist
+
+statement error
+SELECT * FROM meta.ducklake_snapshot_changes_rebuild
+----
+does not exist
+
+query I
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
+----
+[0, 1, 2]
+
+# a heal interrupted before dropping the old table drops it
+statement ok
+CREATE TABLE meta.ducklake_snapshot_old(snapshot_id BIGINT, snapshot_time TIMESTAMPTZ, schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT, branch_id BIGINT)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_old SELECT snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id FROM meta.ducklake_snapshot
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement error
+SELECT * FROM meta.ducklake_snapshot_old
+----
+does not exist
+
+statement ok
+INSERT INTO dl.t VALUES (44)
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
+----
+0	0
+1	0
+2	0
+3	0
+
+# only the changes table has the shape of 1.1, the snapshot table keeps its key
+statement ok
+CREATE TABLE meta.changes_backup(snapshot_id BIGINT, changes_made VARCHAR, author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR)
+
+statement ok
+INSERT INTO meta.changes_backup SELECT snapshot_id, changes_made, author, commit_message, commit_extra_info FROM meta.ducklake_snapshot_changes
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_changes
+
+statement ok
+CREATE TABLE meta.ducklake_snapshot_changes(snapshot_id BIGINT PRIMARY KEY, changes_made VARCHAR, author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes SELECT * FROM meta.changes_backup
+
+statement ok
+DROP TABLE meta.changes_backup
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
+----
+0	0
+1	0
+2	0
+3	0
+
+# both tables are keyed by branch and snapshot
+statement error
+INSERT INTO meta.ducklake_snapshot SELECT snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id FROM meta.ducklake_snapshot WHERE snapshot_id = 1
+----
+constraint
+
+statement error
+INSERT INTO meta.ducklake_snapshot_changes SELECT snapshot_id, changes_made, author, commit_message, commit_extra_info, branch_id FROM meta.ducklake_snapshot_changes WHERE snapshot_id = 1
+----
+constraint
+
+statement ok
+INSERT INTO dl.t VALUES (45)
+
+query I
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
+----
+[0, 1, 2, 3, 4]
+
+query I
+SELECT list(i ORDER BY i) FROM dl.t
+----
+[42, 43, 44, 45]
+
+statement ok
+DETACH dl

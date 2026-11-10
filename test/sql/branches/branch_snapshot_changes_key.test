@@ -1,0 +1,76 @@
+# name: test/sql/branches/branch_snapshot_changes_key.test
+# description: snapshot changes are keyed by branch and snapshot, a branch snapshot keeps its own changes next to main
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 3, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, 'dev author', 'dev commit', NULL, 1)
+
+# main and the branch both hold the changes of a snapshot 3
+query III
+SELECT snapshot_id, branch_id, author FROM meta.ducklake_snapshot_changes WHERE snapshot_id = 3 ORDER BY branch_id
+----
+3	0	NULL
+3	1	dev author
+
+# a second row for the same branch and snapshot is rejected
+statement error
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 0)
+----
+constraint
+
+statement error
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1)
+----
+constraint
+
+# the listing of main joins the changes of main
+query III
+SELECT snapshot_id, author, commit_message FROM dl.snapshots() WHERE snapshot_id = 3
+----
+3	NULL	NULL
+
+statement ok
+DETACH dl
+
+# the listing of the branch joins the changes of the branch
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query III
+SELECT snapshot_id, author, commit_message FROM dl.snapshots() WHERE snapshot_id = 3
+----
+3	dev author	dev commit
+
+query I
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
+----
+[0, 1, 2, 3]
+
+statement ok
+DETACH dl

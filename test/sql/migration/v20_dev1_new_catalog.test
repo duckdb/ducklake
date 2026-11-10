@@ -20,7 +20,7 @@ SELECT value FROM dl.options() WHERE option_name = 'version'
 
 # SQLite reports the timestamp column as text
 query II
-SELECT column_name, CASE WHEN column_name = 'expires_at' AND data_type = 'VARCHAR' THEN 'TIMESTAMP WITH TIME ZONE' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_snapshot_tag') ORDER BY column_index
+SELECT column_name, CASE WHEN column_name = 'expires_at' AND data_type = 'VARCHAR' THEN 'TIMESTAMP WITH TIME ZONE' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_snapshot_tag') ORDER BY column_index
 ----
 tag_name	VARCHAR
 snapshot_id	BIGINT
@@ -29,25 +29,53 @@ end_snapshot	BIGINT
 expires_at	TIMESTAMP WITH TIME ZONE
 
 query II
-SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_branch') ORDER BY column_index
+SELECT column_name, CASE WHEN column_name = 'snapshot_time' AND data_type = 'VARCHAR' THEN 'TIMESTAMP WITH TIME ZONE' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_snapshot') ORDER BY column_index
+----
+snapshot_id	BIGINT
+snapshot_time	TIMESTAMP WITH TIME ZONE
+schema_version	BIGINT
+next_catalog_id	BIGINT
+next_file_id	BIGINT
+branch_id	BIGINT
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_snapshot_changes') ORDER BY column_index
+----
+snapshot_id	BIGINT
+changes_made	VARCHAR
+author	VARCHAR
+commit_message	VARCHAR
+commit_extra_info	VARCHAR
+branch_id	BIGINT
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_branch') ORDER BY column_index
 ----
 branch_id	BIGINT
 branch_name	VARCHAR
-fork_branch_id	BIGINT
-fork_snapshot_id	BIGINT
-begin_snapshot	BIGINT
-end_snapshot	BIGINT
+parent_id	BIGINT
+parent_branch_snapshot	BIGINT
 
 query II
-SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_snapshot_remap') ORDER BY column_index
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_snapshot_remap') ORDER BY column_index
 ----
+branch_id	BIGINT
 merge_snapshot_id	BIGINT
+old_branch_id	BIGINT
 old_snapshot_id	BIGINT
 new_snapshot_id	BIGINT
 
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_schema_versions') ORDER BY column_index
+----
+begin_snapshot	BIGINT
+schema_version	BIGINT
+table_id	BIGINT
+branch_id	BIGINT
+
 # SQLite reports the boolean column as a number
 query II
-SELECT column_name, CASE WHEN column_name = 'is_delete' AND data_type = 'BIGINT' THEN 'BOOLEAN' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_file_visibility') ORDER BY column_index
+SELECT column_name, CASE WHEN column_name = 'is_delete' AND data_type = 'BIGINT' THEN 'BOOLEAN' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_file_visibility') ORDER BY column_index
 ----
 branch_id	BIGINT
 table_id	BIGINT
@@ -56,7 +84,7 @@ snapshot_id	BIGINT
 is_delete	BOOLEAN
 
 query II
-SELECT column_name, CASE WHEN column_name = 'is_delete' AND data_type = 'BIGINT' THEN 'BOOLEAN' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_delete_file_visibility') ORDER BY column_index
+SELECT column_name, CASE WHEN column_name = 'is_delete' AND data_type = 'BIGINT' THEN 'BOOLEAN' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_delete_file_visibility') ORDER BY column_index
 ----
 branch_id	BIGINT
 table_id	BIGINT
@@ -64,14 +92,19 @@ delete_file_id	BIGINT
 snapshot_id	BIGINT
 is_delete	BOOLEAN
 
-# the initial snapshot belongs to main
-query IIIIII
-SELECT branch_id, branch_name, fork_branch_id, fork_snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_branch
+# the initial snapshot and its changes belong to main
+query IIII
+SELECT branch_id, branch_name, parent_id, parent_branch_snapshot FROM meta.ducklake_branch
 ----
-0	main	NULL	NULL	0	NULL
+0	main	NULL	NULL
 
 query II
 SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot
+----
+0	0
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes
 ----
 0	0
 
@@ -89,6 +122,23 @@ SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
 ----
 0	0
 1	0
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
+----
+0	0
+1	0
+
+query III
+SELECT begin_snapshot, schema_version, branch_id FROM meta.ducklake_schema_versions
+----
+1	1	0
+
+# the snapshot table is keyed by branch and snapshot
+statement error
+INSERT INTO meta.ducklake_snapshot SELECT snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id FROM meta.ducklake_snapshot WHERE snapshot_id = 1
+----
+constraint
 
 statement ok
 DETACH dl

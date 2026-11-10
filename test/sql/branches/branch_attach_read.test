@@ -24,7 +24,7 @@ INSERT INTO dl.t VALUES (2)
 
 # fork dev at the snapshot of the first insert
 statement ok
-INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2, 2, NULL)
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
 
 # a delete on main after the fork
 statement ok
@@ -74,6 +74,11 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_att
 
 # the branch head is the fork, the later insert and delete of main are not visible
 query I
+SELECT id FROM dl.current_snapshot()
+----
+2
+
+query I
 SELECT * FROM dl.t
 ----
 1
@@ -92,21 +97,30 @@ read-only mode
 statement ok
 DETACH dl
 
-# a snapshot of the branch and a delete event that ends the inherited file on dev
+# the first own snapshot of the branch and a delete event that ends the inherited file on dev
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS m (DATA_PATH '{DATA_PATH}/branch_attach_read_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
-INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 3, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
 
 statement ok
-INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, 100, TRUE FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND is_delete = FALSE AND snapshot_id = 2
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, 3, TRUE FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND is_delete = FALSE AND snapshot_id = 2
 
 statement ok
 DETACH m
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_attach_read_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+# the head of the branch is its own snapshot
+query I
+SELECT id FROM dl.current_snapshot()
+----
+3
 
 # the delete event of the branch is authoritative, the file is gone at the branch head
 query I
@@ -131,6 +145,11 @@ query I
 SELECT * FROM dl.t
 ----
 2
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+6
 
 statement ok
 DETACH dl

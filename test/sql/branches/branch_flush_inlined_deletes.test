@@ -32,17 +32,21 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_flu
 statement ok
 DELETE FROM dl.t WHERE i = 2
 
+# the branch forks after both deletes and references the live files with events of its own
 statement ok
-INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 4, 4, NULL)
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 4)
 
 statement ok
-INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 4
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 5, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 4 AND branch_id = 0
 
 statement ok
-INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, snapshot_id, FALSE FROM meta.ducklake_file_visibility v WHERE branch_id = 0 AND is_delete = FALSE AND NOT EXISTS (SELECT 1 FROM meta.ducklake_file_visibility d WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.data_file_id = v.data_file_id)
+INSERT INTO meta.ducklake_snapshot_changes VALUES (5, NULL, NULL, NULL, NULL, 1)
 
 statement ok
-INSERT INTO meta.ducklake_delete_file_visibility SELECT 1, table_id, delete_file_id, snapshot_id, FALSE FROM meta.ducklake_delete_file_visibility v WHERE branch_id = 0 AND is_delete = FALSE AND NOT EXISTS (SELECT 1 FROM meta.ducklake_delete_file_visibility d WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.delete_file_id = v.delete_file_id)
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, 5, FALSE FROM meta.ducklake_file_visibility v WHERE branch_id = 0 AND is_delete = FALSE AND NOT EXISTS (SELECT 1 FROM meta.ducklake_file_visibility d WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.data_file_id = v.data_file_id)
+
+statement ok
+INSERT INTO meta.ducklake_delete_file_visibility SELECT 1, table_id, delete_file_id, 5, FALSE FROM meta.ducklake_delete_file_visibility v WHERE branch_id = 0 AND is_delete = FALSE AND NOT EXISTS (SELECT 1 FROM meta.ducklake_delete_file_visibility d WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.delete_file_id = v.delete_file_id)
 
 # the flush replaces the delete file with one that also holds the inlined delete
 statement ok
@@ -94,13 +98,14 @@ statement ok
 SET VARIABLE fork = (SELECT MAX(snapshot_id) FROM meta.ducklake_snapshot WHERE branch_id = 0)
 
 statement ok
-INSERT INTO meta.ducklake_branch SELECT 2, 'feature', 0, getvariable('fork'), getvariable('fork'), NULL
+INSERT INTO meta.ducklake_branch SELECT 2, 'feature', 0, getvariable('fork')
+
+# the branch holds a snapshot of its own but no events, it inherits through the fork
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT getvariable('fork') + 1, NOW(), schema_version, next_catalog_id, next_file_id, 2 FROM meta.ducklake_snapshot WHERE snapshot_id = getvariable('fork') AND branch_id = 0
 
 statement ok
-INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 200, NOW(), schema_version, next_catalog_id, next_file_id, 2 FROM meta.ducklake_snapshot WHERE snapshot_id = getvariable('fork')
-
-statement ok
-INSERT INTO meta.ducklake_file_visibility SELECT 2, table_id, data_file_id, snapshot_id, FALSE FROM meta.ducklake_file_visibility v WHERE branch_id = 0 AND is_delete = FALSE AND snapshot_id <= getvariable('fork') AND NOT EXISTS (SELECT 1 FROM meta.ducklake_file_visibility d WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.data_file_id = v.data_file_id)
+INSERT INTO meta.ducklake_snapshot_changes SELECT getvariable('fork') + 1, NULL, NULL, NULL, NULL, 2
 
 statement ok
 DETACH m

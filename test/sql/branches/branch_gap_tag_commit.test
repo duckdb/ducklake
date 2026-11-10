@@ -1,5 +1,5 @@
 # name: test/sql/branches/branch_gap_tag_commit.test
-# description: a commit with a tag over a moved lineage with branch snapshots must conflict, not fill the id gap
+# description: a tagged commit next to a branch snapshot with the same id conflicts with the concurrent commit of main
 # group: [branches]
 
 require ducklake
@@ -33,23 +33,32 @@ CREATE TABLE dl.u(j INTEGER)
 statement ok con1
 CALL ducklake_create_tag('dl', 'pin', version => 2)
 
+# a branch snapshot takes the id main commits next
 statement ok
-INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2, 2, NULL)
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
 
 statement ok
-INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 3, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
 
 statement ok
-INSERT INTO meta.ducklake_snapshot_changes VALUES (100, NULL, NULL, NULL, NULL)
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1)
 
+# main commits its own 3 next to the branch snapshot
 statement ok con2
 CREATE TABLE dl.u(j INTEGER)
 
 query I
 SELECT id FROM dl.current_snapshot()
 ----
-101
+3
 
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot WHERE snapshot_id = 3 ORDER BY branch_id
+----
+3	0
+3	1
+
+# the tag routes the commit through the conflict check, which sees the table main created
 statement error con1
 COMMIT
 ----

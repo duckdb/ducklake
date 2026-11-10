@@ -32,12 +32,10 @@ struct DuckLakeCommitContext {
 	std::function<bool(TableIndex)> inlined_file_deletion_table_exists;
 	//! Returns the latest snapshot for the first commit attempt.
 	std::function<DuckLakeSnapshot()> get_snapshot;
-	//! Reads the newest snapshot of any branch and of the lineage in the commit transaction,
-	//! so a first attempt allocates past the branches, unset on catalogs without branches
-	std::function<DuckLakeSnapshotMaxima()> get_snapshot_maxima;
 	//! Whether the catalog holds any branch besides main, unset batches keep every branch statement
 	std::function<bool()> has_branches;
 	//! What the expiries of the transaction delete in the commit attempt, read after the latest snapshot
+	//! whose id the attempt passes
 	std::function<DuckLakeExpiry(idx_t, idx_t)> get_expired_snapshots = [](idx_t, idx_t) {
 		return DuckLakeExpiry();
 	};
@@ -184,6 +182,12 @@ struct DuckLakeCommitContext {
 	bool supports_v1_1_metadata = false;
 	//! Whether the metadata schema has the 2.0 layout, visibility rows instead of inline ranges.
 	bool supports_v2_0_metadata = false;
+	//! The branch the commit continues, main on the server side
+	idx_t commit_branch_id = 0;
+	//! The chain predicate selecting the schema version rows of the commit lineage under the alias sv, empty before 2.0
+	string schema_version_chain;
+	//! The chain predicate selecting the visibility events of the commit lineage under the alias v, empty on main
+	string file_visibility_chain;
 	//! Column names of the inlined data tables under this catalog version.
 	DuckLakeInlinedColNames InlinedColNames() const {
 		return DuckLakeInlinedColNames(supports_v1_1_metadata);
@@ -220,10 +224,10 @@ public:
 
 	static SnapshotDeletedFromFiles
 	GetFilesDeletedOrDroppedAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor,
-	                                      bool branch_aware);
+	                                      bool branch_aware, const string &chain_predicate);
 
 	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes,
-	                            const DuckLakeSnapshotCommit &commit_info) const;
+	                            const DuckLakeSnapshotCommit &commit_info, bool write_branch_id) const;
 
 	string CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes,
 	                     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats, const DuckLakeCommitContext &context,

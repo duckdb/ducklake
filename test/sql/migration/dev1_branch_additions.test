@@ -16,7 +16,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branc
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
 
-# simulate a catalog created by a dev build without the branch tables and with inline ranges
+# simulate a catalog created by a dev build without the branch tables and columns and with inline ranges
 statement ok
 DROP TABLE meta.ducklake_branch
 
@@ -24,7 +24,43 @@ statement ok
 DROP TABLE meta.ducklake_snapshot_remap
 
 statement ok
-ALTER TABLE meta.ducklake_snapshot DROP COLUMN branch_id
+CREATE TABLE meta.snapshot_backup(snapshot_id BIGINT, snapshot_time TIMESTAMPTZ, schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT)
+
+statement ok
+INSERT INTO meta.snapshot_backup SELECT snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id FROM meta.ducklake_snapshot
+
+statement ok
+DROP TABLE meta.ducklake_snapshot
+
+statement ok
+CREATE TABLE meta.ducklake_snapshot(snapshot_id BIGINT PRIMARY KEY, snapshot_time TIMESTAMPTZ, schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT * FROM meta.snapshot_backup
+
+statement ok
+DROP TABLE meta.snapshot_backup
+
+statement ok
+CREATE TABLE meta.changes_backup(snapshot_id BIGINT, changes_made VARCHAR, author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR)
+
+statement ok
+INSERT INTO meta.changes_backup SELECT snapshot_id, changes_made, author, commit_message, commit_extra_info FROM meta.ducklake_snapshot_changes
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_changes
+
+statement ok
+CREATE TABLE meta.ducklake_snapshot_changes(snapshot_id BIGINT PRIMARY KEY, changes_made VARCHAR, author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes SELECT * FROM meta.changes_backup
+
+statement ok
+DROP TABLE meta.changes_backup
+
+statement ok
+ALTER TABLE meta.ducklake_schema_versions DROP COLUMN branch_id
 
 statement ok
 ALTER TABLE meta.ducklake_data_file ADD COLUMN begin_snapshot BIGINT
@@ -53,48 +89,26 @@ DROP TABLE meta.ducklake_delete_file_visibility
 statement ok
 DETACH dl
 
-# a read only attach leaves the catalog as it is
-statement ok
+# a read only attach cannot use the snapshot tables of the older build
+statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', READ_ONLY)
-
-query I
-SELECT * FROM dl.t
 ----
-42
+attach it writable once
 
+# a snapshot pinned attach is read only as well
 statement error
-SELECT * FROM meta.ducklake_branch
-----
-does not exist
-
-statement ok
-DETACH dl
-
-# a snapshot pinned attach is read only and leaves the catalog as it is
-statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', SNAPSHOT_VERSION 1)
-
-query I
-SELECT * FROM dl.t
 ----
-42
+attach it writable once
 
-statement error
-SELECT * FROM meta.ducklake_branch
-----
-does not exist
-
-statement ok
-DETACH dl
-
-# a writable attach adds the missing tables and backfills the snapshots
+# a writable attach adds the missing tables and columns and backfills the snapshots
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branch_additions_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
 
-query IIIIII
-SELECT branch_id, branch_name, fork_branch_id, fork_snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_branch
+query IIII
+SELECT branch_id, branch_name, parent_id, parent_branch_snapshot FROM meta.ducklake_branch
 ----
-0	main	NULL	NULL	0	NULL
+0	main	NULL	NULL
 
 query II
 SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
@@ -102,10 +116,26 @@ SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
 0	0
 1	0
 
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
+----
+0	0
+1	0
+
+query II
+SELECT begin_snapshot, branch_id FROM meta.ducklake_schema_versions
+----
+1	0
+
 query I
 SELECT COUNT(*) FROM meta.ducklake_snapshot_remap
 ----
 0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND is_delete = FALSE
+----
+1
 
 query I
 SELECT * FROM dl.t
@@ -166,12 +196,15 @@ SELECT COUNT(*) FROM dl.t
 ----
 2
 
-# an existing branch of an older dev catalog inherits its visibility through the fork, without own rows
+# a branch added to the healed catalog inherits its visibility through the fork, without own rows
 statement ok
-INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 1, 1, NULL)
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 1)
 
 statement ok
-INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 1
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 2, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 1 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (2, NULL, NULL, NULL, NULL, 1)
 
 statement ok
 DETACH dl

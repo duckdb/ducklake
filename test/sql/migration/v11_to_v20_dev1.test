@@ -45,21 +45,38 @@ SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
 2.0-dev1
 
-query IIIIII
-SELECT branch_id, branch_name, fork_branch_id, fork_snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_branch
+query IIII
+SELECT branch_id, branch_name, parent_id, parent_branch_snapshot FROM meta.ducklake_branch
 ----
-0	main	NULL	NULL	0	NULL
+0	main	NULL	NULL
 
-# existing snapshots are backfilled to main
+# existing snapshots and their changes are backfilled to main
 query II
 SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
 ----
 0	0
 1	0
 
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
+----
+0	0
+1	0
+
+query II
+SELECT begin_snapshot, branch_id FROM meta.ducklake_schema_versions
+----
+1	0
+
+# the migrated snapshot table is keyed by branch and snapshot
+statement error
+INSERT INTO meta.ducklake_snapshot SELECT snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id FROM meta.ducklake_snapshot WHERE snapshot_id = 1
+----
+constraint
+
 # SQLite reports the timestamp column as text
 query II
-SELECT column_name, CASE WHEN column_name = 'expires_at' AND data_type = 'VARCHAR' THEN 'TIMESTAMP WITH TIME ZONE' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_snapshot_tag') ORDER BY column_index
+SELECT column_name, CASE WHEN column_name = 'expires_at' AND data_type = 'VARCHAR' THEN 'TIMESTAMP WITH TIME ZONE' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_snapshot_tag') ORDER BY column_index
 ----
 tag_name	VARCHAR
 snapshot_id	BIGINT

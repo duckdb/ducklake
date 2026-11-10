@@ -123,15 +123,17 @@ void DuckLakeInitializer::Initialize() {
 		ThrowUnsupportedByVersion(catalog.GetDuckLakeVersion(), "branches");
 	}
 	if (!options.branch_name.empty() && !StringUtil::CIEquals(options.branch_name, "main")) {
-		auto branch = current_metadata_manager.FindBranch(options.branch_name);
-		if (!branch.IsValid()) {
+		auto branches = current_metadata_manager.LoadBranches();
+		optional_idx branch_id;
+		for (auto &branch : branches) {
+			if (StringUtil::CIEquals(branch.name, options.branch_name)) {
+				branch_id = branch.branch_id;
+			}
+		}
+		if (!branch_id.IsValid()) {
 			throw InvalidInputException("No branch with the name \"%s\" exists", options.branch_name);
 		}
-		if (!branch.fork_branch_id.IsValid() || branch.fork_branch_id.GetIndex() != 0 ||
-		    !branch.fork_snapshot_id.IsValid()) {
-			throw NotImplementedException("Only branches that fork from main can be attached");
-		}
-		catalog.SetAttachedBranch(branch.branch_id, branch.fork_snapshot_id);
+		catalog.SetAttachedChain(DuckLakeBranchChain::Resolve(branches, branch_id.GetIndex()));
 	}
 	if (options.at_clause) {
 		// if the user specified a snapshot try to load it to trigger an error if it does not exist
@@ -386,7 +388,15 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 		if (catalog.GetAttached().IsReadOnly()) {
 			// once the inline range columns are gone the visibility events are the only readable ranges
 			auto &manager = transaction.GetMetadataManager();
-			if (manager.HasAllFileRangeColumns()) {
+			if (!manager.HasSnapshotChangesBranchColumn() || !manager.HasSchemaVersionsBranchColumn() ||
+			    manager.HasSnapshotRebuildTable() || manager.HasSnapshotOldTable() ||
+			    manager.HasSnapshotChangesRebuildTable() || manager.HasSnapshotChangesOldTable() ||
+			    (manager.HasBranchTable() && !manager.HasBranchTableShape()) ||
+			    (manager.HasSnapshotRemapTable() && !manager.HasSnapshotRemapShape())) {
+				// the snapshot tables are keyed by branch, which only a writable attach can rebuild
+				throw InvalidInputException("This DuckLake catalog has the snapshot tables of an older dev build, "
+				                            "attach it writable once to heal it");
+			} else if (manager.HasAllFileRangeColumns()) {
 				catalog.SetBranchMetadataMissing();
 			} else if ((manager.HasFileVisibilityTable() &&
 			            !manager.HasVisibilityEventShape("ducklake_file_visibility")) ||

@@ -1,7 +1,9 @@
 #include "storage/ducklake_inlined_data_reader.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
+#include "storage/ducklake_catalog.hpp"
 #include "duckdb/storage/table/column_segment.hpp"
 #include "duckdb/planner/table_filter_state.hpp"
 #include "storage/ducklake_delete_filter.hpp"
@@ -68,7 +70,7 @@ void DuckLakeInlinedDataReader::GetColumnToRead(const DuckLakeFunctionInfo &read
 shared_ptr<DuckLakeCommittedInlinedRows>
 DuckLakeInlinedDataReader::ReadCommittedRows(DuckLakeFunctionInfo &read_info, const Identifier &table_name,
                                              const vector<MultiFileColumnDefinition> &columns,
-                                             optional_idx &next_file_id) {
+                                             map<idx_t, idx_t> &next_file_ids) {
 	auto transaction = read_info.GetTransaction();
 	auto &metadata_manager = transaction->GetMetadataManager();
 	auto col_names = metadata_manager.InlinedColNames();
@@ -81,15 +83,38 @@ DuckLakeInlinedDataReader::ReadCommittedRows(DuckLakeFunctionInfo &read_info, co
 		result->columns.push_back(std::move(column));
 		types.push_back(std::move(type));
 	}
-	result->columns.push_back("(SELECT MAX(next_file_id) FROM {METADATA_CATALOG}.ducklake_snapshot)");
-	types.push_back(LogicalType::BIGINT);
+	// the allocator of every chain branch, a flush on a branch since the read writes files at or above its own
+	auto &catalog = transaction->GetCatalog();
+	vector<idx_t> allocator_branches;
+	if (!catalog.SupportsBranching()) {
+		result->columns.push_back("(SELECT MAX(next_file_id) FROM {METADATA_CATALOG}.ducklake_snapshot)");
+		types.push_back(LogicalType::BIGINT);
+		allocator_branches.push_back(0);
+	} else {
+		for (auto &segment : catalog.AttachedChain().Segments()) {
+			result->columns.push_back(StringUtil::Format(
+			    "(SELECT MAX(next_file_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = %llu)",
+			    segment.branch_id));
+			types.push_back(LogicalType::BIGINT);
+			allocator_branches.push_back(segment.branch_id);
+		}
+	}
 	auto query_result = metadata_manager.ReadInlinedData(read_info.snapshot, table_name, result->columns);
 	result->rows = metadata_manager.TransformInlinedData(*query_result, types, table_name);
 	auto &rows = *result->rows->data;
 	if (rows.Count() > 0) {
-		auto file_id = rows.GetValue(types.size() - 1, 0).GetValue<idx_t>();
-		if (!next_file_id.IsValid() || file_id < next_file_id.GetIndex()) {
-			next_file_id = file_id;
+		// the earliest read of the tables decides, a branch without snapshots has no allocator
+		idx_t first_allocator = types.size() - allocator_branches.size();
+		for (idx_t i = 0; i < allocator_branches.size(); i++) {
+			auto value = rows.GetValue(first_allocator + i, 0);
+			if (value.IsNull()) {
+				continue;
+			}
+			auto file_id = value.GetValue<idx_t>();
+			auto entry = next_file_ids.find(allocator_branches[i]);
+			if (entry == next_file_ids.end() || file_id < entry->second) {
+				next_file_ids[allocator_branches[i]] = file_id;
+			}
 		}
 	}
 	return result;

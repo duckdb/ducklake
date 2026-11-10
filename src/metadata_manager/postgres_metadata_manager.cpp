@@ -532,15 +532,9 @@ static string PostgresQuery(const string &remote_query) {
 	                          SQLString(remote_query));
 }
 
-string PostgresMetadataManager::GetSnapshotMaximaQuery() const {
-	auto remote_query = SnapshotMaximaSql();
-	SubstituteCatalogPlaceholders(remote_query,
-	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
-	return PostgresQuery(remote_query);
-}
-
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
-	auto remote_query = BranchAwareLatestSnapshotQuery(true);
+	// the chain head query is standard SQL, so the server runs it
+	auto remote_query = DuckLakeMetadataManager::GetLatestSnapshotQuery();
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	return PostgresQuery(remote_query);
@@ -549,8 +543,10 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot,
                                                                    bool include_exactness) const {
 	// one statement reads the latest snapshot and the table stats from the same state at any isolation level
+	auto &catalog = transaction.GetCatalog();
 	auto remote_query =
-	    SnapshotAndStatsAndChangesQuery(include_exactness, transaction.GetCatalog().SupportsBranching(), true);
+	    SnapshotAndStatsAndChangesQuery(include_exactness, catalog.SupportsBranching(),
+	                                    catalog.AttachedChain().Predicate(""), catalog.AttachedBranchId());
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	SubstituteSnapshotPlaceholders(snapshot, remote_query);

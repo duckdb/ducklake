@@ -554,7 +554,7 @@ shared_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::GetExistingTableStats(T
 	    [&](string query) {
 		    return RunQuery(StringUtil::Replace(query, "{METADATA_CATALOG}", schema_id), "read missing table sizes");
 	    },
-	    supports_v2_0_metadata);
+	    supports_v2_0_metadata, string());
 	for (auto &read_table : read_tables) {
 		existing_table_stats[read_table] = nullptr;
 	}
@@ -575,8 +575,10 @@ DuckLakeVersion DuckLakeServerSideCommit::ReadCatalogVersion() {
 }
 
 DuckLakeSnapshot DuckLakeServerSideCommit::ReadLatestSnapshot() {
-	string sql = StringUtil::Replace(DuckLakeMetadataManager::MainHeadSnapshotQuery(supports_v2_0_metadata),
-	                                 "{METADATA_CATALOG}", schema_id);
+	// the server side commits on main
+	auto query = supports_v2_0_metadata ? DuckLakeMetadataManager::HeadSnapshotQuery("branch_id = 0")
+	                                    : DuckLakeMetadataManager::LatestSnapshotQuery();
+	string sql = StringUtil::Replace(query, "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read latest snapshot");
 	auto snapshot = DuckLakeMetadataManager::ParseSnapshot(*result);
 	if (!snapshot) {
@@ -657,20 +659,17 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.skip_drop_empty_inlined = true;
 	ctx.supports_v1_1_metadata = supports_v1_1_metadata;
 	ctx.supports_v2_0_metadata = supports_v2_0_metadata;
-	ctx.snapshot_and_stats_query =
-	    DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(supports_v1_1_metadata, supports_v2_0_metadata);
+	ctx.snapshot_and_stats_query = DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(
+	    supports_v1_1_metadata, supports_v2_0_metadata, "branch_id = 0", 0);
+	if (supports_v2_0_metadata) {
+		ctx.schema_version_chain = "sv.branch_id = 0";
+	}
 	ctx.conflict_query_executor = [this](string q) -> unique_ptr<QueryResult> {
 		auto sql = SubstitutePlaceholders(std::move(q), transaction_snapshot);
 		return fresh_conn.Query(sql);
 	};
 	ctx.get_snapshot = [this]() {
 		return transaction_snapshot;
-	};
-	ctx.get_snapshot_maxima = [this]() {
-		// read in the commit transaction, so a branch snapshot after the staged anchor is seen
-		auto sql = StringUtil::Replace(DuckLakeMetadataManager::SnapshotMaximaSql(), "{METADATA_CATALOG}", schema_id);
-		auto result = RunQuery(sql, "read the newest snapshot ids");
-		return DuckLakeMetadataManager::ParseSnapshotMaxima(*result);
 	};
 	ctx.execute_commit_batch = [this](DuckLakeSnapshot snapshot, string &query) -> unique_ptr<QueryResult> {
 		query = SubstitutePlaceholders(query, snapshot);
@@ -735,9 +734,10 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		if (InlinedFileDeletionTableExists(table_id)) {
 			inlined_deletion_table = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
 		}
-		auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetNetDataFileRowCountSql(
-		                                      table_id, inlined_deletion_table, supports_v2_0_metadata, false, true),
-		                                  transaction_snapshot);
+		auto sql =
+		    SubstitutePlaceholders(DuckLakeMetadataManager::GetNetDataFileRowCountSql(
+		                               table_id, inlined_deletion_table, supports_v2_0_metadata, string(), false, true),
+		                           transaction_snapshot);
 		auto result = RunQuery(sql, "read net data file row count");
 		for (auto &row : *result) {
 			return row.GetValue<idx_t>(0);

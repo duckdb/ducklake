@@ -1746,36 +1746,35 @@ bool DuckLakeCatalog::UnregisterCatalog() {
 	return metadata_catalog_unused;
 }
 
-bool DuckLakeCatalog::ListingCacheMatches(idx_t snapshot_id, optional_idx global_snapshot_max) const {
-	// a commit on another branch can flush files this lineage inherits, so the listings belong to one global maximum
-	return listing_cache_head.IsValid() && listing_cache_head.GetIndex() == snapshot_id &&
-	       listing_cache_global_max == global_snapshot_max;
+bool DuckLakeCatalog::ListingCacheMatches(idx_t snapshot_id, const vector<idx_t> &heads) const {
+	// a flush on a parent writes an add event dated before the cap that the branch inherits,
+	// so a commit on any branch of the chain drops the shared listings, which only reads at the head share
+	return !listing_cache_heads.empty() && listing_cache_heads == heads && heads.back() == snapshot_id;
 }
 
-void DuckLakeCatalog::ObserveListingHead(idx_t head_snapshot_id, optional_idx global_snapshot_max) {
+void DuckLakeCatalog::ObserveListingHead(const vector<idx_t> &heads) {
 	lock_guard<mutex> guard(listing_cache_lock);
-	if (ListingCacheMatches(head_snapshot_id, global_snapshot_max)) {
+	if (!heads.empty() && ListingCacheMatches(heads.back(), heads)) {
 		return;
 	}
 	listing_cache.clear();
-	listing_cache_head = head_snapshot_id;
-	listing_cache_global_max = global_snapshot_max;
+	listing_cache_heads = heads;
 }
 
 shared_ptr<vector<DuckLakeFileListEntry>> DuckLakeCatalog::TryGetCachedListing(const string &key, idx_t snapshot_id,
-                                                                               optional_idx global_snapshot_max) {
+                                                                               const vector<idx_t> &heads) {
 	lock_guard<mutex> guard(listing_cache_lock);
-	if (!ListingCacheMatches(snapshot_id, global_snapshot_max)) {
+	if (!ListingCacheMatches(snapshot_id, heads)) {
 		return nullptr;
 	}
 	auto entry = listing_cache.find(key);
 	return entry == listing_cache.end() ? nullptr : entry->second;
 }
 
-void DuckLakeCatalog::StoreCachedListing(const string &key, idx_t snapshot_id, optional_idx global_snapshot_max,
+void DuckLakeCatalog::StoreCachedListing(const string &key, idx_t snapshot_id, const vector<idx_t> &heads,
                                          shared_ptr<vector<DuckLakeFileListEntry>> entries) {
 	lock_guard<mutex> guard(listing_cache_lock);
-	if (!ListingCacheMatches(snapshot_id, global_snapshot_max)) {
+	if (!ListingCacheMatches(snapshot_id, heads)) {
 		return;
 	}
 	if (listing_cache.size() >= 256) {
@@ -1787,7 +1786,7 @@ void DuckLakeCatalog::StoreCachedListing(const string &key, idx_t snapshot_id, o
 void DuckLakeCatalog::InvalidateListingCache() {
 	lock_guard<mutex> guard(listing_cache_lock);
 	listing_cache.clear();
-	listing_cache_head = optional_idx();
+	listing_cache_heads.clear();
 }
 
 } // namespace duckdb

@@ -1,0 +1,108 @@
+# name: test/sql/migration/v11_to_v20_dev1_resume_rebuilt.test
+# description: the migration of a 1.1 catalog resumes after an interrupted run rebuilt the snapshot tables
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+# the run stopped after the tag, branch and remap tables and both snapshot table rebuilds
+statement ok
+CREATE TABLE meta.ducklake_snapshot_tag(tag_name VARCHAR, snapshot_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, expires_at TIMESTAMPTZ)
+
+statement ok
+CREATE TABLE meta.ducklake_branch(branch_id BIGINT PRIMARY KEY, branch_name VARCHAR, parent_id BIGINT, parent_branch_snapshot BIGINT)
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (0, 'main', NULL, NULL)
+
+statement ok
+CREATE TABLE meta.ducklake_snapshot_remap(branch_id BIGINT, merge_snapshot_id BIGINT, old_branch_id BIGINT, old_snapshot_id BIGINT, new_snapshot_id BIGINT)
+
+statement ok
+CREATE TABLE meta.ducklake_snapshot_rebuild(snapshot_id BIGINT, snapshot_time TIMESTAMPTZ, schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT, branch_id BIGINT, PRIMARY KEY(branch_id, snapshot_id))
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_rebuild SELECT snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, 0 FROM meta.ducklake_snapshot
+
+statement ok
+DROP TABLE meta.ducklake_snapshot
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_rebuild RENAME TO ducklake_snapshot
+
+statement ok
+CREATE TABLE meta.ducklake_snapshot_changes_rebuild(snapshot_id BIGINT, changes_made VARCHAR, author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR, branch_id BIGINT, PRIMARY KEY(branch_id, snapshot_id))
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes_rebuild SELECT snapshot_id, changes_made, author, commit_message, commit_extra_info, 0 FROM meta.ducklake_snapshot_changes
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_changes
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_changes_rebuild RENAME TO ducklake_snapshot_changes
+
+statement ok
+DETACH dl
+
+# the catalog still reports 1.1 and the migration completes the remaining additions
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
+----
+0	0
+1	0
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
+----
+0	0
+1	0
+
+query II
+SELECT begin_snapshot, branch_id FROM meta.ducklake_schema_versions
+----
+1	0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_visibility
+----
+1
+
+# the migrated catalog commits
+statement ok
+INSERT INTO dl.t VALUES (43)
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+42
+43
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
+----
+0	0
+1	0
+2	0
+
+statement ok
+DETACH dl

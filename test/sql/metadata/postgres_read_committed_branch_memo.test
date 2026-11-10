@@ -32,7 +32,7 @@ SELECT count(*) FROM ducklake_expire_snapshots('dl', versions => [1], dry_run =>
 1
 
 statement ok con2
-INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 1, 1, NULL)
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 1)
 
 query I con1
 SELECT count(*) FROM ducklake_expire_snapshots('dl', versions => [1], dry_run => true)

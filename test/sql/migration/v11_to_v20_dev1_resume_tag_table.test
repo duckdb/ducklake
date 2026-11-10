@@ -1,0 +1,69 @@
+# name: test/sql/migration/v11_to_v20_dev1_resume_tag_table.test
+# description: the migration of a 1.1 catalog resumes after an interrupted run created the snapshot tag table
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+# the first statement of the migration ran before the run stopped
+statement ok
+CREATE TABLE meta.ducklake_snapshot_tag(tag_name VARCHAR, snapshot_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, expires_at TIMESTAMPTZ)
+
+statement ok
+DETACH dl
+
+# the migration skips the table it finds
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_snapshot_tag
+----
+0
+
+query IIII
+SELECT branch_id, branch_name, parent_id, parent_branch_snapshot FROM meta.ducklake_branch
+----
+0	main	NULL	NULL
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
+----
+0	0
+1	0
+
+# the migrated catalog commits
+statement ok
+INSERT INTO dl.t VALUES (43)
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+42
+43
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
+----
+0	0
+1	0
+2	0
+
+statement ok
+DETACH dl

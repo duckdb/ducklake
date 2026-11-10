@@ -249,6 +249,12 @@
         "test/sql/cleanup/expire_cleanup_in_transaction.test",
         "test/sql/cleanup/expire_cleanup_concurrent_commit.test"
       ]
+    },
+    {
+      "reason": "A failed attach keeps the metadata catalog attached on quack, which the test attaches again under the same name to edit the old layout",
+      "paths": [
+        "test/sql/migration/dev1_heal_refuses_old_branches.test"
+      ]
     }
   ]
 }

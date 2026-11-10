@@ -71,8 +71,13 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 	}
 
 	string filter;
-	// we can never delete the most recent snapshot
-	filter = "snapshot_id != (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot) AND ";
+	// we can never delete the most recent snapshot, which is the newest one of the attached branch from 2.0 on
+	string head_filter;
+	if (ducklake_catalog.SupportsBranching()) {
+		head_filter = StringUtil::Format(" WHERE branch_id = %llu", ducklake_catalog.AttachedBranchId());
+	}
+	filter = StringUtil::Format(
+	    "snapshot_id != (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot%s) AND ", head_filter);
 	if (has_timestamp) {
 		auto from_timestamp = older_than.GetValue<timestamp_tz_t>();
 		auto timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(timestamp_t(from_timestamp.value));

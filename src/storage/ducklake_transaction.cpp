@@ -1655,18 +1655,15 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.get_snapshot = [&]() {
 		return GetSnapshot();
 	};
-	context.get_snapshot_maxima = [&]() {
-		return metadata_manager->GetSnapshotMaxima();
-	};
 	context.has_branches = [&]() {
 		return metadata_manager->HasBranches();
 	};
 	vector<DuckLakeSnapshotInfo> committed_expiry;
 	bool expired_by_statements = false;
 	if (ExpiresSnapshotsOnCommit()) {
-		context.get_expired_snapshots = [&](idx_t attempt, idx_t latest_snapshot_id) {
+		context.get_expired_snapshots = [&](idx_t attempt, idx_t head_snapshot_id) {
 			expired_by_statements = attempt == 0 && !metadata_manager->CommitsEachStatement();
-			return ExpiredSnapshotsForCommit(attempt, latest_snapshot_id);
+			return ExpiredSnapshotsForCommit(attempt, head_snapshot_id);
 		};
 		context.cleanup_expired_snapshots = [&](const vector<DuckLakeSnapshotInfo> &expired) {
 			if (expired_by_statements) {
@@ -1899,6 +1896,11 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
 	context.supports_v2_0_metadata = ducklake_catalog.SupportsBranching();
+	if (context.supports_v2_0_metadata) {
+		context.commit_branch_id = ducklake_catalog.AttachedBranchId();
+		context.schema_version_chain = ducklake_catalog.AttachedChain().Predicate("sv", "begin_snapshot");
+		context.file_visibility_chain = DuckLakeMetadataManager::FileSourceChain(ducklake_catalog.AttachedChain());
+	}
 	context.snapshot_and_stats_query =
 	    metadata_manager->GetSnapshotAndStatsAndChangesQuery(transaction_snapshot, context.supports_v1_1_metadata);
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
@@ -2158,11 +2160,12 @@ vector<DuckLakeSnapshotTagInfo> DuckLakeTransaction::GetSnapshotTagsInternal(boo
 	if (state->new_snapshot_tags.empty()) {
 		return result;
 	}
-	// the times of the snapshots this transaction tagged
+	// the times of the snapshots this transaction tagged, which are snapshots of main
 	map<idx_t, Value> snapshot_times;
 	if (with_snapshot_time) {
 		for (auto &snapshot : metadata_manager.GetAllSnapshots(StringUtil::Format(
-		         "snapshot_id IN (%s)", DuckLakeTransactionState::TaggedSnapshotIdList(state->new_snapshot_tags)))) {
+		         "snapshot_id IN (%s)%s", DuckLakeTransactionState::TaggedSnapshotIdList(state->new_snapshot_tags),
+		         metadata_manager.MainSnapshotFilter()))) {
 			snapshot_times[snapshot.id] = Value::TIMESTAMPTZ(snapshot.time);
 		}
 	}
@@ -2181,11 +2184,20 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshots(const strin
 }
 
 vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshotsInternal(const string &filter) {
-	auto protected_snapshots = TaggedSnapshotsInternal();
-	auto branch_protected = GetMetadataManager().GetBranchProtectedSnapshots();
+	set<idx_t> protected_snapshots;
+	if (!ducklake_catalog.OnBranch()) {
+		// tags name snapshots of main until they carry a branch
+		protected_snapshots = TaggedSnapshotsInternal();
+	}
+	auto branch_protected = GetMetadataManager().GetBranchProtectedSnapshots(ducklake_catalog.AttachedBranchId());
 	protected_snapshots.insert(branch_protected.begin(), branch_protected.end());
+	string lineage_filter = filter;
+	if (ducklake_catalog.SupportsBranching()) {
+		// an expiry removes snapshots of the attached branch alone, other branches number theirs alike
+		lineage_filter = StringUtil::Format("(%s) AND branch_id = %llu", filter, ducklake_catalog.AttachedBranchId());
+	}
 	vector<DuckLakeSnapshotInfo> result;
-	for (auto &snapshot : GetMetadataManager().GetAllSnapshots(filter)) {
+	for (auto &snapshot : GetMetadataManager().GetAllSnapshots(lineage_filter)) {
 		if (protected_snapshots.find(snapshot.id) == protected_snapshots.end()) {
 			result.push_back(std::move(snapshot));
 		}
@@ -2231,13 +2243,14 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpireSnapshots(const string &
 	return ExpireSnapshotsNow(filter);
 }
 
-DuckLakeExpiry DuckLakeTransaction::ExpiredSnapshotsForCommit(idx_t attempt, idx_t latest_snapshot_id) {
+DuckLakeExpiry DuckLakeTransaction::ExpiredSnapshotsForCommit(idx_t attempt, idx_t head_snapshot_id) {
 	lock_guard<mutex> guard(snapshot_tag_lock);
 	DuckLakeExpiry result;
 	if (attempt == 0 && !GetMetadataManager().CommitsEachStatement()) {
-		// the statements expired in the metadata transaction of the first attempt
+		// the statements expired in the metadata transaction of the first attempt, as before 2.0 the head they read
+		// must be the head the commit reads, because the primary key only gates the id the commit inserts
 		bool expired = !expired_in_transaction.empty() || !state->expired_snapshot_tags.empty();
-		if (expired && expiry_snapshot_id.GetIndex() != latest_snapshot_id) {
+		if (expired && expiry_head_snapshot_id.GetIndex() != head_snapshot_id) {
 			throw TransactionException(
 			    "Transaction conflict: a concurrent commit preceded the commit of the snapshot expiry");
 		}
@@ -2266,24 +2279,22 @@ DuckLakeExpiry DuckLakeTransaction::ExpiredSnapshotsForCommit(idx_t attempt, idx
 
 vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpireSnapshotsNow(const string &filter) {
 	auto &metadata_manager = GetMetadataManager();
-	optional_idx latest_snapshot_id;
-	if (ExpiresSnapshotsOnCommit()) {
-		// read before the snapshots, so a commit they miss is newer than the snapshot the commit checks for
-		auto snapshot = metadata_manager.GetSnapshot();
-		latest_snapshot_id = metadata_manager.GetGlobalSnapshotMax();
-		if (!latest_snapshot_id.IsValid()) {
-			latest_snapshot_id = snapshot->snapshot_id;
-		}
+	bool expires_on_commit = ExpiresSnapshotsOnCommit();
+	optional_idx head_snapshot_id;
+	if (expires_on_commit) {
+		// expiring deletes inlined rows by their snapshot columns so the catalog version must be current
+		// read before the snapshots, so a commit they miss moves the head the commit compares with
+		head_snapshot_id = metadata_manager.GetSnapshot()->snapshot_id;
 	}
 	auto expired = ExpirableSnapshotsInternal(filter);
 	vector<DuckLakeSnapshotTagInfo> expired_tags;
-	if (latest_snapshot_id.IsValid()) {
+	if (expires_on_commit) {
 		expired_tags = ExpiredSnapshotTagsInternal();
 	}
 	if (expired.empty() && expired_tags.empty()) {
 		return expired;
 	}
-	if (!latest_snapshot_id.IsValid()) {
+	if (!expires_on_commit) {
 		// expiring deletes inlined rows by their snapshot columns so the catalog version must be current
 		metadata_manager.GetSnapshot();
 	}
@@ -2302,9 +2313,9 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpireSnapshotsNow(const strin
 			}
 		}
 	}
-	if (latest_snapshot_id.IsValid()) {
-		if (!expiry_snapshot_id.IsValid()) {
-			expiry_snapshot_id = latest_snapshot_id;
+	if (expires_on_commit) {
+		if (!expiry_head_snapshot_id.IsValid()) {
+			expiry_head_snapshot_id = head_snapshot_id;
 		}
 		expired_in_transaction.insert(expired_in_transaction.end(), expired.begin(), expired.end());
 		for (auto &tag : expired_tags) {
@@ -2442,8 +2453,8 @@ DuckLakeSnapshot DuckLakeTransaction::GetLatestSnapshot() {
 	if (!snapshot) {
 		// no snapshot loaded yet for this transaction - load it
 		snapshot = metadata_manager->GetSnapshot();
-		// a moved head drops the parsed listings transactions share
-		ducklake_catalog.ObserveListingHead(snapshot->snapshot_id, metadata_manager->GetGlobalSnapshotMax());
+		// a moved head of any branch of the chain drops the parsed listings transactions share
+		ducklake_catalog.ObserveListingHead(metadata_manager->GetLineageHeads());
 	}
 	return *snapshot;
 }

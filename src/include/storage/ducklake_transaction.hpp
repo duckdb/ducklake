@@ -433,8 +433,9 @@ private:
 	void CheckSnapshotTagExpiry(const string &name, const Value &expires_at) const;
 	//! The live tags whose expiry time has passed, which an expiry drops
 	vector<DuckLakeSnapshotTagInfo> ExpiredSnapshotTagsInternal();
-	//! What the commit attempt expires, what the statements expired for the first attempt
-	DuckLakeExpiry ExpiredSnapshotsForCommit(idx_t attempt, idx_t latest_snapshot_id);
+	//! What the commit attempt expires, what the statements expired for the first attempt when the head the
+	//! commit read is the head they read
+	DuckLakeExpiry ExpiredSnapshotsForCommit(idx_t attempt, idx_t head_snapshot_id);
 	bool ChangesMadeBesidesExpiry() const;
 
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
@@ -460,9 +461,11 @@ private:
 	mutex snapshot_tag_lock;
 	//! The expiry criteria of this transaction, applied by its commit
 	vector<string> expiry_filters;
-	//! The snapshots the statements of this transaction expired, and the latest snapshot the first expiry saw
+	//! The snapshots the statements of this transaction expired
 	vector<DuckLakeSnapshotInfo> expired_in_transaction;
-	optional_idx expiry_snapshot_id;
+	//! The head of the attached branch when the statements first expired, a commit that reads another head
+	//! reselects what it expires like a retry does
+	optional_idx expiry_head_snapshot_id;
 	//! Whether statements wrote to the metadata transaction, which a retried commit rolls back
 	bool metadata_written = false;
 	bool snapshots_expired = false;

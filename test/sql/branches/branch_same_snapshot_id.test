@@ -1,0 +1,89 @@
+# name: test/sql/branches/branch_same_snapshot_id.test
+# description: main and a branch both hold snapshot 3, a branch delete event dated 3 hides a file on the branch only
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+# dev forks at the first insert, so its first own snapshot is 3 like the second insert of main
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 3, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, 3, TRUE FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND is_delete = FALSE AND snapshot_id = 2
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot WHERE snapshot_id = 3 ORDER BY branch_id
+----
+3	0
+3	1
+
+# the key of a snapshot is its branch and its id
+statement error
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 3, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
+----
+constraint
+
+# main reads both files at its own snapshot 3
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+
+query I
+SELECT i FROM dl.t AT (VERSION => 3) ORDER BY i
+----
+1
+2
+
+statement ok
+DETACH dl
+
+# the delete event of dev hides the inherited file at the snapshot 3 of dev
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+3
+
+query I
+SELECT i FROM dl.t
+----
+
+query I
+SELECT i FROM dl.t AT (VERSION => 2)
+----
+1
+
+query I
+SELECT i FROM dl.t AT (VERSION => 3)
+----
+
+statement ok
+DETACH dl

@@ -23,10 +23,13 @@ statement ok
 INSERT INTO dl.t VALUES (2)
 
 statement ok
-INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 3, 3, NULL)
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 3)
 
 statement ok
-INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 3
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 4, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 3 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (4, NULL, NULL, NULL, NULL, 1)
 
 # the flush rehomes the inlined rows into a file that starts before the fork, which the fork inherits
 statement ok

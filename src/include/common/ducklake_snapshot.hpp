@@ -31,20 +31,11 @@ struct DuckLakeSnapshot {
 	idx_t schema_version;
 	idx_t next_catalog_id;
 	idx_t next_file_id;
+	//! The branch that owns snapshot_id, ids are numbered per branch
+	idx_t branch_id = 0;
 
 	void Serialize(Serializer &serializer) const;
 	static DuckLakeSnapshot Deserialize(Deserializer &deserializer);
-};
-
-//! The newest snapshot of any branch and of the commit lineage, read when a commit allocates
-struct DuckLakeSnapshotMaxima {
-	optional_idx global_max;
-	optional_idx lineage_head;
-	//! The newest snapshot of a branch, set when any branch committed, so id gaps can exist
-	optional_idx branch_max;
-	//! The highest allocators of any snapshot, a commit past a branch gap allocates past them
-	optional_idx next_catalog_id;
-	optional_idx next_file_id;
 };
 
 } // namespace duckdb

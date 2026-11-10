@@ -77,8 +77,15 @@ CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_file_vis
 statement ok
 CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_delete_file_visibility')
 
+# the snapshot tables and the schema versions of a dev catalog carry no branch
 statement ok
 CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_snapshot DROP COLUMN branch_id')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_snapshot_changes DROP COLUMN branch_id')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_schema_versions DROP COLUMN branch_id')
 
 statement ok
 CALL postgres_execute('pg', 'UPDATE dev1_skips_present_ddl.ducklake_metadata SET value = ''1.1-dev1'' WHERE key = ''version''')
@@ -105,6 +112,12 @@ SELECT * FROM dl.t
 
 statement ok
 DETACH dl
+
+# the migration rebuilt the snapshot tables with the branch column
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT 1 FROM information_schema.columns WHERE table_schema = ''dev1_skips_present_ddl'' AND table_name IN (''ducklake_snapshot'', ''ducklake_snapshot_changes'', ''ducklake_schema_versions'') AND column_name = ''branch_id''')
+----
+3
 
 statement ok
 CALL postgres_execute('pg', 'DROP SCHEMA dev1_skips_present_ddl CASCADE')

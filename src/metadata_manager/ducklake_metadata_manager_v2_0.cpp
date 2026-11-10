@@ -18,8 +18,21 @@ string DuckLakeMetadataManagerV2_0<Base>::GetCreateTableStatements() {
 
 template <typename Base>
 string DuckLakeMetadataManagerV2_0<Base>::GetSnapshotTableStatement() {
-	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(" + DuckLakeMetadataManager::GetSnapshotTableColumns() +
-	       ", branch_id BIGINT DEFAULT 0);";
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(" +
+	       DuckLakeMetadataManager::BranchedSnapshotTableColumns() + ");";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetSnapshotChangesTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_changes(" +
+	       DuckLakeMetadataManager::BranchedSnapshotChangesTableColumns() + ");";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetSchemaVersionsTableStatement() {
+	// branch_id is the branch whose snapshot begin_snapshot is
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_schema_versions(begin_snapshot BIGINT, schema_version BIGINT, "
+	       "table_id BIGINT, branch_id BIGINT);";
 }
 
 template <typename Base>

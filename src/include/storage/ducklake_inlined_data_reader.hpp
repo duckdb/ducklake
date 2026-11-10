@@ -11,6 +11,7 @@
 #include "duckdb/common/multi_file/base_file_reader.hpp"
 #include "storage/ducklake_inlined_data.hpp"
 #include "common/ducklake_snapshot.hpp"
+#include "duckdb/common/map.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 
 namespace duckdb {
@@ -44,10 +45,11 @@ public:
 	void SetCommittedRows(shared_ptr<DuckLakeCommittedInlinedRows> rows);
 
 	//! Read the columns of a committed inlined table, and the next file id of the catalog when it has rows
+	//! Reads the committed rows and lowers the file allocator of every chain branch to the one the read saw
 	static shared_ptr<DuckLakeCommittedInlinedRows> ReadCommittedRows(DuckLakeFunctionInfo &read_info,
 	                                                                  const Identifier &table_name,
 	                                                                  const vector<MultiFileColumnDefinition> &columns,
-	                                                                  optional_idx &next_file_id);
+	                                                                  map<idx_t, idx_t> &next_file_ids);
 
 private:
 	static void GetColumnToRead(const DuckLakeFunctionInfo &read_info, DuckLakeMetadataManager &metadata_manager,

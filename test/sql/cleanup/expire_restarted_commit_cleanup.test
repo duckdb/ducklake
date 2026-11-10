@@ -1,5 +1,5 @@
 # name: test/sql/cleanup/expire_restarted_commit_cleanup.test
-# description: a commit restarted over a branch snapshot gap reselects its expiry and cleans up the expired metadata
+# description: a commit restarted by the snapshot key of a concurrent commit reselects its expiry and cleans up after it
 # group: [cleanup]
 
 require ducklake
@@ -19,24 +19,30 @@ CREATE TABLE dl.t AS SELECT 42 AS i
 statement ok
 DELETE FROM dl.t
 
-statement ok
-INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2, 2, NULL)
-
-statement ok
-INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2
-
-statement ok
-INSERT INTO meta.ducklake_snapshot_changes VALUES (100, NULL, NULL, NULL, NULL)
-
 statement ok con1
 BEGIN
 
 statement ok con1
 CALL ducklake_expire_snapshots('dl', versions => [1])
 
-# the tag routes the commit through the conflict check and the branch snapshot gap restarts it
-statement ok con1
-CALL ducklake_create_tag('dl', 'keep', version => 2)
+# a branch snapshot with the id con1 computed does not disturb it
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 3, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1)
+
+# a commit of main takes that id, so the snapshot key restarts the commit of con1
+statement ok
+CREATE TABLE dl.u (j INTEGER)
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+3
 
 statement ok con1
 COMMIT
@@ -56,9 +62,9 @@ SELECT (SELECT count(*) FROM meta.ducklake_data_file),
 query I
 SELECT id FROM dl.current_snapshot()
 ----
-101
+4
 
 query I
-SELECT count(*) FROM ducklake_tags('dl') WHERE tag_name = 'keep'
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
 ----
-1
+[0, 2, 3, 4]

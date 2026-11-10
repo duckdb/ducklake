@@ -21,7 +21,7 @@ FROM range(1, 4098) r(i), meta.ducklake_snapshot
 WHERE snapshot_id = 0
 
 statement ok
-INSERT INTO meta.ducklake_snapshot_changes
+INSERT INTO meta.ducklake_snapshot_changes (snapshot_id, changes_made, author, commit_message, commit_extra_info)
 SELECT i,
        CASE WHEN i % 2 = 1 THEN 'inserted_into_table:' || i || ',deleted_from_table:' || (i + 1) END,
        CASE WHEN i % 2 = 1 THEN 'author ' || i END,

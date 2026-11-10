@@ -22,17 +22,21 @@ INSERT INTO dl.t VALUES (1), (2), (3)
 statement ok
 DELETE FROM dl.t WHERE i = 1
 
+# the branch forks after the first delete and references the files with events of its own
 statement ok
-INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 3, 3, NULL)
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 3)
 
 statement ok
-INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 3
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 4, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 3 AND branch_id = 0
 
 statement ok
-INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, snapshot_id, FALSE FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND is_delete = FALSE
+INSERT INTO meta.ducklake_snapshot_changes VALUES (4, NULL, NULL, NULL, NULL, 1)
 
 statement ok
-INSERT INTO meta.ducklake_delete_file_visibility SELECT 1, table_id, delete_file_id, snapshot_id, FALSE FROM meta.ducklake_delete_file_visibility WHERE branch_id = 0 AND is_delete = FALSE
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, 4, FALSE FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND is_delete = FALSE
+
+statement ok
+INSERT INTO meta.ducklake_delete_file_visibility SELECT 1, table_id, delete_file_id, 4, FALSE FROM meta.ducklake_delete_file_visibility WHERE branch_id = 0 AND is_delete = FALSE
 
 statement ok
 DETACH dl
@@ -67,12 +71,12 @@ SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility WHERE branch_id = 1
 
 # the change feed reports each deletion once
 query I
-SELECT COUNT(*) FROM ducklake_table_changes('dl', 'main', 't', 101, 101)
+SELECT COUNT(*) FROM ducklake_table_changes('dl', 'main', 't', 4, 4)
 ----
 1
 
 query I
-SELECT COUNT(*) FROM ducklake_table_changes('dl', 'main', 't', 3, 101)
+SELECT COUNT(*) FROM ducklake_table_changes('dl', 'main', 't', 3, 4)
 ----
 2
 

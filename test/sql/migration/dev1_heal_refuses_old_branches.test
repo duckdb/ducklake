@@ -1,0 +1,122 @@
+# name: test/sql/migration/dev1_heal_refuses_old_branches.test
+# description: the heal of the snapshot tables refuses a catalog that holds branches of the older dev build
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+# the branch table of the older dev build holds a branch next to main
+statement ok
+DROP TABLE meta.ducklake_branch
+
+statement ok
+CREATE TABLE meta.ducklake_branch(branch_id BIGINT PRIMARY KEY, branch_name VARCHAR, fork_branch_id BIGINT, fork_snapshot_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT)
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (0, 'main', NULL, NULL, 0, NULL), (1, 'dev', 0, 1, 1, NULL)
+
+# the snapshot changes of the older dev build carry no branch
+statement ok
+CREATE TABLE meta.changes_backup(snapshot_id BIGINT, changes_made VARCHAR, author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR)
+
+statement ok
+INSERT INTO meta.changes_backup SELECT snapshot_id, changes_made, author, commit_message, commit_extra_info FROM meta.ducklake_snapshot_changes
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_changes
+
+statement ok
+CREATE TABLE meta.ducklake_snapshot_changes(snapshot_id BIGINT PRIMARY KEY, changes_made VARCHAR, author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes SELECT * FROM meta.changes_backup
+
+statement ok
+DROP TABLE meta.changes_backup
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+----
+Cannot heal
+
+# a snapshot of the old branch alone is refused as well
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS meta
+
+statement ok
+DELETE FROM meta.ducklake_branch WHERE branch_id = 1
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 2, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 1
+
+statement ok
+DETACH meta
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+----
+Cannot heal
+
+# a visibility event of the old branch alone is refused as well
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS meta
+
+statement ok
+DELETE FROM meta.ducklake_snapshot WHERE branch_id = 1
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, 1, FALSE FROM meta.ducklake_file_visibility WHERE branch_id = 0
+
+statement ok
+DETACH meta
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+----
+Cannot heal
+
+# without rows of the old branch the heal proceeds
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS meta
+
+statement ok
+DELETE FROM meta.ducklake_file_visibility WHERE branch_id = 1
+
+statement ok
+DETACH meta
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query IIII
+SELECT branch_id, branch_name, parent_id, parent_branch_snapshot FROM meta.ducklake_branch
+----
+0	main	NULL	NULL
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
+----
+0	0
+1	0
+
+query I
+SELECT * FROM dl.t
+----
+42
+
+statement ok
+DETACH dl

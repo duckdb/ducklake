@@ -22,14 +22,18 @@ INSERT INTO dl.t VALUES (1)
 statement ok
 INSERT INTO dl.t VALUES (2)
 
+# the branch forks at the first insert, its own snapshot 3 references the inherited file with an event
 statement ok
-INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2, 2, NULL)
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
 
 statement ok
-INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 3, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
 
 statement ok
-INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, snapshot_id, FALSE FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND is_delete = FALSE AND snapshot_id = 2
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, 3, FALSE FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND is_delete = FALSE AND snapshot_id = 2
 
 statement ok
 DETACH dl
@@ -46,33 +50,38 @@ SELECT id FROM dl.current_snapshot()
 statement ok
 INSERT INTO dl.t VALUES (3)
 
-# the new commit of main takes a global id after the branch snapshot
+# the new commit of main is the next id of its own lineage
 query I
 SELECT id FROM dl.current_snapshot()
 ----
-101
+4
 
-# the head is readable and the listing stays in the lineage
+# the head is readable and the listing holds the snapshots of main only
 query I
-SELECT COUNT(*) FROM dl.t AT (VERSION => 101)
+SELECT COUNT(*) FROM dl.t AT (VERSION => 4)
 ----
 3
 
 query I
-SELECT COUNT(*) FROM dl.snapshots() WHERE snapshot_id = 100
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
 ----
-0
+[0, 1, 2, 3, 4]
 
 query I
 SELECT COUNT(*) FROM ducklake_table_insertions('dl', 'main', 't', NOW(), NOW())
 ----
 0
 
-# the fork point and the branch snapshot cannot be expired
+# the fork point cannot be expired, the snapshot 3 of main is not the branch snapshot and can
 query I
-SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [2, 100], dry_run => true)
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [2], dry_run => true)
 ----
 0
+
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [3], dry_run => true)
+----
+1
 
 # a file a branch event references survives the cleanup of main
 statement ok
@@ -104,20 +113,20 @@ SELECT COUNT(*) FROM dl.t
 statement ok
 DETACH dl
 
-# an ended branch no longer protects its snapshots or files
+# a dropped branch no longer protects its snapshots or files
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_protection_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
-UPDATE meta.ducklake_branch SET end_snapshot = 101 WHERE branch_id = 1
+DELETE FROM meta.ducklake_branch WHERE branch_id = 1
 
 query I
-SELECT COUNT(*) > 0 FROM ducklake_expire_snapshots('dl', versions => [2, 100], dry_run => true)
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [2], dry_run => true)
 ----
-true
+1
 
 statement ok
-CALL ducklake_expire_snapshots('dl', versions => [2, 3, 100, 101], dry_run => false)
+CALL ducklake_expire_snapshots('dl', versions => [2, 3, 4], dry_run => false)
 
 statement ok
 CALL ducklake_cleanup_old_files('dl', cleanup_all => true)

@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "common/ducklake_branch_chain.hpp"
 #include "common/ducklake_encryption.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
@@ -376,36 +377,36 @@ public:
 	}
 	//! The branch the catalog is attached at, 0 for main
 	idx_t AttachedBranchId() const {
-		return attached_branch_id;
-	}
-	//! The parent snapshot the attached branch forked at, unset on main
-	optional_idx AttachedBranchFork() const {
-		return attached_branch_fork;
+		return attached_chain.BranchId();
 	}
 	bool OnBranch() const {
-		return attached_branch_id != 0;
+		return attached_chain.OnBranch();
 	}
-	void SetAttachedBranch(idx_t branch_id, optional_idx fork_snapshot) {
-		attached_branch_id = branch_id;
-		attached_branch_fork = fork_snapshot;
+	//! The branches the attached branch reads through, main alone by default
+	const DuckLakeBranchChain &AttachedChain() const {
+		return attached_chain;
 	}
-	//! Observes the head and global snapshot maximum a transaction loaded, a change of either drops the listings
-	void ObserveListingHead(idx_t head_snapshot_id, optional_idx global_snapshot_max);
-	//! Returns the cached parsed listing of the observed head and global maximum, nullptr otherwise
+	void SetAttachedChain(DuckLakeBranchChain chain) {
+		attached_chain = std::move(chain);
+	}
+	//! Observes the heads of the chain a transaction loaded, a change of any of them drops the listings
+	void ObserveListingHead(const vector<idx_t> &heads);
+	//! Returns the cached parsed listing of a read at the head under the observed heads, nullptr otherwise
 	shared_ptr<vector<DuckLakeFileListEntry>> TryGetCachedListing(const string &key, idx_t snapshot_id,
-	                                                              optional_idx global_snapshot_max);
-	//! Stores a parsed listing read at the observed head and global maximum
-	void StoreCachedListing(const string &key, idx_t snapshot_id, optional_idx global_snapshot_max,
+	                                                              const vector<idx_t> &heads);
+	//! Stores a parsed listing read at the head under the observed heads
+	void StoreCachedListing(const string &key, idx_t snapshot_id, const vector<idx_t> &heads,
 	                        shared_ptr<vector<DuckLakeFileListEntry>> entries);
 	//! Drops the cached listings, called when a transaction writes metadata
 	void InvalidateListingCache();
 
-	//! Clips a read snapshot to the fork when attached at a branch
-	idx_t ClipToBranchFork(idx_t snapshot_id) const {
-		if (!OnBranch() || snapshot_id < attached_branch_fork.GetIndex()) {
+	//! Clips a read snapshot to the root cap when attached at a branch, the catalog tables carry the ids of main
+	idx_t ClipToParentView(idx_t snapshot_id) const {
+		auto root_cap = attached_chain.RootCap();
+		if (!root_cap.IsValid() || snapshot_id < root_cap.GetIndex()) {
 			return snapshot_id;
 		}
-		return attached_branch_fork.GetIndex();
+		return root_cap.GetIndex();
 	}
 	//! Whether an expiry commits a snapshot whose changes list the expired snapshots
 	bool RecordsExpiredSnapshots() const {
@@ -571,16 +572,14 @@ private:
 	shared_ptr<const DuckLakeMetadataProfile> metadata_profile;
 	//! The resolved DuckLake spec version of the attached catalog
 	DuckLakeVersion ducklake_version = DuckLakeVersion::V1_0;
-	//! The branch the catalog is attached at and its fork snapshot, main by default
-	idx_t attached_branch_id = 0;
-	//! Parsed listings shared across transactions at the observed head and global snapshot maximum
+	//! The chain of the branch the catalog is attached at, main by default
+	DuckLakeBranchChain attached_chain = DuckLakeBranchChain::Main();
+	//! Parsed listings shared across transactions at the observed heads of every branch of the chain
 	mutex listing_cache_lock;
-	optional_idx listing_cache_head;
-	optional_idx listing_cache_global_max;
-	//! Whether the cached listings were read at this head and global maximum, with the lock held
-	bool ListingCacheMatches(idx_t snapshot_id, optional_idx global_snapshot_max) const;
+	vector<idx_t> listing_cache_heads;
+	//! Whether the cached listings belong to a read at the head under these heads, with the lock held
+	bool ListingCacheMatches(idx_t snapshot_id, const vector<idx_t> &heads) const;
 	unordered_map<string, shared_ptr<vector<DuckLakeFileListEntry>>> listing_cache;
-	optional_idx attached_branch_fork;
 	bool branch_metadata_present = true;
 	//! A per-instance identifier used to scope ObjectCache keys.
 	string instance_id;

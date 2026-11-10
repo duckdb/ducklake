@@ -50,7 +50,11 @@ statement ok
 DELETE FROM dl.u
 
 statement ok
-INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 5, 5, NULL)
+INSERT INTO dl.u VALUES (8)
+
+# the branch forks at the creation of u, so it inherits the file the delete ended
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 3)
 
 statement ok
 CALL truncate_duckdb_logs()
@@ -64,14 +68,15 @@ CALL ducklake_expire_snapshots('dl', versions => [4])
 statement ok
 CALL disable_logging()
 
-# with a live branch the guard protects the files it still references
+# with a live branch the guard keeps the files its events reference and the files it inherits at its fork
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
 WHERE query LIKE '%NOT EXISTS (SELECT 1 FROM%ducklake_branch b%'
+AND query LIKE '%f.begin_snapshot <= 3 AND (f.end_snapshot IS NULL OR 3 < f.end_snapshot)%'
 ----
 true
 
 query I
-SELECT count(*) FROM dl.u
+SELECT i FROM dl.u
 ----
-0
+8

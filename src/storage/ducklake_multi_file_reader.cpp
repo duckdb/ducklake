@@ -367,7 +367,7 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 				auto filter_snapshot = read_info.snapshot.snapshot_id;
 				auto &delete_bound = file_entry.delete_snapshot_filter_max;
 				if (delete_bound.IsValid() && delete_bound.GetIndex() < filter_snapshot) {
-					// deletes main dated after the fork never apply on a branch
+					// deletes of the owning segment dated after its cap never apply on a branch
 					filter_snapshot = delete_bound.GetIndex();
 				}
 				delete_filter->SetSnapshotFilter(filter_snapshot);
