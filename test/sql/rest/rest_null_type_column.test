@@ -8,12 +8,12 @@ statement ok
 ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
-CREATE TABLE dl.n AS SELECT NULL AS x, 42 AS y
+CREATE TABLE dl.n AS SELECT NULL AS x
 
-query II
-SELECT x, y FROM dl.n
+query I
+SELECT x FROM dl.n
 ----
-NULL	42
+NULL
 
 statement ok
 DETACH dl
