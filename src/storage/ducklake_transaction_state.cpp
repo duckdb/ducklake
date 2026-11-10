@@ -2483,7 +2483,6 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(
 	    flushed_inlined_tables, flushed_inlined_file_deletions, context.InlinedColNames());
 	// the live files and inlined rows decide the stats that this commit cannot update from memory
-	batch_queries += DuckLakeMetadataManager::RefreshTableSizesSql(refreshed_table_sizes);
 
 	map<TableIndex, set<string>> inlined_tables;
 	if (!refreshed_row_counts.empty()) {
@@ -2509,8 +2508,10 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	for (auto &table_id : refreshed_row_counts) {
 		batch_queries += DuckLakeMetadataManager::RefreshTableRowCountSql(
 		    table_id, inlined_tables[table_id], pending_inlined_rows[table_id], context.InlinedColNames(),
-		    context.supports_v1_1_metadata, context.inlined_file_deletion_table_exists(table_id));
+		    context.supports_v1_1_metadata, context.inlined_file_deletion_table_exists(table_id),
+		    refreshed_table_sizes.erase(table_id) > 0);
 	}
+	batch_queries += DuckLakeMetadataManager::RefreshTableSizesSql(refreshed_table_sizes);
 
 	// Tracking for tables that had schema changes
 	set<TableIndex> tables_with_schema_changes;

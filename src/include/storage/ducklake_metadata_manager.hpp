@@ -567,7 +567,8 @@ public:
 	static string RefreshTableSizesSql(const set<TableIndex> &table_ids);
 	static string RefreshTableRowCountSql(TableIndex table_id, const set<string> &inlined_tables,
 	                                      idx_t pending_inlined_rows, const DuckLakeInlinedColNames &col_names,
-	                                      bool include_exactness, bool has_inlined_file_deletions);
+	                                      bool include_exactness, bool has_inlined_file_deletions,
+	                                      bool refresh_file_size);
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor, const string &query);

@@ -5583,7 +5583,8 @@ static string SumRowCountsSql(vector<string> counts) {
 string DuckLakeMetadataManager::RefreshTableRowCountSql(TableIndex table_id, const set<string> &inlined_tables,
                                                         idx_t pending_inlined_rows,
                                                         const DuckLakeInlinedColNames &col_names,
-                                                        bool include_exactness, bool has_inlined_file_deletions) {
+                                                        bool include_exactness, bool has_inlined_file_deletions,
+                                                        bool refresh_file_size) {
 	vector<string> counts;
 	vector<string> deleted_counts;
 	counts.push_back(StringUtil::Format(R"(SELECT
@@ -5619,15 +5620,24 @@ WHERE data.table_id = %d AND data.end_snapshot IS NULL AND del.begin_snapshot <=
 	// Retain conservative bounds while stored deletions prevent exact MIN/MAX answers, including on older readers.
 	auto exactness = include_exactness ? ", min_is_exact=NULL, max_is_exact=NULL" : "";
 	auto row_count = SumRowCountsSql(std::move(counts));
+	string file_size;
+	if (refresh_file_size) {
+		file_size = StringUtil::Format(R"(, file_size_bytes = (
+    SELECT COALESCE(SUM(data.file_size_bytes), 0)
+    FROM {METADATA_CATALOG}.ducklake_data_file data
+    WHERE data.table_id = %d AND data.end_snapshot IS NULL
+))",
+		                               table_id.index);
+	}
 	return StringUtil::Format(R"(
 UPDATE {METADATA_CATALOG}.ducklake_table_column_stats
 SET min_value=NULL, max_value=NULL%s WHERE table_id = %d AND (%s) = 0 AND EXISTS (
     SELECT 1 FROM {METADATA_CATALOG}.ducklake_table_stats
     WHERE table_id = %d AND (record_count IS NULL OR record_count <> (%s))
 );
-UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count = (%s) WHERE table_id = %d;)",
+UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count = (%s)%s WHERE table_id = %d;)",
 	                          exactness, table_id.index, SumRowCountsSql(std::move(deleted_counts)), table_id.index,
-	                          row_count, row_count, table_id.index);
+	                          row_count, row_count, file_size, table_id.index);
 }
 
 string DuckLakeMetadataManager::RefreshTableSizesSql(const set<TableIndex> &table_ids) {
