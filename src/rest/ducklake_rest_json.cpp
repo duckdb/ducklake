@@ -5,7 +5,6 @@
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/types/geometry_crs.hpp"
 
-
 namespace duckdb {
 
 //===--------------------------------------------------------------------===//
