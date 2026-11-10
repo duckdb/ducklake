@@ -389,12 +389,12 @@ public:
 		attached_branch_id = branch_id;
 		attached_branch_fork = fork_snapshot;
 	}
-	//! Observes the head snapshot a transaction loaded, a moved head drops the cached listings
+	//! Observes the head and global snapshot maximum a transaction loaded, a change of either drops the listings
 	void ObserveListingHead(idx_t head_snapshot_id, optional_idx global_snapshot_max);
-	//! Returns the cached parsed listing when the key matches the observed head, nullptr otherwise
+	//! Returns the cached parsed listing of the observed head and global maximum, nullptr otherwise
 	shared_ptr<vector<DuckLakeFileListEntry>> TryGetCachedListing(const string &key, idx_t snapshot_id,
 	                                                              optional_idx global_snapshot_max);
-	//! Stores a parsed listing read at the observed head
+	//! Stores a parsed listing read at the observed head and global maximum
 	void StoreCachedListing(const string &key, idx_t snapshot_id, optional_idx global_snapshot_max,
 	                        shared_ptr<vector<DuckLakeFileListEntry>> entries);
 	//! Drops the cached listings, called when a transaction writes metadata
@@ -573,7 +573,7 @@ private:
 	DuckLakeVersion ducklake_version = DuckLakeVersion::V1_0;
 	//! The branch the catalog is attached at and its fork snapshot, main by default
 	idx_t attached_branch_id = 0;
-	//! Parsed head listings shared across transactions, valid while the observed head is unchanged
+	//! Parsed listings shared across transactions at the observed head and global snapshot maximum
 	mutex listing_cache_lock;
 	optional_idx listing_cache_head;
 	optional_idx listing_cache_global_max;
