@@ -45,13 +45,13 @@ Query exceeded maximum execution time
 statement ok
 RESET max_execution_time
 
-# Neither the metadata read nor the attach is repeated after cancellation.
+# Cancellation may precede the metadata read; neither it nor the attach is repeated.
 query II
-SELECT count(*) FILTER (WHERE query LIKE '%SELECT key, value%'),
+SELECT count(*) FILTER (WHERE query LIKE '%SELECT key, value%') <= 1,
        count(*) FILTER (WHERE query LIKE 'ATTACH OR REPLACE %')
 FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE catalog = 'deadline_lake'
 ----
-1	1
+true	1
 
 statement ok
 ATTACH '{TEST_DIR}/metadata_attach_deadline.db' AS metadata

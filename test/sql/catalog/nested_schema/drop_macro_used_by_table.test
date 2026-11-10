@@ -45,12 +45,15 @@ DROP MACRO lake.a.b.f
 ----
 Cannot drop macro "f" because the default of column "c" of table "y" calls it
 
-# catalog.name in a table of a nested schema resolves through the name of its schema
+# catalog.name resolves through the full nested schema, not a top-level schema with the same leaf name.
 statement ok
 CREATE SCHEMA lake.b
 
 statement ok
-CREATE MACRO lake.b.k() AS 9
+CREATE MACRO lake.b.k() AS -1
+
+statement ok
+CREATE MACRO lake.a.b.k() AS 9
 
 statement ok
 CREATE TABLE lake.a.b.t (c INTEGER DEFAULT lake.k())
@@ -64,6 +67,6 @@ SELECT c FROM lake.a.b.t
 9
 
 statement error
-DROP MACRO lake.b.k
+DROP MACRO lake.a.b.k
 ----
 Cannot drop macro "k" because the default of column "c" of table "t" calls it
