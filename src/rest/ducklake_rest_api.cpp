@@ -821,7 +821,6 @@ JSONMutableValue DuckLakeRESTSerializer::Write(JSONWriter &writer, const DuckLak
 	RESTWriteOptional<RESTUInt64Codec>(writer, result, "delete_file_begin_snapshot", value.delete_file_begin_snapshot,
 	                                   !RESTIsNull(value.delete_file_begin_snapshot));
 	result.Add("record_count", RESTWriteValue<RESTUInt64Codec>(writer, value.row_count));
-	result.Add("delete_count", RESTWriteValue<RESTUInt64Codec>(writer, value.delete_count));
 	RESTWriteOptional<RESTUInt64Codec>(writer, result, "mapping_id", value.mapping_id, !RESTIsNull(value.mapping_id));
 	return result;
 }
@@ -838,7 +837,6 @@ DuckLakeFileListExtendedEntry DuckLakeRESTSerializer::Read(RESTJsonIn in) {
 	RESTReadOptional<RESTUInt64Codec>(in, "snapshot_id", result.snapshot_id);
 	RESTReadOptional<RESTUInt64Codec>(in, "delete_file_begin_snapshot", result.delete_file_begin_snapshot);
 	RESTReadValue<RESTUInt64Codec>(in.Get("record_count"), result.row_count);
-	RESTReadOptional<RESTUInt64Codec>(in, "delete_count", result.delete_count, 0);
 	RESTReadOptional<RESTUInt64Codec>(in, "mapping_id", result.mapping_id);
 	return result;
 }

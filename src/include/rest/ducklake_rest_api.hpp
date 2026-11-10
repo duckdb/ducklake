@@ -1525,9 +1525,7 @@ public:
 	RESTCommitTransactionResponse CommitTransaction(const RESTCommitTransactionRequest &request);
 
 	//! Maps the paths of the requests and responses to and from the data path of the server, if set
-	virtual optional_ptr<const RESTPathMapper> GetPathMapper() const {
-		return nullptr;
-	}
+	virtual optional_ptr<const RESTPathMapper> GetPathMapper() const = 0;
 
 	//! Sends the JSON body of a request to an endpoint, returns the body of the response, which is JSON unless
 	//! the endpoint has a more compact format

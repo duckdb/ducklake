@@ -669,9 +669,6 @@ structure FileListExtendedEntry {
     @cppMember("row_count")
     record_count: UInt64
 
-    /// The number of deleted rows of the file.
-    delete_count: UInt64 = 0
-
     /// The name map of the file.
     mapping_id: UInt64
 }

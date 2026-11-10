@@ -38,9 +38,6 @@ public:
 	//! The value of a property: the value of the server if it overrides it, the client value if it has one, else the
 	//! default
 	string GetProperty(const string &name, const string &client_value = string()) const;
-	const string &Prefix() const {
-		return prefix;
-	}
 
 	//! The client has another view of the data path than the server: paths are mapped between the two
 	void SetPathMapping(string client_path, string server_path);
@@ -51,10 +48,6 @@ public:
 	//! has the accept header, if it is set
 	int32_t SendRaw(const string &method, const string &target, const string &body, string &response,
 	                string &content_type, const string &accept = string());
-
-	const string &BaseURL() const {
-		return base_url;
-	}
 
 	//! The schema version and data version (next file id) of the latest catalog and statistics the client loaded
 	atomic<idx_t> loaded_metadata_version {DConstants::INVALID_INDEX};

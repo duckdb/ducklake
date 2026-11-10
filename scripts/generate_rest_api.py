@@ -1736,9 +1736,7 @@ def generate_header(spec):
     lines.append(
         "\t//! Maps the paths of the requests and responses to and from the data path of the server, if set"
     )
-    lines.append("\tvirtual optional_ptr<const RESTPathMapper> GetPathMapper() const {")
-    lines.append("\t\treturn nullptr;")
-    lines.append("\t}")
+    lines.append("\tvirtual optional_ptr<const RESTPathMapper> GetPathMapper() const = 0;")
     lines.append("")
     lines.append(
         "\t//! Sends the JSON body of a request to an endpoint, returns the body of the response, which is JSON unless"

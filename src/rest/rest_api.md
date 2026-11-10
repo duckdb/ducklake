@@ -1042,7 +1042,6 @@ A data file of a table with the ids of its files, used to plan deletes and updat
 | `snapshot_id` | `uint64` (optional) | The snapshot that added the file. |
 | `delete_file_begin_snapshot` | `uint64` (optional) | The snapshot that added the delete file. |
 | `record_count` | `uint64` | The number of rows of the file. |
-| `delete_count` | `uint64` (default `0`) | The number of deleted rows of the file. |
 | `mapping_id` | `uint64` (optional) | The name map of the file. |
 
 ### `FileOrder`

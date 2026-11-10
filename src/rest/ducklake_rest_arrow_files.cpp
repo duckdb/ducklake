@@ -401,14 +401,12 @@ static vector<string> ExtendedNames() {
 	        "snapshot_id",
 	        "delete_file_begin_snapshot",
 	        "row_count",
-	        "delete_count",
 	        "mapping_id"};
 }
 
 static vector<LogicalType> ExtendedTypes() {
-	return {LogicalType::UBIGINT, LogicalType::UBIGINT, FileType(),           FileType(),
-	        LogicalType::UBIGINT, LogicalType::UBIGINT, LogicalType::UBIGINT, LogicalType::UBIGINT,
-	        LogicalType::UBIGINT, LogicalType::UBIGINT};
+	return {LogicalType::UBIGINT, LogicalType::UBIGINT, FileType(),           FileType(),          LogicalType::UBIGINT,
+	        LogicalType::UBIGINT, LogicalType::UBIGINT, LogicalType::UBIGINT, LogicalType::UBIGINT};
 }
 
 string RESTArrowFiles::Write(ClientContext &context, const vector<DuckLakeFileListExtendedEntry> &files) {
@@ -423,8 +421,7 @@ string RESTArrowFiles::Write(ClientContext &context, const vector<DuckLakeFileLi
 		    auto snapshot_id = FlatVector::Writer<uint64_t>(chunk.data[5], count);
 		    auto delete_begin = FlatVector::Writer<uint64_t>(chunk.data[6], count);
 		    auto row_count = FlatVector::Writer<uint64_t>(chunk.data[7], count);
-		    auto delete_count = FlatVector::Writer<uint64_t>(chunk.data[8], count);
-		    auto mapping_id = FlatVector::Writer<uint64_t>(chunk.data[9], count);
+		    auto mapping_id = FlatVector::Writer<uint64_t>(chunk.data[8], count);
 		    for (idx_t i = 0; i < count; i++) {
 			    auto &entry = entries[start + i];
 			    WriteIndex(file_id, entry.file_id);
@@ -435,7 +432,6 @@ string RESTArrowFiles::Write(ClientContext &context, const vector<DuckLakeFileLi
 			    WriteOptional(snapshot_id, entry.snapshot_id);
 			    WriteOptional(delete_begin, entry.delete_file_begin_snapshot);
 			    row_count.WriteValue(entry.row_count);
-			    delete_count.WriteValue(entry.delete_count);
 			    WriteIndex(mapping_id, entry.mapping_id);
 		    }
 	    });
@@ -452,8 +448,7 @@ void RESTArrowFiles::Read(ClientContext &context, shared_ptr<const string> data,
 		auto snapshot_id = chunk.data[5].Values<uint64_t>();
 		auto delete_begin = chunk.data[6].Values<uint64_t>();
 		auto row_count = chunk.data[7].Values<uint64_t>();
-		auto delete_count = chunk.data[8].Values<uint64_t>();
-		auto mapping_id = chunk.data[9].Values<uint64_t>();
+		auto mapping_id = chunk.data[8].Values<uint64_t>();
 		for (idx_t i = 0; i < chunk.size(); i++) {
 			DuckLakeFileListExtendedEntry entry;
 			entry.file_id = ReadIndex<DataFileIndex>(file_id[i]);
@@ -464,7 +459,6 @@ void RESTArrowFiles::Read(ClientContext &context, shared_ptr<const string> data,
 			entry.snapshot_id = ReadOptional(snapshot_id[i]);
 			entry.delete_file_begin_snapshot = ReadOptional(delete_begin[i]);
 			entry.row_count = row_count[i].GetValue();
-			entry.delete_count = delete_count[i].GetValue();
 			entry.mapping_id = ReadIndex<MappingIndex>(mapping_id[i]);
 			result.push_back(std::move(entry));
 		}

@@ -32,15 +32,8 @@ public:
 	bool IsRemote() const override {
 		return true;
 	}
-	bool SupportsAppender() const override {
-		return false;
-	}
 	bool CommitsEachStatement() const override {
 		return true;
-	}
-	//! The server reads the metadata at the snapshot of the request
-	bool ShowsConcurrentCommits() const override {
-		return false;
 	}
 	bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const override {
 		return true;

@@ -59,7 +59,7 @@ SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/2/
 ----
 200
 
-# the extended file list has the deleted rows of each file
+# the extended file list has the delete file of each file
 statement ok
 CREATE TABLE dl.e AS SELECT i FROM range(1000) t(i)
 
@@ -69,19 +69,19 @@ INSERT INTO dl.e SELECT i FROM range(50) t(i)
 statement ok
 DELETE FROM dl.e WHERE i < 10 AND i >= 5
 
-query III
-SELECT row_count, delete_count, delete_file.row_count
+query II
+SELECT row_count, delete_file.row_count
 FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/3/scan', '{"extended": true}', part := 'extended_files') ORDER BY 1
 ----
-50	5	5
-1000	5	5
+50	5
+1000	5
 
 statement ok
 DETACH dl
 
 # the path of a schema without a trailing separator holds the directories of its tables
 query I
-SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests":[{"create_schema":{"placeholder_id":-1,"schema_name":"s","path":"{TEST_DIR}/chosen"}},{"create_table":{"placeholder_id":-2,"schema_id":-1,"table_name":"st","columns":[{"column_name":"i","column_type":{"id":"int32"}}]}}]}')
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests":[{"create_schema":{"placeholder_id":-1,"schema_name":"s","path":' || to_json('{TEST_DIR}/chosen') || '}},{"create_table":{"placeholder_id":-2,"schema_id":-1,"table_name":"st","columns":[{"column_name":"i","column_type":{"id":"int32"}}]}}]}')
 ----
 200
 

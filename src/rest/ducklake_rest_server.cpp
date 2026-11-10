@@ -544,15 +544,20 @@ static unique_ptr<FunctionData> DuckLakeRESTStopBind(ClientContext &context, Tab
 //! Reads a JSON response as the type that the API defines for it, so tests find responses that do not match the model
 static void ValidateResponse(const string &method, const string &path, int32_t status, const string &content_type,
                              const string &response) {
-	if (response.empty() || StringUtil::StartsWith(content_type, "multipart/")) {
+	if (StringUtil::StartsWith(content_type, "multipart/")) {
 		return;
 	}
 	auto route_path = path.substr(0, path.find('?'));
 	for (auto &route : DuckLakeRESTAPI::GetRoutes()) {
-		if (route.method != method || !duckdb_re2::RE2::FullMatch(route_path, route.PathPattern(false))) {
+		if (route.method != method ||
+		    (!duckdb_re2::RE2::FullMatch(route_path, route.PathPattern(false)) &&
+		     (route.no_prefix || !duckdb_re2::RE2::FullMatch(route_path, route.PathPattern(true))))) {
 			continue;
 		}
 		try {
+			if (response.empty()) {
+				throw IOException("the response has no body");
+			}
 			if (status == 200) {
 				DuckLakeRESTAPI::ValidateResponse(route.endpoint, response);
 			} else {
