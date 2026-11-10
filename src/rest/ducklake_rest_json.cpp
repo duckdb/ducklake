@@ -1,15 +1,10 @@
 #include "rest/ducklake_rest_json.hpp"
 #include "common/ducklake_types.hpp"
 
-#include "duckdb/common/enum_util.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/types/geometry_crs.hpp"
-#include "duckdb/common/types/variant.hpp"
-#include "duckdb/common/types/vector.hpp"
-#include "duckdb/function/scalar/variant_utils.hpp"
 
-#include <cmath>
 
 namespace duckdb {
 

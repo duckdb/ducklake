@@ -11,6 +11,7 @@
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/parser.hpp"
+#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -300,27 +301,35 @@ static Value FoldConstant(ClientContext &context, const ParsedExpression &expr) 
 		if (child.IsNull()) {
 			return child;
 		}
-		return child.DefaultCastAs(TransformStringToLogicalType(cast.TargetType().ToString(), context));
+		auto target = TransformStringToLogicalType(cast.TargetType().ToString(), context);
+		if (!cast.IsTryCast()) {
+			return child.DefaultCastAs(target);
+		}
+		auto result = child.DefaultTryCastAs(target);
+		return result ? std::move(*result) : Value(target);
 	}
 	default:
 		return Value();
 	}
 }
 
-//! The constant as a value of the field, if comparing it in the type of the field gives the same result
-static bool TryCastToField(const Value &value, const LogicalType &type, Value &result) {
+//! The constant as a value of the field, if DuckDB compares the two in the type of the field
+static bool TryCastToField(ClientContext &context, const Value &value, const LogicalType &type, Value &result) {
 	if (value.type() == type) {
 		result = value;
 		return true;
 	}
-	// comparisons of other types cast to a common type, which only the exact casts of numbers preserve
-	if (!value.type().IsNumeric() || !type.IsNumeric()) {
+	// a comparison casts the field to the common type, which only keeps the order of the field if it is invertible
+	LogicalType common_type;
+	if (!LogicalType::TryGetMaxLogicalType(context, type, value.type(), common_type) ||
+	    (common_type != type && !BoundCastExpression::CastIsInvertible(type, common_type))) {
 		return false;
 	}
 	auto casted = value.DefaultTryCastAs(type, nullptr, true);
 	if (!casted) {
 		return false;
 	}
+	// the constant must be a value of the field, e.g. not 1.25 for a DECIMAL(3,1)
 	auto back = casted->DefaultTryCastAs(value.type());
 	if (!back || !Value::NotDistinctFrom(*back, value)) {
 		return false;
@@ -351,7 +360,7 @@ public:
 				comparison_type = FlipComparisonExpression(comparison_type);
 			}
 			Value field_value;
-			if (value.IsNull() || !TryCastToField(value, field.Type(), field_value)) {
+			if (value.IsNull() || !TryCastToField(context, value, field.Type(), field_value)) {
 				return nullptr;
 			}
 			auto column = make_uniq<BoundReferenceExpression>(field.Type(), 0ULL);
@@ -379,7 +388,7 @@ public:
 					}
 					auto value = FoldConstant(context, *children[i]);
 					Value field_value;
-					if (value.IsNull() || !TryCastToField(value, field.Type(), field_value)) {
+					if (value.IsNull() || !TryCastToField(context, value, field.Type(), field_value)) {
 						return nullptr;
 					}
 					values.push_back(std::move(field_value));

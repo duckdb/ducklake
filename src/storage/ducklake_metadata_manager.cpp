@@ -2991,6 +2991,9 @@ DuckLakeMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, Duc
 		col_idx++;
 		file_entry.delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
 		file_entry.delete_file_begin_snapshot = OptIdx(row, col_idx++);
+		if (file_entry.delete_file.row_count.IsValid()) {
+			file_entry.delete_count = file_entry.delete_file.row_count.GetIndex();
+		}
 		files.push_back(std::move(file_entry));
 	}
 	return files;

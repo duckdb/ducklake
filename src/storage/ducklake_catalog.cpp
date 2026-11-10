@@ -466,6 +466,9 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::CreateSchemaExtended(CatalogTransact
 	if (schema_data_path.empty()) {
 		schema_data_path = DataPath() + (parent ? schema_uuid + separator
 		                                        : GeneratePathFromName(schema_uuid, schema_name.GetIdentifierName()));
+	} else if (schema_data_path.back() != '/' && schema_data_path.back() != '\\') {
+		// the paths of the tables are appended to the path of the schema
+		schema_data_path += separator;
 	}
 	auto schema_entry = make_uniq<DuckLakeSchemaEntry>(*this, info, schema_id, std::move(schema_uuid),
 	                                                   std::move(schema_data_path), parent);
