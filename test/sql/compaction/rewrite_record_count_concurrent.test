@@ -47,7 +47,7 @@ SELECT count(*), sum(id) FROM lake.c
 ----
 50	4225
 
-# MIN and MAX alone can be answered from the stored bounds, which still hold the deleted 0
+# Cleared bounds force MIN and MAX to scan the remaining rows.
 query II
 SELECT min(id), max(id) FROM lake.c
 ----
