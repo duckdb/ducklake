@@ -170,7 +170,7 @@ private:
 
 	void PreAlign(idx_t length, idx_t alignment) {
 		if (length == 0) {
-			return; // LCOV_EXCL_LINE: the parts of a DuckDB message are not empty
+			return;
 		}
 		min_align = MaxValue<idx_t>(min_align, alignment);
 		Fill(Padding(used + length, alignment));

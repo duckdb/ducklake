@@ -179,7 +179,7 @@ static int32_t StatusCodeForError(ExceptionType type) {
 	case ExceptionType::NOT_IMPLEMENTED:
 		return 501;
 	default:
-		return 500; // LCOV_EXCL_LINE: the other errors of a request are client errors
+		return 500;
 	}
 }
 
@@ -434,7 +434,7 @@ static Value GetNamedParameter(TableFunctionBindInput &input, const string &name
 static map<string, string> ToStringMap(const Value &value) {
 	map<string, string> result;
 	if (value.IsNull()) {
-		return result; // LCOV_EXCL_LINE: the caller passes the maps that are set
+		return result;
 	}
 	for (auto &entry : MapValue::GetChildren(value)) {
 		auto &children = StructValue::GetChildren(entry);
