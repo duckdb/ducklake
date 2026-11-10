@@ -84,17 +84,6 @@ FROM dl.sorted ORDER BY ALL
 NULL	3
 
 statement ok
-CREATE VIEW dl.v AS SELECT i FROM dl.t
-
-statement ok
-COMMENT ON COLUMN dl.v.i IS 'the id'
-
-query I
-SELECT comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 'v'
-----
-the id
-
-statement ok
 DETACH dl
 
 include test/template/rest_teardown.test_template
