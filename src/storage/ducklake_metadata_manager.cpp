@@ -138,7 +138,7 @@ bool DuckLakeMetadataManager::DetectConcurrentReadsBlockCommits() {
 		return true;
 	}
 	// WAL readers do not block commits, and a write transaction fails on a stale snapshot instead
-	// a connection of its own keeps a refused probe from aborting the metadata transaction
+	// the probe runs on its own connection so a refusal cannot abort the metadata transaction
 	string query = "SELECT journal_mode FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, 'PRAGMA journal_mode')";
 	SubstituteCatalogPlaceholders(query);
 	Connection probe_connection(*transaction.GetConnection().context->db);
