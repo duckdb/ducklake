@@ -79,7 +79,8 @@
         "test/sql/add_files/add_files_null_type.test",
         "test/sql/macros/test_null_default.test",
         "test/sql/macros/typed_null_default.test",
-        "test/sql/geo/null_to_geometry_promotion_stats.test"
+        "test/sql/geo/null_to_geometry_promotion_stats.test",
+        "test/sql/rest/rest_null_type_column.test"
       ]
     },
     {

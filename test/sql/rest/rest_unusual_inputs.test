@@ -35,15 +35,6 @@ SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transacti
 ----
 400
 
-# inlined rows of a column of the NULL type
-statement ok
-CREATE TABLE dl.n AS SELECT NULL AS x, 42 AS y
-
-query II
-SELECT x, y FROM dl.n
-----
-NULL	42
-
 # a compaction of files that are not Parquet files is refused
 statement ok
 COPY (SELECT 1 AS i) TO '{TEST_DIR}/{BASE_TEST_NAME}_not_parquet_1.parquet'
