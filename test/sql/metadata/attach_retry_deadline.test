@@ -33,6 +33,9 @@ SET ducklake_retry_wait_ms = 10000
 statement ok
 SET max_execution_time = 500
 
+statement ok
+SET VARIABLE attach_retry_start = epoch_ms(current_timestamp)
+
 statement error
 ATTACH 'ducklake:{TEST_DIR}/metadata_attach_retry_deadline.db' AS deadline_lake
 ----
@@ -47,6 +50,12 @@ SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
 WHERE catalog = 'deadline_lake' AND query LIKE 'ATTACH OR REPLACE %'
 ----
 1
+
+# The 500ms deadline must interrupt a retry wait capped at 3000ms, with generous scheduling margin.
+query I
+SELECT epoch_ms(current_timestamp) - getvariable('attach_retry_start') < 2000
+----
+true
 
 statement ok
 ATTACH '{TEST_DIR}/metadata_attach_retry_deadline.db' AS metadata
