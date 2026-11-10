@@ -18,12 +18,12 @@ CREATE TABLE lake.items AS SELECT 42 AS i
 statement ok
 ALTER TABLE __ducklake_metadata_lake.ducklake_metadata RENAME TO original_metadata
 
-# The existence probe does not read value, while loading the metadata must evaluate it.
+# The existence probe finds the first row quickly; loading all metadata must finish the slow scan.
 statement ok
 CREATE VIEW __ducklake_metadata_lake.ducklake_metadata AS
-SELECT key, CASE WHEN (SELECT sum(sin(i)) FROM range(1000000000) t(i)) IS NOT NULL
-                 THEN error('metadata load ignored caller deadline') ELSE value END AS value, scope, scope_id
-FROM __ducklake_metadata_lake.original_metadata
+SELECT key, value, scope, scope_id
+FROM __ducklake_metadata_lake.original_metadata, range(1000000000) t(i)
+WHERE i = 0 OR sin(i) = 2
 
 statement ok
 DETACH lake
@@ -45,13 +45,13 @@ Query exceeded maximum execution time
 statement ok
 RESET max_execution_time
 
-# Cancellation may precede the metadata read; neither it nor the attach is repeated.
+# Cancellation reaches the metadata load without a legacy-schema fallback or another attach.
 query II
-SELECT count(*) FILTER (WHERE query LIKE '%SELECT key, value%') <= 1,
+SELECT count(*) FILTER (WHERE query LIKE '%SELECT key, value%'),
        count(*) FILTER (WHERE query LIKE 'ATTACH OR REPLACE %')
 FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE catalog = 'deadline_lake'
 ----
-true	1
+1	1
 
 statement ok
 ATTACH '{TEST_DIR}/metadata_attach_deadline.db' AS metadata
