@@ -231,6 +231,8 @@ class ObjectType:
         self.cpp_class = spec.get("class")
         self.extends = spec.get("extends")
         self.custom = spec.get("custom", False)
+        # a mixin is only read and written as part of the structures that use it
+        self.mixin = spec.get("mixin", False)
         self.null_if = spec.get("null_if")
         self.variant_of = spec.get("variant_of")
         self.is_request = is_request
@@ -242,6 +244,7 @@ class ObjectType:
             "class",
             "extends",
             "custom",
+            "mixin",
             "null_if",
             "fields",
             "variant_of",
@@ -477,6 +480,16 @@ class Spec:
         if not isinstance(result, ObjectType):
             raise SpecError(f"{context}: {name} is not an object type")
         return result
+
+    def serialized(self, obj):
+        """Whether an object has serializers of its own: a mixin that no field refers to is only part of others"""
+        if not obj.mixin:
+            return True
+        for other in self.all_objects():
+            for field in self.fields_of(other):
+                if obj.name in re.findall(r"\w+", repr(field.type)):
+                    return True
+        return False
 
     def all_objects(self):
         result = list(self.objects)
@@ -853,6 +866,8 @@ class SmithyModel:
             result["null_if"] = null_if
         if self.trait(shape, "customSerialization") is not None:
             result["custom"] = True
+        if "smithy.api#mixin" in shape.get("traits", {}):
+            result["mixin"] = True
         if shape_id in self.variants:
             result["variant_of"] = self.variants[shape_id]
         result["fields"] = self.fields(shape)
@@ -1351,12 +1366,16 @@ def generate_header(spec):
     lines.append("\t}")
     lines.append("")
     for obj in all_objects:
+        if not spec.serialized(obj):
+            continue
         lines.append(
             f"\tstatic JSONMutableValue Write(JSONWriter &writer, const {obj.cpp_name} &value);"
         )
     lines.append("};")
     lines.append("")
     for obj in all_objects:
+        if not spec.serialized(obj):
+            continue
         lines.append(f"template <>")
         lines.append(f"{obj.cpp_name} DuckLakeRESTSerializer::Read(RESTJsonIn in);")
     lines.append("")
@@ -1433,8 +1452,6 @@ def generate_header(spec):
     lines.append("")
     lines.append("\tRESTCommitRequestType type;")
     lines.append("")
-    lines.append("\t//! The endpoint of the request")
-    lines.append("\tconst char *Path() const;")
     lines.append("\tstatic optional_idx TypeFromPath(const string &path);")
     lines.append("")
     lines.append("\ttemplate <class TARGET>")
@@ -1658,6 +1675,12 @@ def generate_header(spec):
     lines.append("\tstatic const vector<RESTRoute> &GetRoutes();")
     lines.append("\t//! The route of an endpoint")
     lines.append("\tstatic const RESTRoute &GetRoute(const string &endpoint);")
+    lines.append(
+        "\t//! Reads the JSON response of an endpoint as the type of its response, which throws if it does not match"
+    )
+    lines.append(
+        "\tstatic void ValidateResponse(const string &endpoint, const string &response_json);"
+    )
     lines.append("};")
     lines.append("")
 
@@ -1795,8 +1818,8 @@ def generate_source(spec):
         "//===--------------------------------------------------------------------===//"
     )
     for obj in spec.all_objects():
-        if obj.custom:
-            # implemented by hand in ducklake_rest_serialization.cpp
+        if obj.custom or not spec.serialized(obj):
+            # implemented by hand in ducklake_rest_serialization.cpp, or part of the structures that use the mixin
             continue
         fields = spec.fields_of(obj)
         lines.append(
@@ -1829,16 +1852,6 @@ def generate_source(spec):
     lines.append(
         "//===--------------------------------------------------------------------===//"
     )
-    lines.append("const char *RESTCommitRequest::Path() const {")
-    lines.append("\tswitch (type) {")
-    for endpoint in spec.commit_requests:
-        lines.append(f"\tcase RESTCommitRequestType::{upper_case(endpoint.name)}:")
-        lines.append(f"\t\treturn {cpp_string(endpoint.name)};")
-    lines.append("\tdefault:")
-    lines.append('\t\tthrow InternalException("Unsupported RESTCommitRequestType");')
-    lines.append("\t}")
-    lines.append("}")
-    lines.append("")
     lines.append("optional_idx RESTCommitRequest::TypeFromPath(const string &path) {")
     for endpoint in spec.commit_requests:
         lines.append(f"\tif (path == {cpp_string(endpoint.name)}) {{")
@@ -2046,6 +2059,21 @@ def generate_source(spec):
     lines.append(
         '\tthrow InternalException("DuckLake REST: unknown endpoint \\"%s\\"", endpoint);'
     )
+    lines.append("}")
+    lines.append("")
+    lines.append(
+        "void DuckLakeRESTAPI::ValidateResponse(const string &endpoint, const string &response_json) {"
+    )
+    lines.append("\tRESTJsonReader document(response_json);")
+    for endpoint in spec.routed:
+        if not endpoint.response:
+            continue
+        lines.append(f"\tif (endpoint == {cpp_string(endpoint.name)}) {{")
+        lines.append(
+            f"\t\tDuckLakeRESTSerializer::Read<{endpoint.response.cpp_name}>(document.Root());"
+        )
+        lines.append("\t\treturn;")
+        lines.append("\t}")
     lines.append("}")
     lines.append("")
 

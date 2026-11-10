@@ -17,6 +17,7 @@
 #include "rest/ducklake_rest_client.hpp"
 
 #include "httplib.hpp"
+#include "re2/re2.h"
 
 namespace duckdb {
 
@@ -540,6 +541,33 @@ static unique_ptr<FunctionData> DuckLakeRESTStopBind(ClientContext &context, Tab
 	return std::move(result);
 }
 
+//! Reads a JSON response as the type that the API defines for it, so tests find responses that do not match the model
+static void ValidateResponse(const string &method, const string &path, int32_t status, const string &content_type,
+                             const string &response) {
+	if (response.empty() || StringUtil::StartsWith(content_type, "multipart/")) {
+		return;
+	}
+	auto route_path = path.substr(0, path.find('?'));
+	for (auto &route : DuckLakeRESTAPI::GetRoutes()) {
+		if (route.method != method || !duckdb_re2::RE2::FullMatch(route_path, route.PathPattern(false))) {
+			continue;
+		}
+		try {
+			if (status == 200) {
+				DuckLakeRESTAPI::ValidateResponse(route.endpoint, response);
+			} else {
+				RESTJsonReader document(response);
+				DuckLakeRESTSerializer::Read<RESTErrorResponse>(document.Root());
+			}
+		} catch (std::exception &ex) {
+			throw IOException(
+			    "ducklake_rest_request: the response of \"%s %s\" does not match the DuckLake REST API: %s", method,
+			    route_path, ErrorData(ex).Message());
+		}
+		return;
+	}
+}
+
 static unique_ptr<FunctionData> DuckLakeRESTRequestBind(ClientContext &context, TableFunctionBindInput &input,
                                                         vector<LogicalType> &return_types, vector<Identifier> &names) {
 	for (auto &value : input.inputs) {
@@ -553,9 +581,11 @@ static unique_ptr<FunctionData> DuckLakeRESTRequestBind(ClientContext &context, 
 	auto accept = GetNamedParameter(input, "accept");
 	string response;
 	string content_type;
-	auto status = client.SendRaw(StringUtil::Upper(StringValue::Get(input.inputs[1])),
-	                             StringValue::Get(input.inputs[2]), StringValue::Get(input.inputs[3]), response,
-	                             content_type, accept.IsNull() ? "application/json" : StringValue::Get(accept));
+	auto method = StringUtil::Upper(StringValue::Get(input.inputs[1]));
+	auto &path = StringValue::Get(input.inputs[2]);
+	auto status = client.SendRaw(method, path, StringValue::Get(input.inputs[3]), response, content_type,
+	                             accept.IsNull() ? "application/json" : StringValue::Get(accept));
+	ValidateResponse(method, path, status, content_type, response);
 	names.emplace_back("status");
 	return_types.emplace_back(LogicalType::INTEGER);
 	names.emplace_back("response");

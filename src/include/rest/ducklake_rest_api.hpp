@@ -283,7 +283,6 @@ struct DuckLakeRESTSerializer {
 	static JSONMutableValue Write(JSONWriter &writer, const RESTResetOptions &value);
 	static JSONMutableValue Write(JSONWriter &writer, const RESTResultColumn &value);
 	static JSONMutableValue Write(JSONWriter &writer, const RESTRetryConfig &value);
-	static JSONMutableValue Write(JSONWriter &writer, const RESTRowSet &value);
 	static JSONMutableValue Write(JSONWriter &writer, const RESTScanFilters &value);
 	static JSONMutableValue Write(JSONWriter &writer, const DuckLakeSchemaInfo &value);
 	static JSONMutableValue Write(JSONWriter &writer, const DuckLakeSchemaSetting &value);
@@ -296,9 +295,7 @@ struct DuckLakeRESTSerializer {
 	static JSONMutableValue Write(JSONWriter &writer, const RESTSetSortedBy &value);
 	static JSONMutableValue Write(JSONWriter &writer, const DuckLakeSnapshot &value);
 	static JSONMutableValue Write(JSONWriter &writer, const RESTSnapshotData &value);
-	static JSONMutableValue Write(JSONWriter &writer, const RESTSnapshotIncludes &value);
 	static JSONMutableValue Write(JSONWriter &writer, const DuckLakeSnapshotInfo &value);
-	static JSONMutableValue Write(JSONWriter &writer, const RESTSnapshotReference &value);
 	static JSONMutableValue Write(JSONWriter &writer, const DuckLakeSortFieldInfo &value);
 	static JSONMutableValue Write(JSONWriter &writer, const DuckLakeSortInfo &value);
 	static JSONMutableValue Write(JSONWriter &writer, const DuckLakeTableInfo &value);
@@ -430,8 +427,6 @@ RESTResultColumn DuckLakeRESTSerializer::Read(RESTJsonIn in);
 template <>
 RESTRetryConfig DuckLakeRESTSerializer::Read(RESTJsonIn in);
 template <>
-RESTRowSet DuckLakeRESTSerializer::Read(RESTJsonIn in);
-template <>
 RESTScanFilters DuckLakeRESTSerializer::Read(RESTJsonIn in);
 template <>
 DuckLakeSchemaInfo DuckLakeRESTSerializer::Read(RESTJsonIn in);
@@ -456,11 +451,7 @@ DuckLakeSnapshot DuckLakeRESTSerializer::Read(RESTJsonIn in);
 template <>
 RESTSnapshotData DuckLakeRESTSerializer::Read(RESTJsonIn in);
 template <>
-RESTSnapshotIncludes DuckLakeRESTSerializer::Read(RESTJsonIn in);
-template <>
 DuckLakeSnapshotInfo DuckLakeRESTSerializer::Read(RESTJsonIn in);
-template <>
-RESTSnapshotReference DuckLakeRESTSerializer::Read(RESTJsonIn in);
 template <>
 DuckLakeSortFieldInfo DuckLakeRESTSerializer::Read(RESTJsonIn in);
 template <>
@@ -588,8 +579,6 @@ struct RESTCommitRequest {
 
 	RESTCommitRequestType type;
 
-	//! The endpoint of the request
-	const char *Path() const;
 	static optional_idx TypeFromPath(const string &path);
 
 	template <class TARGET>
@@ -1503,6 +1492,8 @@ struct DuckLakeRESTAPI {
 	static const vector<RESTRoute> &GetRoutes();
 	//! The route of an endpoint
 	static const RESTRoute &GetRoute(const string &endpoint);
+	//! Reads the JSON response of an endpoint as the type of its response, which throws if it does not match
+	static void ValidateResponse(const string &endpoint, const string &response_json);
 };
 
 //===--------------------------------------------------------------------===//
