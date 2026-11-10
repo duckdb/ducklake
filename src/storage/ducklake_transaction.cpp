@@ -51,7 +51,8 @@ DuckLakeInternalConnectionState::CreateConnection(DatabaseInstance &db, const sh
 	                                                     : Connection::CreateInternal(db));
 	// Follow the immediate caller so its transaction-finalization suppression applies.
 	connection->context->base_context.reset();
-	connection->context->registered_state->GetOrCreate<DuckLakeInternalConnectionState>(KEY, base_context);
+	connection->context->GetContext().GetRegisteredState().GetOrCreate<DuckLakeInternalConnectionState>(KEY,
+	                                                                                                    base_context);
 	if (base_context) {
 		DuckLakeUtil::CopyExtensionSettings(*base_context, *connection->context);
 	}
