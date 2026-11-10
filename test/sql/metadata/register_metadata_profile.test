@@ -42,6 +42,16 @@ CALL ducklake_register_metadata_profile('x', '{"system_column_names": "rowid"}')
 "system_column_names" must be an array of strings
 
 statement error
+CALL ducklake_register_metadata_profile('x', '{"reset_settings": "binary_as_string"}')
+----
+"reset_settings" must be an array of strings
+
+statement error
+CALL ducklake_register_metadata_profile('x', '{"reported_catalog_type": 1}')
+----
+"reported_catalog_type" must be a string
+
+statement error
 CALL ducklake_register_metadata_profile('x', '{"base": "unknown"}')
 ----
 base "unknown" is not a registered metadata profile
@@ -75,6 +85,11 @@ statement error
 CALL ducklake_register_metadata_profile(NULL, '{}')
 ----
 does not accept NULL arguments
+
+statement error
+CALL ducklake_register_metadata_profile('x', '{}', replace := NULL)
+----
+The replace option must be a non-null boolean
 
 statement ok
 CALL ducklake_register_metadata_profile('duckdb', '{"system_column_names": ["reserved"]}')
@@ -125,6 +140,45 @@ SELECT reserved FROM dl.t ORDER BY reserved
 ----
 1
 2
+
+statement ok
+DETACH dl
+
+# without replace, a registered profile is kept, but the JSON is still checked
+statement error
+CALL ducklake_register_metadata_profile('DuckDB', '{"max_columns": 5}', replace := false)
+----
+unknown field "max_columns"
+
+statement ok
+CALL ducklake_register_metadata_profile('DuckDB', '{"system_column_names": ["reserved"]}', replace := false)
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/register_metadata_profile.db' AS dl (DATA_PATH '{TEST_DIR}/register_metadata_profile', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+query II
+SELECT table_name, file_count FROM ducklake_table_info('dl') ORDER BY table_name
+----
+t	1
+u	0
+
+statement ok
+DETACH dl
+
+# ducklake_settings reports the catalog type of the profile
+statement ok
+CALL ducklake_register_metadata_profile('duckdb', '{"reported_catalog_type": "custom"}')
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/register_metadata_profile.db' AS dl (DATA_PATH '{TEST_DIR}/register_metadata_profile')
+
+query I
+SELECT catalog_type FROM ducklake_settings('dl')
+----
+custom
 
 statement ok
 DETACH dl

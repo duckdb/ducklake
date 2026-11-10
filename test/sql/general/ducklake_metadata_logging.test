@@ -40,6 +40,14 @@ SELECT COUNT(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
 ----
 true
 
+query I
+SELECT COUNT(*) > 0
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%ducklake_snapshot %'
+  AND query LIKE '%test_tbl%'
+----
+true
+
 # verify the catalog column matches the attached catalog name
 query I
 SELECT COUNT(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE catalog != 'ducklake'

@@ -1,0 +1,40 @@
+# name: test/sql/time_travel/at_timestamp_cached_no_rescan.test
+# description: a cached timestamp lookup in an unchanged metadata transaction runs no expiry query
+# group: [time_travel]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS l (DATA_PATH '{DATA_PATH}/at_timestamp_cached_no_rescan', DUCKLAKE_VERSION '2.0-dev1')
+
+statement ok
+CREATE TABLE l.t(i INTEGER)
+
+statement ok
+SET VARIABLE ts = (SELECT snapshot_time FROM l.snapshots() WHERE snapshot_id = 1)
+
+statement ok
+BEGIN
+
+statement ok
+SELECT count(*) FROM l.t AT (TIMESTAMP => getvariable('ts'))
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+statement ok
+SELECT count(*) FROM l.t AT (TIMESTAMP => getvariable('ts'))
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%expired_snapshot:%'
+----
+0
+
+statement ok
+ROLLBACK

@@ -42,8 +42,9 @@ public:
 	//! File systems allow at most 255 bytes in a file name
 	static constexpr idx_t MAX_FILE_NAME_LENGTH = 255;
 
-	//! Extracts the value of a literal, or of a cast over a literal, as written in a DEFAULT or parameter default
-	static bool TryGetLiteralValue(const ParsedExpression &expr, Value &result);
+	//! The value of a literal or of a cast over one, a cast of a time zone type needs the context
+	static bool TryGetLiteralValue(const ParsedExpression &expr, Value &result,
+	                               optional_ptr<ClientContext> context = nullptr);
 	//! Casts stored text to a type when the value prints as the same text
 	static bool TryReadTextAs(const Value &text, const LogicalType &type, Value &result);
 	//! The snapshot id a VERSION string reads as, such a string is never the name of a snapshot tag
@@ -110,6 +111,8 @@ public:
 	//! Copy extension-registered settings from one context onto another. Core engine settings
 	//! are not copied, and settings that change the types read are turned off.
 	static void CopyExtensionSettings(ClientContext &from, ClientContext &to);
+	//! Reset the given extension settings of a context to their defaults, skipping those that are not registered
+	static void ResetExtensionSettings(ClientContext &context, const vector<string> &names);
 
 	static string ParseConfigOptionValue(ClientContext &context, const string &option, const Value &val);
 	static void ValidateConfigOptionScope(const string &option, bool has_schema, bool has_table);

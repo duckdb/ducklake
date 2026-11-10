@@ -1,0 +1,84 @@
+# name: test/sql/metadata/load_invalid_decimal_type.test
+# description: loading a catalog with an invalid DECIMAL column type reports an error
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/invalid_decimal.db' AS dl (DATA_PATH '{DATA_PATH}/invalid_decimal')
+
+statement ok
+CREATE TABLE dl.t (d DECIMAL(10, 2))
+
+statement ok
+DETACH dl
+
+foreach decimal_type decimal(999999,1) decimal(0,0) decimal(39,0) decimal(10,11)
+
+statement ok
+ATTACH '{TEST_DIR}/invalid_decimal.db' AS meta
+
+statement ok
+UPDATE meta.ducklake_column SET column_type = '{decimal_type}'
+
+statement ok
+DETACH meta
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/invalid_decimal.db' AS dl
+
+statement error
+SELECT * FROM dl.t
+----
+- width must be between 1 and 38 and scale must not exceed the width
+
+statement ok
+DETACH dl
+
+endloop
+
+foreach decimal_type decimal(a,1) decimal(10,b) decimal(99999999999999999999999,1)
+
+statement ok
+ATTACH '{TEST_DIR}/invalid_decimal.db' AS meta
+
+statement ok
+UPDATE meta.ducklake_column SET column_type = '{decimal_type}'
+
+statement ok
+DETACH meta
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/invalid_decimal.db' AS dl
+
+statement error
+SELECT * FROM dl.t
+----
+- width and scale must be numbers
+
+statement ok
+DETACH dl
+
+endloop
+
+# the maximum width is accepted
+statement ok
+ATTACH '{TEST_DIR}/invalid_decimal.db' AS meta
+
+statement ok
+UPDATE meta.ducklake_column SET column_type = 'decimal(38,38)'
+
+statement ok
+DETACH meta
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/invalid_decimal.db' AS dl
+
+query T
+SELECT column_type FROM (DESCRIBE dl.t)
+----
+DECIMAL(38,38)

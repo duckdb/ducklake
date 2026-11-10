@@ -1,0 +1,74 @@
+# name: test/sql/settings/set_option_concurrent_insert_expiry.test
+# description: a commit of options on a Postgres catalog with snapshot tags expires again when it retries
+# group: [settings]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/set_option_concurrent_insert_expiry')
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+# the retry after another commit of the option expires again
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+statement ok con1
+CALL dl.set_option('parquet_version', 2, table_name => 't')
+
+statement ok con2
+CALL dl.set_option('parquet_version', 1, table_name => 't')
+
+statement ok con1
+COMMIT
+
+query III
+SELECT (SELECT count(*) FROM dl.snapshots() WHERE snapshot_id = 1), (SELECT count(*) FROM dl.snapshots()),
+       (SELECT list(value) FROM dl.options() WHERE option_name = 'parquet_version')
+----
+0	3	[V2]
+
+# an expiry that finds nothing to expire writes no snapshot, but still keeps the option from being inserted twice
+statement ok con3
+BEGIN
+
+statement ok con3
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+statement ok con3
+CALL dl.set_option('parquet_compression', 'lz4', table_name => 't')
+
+statement ok con4
+BEGIN
+
+statement ok con4
+CALL dl.set_option('parquet_compression', 'zstd', table_name => 't')
+
+statement ok con3
+COMMIT
+
+statement ok con4
+COMMIT
+
+query III
+SELECT (SELECT count(*) FROM dl.snapshots()), count(*), max(value) FROM dl.options()
+WHERE option_name = 'parquet_compression' AND scope_entry = 'main.t'
+----
+3	1	zstd
