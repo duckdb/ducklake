@@ -382,4 +382,11 @@ SELECT status, response->>'$.error.type' FROM ducklake_rest_request('{rest_serve
 statement ok
 DETACH dl
 
+# a value of an object type has to be a JSON object
+query II
+SELECT status, response->>'$.error.message' LIKE '%expected a JSON object for CreateSchemaRequest%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"create_schema": 42}]}')
+----
+400	true
+
 include test/template/rest_teardown.test_template

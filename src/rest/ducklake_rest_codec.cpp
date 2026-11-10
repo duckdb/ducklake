@@ -4,6 +4,17 @@
 
 namespace duckdb {
 
+void RESTThrowInvalidEnum(const string &name, const char *type_name, const vector<string> &names) {
+	throw InvalidInputException("DuckLake REST: \"%s\" is not a valid %s (expected one of %s)", name, type_name,
+	                            StringUtil::Join(names, ", "));
+}
+
+void RESTExpectObject(RESTJsonIn in, const char *type_name) {
+	if (!in.IsNull() && !in.IsObject()) {
+		throw InvalidInputException("DuckLake REST: expected a JSON object for %s", type_name);
+	}
+}
+
 RESTRows::RESTRows() {
 }
 

@@ -150,6 +150,82 @@ void RESTReadValue(RESTJsonIn in, RESTOptional<T> &result) {
 	result = RESTOptional<T>(CODEC::template Get<T>(in));
 }
 
+//! A value of an enum of the REST API and its name
+template <class T>
+struct RESTEnumValue {
+	T value;
+	const char *name;
+};
+[[noreturn]] void RESTThrowInvalidEnum(const string &name, const char *type_name, const vector<string> &names);
+//! The name of a value of an enum
+template <class T, idx_t N>
+const char *RESTEnumName(const RESTEnumValue<T> (&values)[N], T value, const char *type_name) {
+	for (auto &entry : values) {
+		if (entry.value == value) {
+			return entry.name;
+		}
+	}
+	throw InternalException("%d is not a value of the REST API type %s", static_cast<int64_t>(value), type_name);
+}
+template <idx_t N>
+const char *RESTEnumName(const char *const (&names)[N], const string &value, const char *type_name) {
+	for (auto name : names) {
+		if (value == name) {
+			return name;
+		}
+	}
+	throw InternalException("\"%s\" is not a value of the REST API type %s", value, type_name);
+}
+//! The value of an enum with a name, throws if it is not one of its names
+template <class T, idx_t N>
+T RESTEnumFromName(const RESTEnumValue<T> (&values)[N], const string &name, const char *type_name) {
+	vector<string> names;
+	for (auto &entry : values) {
+		if (name == entry.name) {
+			return entry.value;
+		}
+		names.push_back(entry.name);
+	}
+	RESTThrowInvalidEnum(name, type_name, names);
+}
+template <idx_t N>
+string RESTEnumFromName(const char *const (&names)[N], const string &name, const char *type_name) {
+	vector<string> all_names;
+	for (auto entry : names) {
+		if (name == entry) {
+			return name;
+		}
+		all_names.push_back(entry);
+	}
+	RESTThrowInvalidEnum(name, type_name, all_names);
+}
+//! Throws unless the JSON value of an object type is an object (or absent)
+void RESTExpectObject(RESTJsonIn in, const char *type_name);
+//! Reads a field that can be absent, returns whether it is there
+template <class CODEC, class T>
+bool RESTReadOptional(RESTJsonIn in, const char *name, T &result) {
+	auto entry = in.TryGet(name);
+	if (entry.IsNull()) {
+		return false;
+	}
+	RESTReadValue<CODEC>(entry, result);
+	return true;
+}
+//! Reads a field that has a default when it is absent
+template <class CODEC, class T, class DEFAULT>
+void RESTReadOptional(RESTJsonIn in, const char *name, T &result, DEFAULT &&default_value) {
+	if (!RESTReadOptional<CODEC>(in, name, result)) {
+		result = std::forward<DEFAULT>(default_value);
+	}
+}
+//! Writes a field of an object if it has a value
+template <class CODEC, class T>
+void RESTWriteOptional(JSONWriter &writer, JSONMutableValue &object, const char *name, const T &value, bool has_value) {
+	if (has_value) {
+		object.Add(name, RESTWriteValue<CODEC>(writer, value));
+	}
+}
+
 struct RESTStringCodec : public RESTCodec<RESTStringCodec> {
 	static JSONMutableValue Write(JSONWriter &writer, const string &value) {
 		return writer.CreateString(value);

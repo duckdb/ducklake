@@ -1138,9 +1138,23 @@ def write_field(spec, field, lines):
         lines.append(f"\t}}")
         return
     write = f"RESTWriteValue<{spec.codec(expr)}>(writer, {member})"
-    if expr.kind == "primitive" and expr.name == "rows":
+    is_rows = expr.kind == "primitive" and expr.name == "rows"
+    if is_rows:
         write = f"RESTRowsCodec::Write(writer, {member})"
     add = f"result.Add({cpp_string(field.name)}, {write});"
+    condition = None
+    if field.has_member:
+        condition = f"value.{field.has_member}"
+    elif field.null_member:
+        condition = f"!value.{field.null_member}"
+    elif field.nullable:
+        condition = f"!RESTIsNull({member})"
+    if condition and not is_rows:
+        # a helper writes the optional field, so the generated code has no branches of its own
+        lines.append(
+            f"\tRESTWriteOptional<{spec.codec(expr)}>(writer, result, {cpp_string(field.name)}, {member}, {condition});"
+        )
+        return
     if field.has_member:
         lines.append(f"\tif (value.{field.has_member}) {{")
         lines.append(f"\t\t{add}")
@@ -1211,6 +1225,19 @@ def read_field(spec, obj, field, lines):
         read = f"RESTReadValue<{spec.codec(expr)}>({{entry}}, {member});"
     if required:
         lines.append("\t" + read.format(entry=f"in.Get({cpp_string(field.name)})"))
+        return
+    if not (expr.kind == "primitive" and expr.name == "rows"):
+        # a helper reads the optional field, so the generated code has no branches of its own
+        codec = spec.codec(expr)
+        call = f"RESTReadOptional<{codec}>(in, {cpp_string(field.name)}, {member}"
+        if field.has_member:
+            lines.append(f"\tresult.{field.has_member} = {call});")
+        elif field.null_member:
+            lines.append(f"\tresult.{field.null_member} = !{call});")
+        elif field.default is not None and spec.default_literal(field) is not None:
+            lines.append(f"\t{call}, {spec.default_literal(field)});")
+        else:
+            lines.append(f"\t{call});")
         return
     lines.append(f"\t{{")
     lines.append(f"\t\tauto entry = in.TryGet({cpp_string(field.name)});")
@@ -1757,43 +1784,29 @@ def generate_source(spec):
     )
     for enum in spec.enums:
         param = "const string &" if not enum.cpp_enum else enum.cpp_enum
-        lines.append(f"const char *{enum.codec}::ToString({param} value) {{")
+        # the names and values of the enum are a table, which shared helpers look values up in
+        table = f"{snake_case(enum.name).upper()}_VALUES"
         if enum.cpp_enum:
-            lines.append("\tswitch (value) {")
-            for value in enum.values:
-                lines.append(f'\tcase {enum.cpp_enum}::{value["cpp"]}:')
-                lines.append(f'\t\treturn {cpp_string(value["name"])};')
-            lines.append("\tdefault:")
-            lines.append(
-                f'\t\tthrow InternalException("{enum.cpp_enum} value %d is not a value of the REST API '
-                f'type {enum.name}", static_cast<int>(value));'
+            entries = ", ".join(
+                f'{{{enum.cpp_enum}::{value["cpp"]}, {cpp_string(value["name"])}}}'
+                for value in enum.values
             )
-            lines.append("\t}")
+            lines.append(
+                f"static const RESTEnumValue<{enum.cpp_enum}> {table}[] = {{{entries}}};"
+            )
         else:
-            for value in enum.values:
-                lines.append(f'\tif (value == {cpp_string(value["name"])}) {{')
-                lines.append(f'\t\treturn {cpp_string(value["name"])};')
-                lines.append("\t}")
-            lines.append(
-                f'\tthrow InternalException("\\"%s\\" is not a value of the REST API type {enum.name}", '
-                f"value);"
-            )
+            entries = ", ".join(cpp_string(value["name"]) for value in enum.values)
+            lines.append(f"static const char *const {table}[] = {{{entries}}};")
+        lines.append("")
+        lines.append(f"const char *{enum.codec}::ToString({param} value) {{")
+        lines.append(f"\treturn RESTEnumName({table}, value, {cpp_string(enum.name)});")
         lines.append("}")
         lines.append("")
         lines.append(
             f"{enum.cpp_name} {enum.codec}::FromString(const string &value) {{"
         )
-        for value in enum.values:
-            lines.append(f'\tif (value == {cpp_string(value["name"])}) {{')
-            if enum.cpp_enum:
-                lines.append(f'\t\treturn {enum.cpp_enum}::{value["cpp"]};')
-            else:
-                lines.append(f"\t\treturn value;")
-            lines.append("\t}")
-        allowed = ", ".join(v["name"] for v in enum.values)
         lines.append(
-            f'\tthrow InvalidInputException("DuckLake REST: \\"%s\\" is not a valid {enum.name} '
-            f'(expected one of {allowed})", value);'
+            f"\treturn RESTEnumFromName({table}, value, {cpp_string(enum.name)});"
         )
         lines.append("}")
         lines.append("")
@@ -1833,11 +1846,7 @@ def generate_source(spec):
         lines.append("")
         lines.append("template <>")
         lines.append(f"{obj.cpp_name} DuckLakeRESTSerializer::Read(RESTJsonIn in) {{")
-        lines.append("\tif (!in.IsNull() && !in.IsObject()) {")
-        lines.append(
-            f'\t\tthrow InvalidInputException("DuckLake REST: expected a JSON object for {obj.name}");'
-        )
-        lines.append("\t}")
+        lines.append(f"\tRESTExpectObject(in, {cpp_string(obj.name)});")
         lines.append(f"\t{obj.cpp_name} result;")
         for field in fields:
             read_field(spec, obj, field, lines)
