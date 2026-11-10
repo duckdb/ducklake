@@ -1,0 +1,71 @@
+# name: test/sql/general/attach_snapshot_time_zone.test
+# description: SNAPSHOT_TIME without an offset is read in the time zone of the session, as an AT clause is
+# group: [general]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/attach_snapshot_time_zone.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET TimeZone = 'Asia/Kolkata'
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/attach_snapshot_time_zone')
+
+statement ok
+CREATE TABLE lake.t(x INT)
+
+statement ok
+INSERT INTO lake.t VALUES (1)
+
+# the local time five and a half hours ago, which equals the current UTC time without its offset
+statement ok
+SET VARIABLE before = strftime(now() - INTERVAL 330 MINUTE, '%Y-%m-%d %H:%M:%S.%f')
+
+# the local time now
+statement ok
+SET VARIABLE after = strftime(now(), '%Y-%m-%d %H:%M:%S.%f')
+
+statement error
+SELECT x FROM lake.t AT (TIMESTAMP => getvariable('before'))
+----
+No snapshot found
+
+statement ok
+DETACH lake
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS h (SNAPSHOT_TIME getvariable('before'))
+----
+No snapshot found
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS h (SNAPSHOT_TIME getvariable('before') || '+05:30')
+----
+No snapshot found
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS h (SNAPSHOT_TIME getvariable('after'))
+
+query I
+SELECT x FROM h.t
+----
+1
+
+statement ok
+DETACH h
+
+# an offset in the value is kept
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS h (SNAPSHOT_TIME strftime(now() AT TIME ZONE 'UTC', '%Y-%m-%d %H:%M:%S.%f') || '+00')
+
+query I
+SELECT x FROM h.t
+----
+1

@@ -10,6 +10,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/file_system.hpp"
+#include "duckdb/common/set.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/optional_idx.hpp"
@@ -36,6 +37,7 @@ class DuckLakeSchemaEntry;
 class DuckLakeTableEntry;
 class DuckLakeTransaction;
 struct DuckLakeRetryConfig;
+struct DuckLakeMetadataProfile;
 struct TransactionChangeInformation;
 class BoundAtClause;
 class SQLStatement;
@@ -44,7 +46,9 @@ class FileSystem;
 struct SnapshotAndStats;
 struct FlushedInlinedTableInfo;
 
-enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND };
+//! How an AT clause picks a snapshot: the bounds of a change feed take the nearest snapshot after or before a
+//! timestamp, time travel takes the newest snapshot at or before it and refuses times before expired snapshots
+enum class SnapshotBound { LOWER_BOUND, UPPER_BOUND, TIME_TRAVEL };
 
 //! A check whether the live rows of an inlined data table hold a value of a column
 struct DuckLakeInlinedValueCheck {
@@ -92,6 +96,8 @@ struct FilterSQLResult {
 	string where_conditions;
 	//! Ordered by column field index so the generated SQL does not depend on hash iteration order
 	map<idx_t, CTERequirement> required_ctes;
+	//! The columns with a filter the conditions do not express completely
+	set<idx_t> unexpressed_columns;
 
 	FilterSQLResult() = default;
 };
@@ -194,8 +200,12 @@ public:
 
 	typedef unique_ptr<DuckLakeMetadataManager> (*create_t)(DuckLakeTransaction &transaction);
 	static void Register(const string &name, create_t);
+	//! Whether a metadata manager of the given name is built in, so that no profile can be registered for it
+	static bool HasBuiltInManager(const string &name);
 
 	static unique_ptr<DuckLakeMetadataManager> Create(DuckLakeTransaction &transaction);
+	//! The profile of the metadata database, which the defaults of the metadata manager follow
+	const DuckLakeMetadataProfile &GetMetadataProfile() const;
 
 	virtual bool TypeIsNativelySupported(const LogicalType &type);
 	//! Check if a type supports data inlining on this metadata backend
@@ -212,10 +222,12 @@ public:
 	virtual bool CommitsEachStatement() const {
 		return false;
 	}
-	//! Whether transactions that started before a metadata table was dropped still read it
-	virtual bool DroppedTablesStayReadable() const {
-		return true;
+	//! Whether metadata reads inside a transaction can show commits of other transactions
+	virtual bool ShowsConcurrentCommits() const {
+		return CommitsEachStatement();
 	}
+	//! Whether transactions that started before a metadata table was dropped still read it
+	virtual bool DroppedTablesStayReadable() const;
 	//! Whether a commit inserts inlined rows after its batch instead of sending them as VALUES text in it
 	virtual bool InsertsInlinedRowsAfterBatch(idx_t row_count) const {
 		return !CommitsEachStatement();
@@ -227,11 +239,15 @@ public:
 	bool ExecuteRetrialsServerSide() const;
 	//! Whether the client can skip the snapshot fetch and let the server read it.
 	virtual bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const;
-	virtual bool IsRetryableCommitError(const string &) const {
-		return false;
+	virtual bool IsRetryableCommitError(const string &message) const;
+	//! The error of a failed commit without the text of the failed query that it repeats
+	virtual string CommitErrorWithoutQuery(const string &message) const {
+		return message;
 	}
 	//! Advice added to the error of a commit that failed for good
-	virtual string CommitErrorHint(const string &) const {
+	virtual string CommitErrorHint(const string &message) const;
+	//! SQL that the commit of a transaction that changed options runs, so two commits cannot both insert an option
+	virtual string ConfigOptionLockSql() const {
 		return string();
 	}
 
@@ -262,13 +278,9 @@ public:
 		return NumericLimits<idx_t>::Maximum();
 	}
 	//! Maximum number of columns of a table supported by this backend
-	virtual idx_t MaxColumnCount() const {
-		return NumericLimits<idx_t>::Maximum();
-	}
+	virtual idx_t MaxColumnCount() const;
 	//! Names of the system columns that the tables of this backend have
-	virtual vector<string> SystemColumnNames() const {
-		return {};
-	}
+	virtual vector<string> SystemColumnNames() const;
 
 	//! Why the rows of a table with the given columns cannot be inlined, empty when they can
 	string GetInliningObstacle(const ColumnList &columns);
@@ -546,8 +558,11 @@ public:
 	                                      const DuckLakeSnapshotCommit &commit_info);
 	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
 	static string InsertTableColumnStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
-	//! Set the stored table sizes to the size of the live data files
-	static string RefreshTableSizesSql(const set<TableIndex> &table_ids);
+	//! Set the stored table sizes to the size of the live data files, and the known record counts of the given tables
+	//! to the rows of the live data files
+	static string RefreshTableSizesSql(const set<TableIndex> &table_ids, const set<TableIndex> &record_count_tables);
+	//! Add the rows stored in the inlined data tables to a known record count
+	static string AddInlinedRowCountsSql(TableIndex table_id, const vector<Identifier> &inlined_table_names);
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor, const string &query);
@@ -556,6 +571,9 @@ public:
 	virtual string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const;
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
+	//! Throws when the newest expired snapshot a time travel by timestamp could see is its resolved snapshot or newer
+	void CheckSnapshotAfterExpiredGap(const DuckLakeSnapshot &snapshot, const Value &timestamp,
+	                                  idx_t newest_snapshot_id, const set<idx_t> &expired_in_transaction);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound,
 	                                                 idx_t newest_snapshot_id);
 
@@ -593,6 +611,8 @@ public:
 	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
+	//! The snapshots in the column order of ducklake_snapshots, then next_file_id
+	unique_ptr<QueryResult> ReadSnapshots(const string &filter);
 	//! The live snapshot tags, with the times of their snapshots if requested
 	virtual vector<DuckLakeSnapshotTagInfo> GetSnapshotTags(bool with_snapshot_time = true);
 	//! The snapshot of the live snapshot tag with the name, if any
@@ -611,8 +631,10 @@ public:
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	//! The tables with data files that are not dropped
 	unordered_set<idx_t> GetTablesWithLiveDataFiles();
-	virtual void SetConfigOption(const DuckLakeConfigOption &option);
+	//! Returns the rows the option is expected to have after it is written
+	virtual idx_t SetConfigOption(const DuckLakeConfigOption &option);
 	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);
+	idx_t ConfigOptionRowCount(const DuckLakeConfigOption &option, optional_ptr<const string> value = nullptr);
 	virtual void MigrateV01();
 	virtual void MigrateV02(bool allow_failures = false);
 	virtual void MigrateV03(bool allow_failures = false);
@@ -626,6 +648,8 @@ public:
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
 	//! Renames the given (old name, new name) columns of each inlined table
 	virtual void RenameInlinedColumns(const map<Identifier, vector<pair<Identifier, Identifier>>> &renames);
+	//! Renames by copying the tables, for a database that parses its whole schema for every renamed column
+	void RenameInlinedColumnsByCopy(const map<Identifier, vector<pair<Identifier, Identifier>>> &renames);
 	//! Adds the schema version rows of inlined tables that older versions registered without one
 	void MigrateInlinedSchemaVersions();
 	//! Restores the defaults that older versions dropped when they renamed a struct field
@@ -656,7 +680,7 @@ protected:
 	virtual string GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                                     const FilterPushdownInfo *filter_info,
 	                                     const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
-	                                     const vector<idx_t> &runtime_filter_stats_columns,
+	                                     vector<idx_t> &runtime_filter_stats_columns,
 	                                     FileListType file_list_type = FileListType::SCAN,
 	                                     const string &metadata_table_prefix = "{METADATA_CATALOG}");
 
@@ -733,7 +757,8 @@ protected:
 	    DuckLakeTableEntry &table, const FilterPushdownInfo &filter_info,
 	    const string &partition_value_table = "{METADATA_CATALOG}.ducklake_file_partition_value");
 	//! Emit the condition for a single-column filter, registering the stats its CTE must project
-	string GenerateColumnFilterCondition(const ColumnFilterInfo &column_filter, FilterSQLResult &result);
+	string GenerateColumnFilterCondition(const ColumnFilterInfo &column_filter, FilterSQLResult &result,
+	                                     bool &complete);
 	//! Emit the condition for a filter tree, combining the per-column conditions of its leaves.
 	//! A node under a parent of the same conjunction type is spliced in without parens of its own.
 	string GenerateFilterTreeCondition(const DuckLakeFilterNode &node, FilterSQLResult &result,
@@ -751,7 +776,8 @@ protected:
 
 private:
 	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
-	                                            unordered_set<string> &referenced_stats, const string &stats_alias);
+	                                            unordered_set<string> &referenced_stats, const string &stats_alias,
+	                                            bool &complete);
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
 	virtual string CastStatsToTarget(const string &stats, const LogicalType &type,
 	                                 StatsCastType cast_type = StatsCastType::ORDERING);
@@ -762,7 +788,7 @@ private:
 	                                            const LogicalType &type, unordered_set<string> &referenced_stats,
 	                                            const string &stats_alias);
 	virtual string GenerateFilterPushdown(const ExpressionFilter &filter, unordered_set<string> &referenced_stats,
-	                                      const string &stats_alias);
+	                                      const string &stats_alias, bool &complete);
 
 public:
 	//! Read inlined file deletions for regular table scans (no snapshot info per row)

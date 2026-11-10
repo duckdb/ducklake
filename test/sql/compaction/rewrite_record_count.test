@@ -1,0 +1,329 @@
+# name: test/sql/compaction/rewrite_record_count.test
+# description: A rewrite that cannot recompute exact stats sets record_count to the rows stored in the live files
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/rewrite_record_count', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+# the second file keeps its delete, so the rewrite of the first cannot recompute exact stats
+statement ok
+CREATE TABLE lake.t (id INTEGER)
+
+statement ok
+INSERT INTO lake.t SELECT i FROM range(100) t(i)
+
+statement ok
+INSERT INTO lake.t SELECT i FROM range(100, 200) t(i)
+
+query I
+DELETE FROM lake.t WHERE id < 60 OR id = 150
+----
+61
+
+statement ok
+SET VARIABLE t_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't' AND end_snapshot IS NULL)
+
+query II
+SELECT files_processed, files_created FROM ducklake_rewrite_data_files('lake', 't', delete_threshold => 0.5)
+----
+1	1
+
+# the 60 deleted rows left with the rewritten file
+statement ok
+SET VARIABLE stored_rows = (SELECT SUM(record_count) FROM meta.ducklake_data_file WHERE table_id = getvariable('t_id') AND end_snapshot IS NULL)
+
+query II
+SELECT record_count, record_count = getvariable('stored_rows') FROM meta.ducklake_table_stats WHERE table_id = getvariable('t_id')
+----
+140	true
+
+# the bounds were not recomputed, the count above the live rows keeps them from being used as exact
+query II
+SELECT min(id), max(id) FROM lake.t
+----
+60	199
+
+# dropping the rewritten file
+query I
+DELETE FROM lake.t WHERE id < 100
+----
+40
+
+query I
+SELECT record_count FROM meta.ducklake_table_stats WHERE table_id = getvariable('t_id')
+----
+100
+
+# dropping the last file empties the count
+query I
+DELETE FROM lake.t
+----
+99
+
+query III
+SELECT record_count, next_row_id, file_size_bytes FROM meta.ducklake_table_stats WHERE table_id = getvariable('t_id')
+----
+0	200	0
+
+query I
+SELECT estimated_size FROM duckdb_tables() WHERE database_name = 'lake' AND table_name = 't'
+----
+0
+
+# the next insert starts from the empty count
+statement ok
+INSERT INTO lake.t VALUES (7)
+
+query I
+SELECT record_count FROM meta.ducklake_table_stats WHERE table_id = getvariable('t_id')
+----
+1
+
+query I
+SELECT estimated_size FROM duckdb_tables() WHERE database_name = 'lake' AND table_name = 't'
+----
+1
+
+query III
+SELECT min(id), max(id), count(*) FROM lake.t
+----
+7	7	1
+
+# a file written before a column was added has no stats for it, so the stats cannot be recomputed
+statement ok
+CREATE TABLE lake.o (id INTEGER)
+
+statement ok
+INSERT INTO lake.o SELECT i FROM range(100) t(i)
+
+statement ok
+ALTER TABLE lake.o ADD COLUMN x INTEGER
+
+statement ok
+INSERT INTO lake.o SELECT i, i FROM range(100, 200) t(i)
+
+query I
+DELETE FROM lake.o WHERE id >= 150
+----
+50
+
+statement ok
+SET VARIABLE o_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'o' AND end_snapshot IS NULL)
+
+query II
+SELECT files_processed, files_created FROM ducklake_rewrite_data_files('lake', 'o', delete_threshold => 0.4)
+----
+1	1
+
+# no deleted row remains, so the count stays above the live rows and the stale maximum of 199 is not exact
+query I
+SELECT record_count FROM meta.ducklake_table_stats WHERE table_id = getvariable('o_id')
+----
+200
+
+query III
+SELECT min(id), max(id), count(*) FROM lake.o
+----
+0	149	150
+
+query III
+SELECT min(x), max(x), count(x) FROM lake.o
+----
+100	149	50
+
+# a rewrite that only removes a fully deleted file (a flush wrote it) writes no new file, the warm stats cache still
+# sees the new count
+statement ok
+CREATE TABLE lake.z (id INTEGER)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 100, table_name => 'z')
+
+statement ok
+INSERT INTO lake.z SELECT i FROM range(10) t(i)
+
+query I
+DELETE FROM lake.z
+----
+10
+
+query I
+SELECT rows_flushed FROM ducklake_flush_inlined_data('lake', table_name => 'z')
+----
+10
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 0, table_name => 'z')
+
+statement ok
+INSERT INTO lake.z SELECT i FROM range(10, 20) t(i)
+
+query I
+DELETE FROM lake.z WHERE id = 15
+----
+1
+
+query I
+SELECT estimated_size FROM duckdb_tables() WHERE database_name = 'lake' AND table_name = 'z'
+----
+20
+
+statement ok
+SET VARIABLE z_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'z' AND end_snapshot IS NULL)
+
+query II
+SELECT files_processed, files_created FROM ducklake_rewrite_data_files('lake', 'z', delete_threshold => 0.5)
+----
+1	0
+
+query I
+SELECT record_count FROM meta.ducklake_table_stats WHERE table_id = getvariable('z_id')
+----
+10
+
+query I
+SELECT estimated_size FROM duckdb_tables() WHERE database_name = 'lake' AND table_name = 'z'
+----
+10
+
+query III
+SELECT min(id), max(id), count(*) FROM lake.z
+----
+10	19	9
+
+# the inlined tables of two schema versions both hold stored rows
+statement ok
+CREATE TABLE lake.m (id INTEGER)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10, table_name => 'm')
+
+statement ok
+INSERT INTO lake.m SELECT i FROM range(30) t(i)
+
+statement ok
+INSERT INTO lake.m VALUES (100), (101), (102)
+
+statement ok
+ALTER TABLE lake.m ADD COLUMN x INTEGER DEFAULT 0
+
+statement ok
+INSERT INTO lake.m VALUES (200, 1), (201, 1)
+
+query I
+DELETE FROM lake.m WHERE id = 101 OR id < 10
+----
+11
+
+statement ok
+SET VARIABLE m_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'm' AND end_snapshot IS NULL)
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_tables WHERE table_id = getvariable('m_id')
+----
+2
+
+query II
+SELECT files_processed, files_created FROM ducklake_rewrite_data_files('lake', 'm', delete_threshold => 0.0)
+----
+1	1
+
+# 20 rows in the rewritten file, 3 stored rows in the first inlined table and 2 in the second
+query I
+SELECT record_count FROM meta.ducklake_table_stats WHERE table_id = getvariable('m_id')
+----
+25
+
+query III
+SELECT min(id), max(id), count(*) FROM lake.m
+----
+10	201	24
+
+# the reproducer of the issue: a rewrite while deleted inlined rows are stored, a flush and whole-file deletes
+statement ok
+CREATE TABLE lake.i (id INTEGER, v INTEGER)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10, table_name => 'i')
+
+statement ok
+INSERT INTO lake.i SELECT i, -400 FROM range(30) t(i)
+
+query I
+DELETE FROM lake.i WHERE id % 3 = 1
+----
+10
+
+statement ok
+INSERT INTO lake.i SELECT i, -100 FROM range(100, 108) t(i)
+
+statement ok
+INSERT INTO lake.i SELECT i, 100 FROM range(200, 208) t(i)
+
+query I
+UPDATE lake.i SET v = v + 6 WHERE id % 4 = 0
+----
+9
+
+statement ok
+SET VARIABLE i_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'i' AND end_snapshot IS NULL)
+
+query II
+SELECT files_processed, files_created FROM ducklake_rewrite_data_files('lake', 'i', delete_threshold => 0.0)
+----
+1	1
+
+# 15 rows in the rewritten file and 25 stored inlined rows, 4 of them deleted
+query I
+SELECT record_count FROM meta.ducklake_table_stats WHERE table_id = getvariable('i_id')
+----
+40
+
+query III
+SELECT min(v), max(v), count(*) FROM lake.i
+----
+-400	106	36
+
+query I
+DELETE FROM lake.i WHERE v < -199
+----
+20
+
+query I
+SELECT record_count FROM meta.ducklake_table_stats WHERE table_id = getvariable('i_id')
+----
+25
+
+query I
+SELECT rows_flushed FROM ducklake_flush_inlined_data('lake', table_name => 'i')
+----
+25
+
+query I
+SELECT record_count FROM meta.ducklake_table_stats WHERE table_id = getvariable('i_id')
+----
+25
+
+# dropping the flushed file, which holds the 9 deleted rows, used to raise an internal error
+query I
+DELETE FROM lake.i WHERE v > -345
+----
+16
+
+query I
+SELECT count(*) FROM lake.i
+----
+0
+
+query I
+SELECT record_count FROM meta.ducklake_table_stats WHERE table_id = getvariable('i_id')
+----
+0

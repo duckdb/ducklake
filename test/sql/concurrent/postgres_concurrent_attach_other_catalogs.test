@@ -1,0 +1,71 @@
+# name: test/sql/concurrent/postgres_concurrent_attach_other_catalogs.test
+# description: attaches of new Postgres catalogs succeed while other catalogs on the same database attach and create tables
+# group: [concurrent]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
+
+loop i 0 5
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS busy_other_{i} CASCADE')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS busy_{i} (DATA_PATH '{DATA_PATH}/busy_other_{i}', METADATA_SCHEMA 'busy_other_{i}')
+
+endloop
+
+# every connection creates tables in its catalog and attaches new catalogs, whose attach clears the metadata cache
+concurrentloop i 0 5
+
+loop n 0 4
+
+statement ok
+CREATE TABLE busy_{i}.t_{n} (a INTEGER)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS fresh_other_{i}_{n} CASCADE')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS fresh_{i}_{n} (DATA_PATH '{DATA_PATH}/fresh_other_{i}_{n}', METADATA_SCHEMA 'fresh_other_{i}_{n}')
+
+statement ok
+DETACH fresh_{i}_{n}
+
+endloop
+
+endloop
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name LIKE 'busy_%'
+----
+20
+
+loop i 0 5
+
+statement ok
+DETACH busy_{i}
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA busy_other_{i} CASCADE')
+
+loop n 0 4
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA fresh_other_{i}_{n} CASCADE')
+
+endloop
+
+endloop
