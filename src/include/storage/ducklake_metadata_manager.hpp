@@ -506,9 +506,10 @@ public:
 	virtual bool InlinedDeletionTableExists(const Identifier &table_name);
 	//! Also drops the empty inlined data tables of the replaced tables
 	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables,
-	                                     const set<TableIndex> &replaced_tables);
+	                                     const set<TableIndex> &replaced_tables, set<string> &dropped_inlined_tables);
 	//! Drop the current inlined data table of a table if it holds no rows
-	string DropInlinedTableIfEmpty(TableIndex table_id, const DuckLakeTableEntry &table);
+	string DropInlinedTableIfEmpty(TableIndex table_id, const DuckLakeTableEntry &table,
+	                               set<string> &dropped_inlined_tables);
 	//! A query that returns a row if the inlined data table holds any row
 	static string InlinedTableHasRowsQuery(const Identifier &table_name);
 	static string DropInlinedTableSql(idx_t table_id, idx_t schema_version, const Identifier &table_name);

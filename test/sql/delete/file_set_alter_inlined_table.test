@@ -1,0 +1,47 @@
+# name: test/sql/delete/file_set_alter_inlined_table.test
+# description: File-set row-count refresh skips empty inlined tables dropped by the same schema change
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/file_set_alter_inlined_table', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE lake.t (i INTEGER)
+
+statement ok
+INSERT INTO lake.t SELECT i FROM range(100) t(i)
+
+statement ok
+INSERT INTO lake.t SELECT i FROM range(100, 200) t(i)
+
+statement ok
+BEGIN
+
+query I
+DELETE FROM lake.t WHERE i < 100
+----
+100
+
+statement ok
+ALTER TABLE lake.t ADD COLUMN j INTEGER
+
+statement ok
+COMMIT
+
+query III
+SELECT count(*), sum(i), count(j) FROM lake.t
+----
+100	14950	0
+
+query II
+SELECT record_count, next_row_id FROM __ducklake_metadata_lake.ducklake_table_stats
+----
+100	200

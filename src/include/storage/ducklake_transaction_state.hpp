@@ -99,12 +99,13 @@ struct DuckLakeCommitContext {
 	                               const vector<DuckLakeTableInfo> &, vector<DuckLakeSchemaInfo> &) {
 		    return false;
 	    };
-	//! Emits the SQL that registers new inlined data tables (CREATE TABLE + ducklake_inlined_data_tables INSERT).
+	//! Emits the SQL that registers new inlined data tables and records empty tables that it drops.
 	// LCOV_EXCL_START
-	std::function<string(DuckLakeSnapshot, const vector<DuckLakeTableInfo> &, const set<TableIndex> &)>
-	    write_inlined_tables = [](DuckLakeSnapshot, const vector<DuckLakeTableInfo> &, const set<TableIndex> &) {
-		    return string();
-	    };
+	std::function<string(DuckLakeSnapshot, const vector<DuckLakeTableInfo> &, const set<TableIndex> &, set<string> &)>
+	    write_inlined_tables =
+	        [](DuckLakeSnapshot, const vector<DuckLakeTableInfo> &, const set<TableIndex> &, set<string> &) {
+		        return string();
+	        };
 	//! Emits the SQL that appends inlined data for the given table changes (handles new inlined-table creation,
 	//! per-tx cache, and the per-row INSERT VALUES).
 	std::function<string(DuckLakeSnapshot &, const vector<DuckLakeInlinedDataInfo> &, const vector<DuckLakeTableInfo> &,

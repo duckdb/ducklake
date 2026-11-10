@@ -2225,6 +2225,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	EnsureCommitInfoProvided(commit_info);
 
 	string batch_queries;
+	set<string> dropped_inlined_tables;
 	// drop entries
 	if (!dropped_tables.empty()) {
 		batch_queries += DuckLakeMetadataManager::DropTables(dropped_tables, false);
@@ -2363,7 +2364,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::WriteDroppedNewColumns(result.dropped_new_columns);
 		batch_queries += WriteAddedFieldStats(result.added_fields, stats, context);
 		batch_queries += context.write_inlined_tables(commit_snapshot, result.new_inlined_data_tables,
-		                                              commit_state.replaced_inlined_tables);
+		                                              commit_state.replaced_inlined_tables, dropped_inlined_tables);
 		batch_queries += DuckLakeMetadataManager::WriteNewSortKeys(existing_catalog.sorts, result.new_sort_keys);
 		new_tables_result = result.new_tables;
 		new_inlined_data_tables_result = result.new_inlined_data_tables;
@@ -2495,7 +2496,10 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			if (row.IsNull(0)) {
 				throw TransactionException("Conflict while locking DuckLake inlined table registrations");
 			}
-			inlined_tables[TableIndex(row.GetValue<idx_t>(0))].insert(row.GetValue<string>(1));
+			auto table_name = row.GetValue<string>(1);
+			if (!dropped_inlined_tables.count(table_name)) {
+				inlined_tables[TableIndex(row.GetValue<idx_t>(0))].insert(std::move(table_name));
+			}
 		}
 	}
 	map<TableIndex, idx_t> pending_inlined_rows;

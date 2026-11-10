@@ -3607,7 +3607,8 @@ Identifier DuckLakeMetadataManager::GetInlinedTableQueries(DuckLakeSnapshot comm
 
 string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot,
                                                       const vector<DuckLakeTableInfo> &new_tables,
-                                                      const set<TableIndex> &replaced_tables) {
+                                                      const set<TableIndex> &replaced_tables,
+                                                      set<string> &dropped_inlined_tables) {
 	auto &catalog = transaction.GetCatalog();
 	auto context_ref = transaction.context.lock();
 	auto &context = *context_ref;
@@ -3642,7 +3643,8 @@ string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_sn
 		if (replaced_tables.count(table.id) && DroppedTablesStayReadable()) {
 			auto replaced_entry = catalog.GetEntryById(transaction, transaction.GetSnapshot(), table.id);
 			if (replaced_entry) {
-				drop_queries += DropInlinedTableIfEmpty(table.id, replaced_entry->Cast<DuckLakeTableEntry>());
+				drop_queries += DropInlinedTableIfEmpty(table.id, replaced_entry->Cast<DuckLakeTableEntry>(),
+				                                        dropped_inlined_tables);
 			}
 		}
 	}
@@ -3661,7 +3663,8 @@ string DuckLakeMetadataManager::DropInlinedTableSql(idx_t table_id, idx_t schema
 	    table_id, schema_version, table_name);
 }
 
-string DuckLakeMetadataManager::DropInlinedTableIfEmpty(TableIndex table_id, const DuckLakeTableEntry &table) {
+string DuckLakeMetadataManager::DropInlinedTableIfEmpty(TableIndex table_id, const DuckLakeTableEntry &table,
+                                                        set<string> &dropped_inlined_tables) {
 	auto &inlined_tables = table.GetInlinedDataTables();
 	if (inlined_tables.empty()) {
 		return string();
@@ -3681,6 +3684,7 @@ string DuckLakeMetadataManager::DropInlinedTableIfEmpty(TableIndex table_id, con
 		return string();
 	}
 	// readers of older schema versions skip dropped inlined tables, so the cached versions stay valid
+	dropped_inlined_tables.insert(current.table_name.GetIdentifierName());
 	return DropInlinedTableSql(table_id.index, current.schema_version, current.table_name);
 }
 

@@ -1778,8 +1778,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		return metadata_manager->TryAppendDataFiles(snapshot, files, new_tables, new_schemas);
 	};
 	context.write_inlined_tables = [&](DuckLakeSnapshot snapshot, const vector<DuckLakeTableInfo> &tables,
-	                                   const set<TableIndex> &replaced_tables) {
-		return metadata_manager->WriteNewInlinedTables(snapshot, tables, replaced_tables);
+	                                   const set<TableIndex> &replaced_tables, set<string> &dropped_inlined_tables) {
+		return metadata_manager->WriteNewInlinedTables(snapshot, tables, replaced_tables, dropped_inlined_tables);
 	};
 	context.write_inlined_file_deletes = [&](const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) {
 		return metadata_manager->WriteNewInlinedFileDeletesSqlBatch(new_deletes);

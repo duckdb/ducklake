@@ -1,5 +1,5 @@
 # name: test/sql/compaction/rewrite_record_count_concurrent.test
-# description: A rewrite committed after a concurrent insert keeps the count above the live rows, the bounds are stale
+# description: A rewrite committed after a concurrent insert refreshes the row count and clears stale bounds
 # group: [compaction]
 
 require ducklake
@@ -13,7 +13,7 @@ test-env DATA_PATH {TEST_DIR}
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/rewrite_record_count_concurrent', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
 
-# the other transaction changed the table, so the rewrite cannot recompute the stats and leaves the count alone
+# the other transaction changed the table, so the rewrite refreshes the count and clears the old bounds
 statement ok
 CREATE TABLE lake.c (id INTEGER)
 
@@ -53,13 +53,13 @@ SELECT min(id), max(id) FROM lake.c
 ----
 60	109
 
-# the count stays at 110 with the stale bounds, unless the commit recomputed the stats exactly (50 with minimum 60)
-query I
-SELECT CASE WHEN s.record_count = 110 THEN c.min_value = '0' WHEN s.record_count = 50 THEN c.min_value = '60' END
+# the refreshed count must not make the old bounds exact
+query III
+SELECT s.record_count, c.min_value, c.max_value
 FROM meta.ducklake_table_stats s JOIN meta.ducklake_table_column_stats c USING (table_id)
 WHERE s.table_id = getvariable('c_id') AND c.column_id = 1
 ----
-true
+50	NULL	NULL
 
 # a commit of another table during the rewrite makes the commit retry, the retry still refreshes the count
 statement ok
