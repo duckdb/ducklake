@@ -916,7 +916,8 @@ static string SnapshotTableRebuildSql(const string &table, const string &columns
 		if (has_table) {
 			// a resumed copy also drops the rows a client expired since the first attempt
 			string branch_column = source_has_branch_id ? "COALESCE(s.branch_id, 0)" : "0";
-			result += StringUtil::Format(R"(
+			result +=
+			    StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.%s
 SELECT %s, %s FROM {METADATA_CATALOG}.%s s
 WHERE NOT EXISTS (
@@ -926,9 +927,8 @@ WHERE NOT EXISTS (
     SELECT 1 FROM {METADATA_CATALOG}.%s s WHERE %s = %s.branch_id AND s.snapshot_id = %s.snapshot_id);
 ALTER TABLE {METADATA_CATALOG}.%s RENAME TO %s;
 )",
-			                             rebuild_table, select_list, branch_column, table, rebuild_table, branch_column,
-			                             rebuild_table, table, branch_column, rebuild_table, rebuild_table, table,
-			                             old_table);
+			                       rebuild_table, select_list, branch_column, table, rebuild_table, branch_column,
+			                       rebuild_table, table, branch_column, rebuild_table, rebuild_table, table, old_table);
 		}
 		result += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME TO %s;\n", rebuild_table, table);
 	} else if (has_rebuild_table) {
