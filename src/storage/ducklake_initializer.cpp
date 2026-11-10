@@ -148,6 +148,9 @@ void DuckLakeInitializer::LoadExistingDuckLakeWithRetries(DuckLakeTransaction &t
 			return;
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
+			if (error.Type() == ExceptionType::INTERRUPT) {
+				error.Throw();
+			}
 			// another attach migrating at the same time can make a migration fail with any error
 			if (PermanentLoadError(error) && !migrating) {
 				error.Throw();

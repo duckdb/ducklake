@@ -826,6 +826,9 @@ DuckLakeMetadata DuckLakeMetadataManager::LoadDuckLake() {
 SELECT key, value, scope, scope_id FROM {METADATA_CATALOG}.ducklake_metadata
 )");
 	if (result->HasError()) {
+		if (result->GetErrorObject().Type() == ExceptionType::INTERRUPT) {
+			result->ThrowIfError();
+		}
 		// preserve the original error in case the fallback also fails
 		auto original_error = result->GetErrorObject().RawMessage();
 		// we might be loading from a v0.1 database - if so we don't have scope yet
@@ -833,6 +836,9 @@ SELECT key, value, scope, scope_id FROM {METADATA_CATALOG}.ducklake_metadata
 SELECT key, value FROM {METADATA_CATALOG}.ducklake_metadata
 )");
 		if (result->HasError()) {
+			if (result->GetErrorObject().Type() == ExceptionType::INTERRUPT) {
+				result->ThrowIfError();
+			}
 			auto fallback_error = result->GetErrorObject().RawMessage();
 			throw IOException("Failed to load existing DuckLake: %s\nFollowed by: %s", original_error, fallback_error);
 		}
