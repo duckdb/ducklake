@@ -29,26 +29,12 @@ jobs:
         id: runners
         uses: duckdb/duckdb-ci/detect-runners@main
 
-  get-duckdb-version:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    name: Get DuckDB version
-    runs-on: ubuntu-latest
-    outputs:
-      duckdb_version: ${{ steps.version.outputs.duckdb_version }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: .github
-      - id: version
-        run: echo "duckdb_version=$(cat .github/duckdb-version)" >> $GITHUB_OUTPUT
-
   build:
     name: Build extension
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    needs: [prepare, get-duckdb-version]
+    needs: prepare
     uses: duckdb/extension-ci-tools/.github/workflows/build.yml@main
     with:
-      duckdb_version: ${{ needs.get-duckdb-version.outputs.duckdb_version }}
       groups: |
         main:
           config: extension_config.cmake
@@ -102,7 +88,7 @@ jobs:
   deploy:
     name: Deploy extension
     if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.ref != 'refs/heads/main')
-    needs: [get-duckdb-version, build, gcc12-compatibility-build]
+    needs: [build, gcc12-compatibility-build]
     uses: duckdb/extension-ci-tools/.github/workflows/deploy.yml@main
     secrets: inherit
     with:
