@@ -418,12 +418,12 @@ string DuckLakeMetadataManager::DataFileSource(bool branch_aware, const string &
 		table_filter = StringUtil::Format(" AND table_id = %d", table_id.GetIndex());
 	}
 	if (chain_predicate.empty()) {
-		// the main lineage has at most one add and one delete event per file, one scan derives both
+		// the main lineage has one add and at most one delete event per file, one scan derives both
 		return StringUtil::Format("(SELECT f.*, v.begin_snapshot, v.end_snapshot "
 		                          "FROM %s.ducklake_data_file f "
 		                          "JOIN (SELECT data_file_id, table_id, "
 		                          "MIN(CASE WHEN NOT is_delete THEN snapshot_id END) AS begin_snapshot, "
-		                          "MAX(CASE WHEN is_delete THEN snapshot_id END) AS end_snapshot "
+		                          "MIN(CASE WHEN is_delete THEN snapshot_id END) AS end_snapshot "
 		                          "FROM %s.ducklake_file_visibility WHERE branch_id = 0%s "
 		                          "GROUP BY data_file_id, table_id "
 		                          "HAVING MIN(CASE WHEN NOT is_delete THEN snapshot_id END) IS NOT NULL) v "
@@ -6106,14 +6106,11 @@ string DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(bool include_exa
 	if (branch_aware) {
 		branch_id_column = "branch_id";
 		changes_filter = StringUtil::Format("c.snapshot_id > {SNAPSHOT_ID} AND c.branch_id = %llu", commit_branch_id);
-		// the aggregate head of HeadSnapshotQuery, a late materialized ORDER BY LIMIT 1 can lose it to a checkpoint
+		// the conflict read selects the head of the lineage as the ordinary reads do
 		snapshot_arm_tail = StringUtil::Format(R"(
     FROM {METADATA_CATALOG}.ducklake_snapshot
-    WHERE (%s) AND snapshot_id = (
-        SELECT MAX(snapshot_id)
-        FROM {METADATA_CATALOG}.ducklake_snapshot
-        WHERE %s))",
-		                                       head_predicate, head_predicate);
+    WHERE (%s) AND %s)",
+		                                       head_predicate, HeadSnapshotFilter(head_predicate));
 	}
 	return R"(
 SELECT
@@ -6247,9 +6244,14 @@ FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot);)";
 }
 
+string DuckLakeMetadataManager::HeadSnapshotFilter(const string &head_predicate) {
+	// the ids of a chain are unique, so MAX is the head, and the aggregate form avoids the late materialized
+	// ORDER BY LIMIT plan whose two rowid joined scans a checkpoint can desynchronize
+	return StringUtil::Format(
+	    "snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE %s)", head_predicate);
+}
+
 string DuckLakeMetadataManager::HeadSnapshotQuery(const string &head_predicate, const vector<idx_t> &lineage_branches) {
-	// the ids of a chain are unique, so MAX is the head and the aggregate form keeps one scan of the table, a
-	// checkpoint between the two scans of a late materialized ORDER BY LIMIT 1 can lose the head
 	string columns = "snapshot_id, schema_version, next_catalog_id, next_file_id, "
 	                 "(SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version'), branch_id";
 	for (auto &branch_id : lineage_branches) {
@@ -6258,8 +6260,8 @@ string DuckLakeMetadataManager::HeadSnapshotQuery(const string &head_predicate, 
 	}
 	return StringUtil::Format(R"(SELECT %s
 FROM {METADATA_CATALOG}.ducklake_snapshot
-WHERE (%s) AND snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE %s);)",
-	                          columns, head_predicate, head_predicate);
+WHERE (%s) AND %s;)",
+	                          columns, head_predicate, HeadSnapshotFilter(head_predicate));
 }
 
 string DuckLakeMetadataManager::BranchLineageFilter() const {

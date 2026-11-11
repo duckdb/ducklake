@@ -367,6 +367,8 @@ public:
 	static string LatestSnapshotQuery();
 	//! With table ids only those tables' stats are read
 	static string GlobalTableStatsQuery(bool include_exactness, const vector<TableIndex> &table_ids = {});
+	//! The filter that selects the head of the snapshots the predicate matches
+	static string HeadSnapshotFilter(const string &head_predicate);
 	//! The head of the snapshots the predicate selects with the catalog version, its branch and the newest snapshot
 	//! of each given branch
 	static string HeadSnapshotQuery(const string &head_predicate, const vector<idx_t> &lineage_branches = {});
