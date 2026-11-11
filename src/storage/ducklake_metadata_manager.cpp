@@ -6184,9 +6184,7 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 	auto result = InsertValuesSql("ducklake_delete_file", delete_file_values) +
 	              InsertValuesSql("ducklake_delete_file_visibility", visibility_values);
 	if (!swap_values.empty()) {
-		// the explicit branch events move to the replacement, an add event takes the begin of main's event so the
-		// segment of main owns it and the cap clips the dated deletes, a branch that inherited the old file through
-		// its root cap gets an add event of its own
+		// the branch events and the inherited references move to the replacement
 		if (include_branch_bookkeeping) {
 			auto swap_rows = StringUtil::Join(swap_values, ", ");
 			string inherited_arm;
@@ -6474,8 +6472,7 @@ WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_sn
 }
 
 string DuckLakeMetadataManager::HeadSnapshotFilter(const string &head_predicate) {
-	// the ids of a chain are unique, so MAX is the head, and the aggregate form avoids the late materialized
-	// ORDER BY LIMIT plan whose two rowid joined scans a checkpoint can desynchronize
+	// MAX is the head, the ids of a chain are unique
 	return StringUtil::Format(
 	    "snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE %s)", head_predicate);
 }
