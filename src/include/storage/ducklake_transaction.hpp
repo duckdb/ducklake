@@ -250,7 +250,9 @@ public:
 	bool HasTransactionLocalInserts(TableIndex table_id) const;
 	bool HasTransactionInlinedData(TableIndex table_id) const;
 	void AppendFiles(TableIndex table_id, vector<DuckLakeDataFile> files);
-	void AddDeletes(TableIndex table_id, vector<DuckLakeDeleteFile> files);
+	//! scoped_delete: the delete operator reports what the deletes could match with MarkDeleteAttempted - any
+	//! other delete conflicts with every concurrent insert into the table
+	void AddDeletes(TableIndex table_id, vector<DuckLakeDeleteFile> files, bool scoped_delete = false);
 	bool AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry);
 	//! Source files of the compactions recorded earlier in this transaction
 	set<DataFileIndex> GetCompactedFiles(TableIndex table_id) const;
@@ -280,9 +282,17 @@ public:
 	void DropView(DuckLakeViewEntry &view);
 	void DropScalarMacro(DuckLakeScalarMacroEntry &macro);
 	void DropTableMacro(DuckLakeTableMacroEntry &macro);
-	void DropFile(TableIndex table_id, DataFileIndex data_file_id, string path, idx_t row_count, idx_t file_size_bytes);
-	//! Record that a delete predicate was evaluated against a table, even if no rows matched
+	//! scoped_delete: as for AddDeletes
+	void DropFile(TableIndex table_id, DataFileIndex data_file_id, string path, idx_t row_count, idx_t file_size_bytes,
+	              bool scoped_delete = false);
+	//! Record that a delete predicate was evaluated against a table, even if no rows matched. It conflicts with any
+	//! concurrent insert into the table.
 	void MarkDeleteAttempted(TableIndex table_id);
+	//! Record that a delete statement was evaluated against a table. It conflicts only with the concurrently inserted
+	//! files that one of the queries returns - none means with any concurrent insert.
+	void MarkDeleteAttempted(TableIndex table_id, const vector<string> &inserted_file_queries);
+	//! Record that the transaction scanned a table, so its inserts conflict with concurrent deletes from it
+	void MarkTableRead(TableIndex table_id);
 
 	//! The snapshots the criterion selects that no tag protects, as the transaction sees them
 	vector<DuckLakeSnapshotInfo> ExpirableSnapshots(const string &filter);

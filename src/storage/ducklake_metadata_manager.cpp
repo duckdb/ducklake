@@ -2353,7 +2353,7 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 //! Every statistics CTE adds a join to the file list query, whose planning grows fast with their number
 static constexpr idx_t MAX_STATS_CTES = 32;
 
-string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot,
+string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                                                       const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
                                                       vector<idx_t> &runtime_filter_stats_columns,
@@ -2443,6 +2443,23 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 		}
 	}
 
+	if (file_list_type == FileListType::COMMITTED_AFTER) {
+		if (filter_result.where_conditions.empty()) {
+			// the filter cannot rule out any file
+			return string();
+		}
+		// any data file committed after the snapshot, also one that a later commit already ended
+		query += StringUtil::Format(R"(
+SELECT data.data_file_id
+FROM %s.ducklake_data_file data
+%s
+WHERE data.table_id=%d AND (data.begin_snapshot > %d OR data.partial_max > %d)
+		)",
+		                            metadata_table_prefix, stats_join_list, table_id.index, snapshot.snapshot_id,
+		                            snapshot.snapshot_id);
+		return query + "\nAND " + filter_result.where_conditions + "\nLIMIT 1";
+	}
+
 	string select_list;
 	if (file_list_type == FileListType::EXTENDED) {
 		select_list = "data.data_file_id, del.delete_file_id, data.record_count, " + GetDataFileSelectList("data") +
@@ -2474,6 +2491,17 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 		query += "\nAND " + filter_result.where_conditions;
 	}
 	return query + order_by_clause;
+}
+
+string DuckLakeMetadataManager::GetCommittedFileMatchingFilterQuery(DuckLakeTableEntry &table,
+                                                                    DuckLakeSnapshot snapshot,
+                                                                    const FilterPushdownInfo &filter_info) {
+	if (filter_info.Empty()) {
+		return string();
+	}
+	vector<idx_t> runtime_filter_stats_columns;
+	return GenerateFileListQuery(table, snapshot, &filter_info, {}, runtime_filter_stats_columns,
+	                             FileListType::COMMITTED_AFTER);
 }
 
 vector<DuckLakeFileListEntry> DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table,

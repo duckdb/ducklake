@@ -415,7 +415,7 @@ bool DuckLakeDelete::TryDropFullyDeletedFile(DuckLakeTransaction &transaction, c
 		return transaction.TryDropTransactionLocalFile(table.GetTableId(), data_file_info.file.path);
 	}
 	transaction.DropFile(table.GetTableId(), delete_file.data_file_id, data_file_info.file.path,
-	                     data_file_info.row_count, data_file_info.file.file_size_bytes);
+	                     data_file_info.row_count, data_file_info.file.file_size_bytes, true);
 	return true;
 }
 
@@ -589,7 +589,7 @@ SinkFinalizeType DuckLakeDelete::Finalize(Pipeline &pipeline, Event &event, Clie
                                           OperatorSinkFinalizeInput &input) const {
 	auto &global_state = input.global_state.Cast<DuckLakeDeleteGlobalState>();
 	auto &transaction = DuckLakeTransaction::Get(context, table.catalog);
-	transaction.MarkDeleteAttempted(table.GetTableId());
+	transaction.MarkDeleteAttempted(table.GetTableId(), inserted_file_queries);
 	if (global_state.deleted_rows.empty()) {
 		return SinkFinalizeType::READY;
 	}
@@ -615,7 +615,7 @@ SinkFinalizeType DuckLakeDelete::Finalize(Pipeline &pipeline, Event &event, Clie
 			transaction.TransactionLocalDelete(table.GetTableId(), data_file_path, std::move(delete_file));
 		}
 	}
-	transaction.AddDeletes(table.GetTableId(), std::move(delete_files));
+	transaction.AddDeletes(table.GetTableId(), std::move(delete_files), true);
 	return SinkFinalizeType::READY;
 }
 
@@ -708,6 +708,42 @@ static void FindDeleteSources(PhysicalOperator &plan, DuckLakeTableEntry &table,
 	}
 }
 
+//! The query for the data files committed after the snapshot of the scan that its static filters could match, empty
+//! if none of them can rule out a file. Dynamic filters are left out: they only hold for the rows the scan read.
+static string GetInsertedFileQuery(DuckLakeMultiFileList &file_list) {
+	auto filter_info = file_list.GetFilterInfo();
+	if (!filter_info) {
+		return string();
+	}
+	auto static_filters = filter_info->Copy();
+	for (auto it = static_filters->column_filters.begin(); it != static_filters->column_filters.end();) {
+		if (ExpressionFilter::GetOptionalDynamicFilterData(*it->second.table_filter)) {
+			it = static_filters->column_filters.erase(it);
+		} else {
+			++it;
+		}
+	}
+	auto &read_info = file_list.GetReadInfo();
+	auto transaction = read_info.GetTransaction();
+	return transaction->GetMetadataManager().GetCommittedFileMatchingFilterQuery(read_info.table, read_info.snapshot,
+	                                                                             *static_filters);
+}
+
+//! Whether the plan only filters and projects the rows of the scan. Otherwise what it deletes can depend on other
+//! data - a join, or bounds the optimizer derived from the other side of a join, are not fixed by the statement.
+static bool OnlyFiltersScan(PhysicalOperator &plan, PhysicalTableScan &scan) {
+	reference<PhysicalOperator> op = plan;
+	while (&op.get() != &scan) {
+		auto type = op.get().type;
+		if ((type != PhysicalOperatorType::PROJECTION && type != PhysicalOperatorType::FILTER) ||
+		    op.get().children.size() != 1) {
+			return false;
+		}
+		op = op.get().children[0].get();
+	}
+	return true;
+}
+
 PhysicalOperator &DuckLakeDelete::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner,
                                              DuckLakeTableEntry &table, PhysicalOperator &child_plan,
                                              vector<idx_t> row_id_indexes, string encryption_key,
@@ -715,6 +751,10 @@ PhysicalOperator &DuckLakeDelete::PlanDelete(ClientContext &context, PhysicalPla
 	vector<reference<PhysicalTableScan>> delete_sources;
 	FindDeleteSources(child_plan, table, delete_sources);
 	auto delete_map = make_shared_ptr<DuckLakeDeleteMap>();
+	// every deleted row comes from the delete source and satisfies the filters pushed into its file list - unless the
+	// plan reads other data, which a concurrent insert could change
+	vector<string> inserted_file_queries;
+	bool conflicts_table_wide = delete_sources.size() != 1 || !OnlyFiltersScan(child_plan, delete_sources[0].get());
 	for (auto &delete_source : delete_sources) {
 		auto &bind_data = delete_source.get().bind_data->Cast<MultiFileBindData>();
 		auto &reader = bind_data.multi_file_reader->Cast<DuckLakeMultiFileReader>();
@@ -725,9 +765,18 @@ PhysicalOperator &DuckLakeDelete::PlanDelete(ClientContext &context, PhysicalPla
 		}
 		delete_map->file_lists.push_back(bind_data.file_list);
 		reader.delete_map = delete_map;
+		if (!conflicts_table_wide) {
+			auto query = GetInsertedFileQuery(file_list);
+			conflicts_table_wide = query.empty();
+			inserted_file_queries.push_back(std::move(query));
+		}
 	}
-	return planner.Make<DuckLakeDelete>(table, child_plan, std::move(delete_map), std::move(row_id_indexes),
-	                                    std::move(encryption_key), allow_duplicates);
+	auto &result = planner.Make<DuckLakeDelete>(table, child_plan, std::move(delete_map), std::move(row_id_indexes),
+	                                            std::move(encryption_key), allow_duplicates);
+	if (!conflicts_table_wide) {
+		result.Cast<DuckLakeDelete>().inserted_file_queries = std::move(inserted_file_queries);
+	}
+	return result;
 }
 
 PhysicalOperator &DuckLakeCatalog::PlanDelete(ClientContext &context, PhysicalPlanGenerator &planner, LogicalDelete &op,
