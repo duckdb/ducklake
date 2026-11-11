@@ -1,0 +1,62 @@
+# name: test/sql/branches/branch_chain_corrupt.test
+# description: a branch attach refuses a chain whose parent is missing, cyclic or without a parent snapshot
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+# the parent of orphan does not exist
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'orphan', 7, 1)
+
+# loop_a and loop_b are each other's parent
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (2, 'loop_a', 3, 1)
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (3, 'loop_b', 2, 1)
+
+# unforked names a parent but not the snapshot it continues from
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (4, 'unforked', 0, NULL)
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'orphan')
+----
+Corrupt DuckLake - branch 7 in the chain of branch 1 does not exist
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'loop_a')
+----
+Corrupt DuckLake - the parents of branch 2 form a cycle
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'unforked')
+----
+Corrupt DuckLake - branch 4 has a parent but no parent snapshot
+
+# main does not read through any of them
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT i FROM dl.t
+----
+42
+
+statement ok
+DETACH dl

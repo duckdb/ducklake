@@ -726,7 +726,9 @@ vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
 		auto &chain = transaction.GetCatalog().AttachedChain();
 		bool written_since = std::any_of(result.begin(), result.end(), [&](const DuckLakeFileListEntry &entry) {
 			if (!entry.file_id.IsValid() || !entry.snapshot_id.IsValid()) {
+				// LCOV_EXCL_START
 				return false;
+				// LCOV_EXCL_STOP
 			}
 			auto allocator = next_file_ids.find(chain.OwnerOf(entry.snapshot_id.GetIndex()));
 			return allocator != next_file_ids.end() && entry.file_id.index >= allocator->second;

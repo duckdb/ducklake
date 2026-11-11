@@ -1,0 +1,59 @@
+# name: test/sql/branches/branch_tag_above_fork.test
+# description: a branch attach resolves the tags of main up to the snapshot it continues from
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+# dev continues from the first insert, both tags name snapshots of main
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+statement ok
+CALL ducklake_create_tag('dl', 'first', version => 2)
+
+statement ok
+CALL ducklake_create_tag('dl', 'second', version => 3)
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') ORDER BY tag_name
+----
+first	2
+second	3
+
+query I
+SELECT i FROM dl.t AT (VERSION => 'first')
+----
+1
+
+# the second tag names a snapshot of main the branch does not read
+statement error
+SELECT i FROM dl.t AT (VERSION => 'second')
+----
+Snapshot tag "second" names snapshot 3 of main, which is newer than the snapshot the attached branch continues from
+
+statement ok
+DETACH dl

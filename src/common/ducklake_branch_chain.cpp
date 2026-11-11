@@ -95,7 +95,9 @@ const DuckLakeBranchSegment &DuckLakeBranchChain::SegmentOf(idx_t snapshot_id) c
 			return segment;
 		}
 	}
+	// LCOV_EXCL_START
 	return segments.back();
+	// LCOV_EXCL_STOP
 }
 
 idx_t DuckLakeBranchChain::OwnerOf(idx_t snapshot_id) const {

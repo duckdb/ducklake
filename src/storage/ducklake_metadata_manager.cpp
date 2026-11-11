@@ -127,36 +127,6 @@ string DuckLakeMetadataManager::CommitErrorHint(const string &message) const {
 	return rule->hint;
 }
 
-bool DuckLakeMetadataManager::DetectConcurrentReadsBlockCommits() {
-	auto &catalog = transaction.GetCatalog();
-	// the SQLite profile leaves the field unset, so the attached catalog type decides
-	bool is_sqlite = StringUtil::CIEquals(catalog.MetadataCatalogType(), "sqlite");
-	if (!GetMetadataProfile().concurrent_reads_block_commits && !is_sqlite) {
-		return false;
-	}
-	if (!is_sqlite || catalog.GetAttached().IsReadOnly()) {
-		// a read only attach never commits, and the pragma counts as a write that a read only catalog refuses
-		return true;
-	}
-	// WAL readers do not block commits, and a write transaction fails on a stale snapshot instead
-	// the probe runs on its own connection so a refusal cannot abort the metadata transaction
-	string query = "SELECT journal_mode FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, 'PRAGMA journal_mode')";
-	SubstituteCatalogPlaceholders(query);
-	Connection probe_connection(*transaction.GetConnection().context->db);
-	auto result = probe_connection.Query(query);
-	if (result->HasError()) {
-		return true;
-	}
-	for (auto &row : *result) {
-		return !StringUtil::CIEquals(row.GetValue<string>(0), "wal");
-	}
-	return true;
-}
-
-bool DuckLakeMetadataManager::ConcurrentReadsBlockCommits() const {
-	return transaction.GetCatalog().ConcurrentReadsBlockCommits();
-}
-
 bool DuckLakeMetadataManager::HasBranches() {
 	if (!transaction.GetCatalog().SupportsBranching()) {
 		// the branch table only exists from 2.0 on, the probe would abort the metadata transaction
@@ -1190,7 +1160,9 @@ bool DuckLakeMetadataManager::HasBranchRows() {
 		auto probe = Query("SELECT COUNT(*) FROM (SELECT 1 FROM {METADATA_CATALOG}." + table +
 		                   " WHERE branch_id <> 0 LIMIT 1);");
 		if (probe->HasError()) {
+			// LCOV_EXCL_START
 			continue;
+			// LCOV_EXCL_STOP
 		}
 		for (auto &row : *probe) {
 			if (row.GetValue<int64_t>(0) > 0) {
@@ -1204,12 +1176,16 @@ bool DuckLakeMetadataManager::HasBranchRows() {
 bool DuckLakeMetadataManager::HasMainBranchRow() {
 	auto probe = Query("SELECT COUNT(*) FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_id = 0");
 	if (probe->HasError()) {
+		// LCOV_EXCL_START
 		return false;
+		// LCOV_EXCL_STOP
 	}
 	for (auto &row : *probe) {
 		return row.GetValue<int64_t>(0) > 0;
 	}
+	// LCOV_EXCL_START
 	return false;
+	// LCOV_EXCL_STOP
 }
 
 set<idx_t> DuckLakeMetadataManager::LoadBranchCaps(idx_t branch_id) {
@@ -1304,12 +1280,16 @@ bool DuckLakeMetadataManager::HasBranchZeroFileVisibility(const string &file_tab
 	}
 	auto probe = Query("SELECT COUNT(*) FROM (" + files_without_rows + " LIMIT 1);");
 	if (probe->HasError()) {
+		// LCOV_EXCL_START
 		return false;
+		// LCOV_EXCL_STOP
 	}
 	for (auto &row : *probe) {
 		return row.GetValue<int64_t>(0) == 0;
 	}
+	// LCOV_EXCL_START
 	return false;
+	// LCOV_EXCL_STOP
 }
 
 bool DuckLakeMetadataManager::HasBranchZeroDataVisibility() {
@@ -1387,6 +1367,10 @@ void DuckLakeMetadataManager::VerifyHealableV2_0Dev1(const V2_0Dev1Additions &mi
 		// interrupted heal on the current layout is finished keeping the branch rows
 		throw InvalidInputException("Cannot heal this DuckLake catalog: it holds branches of an older development "
 		                            "build, recreate it");
+	}
+	if (!missing.has_changes_table && !missing.has_changes_old) {
+		// no interruption of the heal leaves both behind, so there is nothing to rebuild the table from
+		throw InvalidInputException("Cannot heal this DuckLake catalog: the snapshot changes table is missing");
 	}
 	// each file table heals from its own preserved ranges, so check them separately
 	bool data_ranges_present = missing.drop_data_begin && missing.drop_data_end;
@@ -5821,7 +5805,9 @@ string DuckLakeMetadataManager::GetInlinedValuesSql(const vector<DuckLakeInlined
 
 string DuckLakeMetadataManager::DropDataFiles(const set<DataFileIndex> &dropped_files, bool write_visibility) {
 	if (dropped_files.empty()) {
+		// LCOV_EXCL_START
 		return {};
+		// LCOV_EXCL_STOP
 	}
 	if (write_visibility) {
 		return VisibilityFlushDrop("ducklake_file_visibility", "data_file_id", "data_file_id",
@@ -7019,7 +7005,9 @@ static string CompactionSnapshotUpdates(const string &file_table, const string &
                                         const string &id_column, const string &snapshot_column, idx_t snapshot_id,
                                         const vector<idx_t> &file_ids, bool write_visibility) {
 	if (file_ids.empty()) {
+		// LCOV_EXCL_START
 		return string();
+		// LCOV_EXCL_STOP
 	}
 	auto id_list = StringUtil::Join(file_ids, file_ids.size(), ", ", [](idx_t id) { return to_string(id); });
 	if (!write_visibility) {

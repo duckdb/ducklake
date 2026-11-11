@@ -1,0 +1,58 @@
+# name: test/sql/stats/count_star_row_count_cache_concurrent.test
+# description: a transaction keeps the row count it computed when a commit moves the shared entry to a newer snapshot
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT i FROM range(500) t(i)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT COUNT(*) FROM dl.t
+----
+500
+
+statement ok con2
+INSERT INTO dl.t VALUES (500)
+
+query I con2
+SELECT COUNT(*) FROM dl.t
+----
+501
+
+query I con1
+SELECT COUNT(*) FROM dl.t
+----
+500
+
+statement ok con1
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+# the second count of con1 reuses its own row count where metadata reads share one snapshot
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite') THEN
+    (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%SUM(record^_count)%' ESCAPE '^')
+    ELSE 2 END
+----
+2

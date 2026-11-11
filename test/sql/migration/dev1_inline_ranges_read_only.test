@@ -1,0 +1,112 @@
+# name: test/sql/migration/dev1_inline_ranges_read_only.test
+# description: a read only attach reads the inline file ranges of an older dev build without branch metadata
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT i FROM range(10) t(i)
+
+statement ok
+DELETE FROM dl.t WHERE i = 5
+
+statement ok
+INSERT INTO dl.t VALUES (100)
+
+# the file tables of the older dev build carried the ranges inline and had no visibility events
+statement ok
+ALTER TABLE meta.ducklake_data_file ADD COLUMN begin_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_data_file ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_data_file SET begin_snapshot = v.snapshot_id FROM meta.ducklake_file_visibility v WHERE v.branch_id = 0 AND v.is_delete = FALSE AND v.data_file_id = ducklake_data_file.data_file_id
+
+statement ok
+UPDATE meta.ducklake_data_file SET end_snapshot = v.snapshot_id FROM meta.ducklake_file_visibility v WHERE v.branch_id = 0 AND v.is_delete = TRUE AND v.data_file_id = ducklake_data_file.data_file_id
+
+statement ok
+ALTER TABLE meta.ducklake_delete_file ADD COLUMN begin_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_delete_file ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_delete_file SET begin_snapshot = v.snapshot_id FROM meta.ducklake_delete_file_visibility v WHERE v.branch_id = 0 AND v.is_delete = FALSE AND v.delete_file_id = ducklake_delete_file.delete_file_id
+
+statement ok
+UPDATE meta.ducklake_delete_file SET end_snapshot = v.snapshot_id FROM meta.ducklake_delete_file_visibility v WHERE v.branch_id = 0 AND v.is_delete = TRUE AND v.delete_file_id = ducklake_delete_file.delete_file_id
+
+statement ok
+DROP TABLE meta.ducklake_file_visibility
+
+statement ok
+DROP TABLE meta.ducklake_delete_file_visibility
+
+statement ok
+DETACH dl
+
+# a read only attach cannot add the visibility tables and reads the ranges instead
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+
+query I
+SELECT list(i ORDER BY i) FROM dl.t
+----
+[0, 1, 2, 3, 4, 6, 7, 8, 9, 100]
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 1)
+----
+10
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 2)
+----
+9
+
+statement ok
+DETACH dl
+
+# without the branch metadata the catalog has no branches to attach at
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+----
+does not support branches
+
+# a writable attach turns the ranges into events
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT list(i ORDER BY i) FROM dl.t
+----
+[0, 1, 2, 3, 4, 6, 7, 8, 9, 100]
+
+query II
+SELECT COUNT(*) FILTER (WHERE is_delete = FALSE), COUNT(*) FILTER (WHERE is_delete = TRUE) FROM meta.ducklake_file_visibility WHERE branch_id = 0
+----
+2	0
+
+query II
+SELECT COUNT(*) FILTER (WHERE is_delete = FALSE), COUNT(*) FILTER (WHERE is_delete = TRUE) FROM meta.ducklake_delete_file_visibility WHERE branch_id = 0
+----
+1	0
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_name IN ('ducklake_data_file', 'ducklake_delete_file') AND column_name IN ('begin_snapshot', 'end_snapshot')
+----
+0
+
+statement ok
+DETACH dl

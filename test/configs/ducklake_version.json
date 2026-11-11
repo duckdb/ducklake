@@ -35,6 +35,8 @@
         "test/sql/migration/dev1_branch_additions.test",
         "test/sql/migration/dev1_heal_refuses_old_branches.test",
         "test/sql/migration/dev1_heal_keeps_current_branches.test",
+        "test/sql/migration/dev1_inline_ranges_read_only.test",
+        "test/sql/migration/dev1_missing_changes_table.test",
         "test/sql/migration/dev1_old_layout_read_only.test",
         "test/sql/migration/dev1_snapshot_tables_heal.test",
         "test/sql/migration/v10_row_group_count.test",
@@ -187,6 +189,7 @@
       "reason": "Inserts branch rows into the 2.0 branch table, which a 1.0 catalog does not have",
       "paths": [
         "test/sql/branches/branch_allocators.test",
+        "test/sql/branches/branch_chain_corrupt.test",
         "test/sql/branches/branch_expire_dry_run.test",
         "test/sql/branches/branch_gap_tag_commit.test",
         "test/sql/branches/branch_listing_after_main_flush.test",
@@ -194,7 +197,9 @@
         "test/sql/branches/branch_nested_chain.test",
         "test/sql/branches/branch_nested_fork_below_parent.test",
         "test/sql/branches/branch_only_file_attach.test",
+        "test/sql/branches/branch_root_without_parent.test",
         "test/sql/branches/branch_same_snapshot_id.test",
+        "test/sql/branches/branch_tag_above_fork.test",
         "test/sql/branches/branch_snapshot_changes_key.test",
         "test/sql/branches/branchless_skips_guards.test",
         "test/sql/cleanup/expire_restarted_commit_cleanup.test"

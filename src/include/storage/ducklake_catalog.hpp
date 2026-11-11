@@ -199,13 +199,6 @@ public:
 	void SetMetadataCatalogType(string catalog_type) {
 		metadata_catalog_type = std::move(catalog_type);
 	}
-	//! Whether reads in the metadata transaction block concurrent commits, set when the metadata is attached
-	bool ConcurrentReadsBlockCommits() const {
-		return concurrent_reads_block_commits;
-	}
-	void SetConcurrentReadsBlockCommits(bool blocks) {
-		concurrent_reads_block_commits = blocks;
-	}
 	const DuckLakeMetadataProfile &MetadataProfile() const;
 	//! Set once the metadata database is attached, when its extension has had the chance to register the profile
 	void SetMetadataProfile(shared_ptr<const DuckLakeMetadataProfile> profile);
@@ -567,7 +560,6 @@ private:
 	//! The metadata server type
 	string metadata_type;
 	string metadata_catalog_type;
-	bool concurrent_reads_block_commits = false;
 	//! The profile of the metadata database, nullptr if it has none
 	shared_ptr<const DuckLakeMetadataProfile> metadata_profile;
 	//! The resolved DuckLake spec version of the attached catalog

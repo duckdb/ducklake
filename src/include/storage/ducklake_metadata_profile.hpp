@@ -43,8 +43,6 @@ struct DuckLakeMetadataProfile {
 	bool dropped_tables_stay_readable = true;
 	//! Rename the columns of inlined data tables by copying the tables instead of with ALTER TABLE
 	bool rename_inlined_columns_by_copy = false;
-	//! A read on a second connection can block a concurrent commit, read inside the transaction instead
-	bool concurrent_reads_block_commits = false;
 	//! The first rule whose pattern is found in the message of a commit error applies
 	vector<DuckLakeCommitErrorRule> commit_errors;
 	//! Extension settings that DuckLake's connections to the metadata database keep at their defaults
