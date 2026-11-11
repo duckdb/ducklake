@@ -2770,9 +2770,27 @@ void DuckLakeTransaction::MarkDeleteAttempted(TableIndex table_id, const vector<
 	}
 }
 
-void DuckLakeTransaction::MarkTableRead(TableIndex table_id) {
+idx_t DuckLakeTransaction::MarkTableRead(TableIndex table_id) {
 	lock_guard<mutex> guard(delete_attempted_lock);
-	state->tables_read.insert(table_id);
+	auto read_id = state->next_read_id++;
+	state->table_reads[table_id].insert(read_id);
+	return read_id;
+}
+
+void DuckLakeTransaction::SetReadScope(idx_t read_id, const string &inserted_file_query) {
+	lock_guard<mutex> guard(delete_attempted_lock);
+	auto entry = state->read_scopes.find(read_id);
+	if (entry == state->read_scopes.end()) {
+		state->read_scopes.emplace(read_id, inserted_file_query);
+	} else if (entry->second != inserted_file_query) {
+		// the same read started again with other filters - it could have seen either
+		entry->second.clear();
+	}
+}
+
+void DuckLakeTransaction::MarkCatalogStateRead() {
+	lock_guard<mutex> guard(delete_attempted_lock);
+	state->reads_catalog_state = true;
 }
 
 bool DuckLakeTransaction::HasDroppedFiles() const {

@@ -289,8 +289,14 @@ DuckLakeMultiFileReader::InitializeGlobalState(ClientContext &context, const Mul
 	// Materialize the file list here, while we are still single-threaded. It is otherwise first touched from
 	// the scan tasks, where every worker piles into DuckLakeMultiFileList::GetFiles() and blocks on its lock
 	// while one of them runs the metadata query - which costs far more in scheduler churn than the scan itself.
-	file_list.Cast<DuckLakeMultiFileList>().SetScanColumns(global_columns, global_column_ids);
-	file_list.Cast<DuckLakeMultiFileList>().GetFiles();
+	auto &ducklake_file_list = file_list.Cast<DuckLakeMultiFileList>();
+	ducklake_file_list.SetScanColumns(global_columns, global_column_ids);
+	ducklake_file_list.GetFiles();
+	// what a concurrent insert could change about this read, for the conflict check of the transaction's deletes
+	auto &read_info = ducklake_file_list.GetReadInfo();
+	if (read_info.read_id != DConstants::INVALID_INDEX) {
+		read_info.GetTransaction()->SetReadScope(read_info.read_id, ducklake_file_list.GetCommittedFileQuery());
+	}
 
 	optional_idx deletion_scan_snapshot_col;
 	optional_idx deletion_scan_file_row_number_col;

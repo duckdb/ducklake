@@ -440,6 +440,23 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::ComplexFilterPushdown(ClientCon
 	                                        std::move(pushdown_info));
 }
 
+string DuckLakeMultiFileList::GetCommittedFileQuery() const {
+	if (!filter_info || read_info.scan_type != DuckLakeScanType::SCAN_TABLE) {
+		return string();
+	}
+	auto static_filters = filter_info->Copy();
+	for (auto it = static_filters->column_filters.begin(); it != static_filters->column_filters.end();) {
+		if (ExpressionFilter::GetOptionalDynamicFilterData(*it->second.table_filter)) {
+			it = static_filters->column_filters.erase(it);
+		} else {
+			++it;
+		}
+	}
+	auto transaction = read_info.GetTransaction();
+	return transaction->GetMetadataManager().GetCommittedFileMatchingFilterQuery(read_info.table, read_info.snapshot,
+	                                                                             *static_filters);
+}
+
 FileExpandResult DuckLakeMultiFileList::GetExpandResult() const {
 	return FileExpandResult::MULTIPLE_FILES;
 }

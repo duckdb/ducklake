@@ -708,27 +708,6 @@ static void FindDeleteSources(PhysicalOperator &plan, DuckLakeTableEntry &table,
 	}
 }
 
-//! The query for the data files committed after the snapshot of the scan that its static filters could match, empty
-//! if none of them can rule out a file. Dynamic filters are left out: they only hold for the rows the scan read.
-static string GetInsertedFileQuery(DuckLakeMultiFileList &file_list) {
-	auto filter_info = file_list.GetFilterInfo();
-	if (!filter_info) {
-		return string();
-	}
-	auto static_filters = filter_info->Copy();
-	for (auto it = static_filters->column_filters.begin(); it != static_filters->column_filters.end();) {
-		if (ExpressionFilter::GetOptionalDynamicFilterData(*it->second.table_filter)) {
-			it = static_filters->column_filters.erase(it);
-		} else {
-			++it;
-		}
-	}
-	auto &read_info = file_list.GetReadInfo();
-	auto transaction = read_info.GetTransaction();
-	return transaction->GetMetadataManager().GetCommittedFileMatchingFilterQuery(read_info.table, read_info.snapshot,
-	                                                                             *static_filters);
-}
-
 //! Whether the plan only filters and projects the rows of the scan. Otherwise what it deletes can depend on other
 //! data - a join, or bounds the optimizer derived from the other side of a join, are not fixed by the statement.
 static bool OnlyFiltersScan(PhysicalOperator &plan, PhysicalTableScan &scan) {
@@ -766,7 +745,7 @@ PhysicalOperator &DuckLakeDelete::PlanDelete(ClientContext &context, PhysicalPla
 		delete_map->file_lists.push_back(bind_data.file_list);
 		reader.delete_map = delete_map;
 		if (!conflicts_table_wide) {
-			auto query = GetInsertedFileQuery(file_list);
+			auto query = file_list.GetCommittedFileQuery();
 			conflicts_table_wide = query.empty();
 			inserted_file_queries.push_back(std::move(query));
 		}
