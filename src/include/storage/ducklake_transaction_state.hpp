@@ -180,6 +180,8 @@ struct DuckLakeCommitContext {
 	bool skip_drop_empty_inlined = false;
 	//! Whether the metadata schema has the >= 1.1 additions.
 	bool supports_v1_1_metadata = false;
+	//! Combines column-bound invalidation and row-total refresh in one statement snapshot.
+	bool supports_data_modifying_cte = false;
 	//! Column names of the inlined data tables under this catalog version.
 	DuckLakeInlinedColNames InlinedColNames() const {
 		return DuckLakeInlinedColNames(supports_v1_1_metadata);

@@ -217,6 +217,9 @@ public:
 	virtual bool SupportsAppender() const {
 		return true;
 	}
+	virtual bool SupportsDataModifyingCTE() const {
+		return false;
+	}
 
 	//! Whether the metadata catalog commits each statement on its own, so a rollback cannot undo them
 	virtual bool CommitsEachStatement() const {
@@ -571,7 +574,7 @@ public:
 	static string RefreshTableRowCountSql(TableIndex table_id, const set<string> &inlined_tables,
 	                                      idx_t pending_inlined_rows, const DuckLakeInlinedColNames &col_names,
 	                                      bool include_exactness, bool has_inlined_file_deletions,
-	                                      bool refresh_file_size);
+	                                      bool refresh_file_size, bool supports_data_modifying_cte);
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor, const string &query);

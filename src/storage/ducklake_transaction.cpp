@@ -1890,6 +1890,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.write_snapshot = ChangesMade();
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
+	context.supports_data_modifying_cte = metadata_manager->SupportsDataModifyingCTE();
 	context.snapshot_and_stats_query =
 	    metadata_manager->GetSnapshotAndStatsAndChangesQuery(transaction_snapshot, context.supports_v1_1_metadata);
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);

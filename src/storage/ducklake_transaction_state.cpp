@@ -2621,7 +2621,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::RefreshTableRowCountSql(
 		    table_id, inlined_tables[table_id], pending_inlined_rows[table_id], context.InlinedColNames(),
 		    context.supports_v1_1_metadata, context.inlined_file_deletion_table_exists(table_id),
-		    refreshed_table_sizes.erase(table_id) > 0);
+		    refreshed_table_sizes.erase(table_id) > 0, context.supports_data_modifying_cte);
 	}
 	batch_queries += DuckLakeMetadataManager::RefreshTableSizesSql(refreshed_table_sizes);
 

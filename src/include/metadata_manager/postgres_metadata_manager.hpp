@@ -25,6 +25,9 @@ public:
 	bool SupportsAppender() const override {
 		return false;
 	}
+	bool SupportsDataModifyingCTE() const override {
+		return true;
+	}
 	bool DroppedTablesStayReadable() const override {
 		return false;
 	}

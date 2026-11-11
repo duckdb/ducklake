@@ -5645,7 +5645,7 @@ string DuckLakeMetadataManager::RefreshTableRowCountSql(TableIndex table_id, con
                                                         idx_t pending_inlined_rows,
                                                         const DuckLakeInlinedColNames &col_names,
                                                         bool include_exactness, bool has_inlined_file_deletions,
-                                                        bool refresh_file_size) {
+                                                        bool refresh_file_size, bool supports_data_modifying_cte) {
 	vector<string> counts;
 	vector<string> deleted_counts;
 	counts.push_back(StringUtil::Format(R"(SELECT
@@ -5690,15 +5690,23 @@ WHERE data.table_id = %d AND data.end_snapshot IS NULL AND del.begin_snapshot <=
 ))",
 		                               table_id.index);
 	}
-	return StringUtil::Format(R"(
+	auto invalidate_bounds = StringUtil::Format(R"(
 UPDATE {METADATA_CATALOG}.ducklake_table_column_stats
 SET min_value=NULL, max_value=NULL%s WHERE table_id = %d AND (%s) = 0 AND EXISTS (
     SELECT 1 FROM {METADATA_CATALOG}.ducklake_table_stats
     WHERE table_id = %d AND (record_count IS NULL OR record_count <> (%s))
-);
-UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count = (%s)%s WHERE table_id = %d;)",
-	                          exactness, table_id.index, SumRowCountsSql(std::move(deleted_counts)), table_id.index,
-	                          row_count, row_count, file_size, table_id.index);
+))",
+	                                            exactness, table_id.index, SumRowCountsSql(std::move(deleted_counts)),
+	                                            table_id.index, row_count);
+	auto refresh_totals = StringUtil::Format(
+	    "UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count = (%s)%s WHERE table_id = %d;", row_count,
+	    file_size, table_id.index);
+	if (supports_data_modifying_cte) {
+		// READ COMMITTED cleanup can remove ended inlined rows between statements. Both updates must count the
+		// same stored rows, or the new total could make bounds that include deleted values appear exact.
+		return "WITH invalidated_bounds AS (" + invalidate_bounds + " RETURNING table_id) " + refresh_totals;
+	}
+	return invalidate_bounds + ";\n" + refresh_totals;
 }
 
 string DuckLakeMetadataManager::RefreshTableSizesSql(const set<TableIndex> &table_ids) {
