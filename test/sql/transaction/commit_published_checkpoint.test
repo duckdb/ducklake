@@ -88,9 +88,41 @@ statement ok
 DETACH dl
 
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/commit_published_checkpoint.db' AS dl (DATA_PATH '{TEST_DIR}/commit_published_checkpoint_files')
+ATTACH 'ducklake:{TEST_DIR}/commit_published_checkpoint.db' AS dl (DATA_PATH '{TEST_DIR}/commit_published_checkpoint_files', DATA_INLINING_ROW_LIMIT 0)
 
 query I
 SELECT value FROM ducklake_options('dl') WHERE option_name = 'target_file_size' AND scope = 'GLOBAL'
 ----
 10000000
+
+# when the metadata commit is not durable, its publication is unknown and the data file is kept as well
+statement ok
+SET auto_checkpoint_skip_wal_threshold = 0
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t VALUES (99)
+
+statement ok
+SET wal_autocheckpoint_entries = 1
+
+statement ok
+PRAGMA debug_checkpoint_abort = 'before_header_non_fatal'
+
+statement error
+COMMIT
+----
+The commit may have taken effect, so the files it wrote are kept
+
+statement ok
+PRAGMA debug_checkpoint_abort = 'none'
+
+statement ok
+SET wal_autocheckpoint_entries = 0
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/commit_published_checkpoint_files/**/*.parquet')
+----
+2

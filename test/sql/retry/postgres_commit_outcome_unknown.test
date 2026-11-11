@@ -1,0 +1,92 @@
+# name: test/sql/retry/postgres_commit_outcome_unknown.test
+# description: a commit that fails after it sent COMMIT to Postgres keeps its data file, as it may have taken effect
+# group: [retry]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CONNECTION postgres:dbname=ducklakedb
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS commit_outcome_unknown CASCADE')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/commit_outcome_unknown', METADATA_SCHEMA 'commit_outcome_unknown', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+# the server ends the connection while it runs COMMIT
+statement ok
+CALL postgres_execute('pg', 'CREATE FUNCTION commit_outcome_unknown.lose_connection() RETURNS trigger
+LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_terminate_backend(pg_backend_pid()); RETURN NULL; END $$')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE CONSTRAINT TRIGGER lose_connection AFTER INSERT
+ON commit_outcome_unknown.ducklake_snapshot DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION commit_outcome_unknown.lose_connection()')
+
+statement error
+INSERT INTO dl.t VALUES (1)
+----
+The commit may have taken effect, so the files it wrote are kept
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/commit_outcome_unknown/**/*.parquet')
+----
+1
+
+# the commit did not take effect, so the file is an orphan
+statement ok
+CALL ducklake_delete_orphaned_files('dl', cleanup_all => true)
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/commit_outcome_unknown/**/*.parquet')
+----
+0
+
+# the server rejects the COMMIT, which its error text cannot tell from a lost response, so the file is kept as well
+statement ok
+CALL postgres_execute('pg', 'DROP TRIGGER lose_connection ON commit_outcome_unknown.ducklake_snapshot')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE FUNCTION commit_outcome_unknown.fail_commit() RETURNS trigger
+LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION ''commit refused''; END $$')
+
+statement ok
+CALL postgres_execute('pg', 'CREATE CONSTRAINT TRIGGER fail_commit AFTER INSERT
+ON commit_outcome_unknown.ducklake_snapshot DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION commit_outcome_unknown.fail_commit()')
+
+statement error
+INSERT INTO dl.t VALUES (2)
+----
+commit refused
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/commit_outcome_unknown/**/*.parquet')
+----
+1
+
+statement ok
+CALL ducklake_delete_orphaned_files('dl', cleanup_all => true)
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/commit_outcome_unknown/**/*.parquet')
+----
+0
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA commit_outcome_unknown CASCADE')

@@ -3102,6 +3102,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
 	bool flushed_inlined = false;
 	bool wrote_snapshot = true;
+	bool publication_unknown = false;
 	for (idx_t i = 0;; i++) {
 		bool can_retry;
 		bool retryable_metadata_error = false;
@@ -3192,6 +3193,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			bool rejected = retryable || context.is_catalog_rejection(error.RawMessage());
 			if (commit_sent && (!rejected || CommitMayHaveBeenPublished(error))) {
 				// sent and not rejected, as after a lost connection: the commit may have been published
+				publication_unknown = true;
 				context.report_commit_outcome(DuckLakeCommitOutcome::PUBLICATION_UNKNOWN);
 			}
 			// an internal error is a bug that a retry cannot fix
@@ -3214,8 +3216,14 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			}
 			if (!retry_on_error || finished_retrying) {
 				// we abort after the max retry count
-				CleanupFiles();
+				if (!publication_unknown) {
+					CleanupFiles();
+				}
 				string error_message = "Failed to commit DuckLake transaction.\n";
+				if (publication_unknown && !files_owned_by_client) {
+					error_message += "The commit may have taken effect, so the files it wrote are kept. "
+					                 "ducklake_delete_orphaned_files removes them if it did not.\n";
+				}
 				// only an error that another retry could solve gets the advice to raise the retry count
 				if (retry_on_error) {
 					auto suggested_count =
