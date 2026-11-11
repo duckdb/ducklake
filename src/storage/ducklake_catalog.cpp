@@ -1072,6 +1072,9 @@ DuckLakeCatalog::GetTableStatsInternal(DuckLakeTransaction &transaction, DuckLak
 		auto *raw = cached.get();
 		return shared_ptr<DuckLakeTableStats>(std::move(cached), &raw->stats);
 	}
+	if (!retry_on_snapshot_mismatch && transaction.StatsSnapshotIsStale(snapshot.snapshot_id)) {
+		return nullptr;
+	}
 
 	auto schema_entry = GetSchemaCacheEntry(transaction, snapshot);
 	auto &table_map = schema_entry->catalog_set.GetTableIdMap();
@@ -1102,6 +1105,11 @@ DuckLakeCatalog::GetTableStatsInternal(DuckLakeTransaction &transaction, DuckLak
 		// Global stats are mutable, so older snapshots must not use newer, narrower bounds
 		if (retry_on_snapshot_mismatch) {
 			throw TransactionException("Transaction conflict - concurrent DuckLake commit changed table statistics");
+		}
+		if (latest_snapshot_id > snapshot.snapshot_id) {
+			// Snapshot IDs cannot go backwards. Avoid repeating a full-lake stats read for every optimizer call.
+			// This memo belongs to the reader; a commit still has to check and retry with its attempt snapshot.
+			transaction.MarkStatsSnapshotStale(snapshot.snapshot_id);
 		}
 		return nullptr;
 	}

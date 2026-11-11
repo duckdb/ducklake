@@ -223,6 +223,12 @@ public:
 	                             SnapshotBound bound = SnapshotBound::TIME_TRAVEL);
 	//! The newest snapshot that the transaction sees, also when the catalog is opened at a fixed snapshot
 	idx_t GetNewestVisibleSnapshotId();
+	bool StatsSnapshotIsStale(idx_t snapshot_id) const {
+		return stale_stats_snapshot == snapshot_id;
+	}
+	void MarkStatsSnapshotStale(idx_t snapshot_id) {
+		stale_stats_snapshot = snapshot_id;
+	}
 
 	static DuckLakeTransaction &Get(ClientContext &context, Catalog &catalog);
 
@@ -474,6 +480,8 @@ private:
 	//! catalog is opened at a fixed snapshot
 	mutex snapshot_lock;
 	unique_ptr<DuckLakeSnapshot> snapshot;
+	//! Reader-only memo: mutable global stats have already advanced past this snapshot.
+	atomic<idx_t> stale_stats_snapshot {DConstants::INVALID_INDEX};
 	idx_t local_catalog_id;
 	//! Set when this transaction inlines into a table that does not yet have an inlined-data table
 	atomic<bool> requires_new_inlined_table {false};
