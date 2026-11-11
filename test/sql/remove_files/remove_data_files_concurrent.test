@@ -1,0 +1,169 @@
+# name: test/sql/remove_files/remove_data_files_concurrent.test
+# description: an older transaction keeps seeing the rows of a file another connection removed
+# group: [remove_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/remove_data_files_concurrent', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t FROM range(0, 10)
+
+statement ok
+INSERT INTO ducklake.t FROM range(10, 20)
+
+statement ok
+INSERT INTO ducklake.t FROM range(20, 30)
+
+statement ok con2
+SET VARIABLE third_file = (SELECT filename FROM ducklake.t WHERE i = 25)
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM ducklake.t
+----
+30
+
+# the removing connection reads the table afterwards, which caches the narrowed bounds
+statement ok con2
+CALL ducklake_remove_data_files('ducklake', 't', getvariable('third_file'))
+
+query III con2
+SELECT min(i), max(i), count(*) FROM ducklake.t
+----
+0	19	20
+
+query II con2
+SELECT min(i), max(i) FROM ducklake.t WHERE i = 25
+----
+NULL	NULL
+
+# the older transaction keeps its own bounds, so the filter is not pruned away
+query III con1
+SELECT min(i), max(i), count(*) FROM ducklake.t
+----
+0	29	30
+
+query II con1
+SELECT min(i), max(i) FROM ducklake.t WHERE i = 25
+----
+25	25
+
+statement ok con1
+ROLLBACK
+
+# the same with a whole-file DELETE
+statement ok
+INSERT INTO ducklake.t FROM range(30, 40)
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM ducklake.t
+----
+30
+
+statement ok con2
+DELETE FROM ducklake.t WHERE i >= 30
+
+query III con2
+SELECT min(i), max(i), count(*) FROM ducklake.t
+----
+0	19	20
+
+query III con1
+SELECT min(i), max(i), count(*) FROM ducklake.t
+----
+0	39	30
+
+query II con1
+SELECT min(i), max(i) FROM ducklake.t WHERE i = 35
+----
+35	35
+
+statement ok con1
+ROLLBACK
+
+# a DELETE that drops a file and deletes a row of another file inline allocates no file id either
+statement ok
+CREATE TABLE ducklake.t2(i INTEGER)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 5, table_name => 't2')
+
+statement ok
+INSERT INTO ducklake.t2 FROM range(0, 10)
+
+statement ok
+INSERT INTO ducklake.t2 FROM range(20, 30)
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM ducklake.t2
+----
+20
+
+statement ok con2
+DELETE FROM ducklake.t2 WHERE i >= 20 OR i = 0
+
+query III con2
+SELECT min(i), max(i), count(*) FROM ducklake.t2
+----
+1	9	9
+
+query II con1
+SELECT min(i), max(i) FROM ducklake.t2 WHERE i = 25
+----
+25	25
+
+statement ok con1
+ROLLBACK
+
+# a whole-file drop with recomputed stats and an inlined deletion in another table still advances the cache key
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM ducklake.t
+----
+20
+
+statement ok con2
+BEGIN
+
+statement ok con2
+DELETE FROM ducklake.t WHERE i >= 10
+
+statement ok con2
+DELETE FROM ducklake.t2 WHERE i = 1
+
+statement ok con2
+COMMIT
+
+query II con2
+SELECT min(i), max(i) FROM ducklake.t
+----
+0	9
+
+query II con1
+SELECT min(i), max(i) FROM ducklake.t WHERE i = 15
+----
+15	15
+
+statement ok con1
+ROLLBACK

@@ -195,6 +195,11 @@ public:
 	static TableFunctionSet GetFunctions();
 };
 
+class DuckLakeRemoveDataFilesFunction : public TableFunction {
+public:
+	static TableFunctionSet GetFunctions();
+};
+
 class DuckLakeSettingsFunction : public DuckLakeBaseMetadataFunction {
 public:
 	DuckLakeSettingsFunction();

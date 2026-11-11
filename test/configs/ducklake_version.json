@@ -9,6 +9,12 @@
   ],
   "skip_tests": [
     {
+      "reason": "The stats exactness columns do not exist in a DuckLake 1.0 catalog",
+      "paths": [
+        "test/sql/remove_files/remove_data_files_stats.test"
+      ]
+    },
+    {
       "reason": "Parquet is statically loaded in this config, test requires missing parquet",
       "paths": [
         "test/sql/general/missing_parquet.test"
