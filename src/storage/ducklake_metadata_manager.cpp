@@ -390,10 +390,10 @@ string DuckLakeMetadataManager::GetDeleteFileTableStatement() {
 
 string DuckLakeMetadataManager::VisibilityEventRanges(const string &visibility_table, const string &file_id_column,
                                                       const string &chain_predicate, const string &prefix) {
-	// the earliest add of the chain is when the file became visible to the lineage, the latest delete ends it
+	// the earliest add is when the file became visible to the lineage, the earliest delete ends it
 	return StringUtil::Format(
 	    "SELECT v.table_id, v.%s, MIN(CASE WHEN v.is_delete = FALSE THEN v.snapshot_id END) AS begin_snapshot, "
-	    "MAX(CASE WHEN v.is_delete = TRUE THEN v.snapshot_id END) AS end_snapshot "
+	    "MIN(CASE WHEN v.is_delete = TRUE THEN v.snapshot_id END) AS end_snapshot "
 	    "FROM %s.%s v WHERE %s GROUP BY v.table_id, v.%s "
 	    "HAVING MIN(CASE WHEN v.is_delete = FALSE THEN v.snapshot_id END) IS NOT NULL",
 	    file_id_column, prefix, visibility_table, chain_predicate, file_id_column);
@@ -459,7 +459,7 @@ string DuckLakeMetadataManager::DeleteFileSource(bool branch_aware, const string
 		                          "FROM %s.ducklake_delete_file f "
 		                          "JOIN (SELECT delete_file_id, table_id, "
 		                          "MIN(CASE WHEN NOT is_delete THEN snapshot_id END) AS begin_snapshot, "
-		                          "MAX(CASE WHEN is_delete THEN snapshot_id END) AS end_snapshot "
+		                          "MIN(CASE WHEN is_delete THEN snapshot_id END) AS end_snapshot "
 		                          "FROM %s.ducklake_delete_file_visibility WHERE branch_id = 0%s "
 		                          "GROUP BY delete_file_id, table_id "
 		                          "HAVING MIN(CASE WHEN NOT is_delete THEN snapshot_id END) IS NOT NULL) v "

@@ -198,6 +198,7 @@
         "test/sql/branches/branch_nested_delete_replacement.test",
         "test/sql/branches/branch_nested_fork_below_parent.test",
         "test/sql/branches/branch_nested_retro_delete.test",
+        "test/sql/branches/branch_nested_retro_delete_history.test",
         "test/sql/branches/branch_only_file_attach.test",
         "test/sql/branches/branch_refork_historical.test",
         "test/sql/branches/branch_root_without_parent.test",
