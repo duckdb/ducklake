@@ -178,7 +178,8 @@
     {
       "reason": "FIXME: Each metadata query runs in its own server-side transaction on quack, so a reader that began before a rewrite reads the narrowed bounds from ducklake_table_column_stats.",
       "paths": [
-        "test/sql/compaction/rewrite_narrow_older_transaction.test"
+        "test/sql/compaction/rewrite_narrow_older_transaction.test",
+        "test/sql/remove_files/remove_data_files_concurrent.test"
       ]
     },
     {
