@@ -34,6 +34,8 @@ struct DuckLakeCommitContext {
 	std::function<DuckLakeSnapshot()> get_snapshot;
 	//! Whether the catalog holds any branch besides main, unset batches keep every branch statement
 	std::function<bool()> has_branches;
+	//! The branches whose chain reaches main with their root caps as VALUES rows, unset on the server side
+	std::function<string()> branch_root_caps;
 	//! What the expiries of the transaction delete in the commit attempt, read after the latest snapshot
 	//! whose id the attempt passes
 	std::function<DuckLakeExpiry(idx_t, idx_t)> get_expired_snapshots = [](idx_t, idx_t) {

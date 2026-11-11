@@ -1658,6 +1658,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.has_branches = [&]() {
 		return metadata_manager->HasBranches();
 	};
+	context.branch_root_caps = [&]() {
+		return DuckLakeMetadataManager::BranchRootCapValues(metadata_manager->LoadBranchRootCaps());
+	};
 	vector<DuckLakeSnapshotInfo> committed_expiry;
 	bool expired_by_statements = false;
 	if (ExpiresSnapshotsOnCommit()) {

@@ -1188,15 +1188,24 @@ bool DuckLakeMetadataManager::HasMainBranchRow() {
 	// LCOV_EXCL_STOP
 }
 
+vector<DuckLakeBranchChain> DuckLakeMetadataManager::LoadBranchChains() {
+	// the clamp of a chain decides how far the branch reads each of its parents
+	auto branches = LoadBranches();
+	vector<DuckLakeBranchChain> chains;
+	for (auto &branch : branches) {
+		if (branch.branch_id != 0) {
+			chains.push_back(DuckLakeBranchChain::Resolve(branches, branch.branch_id));
+		}
+	}
+	return chains;
+}
+
 set<idx_t> DuckLakeMetadataManager::LoadBranchCaps(idx_t branch_id) {
 	set<idx_t> caps;
-	auto branches = LoadBranches();
-	for (auto &branch : branches) {
-		if (branch.branch_id == branch_id) {
+	for (auto &chain : LoadBranchChains()) {
+		if (chain.BranchId() == branch_id) {
 			continue;
 		}
-		// the clamp of the chain decides how far the other branch reads this one
-		auto chain = DuckLakeBranchChain::Resolve(branches, branch.branch_id);
 		for (auto &segment : chain.Segments()) {
 			if (segment.branch_id == branch_id && segment.last_snapshot.IsValid()) {
 				caps.insert(segment.last_snapshot.GetIndex());
@@ -1204,6 +1213,26 @@ set<idx_t> DuckLakeMetadataManager::LoadBranchCaps(idx_t branch_id) {
 		}
 	}
 	return caps;
+}
+
+vector<pair<idx_t, idx_t>> DuckLakeMetadataManager::LoadBranchRootCaps() {
+	vector<pair<idx_t, idx_t>> root_caps;
+	for (auto &chain : LoadBranchChains()) {
+		// a root of its own inherits nothing of main
+		auto &root = chain.Segments().front();
+		if (root.branch_id == 0 && root.last_snapshot.IsValid()) {
+			root_caps.emplace_back(chain.BranchId(), root.last_snapshot.GetIndex());
+		}
+	}
+	return root_caps;
+}
+
+string DuckLakeMetadataManager::BranchRootCapValues(const vector<pair<idx_t, idx_t>> &root_caps) {
+	vector<string> rows;
+	for (auto &entry : root_caps) {
+		rows.push_back(StringUtil::Format("(%llu, %llu)", entry.first, entry.second));
+	}
+	return StringUtil::Join(rows, ", ");
 }
 
 set<idx_t> DuckLakeMetadataManager::GetBranchProtectedSnapshots(idx_t branch_id) {
@@ -5426,16 +5455,17 @@ static void AppendFileStats(Appender &appender, const DuckLakeColumnStats &stats
 // Optimized version using DuckDB Appender API for much faster inserts
 //! A flushed delete file starts in the past so branches inherit it, except where a branch already
 //! wrote its own delete file for the data file, which suppresses the inherited one from its first own file
-static string RetroactiveDeleteSuppressionSql(const vector<string> &retro_values) {
-	if (retro_values.empty()) {
+//! The root caps are the VALUES rows (branch_id, root_cap) of every branch whose chain reaches main
+static string RetroactiveDeleteSuppressionSql(const vector<string> &retro_values, const string &branch_root_caps) {
+	if (retro_values.empty() || branch_root_caps.empty()) {
 		return string();
 	}
 	return StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_delete_file_visibility
 SELECT own.branch_id, t.table_id, t.delete_file_id, MIN(own.snapshot_id), TRUE
 FROM (VALUES %s) t(table_id, delete_file_id, data_file_id, begin_snapshot)
-JOIN {METADATA_CATALOG}.ducklake_branch b
-ON b.parent_id = 0 AND b.parent_branch_snapshot >= t.begin_snapshot
+JOIN (VALUES %s) b(branch_id, root_cap)
+ON b.root_cap >= t.begin_snapshot
 JOIN {METADATA_CATALOG}.ducklake_delete_file_visibility own
 ON own.branch_id = b.branch_id AND own.is_delete = FALSE AND own.delete_file_id <> t.delete_file_id
 JOIN {METADATA_CATALOG}.ducklake_delete_file df
@@ -5445,7 +5475,7 @@ WHERE NOT EXISTS (
     WHERE e.branch_id = own.branch_id AND e.delete_file_id = t.delete_file_id)
 GROUP BY own.branch_id, t.table_id, t.delete_file_id;
 )",
-	                          StringUtil::Join(retro_values, ", "));
+	                          StringUtil::Join(retro_values, ", "), branch_root_caps);
 }
 
 string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &commit_snapshot,
@@ -5849,7 +5879,7 @@ WHERE delete_file_id IN (%s);
 string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_files,
                                                     const vector<DuckLakePath> &resolved_paths,
                                                     bool write_row_group_count, bool write_visibility,
-                                                    bool include_branch_bookkeeping) {
+                                                    bool include_branch_bookkeeping, const string &branch_root_caps) {
 	if (new_files.empty()) {
 		return {};
 	}
@@ -5910,8 +5940,29 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 	              InsertValuesSql("ducklake_delete_file_visibility", visibility_values);
 	if (!swap_values.empty()) {
 		// the explicit branch events move to the replacement, an add event takes the begin of main's event so the
-		// segment of main owns it and the cap clips the dated deletes, without branches both arms are empty
+		// segment of main owns it and the cap clips the dated deletes, a branch that inherited the old file through
+		// its root cap gets an add event of its own
 		if (include_branch_bookkeeping) {
+			auto swap_rows = StringUtil::Join(swap_values, ", ");
+			string inherited_arm;
+			if (!branch_root_caps.empty()) {
+				inherited_arm = StringUtil::Format(R"(
+UNION ALL
+SELECT b.branch_id, t.table_id, t.new_delete_file_id, v.snapshot_id, FALSE
+FROM (VALUES %s) t(new_delete_file_id, old_delete_file_id, data_file_id, table_id)
+JOIN {METADATA_CATALOG}.ducklake_delete_file_visibility v
+ON v.delete_file_id = t.old_delete_file_id AND v.branch_id = 0 AND v.is_delete = FALSE
+JOIN (VALUES %s) b(branch_id, root_cap)
+ON b.root_cap >= v.snapshot_id
+WHERE NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.ducklake_delete_file_visibility e
+    WHERE e.branch_id = b.branch_id AND e.delete_file_id = t.old_delete_file_id)
+AND NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.ducklake_delete_file_visibility own
+    JOIN {METADATA_CATALOG}.ducklake_delete_file df ON df.delete_file_id = own.delete_file_id
+    WHERE own.branch_id = b.branch_id AND own.is_delete = FALSE AND df.data_file_id = t.data_file_id))",
+				                                   swap_rows, branch_root_caps);
+			}
 			result += StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_delete_file_visibility
 SELECT v.branch_id, v.table_id, t.new_delete_file_id,
@@ -5921,23 +5972,9 @@ FROM (VALUES %s) t(new_delete_file_id, old_delete_file_id, data_file_id, table_i
 JOIN {METADATA_CATALOG}.ducklake_delete_file_visibility v ON v.delete_file_id = t.old_delete_file_id
 LEFT JOIN {METADATA_CATALOG}.ducklake_delete_file_visibility m
 ON m.delete_file_id = t.old_delete_file_id AND m.branch_id = 0 AND m.is_delete = FALSE
-WHERE v.branch_id <> 0
-UNION ALL
-SELECT b.branch_id, t.table_id, t.new_delete_file_id, v.snapshot_id, FALSE
-FROM (VALUES %s) t(new_delete_file_id, old_delete_file_id, data_file_id, table_id)
-JOIN {METADATA_CATALOG}.ducklake_delete_file_visibility v
-ON v.delete_file_id = t.old_delete_file_id AND v.branch_id = 0 AND v.is_delete = FALSE
-JOIN {METADATA_CATALOG}.ducklake_branch b
-ON b.parent_id = 0 AND b.parent_branch_snapshot >= v.snapshot_id
-WHERE NOT EXISTS (
-    SELECT 1 FROM {METADATA_CATALOG}.ducklake_delete_file_visibility e
-    WHERE e.branch_id = b.branch_id AND e.delete_file_id = t.old_delete_file_id)
-AND NOT EXISTS (
-    SELECT 1 FROM {METADATA_CATALOG}.ducklake_delete_file_visibility own
-    JOIN {METADATA_CATALOG}.ducklake_delete_file df ON df.delete_file_id = own.delete_file_id
-    WHERE own.branch_id = b.branch_id AND own.is_delete = FALSE AND df.data_file_id = t.data_file_id);
+WHERE v.branch_id <> 0%s;
 )",
-			                             StringUtil::Join(swap_values, ", "), StringUtil::Join(swap_values, ", "));
+			                             swap_rows, inherited_arm);
 		}
 		result += StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_delete_file_visibility
@@ -5947,7 +5984,7 @@ WHERE delete_file_id IN (%s);
 	}
 	// after the swap, so a flushed replacement suppresses only where a branch has its own delete file
 	if (include_branch_bookkeeping) {
-		result += RetroactiveDeleteSuppressionSql(retro_visibility_values);
+		result += RetroactiveDeleteSuppressionSql(retro_visibility_values, branch_root_caps);
 	}
 	return result;
 }

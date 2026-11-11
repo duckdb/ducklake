@@ -577,10 +577,12 @@ public:
 	//! Caller supplies one resolved path per overwritten file, in the same order.
 	static string DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverwrittenDeleteFile> &overwritten_files,
 	                                           const vector<DuckLakePath> &resolved_paths);
-	//! Caller supplies one resolved path per new delete file, in the same order.
+	//! Caller supplies one resolved path per new delete file, in the same order
+	//! The branch root caps are the VALUES rows (branch_id, root_cap) of every branch whose chain reaches main
 	static string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
 	                                  const vector<DuckLakePath> &resolved_paths, bool write_row_group_count,
-	                                  bool write_visibility, bool include_branch_bookkeeping = true);
+	                                  bool write_visibility, bool include_branch_bookkeeping = true,
+	                                  const string &branch_root_caps = string());
 	static string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros);
 
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
@@ -696,8 +698,14 @@ public:
 	virtual void MigrateV11();
 	//! Every branch of the catalog
 	vector<DuckLakeBranchInfo> LoadBranches();
+	//! The resolved chain of every branch other than main
+	vector<DuckLakeBranchChain> LoadBranchChains();
 	//! The snapshots of a branch that the chains of the other branches continue from, the root caps for main
 	set<idx_t> LoadBranchCaps(idx_t branch_id);
+	//! Every branch whose chain reaches main with the snapshot of main it reads up to
+	vector<pair<idx_t, idx_t>> LoadBranchRootCaps();
+	//! The root caps rendered as VALUES rows (branch_id, root_cap), empty without such branches
+	static string BranchRootCapValues(const vector<pair<idx_t, idx_t>> &root_caps);
 	//! The snapshots of a branch that an expiry keeps, the caps other branches read it up to and its head
 	set<idx_t> GetBranchProtectedSnapshots(idx_t branch_id);
 	string FileVisibilityGuard(const string &visibility_table, const string &file_id_column, const string &alias = "f",
