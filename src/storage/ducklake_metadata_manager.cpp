@@ -6129,26 +6129,29 @@ string DuckLakeMetadataManager::DropDataFiles(const set<DataFileIndex> &dropped_
 }
 
 string DuckLakeMetadataManager::GetDeleteCountForDataFilesSql(TableIndex table_id, const set<DataFileIndex> &file_ids,
-                                                              const Identifier &inlined_deletion_table) {
+                                                              const Identifier &inlined_deletion_table,
+                                                              bool branch_aware, const string &chain_predicate) {
 	auto id_list = GenerateIDList(file_ids);
 	string inlined_deletions = "0";
 	if (!inlined_deletion_table.empty()) {
 		inlined_deletions = StringUtil::Format(R"(
 (SELECT COUNT(*) FROM {METADATA_CATALOG}.%s
  WHERE file_id IN (%s)
-   AND begin_snapshot <= {SNAPSHOT_ID}))",
+   AND begin_snapshot <= {PARENT_VIEW_SNAPSHOT_ID}))",
 		                                       inlined_deletion_table, id_list);
 	}
+	// the ranges of the delete files come from the visibility events of the commit lineage
 	return StringUtil::Format(R"(
 SELECT
   (SELECT COALESCE(SUM(delete_count), 0)
-   FROM {METADATA_CATALOG}.ducklake_delete_file
+   FROM %s
    WHERE table_id = %d
      AND data_file_id IN (%s)
      AND {SNAPSHOT_ID} >= begin_snapshot
      AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL))
   +
   %s;)",
+	                          DeleteFileSource(branch_aware, chain_predicate, "{METADATA_CATALOG}", table_id.index),
 	                          table_id.index, id_list, inlined_deletions);
 }
 

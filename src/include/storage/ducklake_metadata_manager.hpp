@@ -579,7 +579,8 @@ public:
 	static string DropDataFiles(const set<DataFileIndex> &dropped_files, bool write_visibility);
 	//! The deletes recorded against the given data files of the table at the snapshot
 	static string GetDeleteCountForDataFilesSql(TableIndex table_id, const set<DataFileIndex> &file_ids,
-	                                            const Identifier &inlined_deletion_table);
+	                                            const Identifier &inlined_deletion_table, bool branch_aware,
+	                                            const string &chain_predicate);
 	//! Selects the given data files that are still in the metadata
 	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
 	//! Selects the given columns that a live data file of the table records values of, or holds the default of

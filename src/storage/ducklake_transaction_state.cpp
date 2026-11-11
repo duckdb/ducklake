@@ -1470,8 +1470,9 @@ bool DuckLakeTransactionState::TryRecomputeGlobalStatsAfterDrop(TableIndex table
 		inlined_deletion_table = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
 	}
 	auto query_result = context.query_metadata_with_snapshot(
-	    snapshot,
-	    DuckLakeMetadataManager::GetDeleteCountForDataFilesSql(table_id, dropped_ids, inlined_deletion_table));
+	    snapshot, DuckLakeMetadataManager::GetDeleteCountForDataFilesSql(table_id, dropped_ids, inlined_deletion_table,
+	                                                                     context.supports_v2_0_metadata,
+	                                                                     FileVisibilityChain(context)));
 	query_result->ThrowIfError("Failed to read the delete counts of dropped files from DuckLake: ");
 	idx_t dropped_delete_count = 0;
 	for (auto &row : *query_result) {

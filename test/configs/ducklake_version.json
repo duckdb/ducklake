@@ -209,6 +209,7 @@
         "test/sql/branches/branch_nested_retro_delete_history.test",
         "test/sql/branches/branch_only_file_attach.test",
         "test/sql/branches/branch_refork_historical.test",
+        "test/sql/branches/branch_remove_data_files.test",
         "test/sql/branches/branch_root_without_parent.test",
         "test/sql/branches/branch_same_snapshot_id.test",
         "test/sql/branches/branch_tag_above_fork.test",
