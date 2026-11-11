@@ -6108,14 +6108,14 @@ string DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(bool include_exa
 	if (branch_aware) {
 		branch_id_column = "branch_id";
 		changes_filter = StringUtil::Format("c.snapshot_id > {SNAPSHOT_ID} AND c.branch_id = %llu", commit_branch_id);
-		snapshot_arm_tail = R"(
-    FROM (
-        SELECT snapshot_id, schema_version, next_catalog_id, next_file_id, branch_id
+		// the aggregate head of HeadSnapshotQuery, a late materialized ORDER BY LIMIT 1 can lose it to a checkpoint
+		snapshot_arm_tail = StringUtil::Format(R"(
+    FROM {METADATA_CATALOG}.ducklake_snapshot
+    WHERE (%s) AND snapshot_id = (
+        SELECT MAX(snapshot_id)
         FROM {METADATA_CATALOG}.ducklake_snapshot
-        WHERE )" + head_predicate +
-		                    R"(
-        ORDER BY snapshot_id DESC
-        LIMIT 1) head)";
+        WHERE %s))",
+		                                       head_predicate, head_predicate);
 	}
 	return R"(
 SELECT
@@ -6172,19 +6172,24 @@ SnapshotChangeInfo DuckLakeMetadataManager::ParseSnapshotAndStatsAndChanges(Quer
                                                                             SnapshotAndStats &current_snapshot) {
 	SnapshotChangeInfo change_info;
 	bool has_exactness = ResultHasColumn(result, "min_is_exact");
-	bool first_row = true;
+	// the stats rows carry a NULL snapshot id, the head row of the lineage is the only other row
+	idx_t snapshot_rows = 0;
 	for (auto &row : result) {
-		if (first_row) {
-			current_snapshot.snapshot.snapshot_id = row.GetValue<idx_t>(0);
-			current_snapshot.snapshot.schema_version = row.GetValue<idx_t>(1);
-			current_snapshot.snapshot.next_catalog_id = row.GetValue<idx_t>(2);
-			current_snapshot.snapshot.next_file_id = row.GetValue<idx_t>(3);
-			current_snapshot.snapshot.branch_id = row.GetValue<idx_t>(4);
-			change_info.changes_made = row.GetValue<string>(5);
-		} else {
+		if (row.IsNull(0)) {
 			TransformGlobalStatsRow(row, current_snapshot.stats, 6, has_exactness);
+			continue;
 		}
-		first_row = false;
+		snapshot_rows++;
+		current_snapshot.snapshot.snapshot_id = row.GetValue<idx_t>(0);
+		current_snapshot.snapshot.schema_version = row.GetValue<idx_t>(1);
+		current_snapshot.snapshot.next_catalog_id = row.GetValue<idx_t>(2);
+		current_snapshot.snapshot.next_file_id = row.GetValue<idx_t>(3);
+		current_snapshot.snapshot.branch_id = row.GetValue<idx_t>(4);
+		change_info.changes_made = row.GetValue<string>(5);
+	}
+	if (snapshot_rows != 1) {
+		throw TransactionException("Transaction conflict - the head snapshot of the commit lineage was not readable, "
+		                           "run the transaction again");
 	}
 	return change_info;
 }
@@ -6245,7 +6250,8 @@ WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_sn
 }
 
 string DuckLakeMetadataManager::HeadSnapshotQuery(const string &head_predicate, const vector<idx_t> &lineage_branches) {
-	// the ids of a chain are unique, so its newest row is the head
+	// the ids of a chain are unique, so MAX is the head and the aggregate form keeps one scan of the table, a
+	// checkpoint between the two scans of a late materialized ORDER BY LIMIT 1 can lose the head
 	string columns = "snapshot_id, schema_version, next_catalog_id, next_file_id, "
 	                 "(SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version'), branch_id";
 	for (auto &branch_id : lineage_branches) {
@@ -6254,10 +6260,8 @@ string DuckLakeMetadataManager::HeadSnapshotQuery(const string &head_predicate, 
 	}
 	return StringUtil::Format(R"(SELECT %s
 FROM {METADATA_CATALOG}.ducklake_snapshot
-WHERE %s
-ORDER BY snapshot_id DESC
-LIMIT 1;)",
-	                          columns, head_predicate);
+WHERE (%s) AND snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE %s);)",
+	                          columns, head_predicate, head_predicate);
 }
 
 string DuckLakeMetadataManager::BranchLineageFilter() const {
