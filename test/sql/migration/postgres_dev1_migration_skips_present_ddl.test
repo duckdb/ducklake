@@ -77,6 +77,34 @@ CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_file_vis
 statement ok
 CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_delete_file_visibility')
 
+# the catalog tables of a dev catalog ended their rows in place and knew no birth branch
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_schema ADD COLUMN end_snapshot BIGINT')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_schema DROP COLUMN branch_id')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_schema_visibility')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_table ADD COLUMN end_snapshot BIGINT')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_table DROP COLUMN branch_id')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_table_visibility')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_view ADD COLUMN end_snapshot BIGINT')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_view DROP COLUMN branch_id')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_view_visibility')
+
 # the snapshot tables and the schema versions of a dev catalog carry no branch
 statement ok
 CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_snapshot DROP COLUMN branch_id')
@@ -116,6 +144,17 @@ DETACH dl
 # the migration rebuilt the snapshot tables with the branch column
 query I
 SELECT count(*) FROM postgres_query('pg', 'SELECT 1 FROM information_schema.columns WHERE table_schema = ''dev1_skips_present_ddl'' AND table_name IN (''ducklake_snapshot'', ''ducklake_snapshot_changes'', ''ducklake_schema_versions'') AND column_name = ''branch_id''')
+----
+3
+
+# and the version rows of the catalog tables with their birth branch and companion tables
+query II
+SELECT count(*) FILTER (WHERE column_name = 'branch_id'), count(*) FILTER (WHERE column_name = 'end_snapshot') FROM postgres_query('pg', 'SELECT column_name FROM information_schema.columns WHERE table_schema = ''dev1_skips_present_ddl'' AND table_name IN (''ducklake_schema'', ''ducklake_table'', ''ducklake_view'')')
+----
+3	0
+
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT 1 FROM information_schema.tables WHERE table_schema = ''dev1_skips_present_ddl'' AND table_name IN (''ducklake_schema_visibility'', ''ducklake_table_visibility'', ''ducklake_view_visibility'')')
 ----
 3
 

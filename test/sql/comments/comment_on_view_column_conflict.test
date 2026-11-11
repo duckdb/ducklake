@@ -93,6 +93,6 @@ WHERE table_name = 'vrenamed' AND column_name = 'k' AND database_name = 'ducklak
 vrenamed	after rename
 
 query I
-SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_view WHERE end_snapshot IS NULL AND view_name = 'vrenamed'
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_view v WHERE view_name = 'vrenamed' AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_view_visibility e WHERE e.view_id = v.view_id AND e.row_branch_id = v.branch_id AND e.row_snapshot = v.begin_snapshot)
 ----
 1

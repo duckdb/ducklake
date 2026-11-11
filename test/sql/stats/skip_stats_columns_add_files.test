@@ -31,7 +31,7 @@ CALL ducklake_add_data_files('ducklake', 'added', '{DATA_PATH}/skip_stats_column
 query IIIII
 SELECT f.column_id, f.min_value IS NULL, f.max_value IS NULL, f.value_count, f.column_size_bytes > 0
 FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
-WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='added' AND end_snapshot IS NULL)
+WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='added')
 ORDER BY f.column_id
 ----
 1	false	false	3	true
@@ -65,7 +65,7 @@ CALL ducklake_add_data_files('ducklake', 'hive_on', '{DATA_PATH}/skip_stats_colu
 query IIII
 SELECT t.table_name, f.min_value IS NULL, f.value_count, f.null_count
 FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
-JOIN ducklake_meta.ducklake_table t ON t.table_id=d.table_id AND t.end_snapshot IS NULL
+JOIN ducklake_meta.ducklake_table t ON t.table_id=d.table_id
 WHERE t.table_name IN ('hive', 'hive_on') AND f.column_id=2
 ORDER BY t.table_name, f.min_value IS NULL, d.data_file_id
 ----
@@ -112,7 +112,7 @@ CALL ducklake_add_data_files('ducklake', 'added_nested_on', '{DATA_PATH}/skip_st
 query IIII
 SELECT t.table_name, f.column_id, f.min_value IS NULL, f.value_count
 FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
-JOIN ducklake_meta.ducklake_table t ON t.table_id=d.table_id AND t.end_snapshot IS NULL
+JOIN ducklake_meta.ducklake_table t ON t.table_id=d.table_id
 WHERE t.table_name IN ('added_nested', 'added_nested_on')
 ORDER BY t.table_name, f.column_id
 ----

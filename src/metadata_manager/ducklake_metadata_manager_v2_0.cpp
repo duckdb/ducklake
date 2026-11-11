@@ -13,6 +13,9 @@ string DuckLakeMetadataManagerV2_0<Base>::GetCreateTableStatements() {
 	result += DuckLakeMetadataManager::GetSnapshotRemapTableStatement() + "\n";
 	result += DuckLakeMetadataManager::GetFileVisibilityTableStatement() + "\n";
 	result += DuckLakeMetadataManager::GetDeleteFileVisibilityTableStatement() + "\n";
+	result += DuckLakeMetadataManager::GetRowVisibilityTableStatement("schema", {"schema_id"}) + "\n";
+	result += DuckLakeMetadataManager::GetRowVisibilityTableStatement("table", {"table_id"}) + "\n";
+	result += DuckLakeMetadataManager::GetRowVisibilityTableStatement("view", {"view_id"}) + "\n";
 	return result;
 }
 
@@ -33,6 +36,27 @@ string DuckLakeMetadataManagerV2_0<Base>::GetSchemaVersionsTableStatement() {
 	// branch_id is the branch whose snapshot begin_snapshot is
 	return "CREATE TABLE {METADATA_CATALOG}.ducklake_schema_versions(begin_snapshot BIGINT, schema_version BIGINT, "
 	       "table_id BIGINT, branch_id BIGINT);";
+}
+
+// the version rows keep their birth and end in the companion tables, branch_id comes last like a healed catalog
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetSchemaTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_schema(schema_id BIGINT PRIMARY KEY, schema_uuid UUID, "
+	       "begin_snapshot BIGINT, schema_name VARCHAR, path VARCHAR, path_is_relative BOOLEAN, parent_schema_id "
+	       "BIGINT, branch_id BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetTableTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_table(table_id BIGINT, table_uuid UUID, begin_snapshot BIGINT, "
+	       "schema_id BIGINT, table_name VARCHAR, path VARCHAR, path_is_relative BOOLEAN, branch_id BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetViewTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_view(view_id BIGINT, view_uuid UUID, begin_snapshot BIGINT, "
+	       "schema_id BIGINT, view_name VARCHAR, dialect VARCHAR, sql VARCHAR, column_aliases VARCHAR, branch_id "
+	       "BIGINT DEFAULT 0);";
 }
 
 template <typename Base>

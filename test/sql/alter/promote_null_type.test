@@ -54,7 +54,7 @@ m	MAP(VARCHAR, DATE)
 
 # the field ids survive the promotion
 query IIII
-SELECT column_id, column_name, column_type, parent_column FROM ducklake_meta.ducklake_column WHERE end_snapshot IS NULL AND table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 't' AND end_snapshot IS NULL) ORDER BY column_id
+SELECT column_id, column_name, column_type, parent_column FROM ducklake_meta.ducklake_column WHERE end_snapshot IS NULL AND table_id = (SELECT table_id FROM ducklake_meta.ducklake_table t WHERE table_name = 't' AND NOT EXISTS (SELECT 1 FROM ducklake_meta.ducklake_table_visibility e WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)) ORDER BY column_id
 ----
 1	id	int32	NULL
 2	n	int32	NULL
@@ -93,7 +93,7 @@ UPDATE t SET n = 10 WHERE id = 1
 
 # bounds after promotion are unknown or cover the live values, filters stay exact
 query II
-SELECT min_value IS NULL OR min_value::INTEGER <= 10, max_value IS NULL OR max_value::INTEGER >= 40 FROM ducklake_meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 't' AND end_snapshot IS NULL) AND column_id = 2
+SELECT min_value IS NULL OR min_value::INTEGER <= 10, max_value IS NULL OR max_value::INTEGER >= 40 FROM ducklake_meta.ducklake_table_column_stats WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table t WHERE table_name = 't' AND NOT EXISTS (SELECT 1 FROM ducklake_meta.ducklake_table_visibility e WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)) AND column_id = 2
 ----
 true	true
 

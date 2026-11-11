@@ -53,6 +53,34 @@ DROP TABLE meta.ducklake_file_visibility
 statement ok
 DROP TABLE meta.ducklake_delete_file_visibility
 
+# the catalog tables of the older dev build ended their rows in place and knew no birth branch
+statement ok
+ALTER TABLE meta.ducklake_schema ADD COLUMN end_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_schema DROP COLUMN branch_id
+
+statement ok
+DROP TABLE meta.ducklake_schema_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_table ADD COLUMN end_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_table DROP COLUMN branch_id
+
+statement ok
+DROP TABLE meta.ducklake_table_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_view ADD COLUMN end_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_view DROP COLUMN branch_id
+
+statement ok
+DROP TABLE meta.ducklake_view_visibility
+
 statement ok
 DETACH dl
 
@@ -105,6 +133,17 @@ SELECT COUNT(*) FILTER (WHERE is_delete = FALSE), COUNT(*) FILTER (WHERE is_dele
 
 query I
 SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_name IN ('ducklake_data_file', 'ducklake_delete_file') AND column_name IN ('begin_snapshot', 'end_snapshot')
+----
+0
+
+# and the version rows of the catalog tables into rows with a birth branch and a companion
+query II
+SELECT COUNT(*) FILTER (WHERE column_name = 'branch_id'), COUNT(*) FILTER (WHERE column_name = 'end_snapshot') FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name IN ('ducklake_schema', 'ducklake_table', 'ducklake_view')
+----
+3	0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_table_visibility
 ----
 0
 

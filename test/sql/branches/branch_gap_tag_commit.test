@@ -65,6 +65,6 @@ COMMIT
 Transaction conflict
 
 query I
-SELECT count(*) FROM meta.ducklake_table WHERE table_name = 'u' AND end_snapshot IS NULL
+SELECT count(*) FROM meta.ducklake_table t WHERE table_name = 'u' AND NOT EXISTS (SELECT 1 FROM meta.ducklake_table_visibility e WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)
 ----
 1

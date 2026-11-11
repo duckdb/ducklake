@@ -1900,9 +1900,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
 	context.supports_v2_0_metadata = ducklake_catalog.SupportsBranching();
 	if (context.supports_v2_0_metadata) {
-		context.commit_branch_id = ducklake_catalog.AttachedBranchId();
-		context.schema_version_chain = ducklake_catalog.AttachedChain().Predicate("sv", "begin_snapshot");
-		context.file_visibility_chain = DuckLakeMetadataManager::FileSourceChain(ducklake_catalog.AttachedChain());
+		context.commit_chain = ducklake_catalog.AttachedChain();
 	}
 	context.snapshot_and_stats_query =
 	    metadata_manager->GetSnapshotAndStatsAndChangesQuery(transaction_snapshot, context.supports_v1_1_metadata);

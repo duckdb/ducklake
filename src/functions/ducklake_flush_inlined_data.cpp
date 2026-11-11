@@ -108,9 +108,10 @@ static DeletedRowVersions GetDeletedRowVersions(DuckLakeMetadataManager &metadat
 	auto flush_source = metadata_manager.InlinedFlushSource(inlined_table_name, table);
 	auto result = metadata_manager.Query(
 	    snapshot,
-	    StringUtil::Format("SELECT %s, %s, %s FROM %s inlined_data WHERE {SNAPSHOT_ID} >= %s AND %s IS NOT NULL;",
-	                       col_names.row_id, col_names.begin_snapshot, col_names.end_snapshot, flush_source,
-	                       col_names.begin_snapshot, col_names.end_snapshot));
+	    StringUtil::Format(
+	        "SELECT %s, %s, %s FROM %s inlined_data WHERE {PARENT_VIEW_SNAPSHOT_ID} >= %s AND %s IS NOT NULL;",
+	        col_names.row_id, col_names.begin_snapshot, col_names.end_snapshot, flush_source, col_names.begin_snapshot,
+	        col_names.end_snapshot));
 	metadata_manager.CheckInlinedDataReadError(*result, inlined_table_name);
 	DeletedRowVersions deleted_rows;
 	for (auto &row : *result) {
@@ -382,7 +383,7 @@ LEFT JOIN %s existing_del
        AND {SNAPSHOT_ID} >= existing_del.begin_snapshot
        AND (existing_del.end_snapshot IS NULL
             OR existing_del.end_snapshot >= COALESCE(data.end_snapshot, {SNAPSHOT_ID} + 1))
-WHERE del.begin_snapshot <= {SNAPSHOT_ID}
+WHERE del.begin_snapshot <= {PARENT_VIEW_SNAPSHOT_ID}
 	)",
 	                                                        inlined_table_name, metadata_manager.DataFiles(),
 	                                                        metadata_manager.DeleteFiles(), table_id.index));

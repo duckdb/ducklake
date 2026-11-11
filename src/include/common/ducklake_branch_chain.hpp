@@ -41,6 +41,8 @@ public:
 	//! The predicate selecting the rows of the chain view, each segment capped by its cap
 	//! Prefix "" gives bare column names, "v" gives v.branch_id and v.snapshot_id, the snapshot column can be renamed
 	string Predicate(const string &prefix, const string &snapshot_column = "snapshot_id") const;
+	//! The chain predicate with every segment also capped by read_snapshot, an SQL expression such as a placeholder
+	string ViewPredicate(const string &prefix, const string &snapshot_column, const string &read_snapshot) const;
 	//! The branch whose segment holds the snapshot id
 	idx_t OwnerOf(idx_t snapshot_id) const;
 	//! The cap of the segment that holds the snapshot id, unset when the attached branch holds it

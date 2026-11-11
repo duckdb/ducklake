@@ -43,7 +43,7 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 query I
-SELECT DISTINCT partition_value FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'tz_tbl' AND end_snapshot IS NULL)
+SELECT DISTINCT partition_value FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'tz_tbl')
 ----
 49
 
@@ -78,7 +78,7 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 query I
-SELECT DISTINCT partition_value FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'tz_hours_tbl' AND end_snapshot IS NULL)
+SELECT DISTINCT partition_value FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'tz_hours_tbl')
 ----
 438286
 
@@ -110,7 +110,7 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 query I
-SELECT DISTINCT partition_value FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'tzns_tbl' AND end_snapshot IS NULL)
+SELECT DISTINCT partition_value FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'tzns_tbl')
 ----
 49
 

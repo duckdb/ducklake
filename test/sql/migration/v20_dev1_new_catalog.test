@@ -73,6 +73,64 @@ schema_version	BIGINT
 table_id	BIGINT
 branch_id	BIGINT
 
+# the version rows of the catalog tables carry their birth branch and end in companion tables, in the order a migrated
+# catalog has as well
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_table') ORDER BY column_index
+----
+table_id
+table_uuid
+begin_snapshot
+schema_id
+table_name
+path
+path_is_relative
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_schema') ORDER BY column_index
+----
+schema_id
+schema_uuid
+begin_snapshot
+schema_name
+path
+path_is_relative
+parent_schema_id
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_view') ORDER BY column_index
+----
+view_id
+view_uuid
+begin_snapshot
+schema_id
+view_name
+dialect
+sql
+column_aliases
+branch_id
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_table_visibility') ORDER BY column_index
+----
+branch_id	BIGINT
+table_id	BIGINT
+row_branch_id	BIGINT
+row_snapshot	BIGINT
+snapshot_id	BIGINT
+
+query III
+SELECT (SELECT COUNT(*) FROM meta.ducklake_schema_visibility), (SELECT COUNT(*) FROM meta.ducklake_table_visibility), (SELECT COUNT(*) FROM meta.ducklake_view_visibility)
+----
+0	0	0
+
+query III
+SELECT schema_name, begin_snapshot, branch_id FROM meta.ducklake_schema
+----
+main	0	0
+
 # SQLite reports the boolean column as a number
 query II
 SELECT column_name, CASE WHEN column_name = 'is_delete' AND data_type = 'BIGINT' THEN 'BOOLEAN' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_file_visibility') ORDER BY column_index

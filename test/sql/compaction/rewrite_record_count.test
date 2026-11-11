@@ -29,7 +29,7 @@ DELETE FROM lake.t WHERE id < 60 OR id = 150
 61
 
 statement ok
-SET VARIABLE t_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't' AND end_snapshot IS NULL)
+SET VARIABLE t_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't')
 
 query II
 SELECT files_processed, files_created FROM ducklake_rewrite_data_files('lake', 't', delete_threshold => 0.5)
@@ -119,7 +119,7 @@ DELETE FROM lake.o WHERE id >= 150
 50
 
 statement ok
-SET VARIABLE o_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'o' AND end_snapshot IS NULL)
+SET VARIABLE o_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'o')
 
 query II
 SELECT files_processed, files_created FROM ducklake_rewrite_data_files('lake', 'o', delete_threshold => 0.4)
@@ -180,7 +180,7 @@ SELECT estimated_size FROM duckdb_tables() WHERE database_name = 'lake' AND tabl
 20
 
 statement ok
-SET VARIABLE z_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'z' AND end_snapshot IS NULL)
+SET VARIABLE z_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'z')
 
 query II
 SELECT files_processed, files_created FROM ducklake_rewrite_data_files('lake', 'z', delete_threshold => 0.5)
@@ -227,7 +227,7 @@ DELETE FROM lake.m WHERE id = 101 OR id < 10
 11
 
 statement ok
-SET VARIABLE m_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'm' AND end_snapshot IS NULL)
+SET VARIABLE m_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'm')
 
 query I
 SELECT count(*) FROM meta.ducklake_inlined_data_tables WHERE table_id = getvariable('m_id')
@@ -277,7 +277,7 @@ UPDATE lake.i SET v = v + 6 WHERE id % 4 = 0
 9
 
 statement ok
-SET VARIABLE i_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'i' AND end_snapshot IS NULL)
+SET VARIABLE i_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'i')
 
 query II
 SELECT files_processed, files_created FROM ducklake_rewrite_data_files('lake', 'i', delete_threshold => 0.0)

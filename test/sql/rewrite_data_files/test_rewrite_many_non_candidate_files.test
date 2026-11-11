@@ -33,7 +33,7 @@ FROM ducklake_meta.ducklake_data_file data, range(1, 500000) files(i)
 WHERE data.table_id = (
     SELECT table_id
     FROM ducklake_meta.ducklake_table
-    WHERE table_name = 'many_files' AND end_snapshot IS NULL
+    WHERE table_name = 'many_files'
 )
 
 statement ok
@@ -43,7 +43,7 @@ FROM ducklake_meta.ducklake_file_visibility v, range(1, 500000) files(i)
 WHERE v.branch_id = 0 AND v.table_id = (
     SELECT table_id
     FROM ducklake_meta.ducklake_table
-    WHERE table_name = 'many_files' AND end_snapshot IS NULL
+    WHERE table_name = 'many_files'
 )
 
 query I

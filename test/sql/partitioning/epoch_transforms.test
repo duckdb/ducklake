@@ -33,14 +33,14 @@ SELECT date_diff('year', DATE '1970-01-01', ts), COUNT(*) FROM partitioned_tbl G
 51	1216
 
 query I
-SELECT transform FROM ducklake_metadata.ducklake_partition_column WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'partitioned_tbl' AND end_snapshot IS NULL) ORDER BY partition_key_index
+SELECT transform FROM ducklake_metadata.ducklake_partition_column WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'partitioned_tbl') ORDER BY partition_key_index
 ----
 epoch_year
 epoch_month
 
 # stored partition values are epoch ordinals
 query III
-SELECT partition_key_index, MIN(partition_value::BIGINT), MAX(partition_value::BIGINT) FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'partitioned_tbl' AND end_snapshot IS NULL) GROUP BY 1 ORDER BY 1
+SELECT partition_key_index, MIN(partition_value::BIGINT), MAX(partition_value::BIGINT) FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'partitioned_tbl') GROUP BY 1 ORDER BY 1
 ----
 0	50	51
 1	600	613
@@ -89,13 +89,13 @@ SELECT date_diff('year', DATE '1970-01-01', ts), COUNT(*) FROM partitioned_tbl G
 
 # one active file per partition after compaction
 query I
-SELECT COUNT(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_metadata.ducklake_data_file f JOIN (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot, MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot FROM ducklake_metadata.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id) v ON v.data_file_id = f.data_file_id) WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'partitioned_tbl' AND end_snapshot IS NULL) AND end_snapshot IS NULL
+SELECT COUNT(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_metadata.ducklake_data_file f JOIN (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot, MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot FROM ducklake_metadata.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id) v ON v.data_file_id = f.data_file_id) WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'partitioned_tbl') AND end_snapshot IS NULL
 ----
 14
 
 query II
 SELECT DISTINCT regexp_extract(path, '.*epoch_year=(-?[0-9]+)[/\\].*', 1)::INT AS epoch_year_part, regexp_extract(path, '.*epoch_month=(-?[0-9]+)[/\\].*', 1)::INT AS epoch_month_part
-FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_metadata.ducklake_data_file f JOIN (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot, MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot FROM ducklake_metadata.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id) v ON v.data_file_id = f.data_file_id) WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'partitioned_tbl' AND end_snapshot IS NULL) AND end_snapshot IS NULL ORDER BY ALL
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_metadata.ducklake_data_file f JOIN (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot, MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot FROM ducklake_metadata.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id) v ON v.data_file_id = f.data_file_id) WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'partitioned_tbl') AND end_snapshot IS NULL ORDER BY ALL
 ----
 50	600
 50	601
@@ -135,7 +135,7 @@ SELECT id, dt FROM days_tbl ORDER BY id
 5	NULL
 
 query I
-SELECT partition_value FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'days_tbl' AND end_snapshot IS NULL) ORDER BY partition_value::BIGINT
+SELECT partition_value FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'days_tbl') ORDER BY partition_value::BIGINT
 ----
 -351
 -1
@@ -176,7 +176,7 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 query I
-SELECT partition_value FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'hours_tbl' AND end_snapshot IS NULL) ORDER BY partition_value::BIGINT
+SELECT partition_value FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'hours_tbl') ORDER BY partition_value::BIGINT
 ----
 -1
 0
@@ -203,7 +203,7 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 query II
-SELECT partition_value, COUNT(*) FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ns_tbl' AND end_snapshot IS NULL) GROUP BY 1 ORDER BY partition_value::BIGINT
+SELECT partition_value, COUNT(*) FROM ducklake_metadata.ducklake_file_partition_value WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'ns_tbl') GROUP BY 1 ORDER BY partition_value::BIGINT
 ----
 -1	1
 0	1
@@ -229,7 +229,7 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 query I
-SELECT transform FROM ducklake_metadata.ducklake_partition_column WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'mixed_tbl' AND end_snapshot IS NULL) ORDER BY partition_key_index
+SELECT transform FROM ducklake_metadata.ducklake_partition_column WHERE table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'mixed_tbl') ORDER BY partition_key_index
 ----
 year
 epoch_month
@@ -296,7 +296,7 @@ SELECT id, ts FROM evo_tbl ORDER BY id
 2	2021-06-01 00:00:00
 
 query II
-SELECT pc.transform, pi.end_snapshot IS NULL FROM ducklake_metadata.ducklake_partition_info pi JOIN ducklake_metadata.ducklake_partition_column pc USING (partition_id) WHERE pi.table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'evo_tbl' AND end_snapshot IS NULL) ORDER BY pi.partition_id
+SELECT pc.transform, pi.end_snapshot IS NULL FROM ducklake_metadata.ducklake_partition_info pi JOIN ducklake_metadata.ducklake_partition_column pc USING (partition_id) WHERE pi.table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'evo_tbl') ORDER BY pi.partition_id
 ----
 year	false
 epoch_year	true

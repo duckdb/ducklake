@@ -327,6 +327,10 @@ public:
 	//! Rows inserted after the metadata tables are created
 	virtual string GetInitialDataStatements();
 	virtual string GetSchemaTableStatement();
+	virtual string GetTableTableStatement();
+	virtual string GetViewTableStatement();
+	//! The companion table holding the end events of the version rows of a catalog table
+	static string GetRowVisibilityTableStatement(const string &kind, const vector<string> &key_columns);
 	virtual string GetDataFileTableStatement();
 	virtual string GetDeleteFileTableStatement();
 	virtual string GetFileColumnStatsTableStatement();
@@ -392,11 +396,12 @@ public:
 	virtual DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot);
 	//! Transaction-free build of the catalog snapshot. Caller supplies a snapshot-aware query
 	//! executor (responsible for `{METADATA_CATALOG}` / `{SNAPSHOT_ID}` substitution) plus the
-	//! data path and separator used for resolving stored relative paths.
+	//! data path and separator used for resolving stored relative paths and the chain the rows are read through.
 	static DuckLakeCatalogInfo
 	BuildCatalogForSnapshot(DuckLakeSnapshot snapshot,
 	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
-	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata = false);
+	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata,
+	                        bool supports_v2_0_metadata, const DuckLakeBranchChain &chain);
 	//! The global stats of every table of the snapshot, or of the given tables
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot,
 	                                                            const vector<TableIndex> &table_ids = {});
@@ -443,11 +448,11 @@ public:
 	                                     const DuckLakeInlinedColNames &col_names);
 	static string GetTableColumnSchemaSql(TableIndex table_id);
 	static string GetInlinedTableNamesSql(TableIndex table_id);
-	//! The chain predicate selects the schema version rows under the alias sv, empty before 2.0
-	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id, const string &chain_predicate);
+	//! The schema version rows are read through the chain from 2.0 on
+	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id, bool branch_aware,
+	                                                    const DuckLakeBranchChain &chain);
 	//! The top-level columns of each inlined data table at the schema version of that table
-	static string GetInlinedTableColumnsSql(optional_idx table_id = optional_idx(),
-	                                        const string &chain_predicate = string());
+	static string GetInlinedTableColumnsSql(optional_idx table_id, bool branch_aware, const DuckLakeBranchChain &chain);
 	//! The inserts of the given rows, in batches
 	static string InsertValuesSql(const string &table_name, const vector<string> &values);
 	//! The inserts of the given rows into the given table, in batches
@@ -458,22 +463,36 @@ public:
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type);
 
 	virtual void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files);
-	static string DropSchemas(const set<SchemaIndex> &ids);
-	static string DropTables(const set<TableIndex> &ids, bool renamed, bool write_visibility);
+	//! The version rows of a catalog table born in the chain view at the read snapshot and not ended in it
+	static string RowVisibility(const DuckLakeBranchChain &chain, const string &alias, const string &kind,
+	                            const vector<string> &key_columns, const string &read_snapshot);
+	//! The range predicate of the version rows before 2.0, which carry begin_snapshot and end_snapshot
+	static string RangeVisibility(const string &alias, const string &read_snapshot);
+	//! The visibility predicate of the version rows under the layout of the catalog
+	static string RowFilter(bool branch_aware, const DuckLakeBranchChain &chain, const string &alias,
+	                        const string &kind, const vector<string> &key_columns, const string &read_snapshot);
+	//! The end events of the version rows the filter selects under the alias t that the commit chain sees
+	static string EndRows(const DuckLakeBranchChain &chain, const string &kind, const vector<string> &key_columns,
+	                      const string &filter);
+	static string DropSchemas(const set<SchemaIndex> &ids, bool branch_aware, const DuckLakeBranchChain &chain);
+	static string DropTables(const set<TableIndex> &ids, bool renamed, bool branch_aware,
+	                         const DuckLakeBranchChain &chain);
 	static string VisibilityFlushDrop(const string &visibility_table, const string &file_id_column,
 	                                  const string &filter_column, const string &id_list);
-	static string DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags = false);
+	static string DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags, bool branch_aware,
+	                        const DuckLakeBranchChain &chain);
 	static string DropMacros(const set<MacroIndex> &ids);
 
 	//! Emits the INSERT for new schemas. Caller supplies resolved paths (one per schema, same order)
 	//! since path resolution depends on the catalog's data_path / separator (instance state).
 	static string WriteNewSchemas(const vector<DuckLakeSchemaInfo> &new_schemas,
-	                              const vector<DuckLakePath> &resolved_paths, bool supports_v1_1_metadata);
+	                              const vector<DuckLakePath> &resolved_paths, bool supports_v1_1_metadata,
+	                              bool branch_aware);
 	//! Emits the INSERT for new tables and their columns. Caller supplies resolved paths (one per
 	//! table, same order). commit_snapshot is currently unused by the body — kept off the signature.
 	static string WriteNewTables(const vector<DuckLakeTableInfo> &new_tables,
-	                             const vector<DuckLakePath> &resolved_paths);
-	static string WriteNewViews(const vector<DuckLakeViewInfo> &new_views);
+	                             const vector<DuckLakePath> &resolved_paths, bool branch_aware);
+	static string WriteNewViews(const vector<DuckLakeViewInfo> &new_views, bool branch_aware);
 	//! Emits the partition-key diff SQL. Caller supplies the existing partition state (fetched
 	//! via GetCatalogForSnapshot) since the diff is computed against it.
 	static string WriteNewPartitionKeys(const vector<DuckLakePartitionInfo> &existing_partitions,
@@ -573,9 +592,10 @@ public:
 	//! Selects the number of live inlined values of each check, the checks of a table are consecutive
 	static string GetInlinedValuesSql(const vector<DuckLakeInlinedValueCheck> &checks,
 	                                  const DuckLakeInlinedColNames &col_names);
-	//! Selects the given tables or views renamed after the snapshot
+	//! Selects the given tables or views with a version row born after the snapshot on the commit branch
 	static string GetRenamedAfterSnapshotSql(const string &metadata_table_name, const string &id_name,
-	                                         const set<TableIndex> &ids);
+	                                         const set<TableIndex> &ids, bool branch_aware,
+	                                         const DuckLakeBranchChain &chain);
 	//! Caller supplies one resolved path per overwritten file, in the same order.
 	static string DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverwrittenDeleteFile> &overwritten_files,
 	                                           const vector<DuckLakePath> &resolved_paths);
@@ -772,6 +792,18 @@ public:
 	bool HasVisibilityMigrationTable(const string &visibility_table);
 	bool HasV2_0Dev1Additions();
 	virtual void AddV2_0Dev1Additions();
+	//! The heal steps a versioned catalog table still needs, the branch column, the companion and the end column drop
+	struct RowVisibilityAdditions {
+		bool branch_column = true;
+		bool visibility_table = true;
+		//! The end column is still present, read into the companion and then dropped
+		bool drop_end = true;
+	};
+	//! Whether the version rows of a catalog table carry a birth branch and end in a companion
+	bool HasRowVisibilityShape(const string &kind);
+	RowVisibilityAdditions ProbeRowVisibilityAdditions(const string &kind);
+	static string RowVisibilityMigrationSql(const string &kind, const vector<string> &key_columns,
+	                                        const RowVisibilityAdditions &add);
 	//! The branch additions a dev catalog is missing, all of them for the 1.1 migration
 	struct V2_0Dev1Additions {
 		//! The snapshot tag table of 2.0 is created
@@ -809,6 +841,10 @@ public:
 		//! Backup tables of an interrupted rewrite, consumed and dropped
 		bool file_visibility_migration = false;
 		bool delete_file_visibility_migration = false;
+		//! The catalog tables whose version rows end in companion tables
+		RowVisibilityAdditions schema_rows;
+		RowVisibilityAdditions table_rows;
+		RowVisibilityAdditions view_rows;
 	};
 	V2_0Dev1Additions ProbeV2_0Dev1Additions();
 	void VerifyHealableV2_0Dev1(const V2_0Dev1Additions &missing);
@@ -986,6 +1022,8 @@ private:
 	vector<idx_t> lineage_heads;
 	//! Whether the catalog holds any branch besides main, read once when reads are repeatable
 	optional_idx catalog_has_branches;
+	//! The columns of the metadata tables probed in the current pass, a missing table has none
+	unordered_map<string, vector<Identifier>> probed_columns;
 	//! Guards the three caches below, the scans of one statement initialize in parallel
 	mutex listing_cache_lock;
 	//! Parsed file listings keyed by their query, statements repeat identical listings several times

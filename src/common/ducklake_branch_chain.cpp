@@ -88,6 +88,27 @@ string DuckLakeBranchChain::Predicate(const string &prefix, const string &snapsh
 	return StringUtil::Join(arms, " OR ");
 }
 
+string DuckLakeBranchChain::ViewPredicate(const string &prefix, const string &snapshot_column,
+                                          const string &read_snapshot) const {
+	// LEAST exists on DuckDB and Postgres, the statements of the SQLite backend are planned by DuckDB as well
+	string column_prefix = prefix.empty() ? string() : prefix + ".";
+	vector<string> arms;
+	for (auto &segment : segments) {
+		auto &cap = segment.last_snapshot;
+		auto bound =
+		    cap.IsValid() ? StringUtil::Format("LEAST(%llu, %s)", cap.GetIndex(), read_snapshot) : read_snapshot;
+		arms.push_back(StringUtil::Format("%sbranch_id = %llu AND %s%s <= %s", column_prefix, segment.branch_id,
+		                                  column_prefix, snapshot_column, bound));
+	}
+	if (arms.size() == 1) {
+		return arms[0];
+	}
+	for (auto &arm : arms) {
+		arm = "(" + arm + ")";
+	}
+	return StringUtil::Join(arms, " OR ");
+}
+
 const DuckLakeBranchSegment &DuckLakeBranchChain::SegmentOf(idx_t snapshot_id) const {
 	// the ids of a chain are contiguous, so the first segment whose cap reaches the id holds it
 	for (auto &segment : segments) {

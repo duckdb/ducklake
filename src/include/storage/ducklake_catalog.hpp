@@ -393,7 +393,7 @@ public:
 	//! Drops the cached listings, called when a transaction writes metadata
 	void InvalidateListingCache();
 
-	//! Clips a read snapshot to the root cap when attached at a branch, the catalog tables carry the ids of main
+	//! Clips a read snapshot to the root cap when attached at a branch, the inlined row tables carry the ids of main
 	idx_t ClipToParentView(idx_t snapshot_id) const {
 		auto root_cap = attached_chain.RootCap();
 		if (!root_cap.IsValid() || snapshot_id < root_cap.GetIndex()) {

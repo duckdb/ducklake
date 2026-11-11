@@ -397,6 +397,11 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				                            "attach it writable once to heal it");
 			} else if (manager.HasAllFileRangeColumns()) {
 				catalog.SetBranchMetadataMissing();
+			} else if (!manager.HasRowVisibilityShape("schema") || !manager.HasRowVisibilityShape("table") ||
+			           !manager.HasRowVisibilityShape("view")) {
+				// the version rows end in companion tables, which only a writable attach can backfill
+				throw InvalidInputException("This DuckLake catalog has the catalog tables of an older dev build, "
+				                            "attach it writable once to heal it");
 			} else if ((manager.HasFileVisibilityTable() &&
 			            !manager.HasVisibilityEventShape("ducklake_file_visibility")) ||
 			           (manager.HasDeleteFileVisibilityTable() &&

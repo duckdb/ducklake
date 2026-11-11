@@ -23,6 +23,9 @@ public:
 	string GetSnapshotTableStatement() override;
 	string GetSnapshotChangesTableStatement() override;
 	string GetSchemaVersionsTableStatement() override;
+	string GetSchemaTableStatement() override;
+	string GetTableTableStatement() override;
+	string GetViewTableStatement() override;
 	string GetDataFileTableStatement() override;
 	string GetDeleteFileTableStatement() override;
 	string GetInitialDataStatements() override;

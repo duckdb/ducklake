@@ -81,7 +81,7 @@ INSERT INTO ducklake_staged_commit SELECT NULL, NULL, NULL, snapshot_id, NULL, N
 FROM main.ducklake_snapshot ORDER BY snapshot_id DESC LIMIT 1 OFFSET 1;
 INSERT INTO ducklake_staged_data_file SELECT 0, table_id, 0, ''{DATA_PATH}/staged_commit_added_file.parquet'', false,
        ''parquet'', 1, 1000, NULL, NULL, NULL, NULL, 0, NULL, NULL, NULL, NULL
-FROM main.ducklake_table WHERE table_name = ''old_client'' AND end_snapshot IS NULL;
+FROM main.ducklake_table WHERE table_name = ''old_client'';
 SELECT * FROM ducklake_commit(''main'', 3)')
 ----
 has altered it

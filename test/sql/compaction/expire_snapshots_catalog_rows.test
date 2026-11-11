@@ -1,0 +1,135 @@
+# name: test/sql/compaction/expire_snapshots_catalog_rows.test
+# description: expiring the snapshots of dropped schemas, tables and views removes their version rows and their ends
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_expire_snapshots_catalog_rows_files', METADATA_CATALOG 'metadata')
+
+# snapshot 1
+statement ok
+CREATE TABLE ducklake.kept(i INTEGER)
+
+# snapshot 2
+statement ok
+CREATE SCHEMA ducklake.s1
+
+# snapshot 3
+statement ok
+CREATE TABLE ducklake.s1.tbl(i INTEGER)
+
+# snapshot 4
+statement ok
+CREATE VIEW ducklake.s1.vw AS SELECT 42
+
+# snapshot 5
+statement ok
+CREATE VIEW ducklake.kept_vw AS SELECT 1
+
+# snapshot 6
+statement ok
+DROP TABLE ducklake.s1.tbl
+
+# snapshot 7
+statement ok
+DROP VIEW ducklake.s1.vw
+
+# snapshot 8
+statement ok
+DROP SCHEMA ducklake.s1
+
+# snapshot 9, the rename ends the row of kept and adds the row of kept2
+statement ok
+ALTER TABLE ducklake.kept RENAME TO kept2
+
+# snapshot 10
+statement ok
+ALTER VIEW ducklake.kept_vw RENAME TO kept_vw2
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_table_visibility
+----
+2
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_view_visibility
+----
+2
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_schema_visibility
+----
+1
+
+# no snapshot of main is left between the birth and the end of the dropped rows
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [2, 3, 4, 5, 6, 7])
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_schema
+----
+1
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_schema_visibility
+----
+0
+
+# the renamed view and table keep both version rows and the end of the old row, which snapshots 8 and 9 still read
+query II
+SELECT view_name, begin_snapshot FROM metadata.ducklake_view ORDER BY begin_snapshot
+----
+kept_vw	5
+kept_vw2	10
+
+query III
+SELECT v.view_name, e.row_snapshot, e.snapshot_id FROM metadata.ducklake_view_visibility e LEFT JOIN metadata.ducklake_view v ON v.view_id = e.view_id AND v.branch_id = e.row_branch_id AND v.begin_snapshot = e.row_snapshot
+----
+kept_vw	5	10
+
+query II
+SELECT table_name, begin_snapshot FROM metadata.ducklake_table ORDER BY begin_snapshot
+----
+kept	1
+kept2	9
+
+query III
+SELECT t.table_name, e.row_snapshot, e.snapshot_id FROM metadata.ducklake_table_visibility e LEFT JOIN metadata.ducklake_table t ON t.table_id = e.table_id AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+----
+kept	1	9
+
+# once nothing reads the old row of the view anymore it goes with its end, the live table keeps its history
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [1, 8, 9])
+
+query II
+SELECT view_name, begin_snapshot FROM metadata.ducklake_view
+----
+kept_vw2	10
+
+query I
+SELECT COUNT(*) FROM metadata.ducklake_view_visibility
+----
+0
+
+query II
+SELECT table_name, begin_snapshot FROM metadata.ducklake_table ORDER BY begin_snapshot
+----
+kept	1
+kept2	9
+
+query III
+SELECT t.table_name, e.row_snapshot, e.snapshot_id FROM metadata.ducklake_table_visibility e LEFT JOIN metadata.ducklake_table t ON t.table_id = e.table_id AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+----
+kept	1	9
+
+query I
+SELECT i FROM ducklake.kept2
+----

@@ -20,7 +20,7 @@ statement ok
 INSERT INTO ducklake.t SELECT range + 1000 FROM range(1000);
 
 query II
-SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't' AND t.end_snapshot IS NULL;
+SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't';
 ----
 1000	1999
 
@@ -38,7 +38,7 @@ statement ok
 COMMIT
 
 query II
-SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't' AND t.end_snapshot IS NULL;
+SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't';
 ----
 1000	4099
 
@@ -46,7 +46,7 @@ statement ok
 INSERT INTO ducklake.t SELECT range + 6000 FROM range(100);
 
 query II
-SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't' AND t.end_snapshot IS NULL;
+SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't';
 ----
 1000	6099
 
@@ -93,7 +93,7 @@ statement ok
 INSERT INTO ducklake.t_float SELECT range + 6000 FROM range(100);
 
 query II
-SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't_float' AND t.end_snapshot IS NULL;
+SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't_float';
 ----
 1000.0	6099.0
 
@@ -130,7 +130,7 @@ statement ok
 INSERT INTO ducklake.t_int_double SELECT range + 6000 FROM range(100);
 
 query II
-SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't_int_double' AND t.end_snapshot IS NULL;
+SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't_int_double';
 ----
 NULL	NULL
 
@@ -161,7 +161,7 @@ statement ok
 INSERT INTO ducklake.t_ctrl SELECT range + 6000 FROM range(100);
 
 query II
-SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't_ctrl' AND t.end_snapshot IS NULL;
+SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't_ctrl';
 ----
 1000	6099
 
@@ -193,7 +193,7 @@ statement ok
 INSERT INTO ducklake.t_dec SELECT range + 6000 FROM range(100);
 
 query II
-SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't_dec' AND t.end_snapshot IS NULL;
+SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't_dec';
 ----
 1000.00	6099.00
 
@@ -225,7 +225,7 @@ statement ok
 INSERT INTO ducklake.t_huge SELECT range + 6000 FROM range(100);
 
 query II
-SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't_huge' AND t.end_snapshot IS NULL;
+SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats s JOIN ducklake_meta.ducklake_table t USING (table_id) WHERE t.table_name = 't_huge';
 ----
 NULL	NULL
 

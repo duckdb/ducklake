@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "common/ducklake_branch_chain.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "storage/ducklake_transaction.hpp"
 
@@ -184,12 +185,8 @@ struct DuckLakeCommitContext {
 	bool supports_v1_1_metadata = false;
 	//! Whether the metadata schema has the 2.0 layout, visibility rows instead of inline ranges.
 	bool supports_v2_0_metadata = false;
-	//! The branch the commit continues, main on the server side
-	idx_t commit_branch_id = 0;
-	//! The chain predicate selecting the schema version rows of the commit lineage under the alias sv, empty before 2.0
-	string schema_version_chain;
-	//! The chain predicate selecting the visibility events of the commit lineage under the alias v, empty on main
-	string file_visibility_chain;
+	//! The chain of the branch the commit continues, main on the server side
+	DuckLakeBranchChain commit_chain = DuckLakeBranchChain::Main();
 	//! Column names of the inlined data tables under this catalog version.
 	DuckLakeInlinedColNames InlinedColNames() const {
 		return DuckLakeInlinedColNames(supports_v1_1_metadata);

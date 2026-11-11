@@ -16,6 +16,13 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_to_v20
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
 
+# a view dropped under 1.1 ends in place, the migration turns the end into an end row
+statement ok
+CREATE VIEW dl.gone AS SELECT 1 AS i
+
+statement ok
+DROP VIEW dl.gone
+
 statement error
 SELECT * FROM meta.ducklake_branch
 ----
@@ -56,12 +63,16 @@ SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
 ----
 0	0
 1	0
+2	0
+3	0
 
 query II
 SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
 ----
 0	0
 1	0
+2	0
+3	0
 
 query II
 SELECT begin_snapshot, branch_id FROM meta.ducklake_schema_versions
@@ -98,6 +109,54 @@ query I
 SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility
 ----
 0
+
+# the version rows of the catalog tables carry their birth branch and end in the companion tables
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_table') ORDER BY column_index
+----
+table_id
+table_uuid
+begin_snapshot
+schema_id
+table_name
+path
+path_is_relative
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_schema') ORDER BY column_index
+----
+schema_id
+schema_uuid
+begin_snapshot
+schema_name
+path
+path_is_relative
+parent_schema_id
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_view') ORDER BY column_index
+----
+view_id
+view_uuid
+begin_snapshot
+schema_id
+view_name
+dialect
+sql
+column_aliases
+branch_id
+
+query IIIII
+SELECT e.branch_id, v.view_name, e.row_branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_view_visibility e JOIN meta.ducklake_view v ON v.view_id = e.view_id
+----
+0	gone	0	2	3
+
+query II
+SELECT (SELECT COUNT(*) FROM meta.ducklake_schema_visibility), (SELECT COUNT(*) FROM meta.ducklake_table_visibility)
+----
+0	0
 
 query I
 SELECT * FROM dl.t
