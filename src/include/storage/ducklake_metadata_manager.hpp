@@ -246,6 +246,10 @@ public:
 	}
 	//! Advice added to the error of a commit that failed for good
 	virtual string CommitErrorHint(const string &message) const;
+	//! Whether a COMMIT that was sent and failed may have taken effect, as a remote catalog can lose the response
+	virtual bool CommitOutcomeUnknown() const {
+		return false;
+	}
 	//! SQL that the commit of a transaction that changed options runs, so two commits cannot both insert an option
 	virtual string ConfigOptionLockSql() const {
 		return string();
