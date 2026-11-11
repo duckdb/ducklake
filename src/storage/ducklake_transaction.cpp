@@ -1604,13 +1604,16 @@ void DuckLakeTransaction::CleanupFiles() {
 	state->CleanupFiles();
 }
 
-void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version) {
+void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version, optional_idx committed_next_file_id) {
 	if (snapshot) {
+		// as a local commit does, the stats of the committed snapshot are invalidated, older snapshots keep theirs
+		auto next_file_id =
+		    committed_next_file_id.IsValid() ? committed_next_file_id.GetIndex() : snapshot->next_file_id;
 		for (auto &entry : state->dropped_file_stats) {
-			ducklake_catalog.InvalidateTableStatsCache(snapshot->next_file_id, entry.first);
+			ducklake_catalog.InvalidateTableStatsCache(next_file_id, entry.first);
 		}
 		for (auto &table_id : state->local_changes.GetCompactedTables()) {
-			ducklake_catalog.InvalidateTableStatsCache(snapshot->next_file_id, table_id);
+			ducklake_catalog.InvalidateTableStatsCache(next_file_id, table_id);
 		}
 	}
 	catalog_version = schema_version;
@@ -1876,9 +1879,10 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		catalog_version = schema_version;
 		committed_snapshot.schema_version = schema_version;
 	};
-	context.set_committed_snapshot_id = [&](idx_t snapshot_id) {
+	context.set_committed_snapshot_id = [&](idx_t snapshot_id, idx_t next_file_id) {
 		ducklake_catalog.SetCommittedSnapshotId(snapshot_id);
 		committed_snapshot.snapshot_id = snapshot_id;
+		committed_snapshot.next_file_id = next_file_id;
 		ducklake_catalog.AdvanceColumnsWithValues(snapshot_id);
 	};
 	context.set_entry_oids = [&](const ducklake_entry_oids_t &oids) {

@@ -1182,7 +1182,7 @@ void RESTMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tran
 	if (!response.schema_version.IsValid()) {
 		throw InvalidInputException("DuckLake REST: the server did not return the schema version of the commit");
 	}
-	flush_transaction.ApplyServerSideCommit(response.schema_version.GetIndex());
+	flush_transaction.ApplyServerSideCommit(response.schema_version.GetIndex(), response.next_file_id);
 }
 
 } // namespace duckdb

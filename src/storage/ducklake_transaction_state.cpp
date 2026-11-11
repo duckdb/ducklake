@@ -3045,7 +3045,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	}
 	// If we got here, this snapshot was successful
 	context.set_entry_oids(committed_entry_oids);
-	context.set_committed_snapshot_id(commit_snapshot.snapshot_id);
+	context.set_committed_snapshot_id(commit_snapshot.snapshot_id, commit_snapshot.next_file_id);
 	context.set_table_options(committed_table_options);
 	for (auto &entry : dropped_file_stats) {
 		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);

@@ -381,7 +381,8 @@ protected:
 public:
 	void RunCommitLoop(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &transaction_changes,
 	                   const DuckLakeRetryConfig &retry_config);
-	void ApplyServerSideCommit(idx_t schema_version);
+	//! Applies a commit that the server made, the next file id of the committed snapshot is the key of its stats
+	void ApplyServerSideCommit(idx_t schema_version, optional_idx committed_next_file_id = optional_idx());
 	//! Removes the files that this transaction wrote
 	void CleanupFiles();
 	//! Post-commit cleanup of empty inlined-data tables superseded by later schema versions.

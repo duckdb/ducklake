@@ -37,6 +37,9 @@ operation CommitTransaction {
         /// The schema version of the committed snapshot.
         schema_version: UInt64
 
+        /// The next file id of the committed snapshot.
+        next_file_id: UInt64
+
         /// The entries the transaction created, with the ids the commit gave them.
         entry_ids: CreatedEntryList = []
 

@@ -1999,6 +1999,8 @@ JSONMutableValue DuckLakeRESTSerializer::Write(JSONWriter &writer, const RESTCom
 	                                   !RESTIsNull(value.snapshot_id));
 	RESTWriteOptional<RESTUInt64Codec>(writer, result, "schema_version", value.schema_version,
 	                                   !RESTIsNull(value.schema_version));
+	RESTWriteOptional<RESTUInt64Codec>(writer, result, "next_file_id", value.next_file_id,
+	                                   !RESTIsNull(value.next_file_id));
 	result.Add("entry_ids", RESTWriteValue<RESTListCodec<RESTObjectCodec<RESTCreatedEntry>>>(writer, value.entry_ids));
 	result.Add("table_options",
 	           RESTWriteValue<RESTListCodec<RESTObjectCodec<RESTOptionSetting>>>(writer, value.table_options));
@@ -2011,6 +2013,7 @@ RESTCommitTransactionResponse DuckLakeRESTSerializer::Read(RESTJsonIn in) {
 	RESTCommitTransactionResponse result;
 	RESTReadOptional<RESTUInt64Codec>(in, "snapshot_id", result.snapshot_id);
 	RESTReadOptional<RESTUInt64Codec>(in, "schema_version", result.schema_version);
+	RESTReadOptional<RESTUInt64Codec>(in, "next_file_id", result.next_file_id);
 	RESTReadOptional<RESTListCodec<RESTObjectCodec<RESTCreatedEntry>>>(in, "entry_ids", result.entry_ids);
 	RESTReadOptional<RESTListCodec<RESTObjectCodec<RESTOptionSetting>>>(in, "table_options", result.table_options);
 	return result;

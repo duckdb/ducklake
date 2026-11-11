@@ -474,6 +474,7 @@ Response:
 |-------|------|-------------|
 | `snapshot_id` | `uint64` (optional) | The committed snapshot, absent if the requests did not create a snapshot (e.g. if they only set options). |
 | `schema_version` | `uint64` (optional) | The schema version of the committed snapshot. |
+| `next_file_id` | `uint64` (optional) | The next file id of the committed snapshot. |
 | `entry_ids` | list of [`CreatedEntry`](#createdentry) (default `[]`) | The entries the transaction created, with the ids the commit gave them. |
 | `table_options` | list of [`OptionSetting`](#optionsetting) (default `[]`) | The options of the tables the transaction created or altered, with the ids the commit gave the tables. |
 
