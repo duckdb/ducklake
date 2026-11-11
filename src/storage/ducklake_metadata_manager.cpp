@@ -6149,7 +6149,7 @@ string DuckLakeMetadataManager::GetDeleteCountForDataFilesSql(TableIndex table_i
 	return StringUtil::Format(R"(
 SELECT
   (SELECT COALESCE(SUM(delete_count), 0)
-   FROM %s
+   FROM %s del
    WHERE table_id = %d
      AND data_file_id IN (%s)
      AND {SNAPSHOT_ID} >= begin_snapshot
