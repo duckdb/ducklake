@@ -1,0 +1,39 @@
+# name: test/sql/migration/dev1_missing_row_visibility.test
+# description: a catalog whose rows lost their end column and the companion that replaced it cannot be healed
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE VIEW dl.v AS SELECT 1 AS x
+
+statement ok
+DROP VIEW dl.v
+
+# the companion holds the only record of the drop
+statement ok
+DROP TABLE meta.ducklake_view_visibility
+
+statement ok
+DETACH dl
+
+# a read only attach cannot recreate the companion
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+attach it writable once
+
+# an empty companion would bring the dropped view back, so the writable attach refuses to heal
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+----
+Cannot heal this DuckLake catalog: the end snapshots of the catalog rows were dropped and the visibility rows that replaced them are missing

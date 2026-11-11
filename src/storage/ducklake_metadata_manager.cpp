@@ -1521,6 +1521,13 @@ void DuckLakeMetadataManager::VerifyHealableV2_0Dev1(const V2_0Dev1Additions &mi
 		throw InvalidInputException("Cannot heal this DuckLake catalog: the inline file ranges were dropped and the "
 		                            "visibility rows that replaced them are missing");
 	}
+	// once the end column is gone the companion alone holds the ends, so a missing companion cannot be rebuilt
+	for (auto rows : {&missing.schema_rows, &missing.table_rows, &missing.view_rows}) {
+		if (rows->visibility_table && !rows->drop_end) {
+			throw InvalidInputException("Cannot heal this DuckLake catalog: the end snapshots of the catalog rows were "
+			                            "dropped and the visibility rows that replaced them are missing");
+		}
+	}
 }
 
 void DuckLakeMetadataManager::AddV2_0Dev1Additions() {
@@ -4681,7 +4688,6 @@ string DuckLakeMetadataManager::WriteNewTables(const vector<DuckLakeTableInfo> &
 		throw InternalException("WriteNewTables: resolved_paths size mismatch");
 	}
 
-	// a 2.0 row carries its birth branch and ends in the companion table instead of end_snapshot
 	vector<string> table_values;
 	vector<string> column_values;
 	for (idx_t i = 0; i < new_tables.size(); ++i) {
@@ -4929,7 +4935,6 @@ string DuckLakeMetadataManager::WriteDroppedNewColumns(const vector<DuckLakeNewC
 }
 
 string DuckLakeMetadataManager::WriteNewViews(const vector<DuckLakeViewInfo> &new_views, bool branch_aware) {
-	// a 2.0 row carries its birth branch and ends in the companion table instead of end_snapshot
 	vector<string> view_values;
 	for (auto &view : new_views) {
 		view_values.push_back(StringUtil::Format(
@@ -7828,11 +7833,11 @@ WHERE scope = 'table' AND scope_id IN (%s);)",
 		if (!row_kind.empty()) {
 			// the unreachable version rows go first, then the ends that named them
 			auto key = row_kind + "_id";
-			result = Execute(StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s r WHERE %s;", delete_tbl,
+			result = Execute(StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s AS r WHERE %s;", delete_tbl,
 			                                    UnreachableRowFilter(row_kind, {key}, "r")));
 			result->ThrowIfError("Failed to delete from " + delete_tbl + " in DuckLake: ");
 			auto ends = Execute(StringUtil::Format(R"(
-DELETE FROM {METADATA_CATALOG}.%s_visibility e
+DELETE FROM {METADATA_CATALOG}.%s_visibility AS e
 WHERE NOT EXISTS (
     SELECT 1
     FROM {METADATA_CATALOG}.%s r
