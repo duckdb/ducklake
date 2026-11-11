@@ -1,0 +1,410 @@
+# name: test/sql/remove_files/remove_data_files_stats.test
+# description: removing a file keeps the table stats exact when the remaining files are delete-free
+# group: [remove_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'};
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/remove_data_files_stats', METADATA_CATALOG 'dl', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER, s VARCHAR);
+
+statement ok
+INSERT INTO ducklake.t SELECT range, 'a' || range FROM range(10);
+
+statement ok
+INSERT INTO ducklake.t SELECT range, 'b' || range FROM range(10, 20);
+
+statement ok
+INSERT INTO ducklake.t SELECT range, 'c' || range FROM range(20, 30);
+
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats ORDER BY column_id
+----
+0	29	true	true
+a0	c29	true	true
+
+# remove the file that holds the maximum of both columns
+statement ok
+SET VARIABLE f1 = (SELECT filename FROM ducklake.t WHERE i = 25)
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't', getvariable('f1'))
+
+# the bounds are recomputed from the per-file stats of the remaining files - no file is read
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats ORDER BY column_id
+----
+0	19	true	true
+a0	b19	true	true
+
+query II
+SELECT record_count, file_size_bytes = (SELECT sum(data_file_size_bytes) FROM ducklake_list_files('ducklake', 't')) FROM dl.ducklake_table_stats
+----
+20	true
+
+# ... so MIN/MAX still fold from the metadata
+query III
+SELECT min(i), max(i), count(*) FROM ducklake.t
+----
+0	19	20
+
+query II
+EXPLAIN ANALYZE SELECT min(i), max(i) FROM ducklake.t
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# remove the file that holds the minimum
+statement ok
+SET VARIABLE f2 = (SELECT filename FROM ducklake.t WHERE i = 5)
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't', getvariable('f2'))
+
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats ORDER BY column_id
+----
+10	19	true	true
+b10	b19	true	true
+
+query III
+SELECT min(i), max(i), count(*) FROM ducklake.t
+----
+10	19	10
+
+# the deletes of the removed file itself leave with it: the remaining files are still delete-free
+statement ok
+INSERT INTO ducklake.t SELECT range, 'c' || range FROM range(20, 30);
+
+statement ok
+DELETE FROM ducklake.t WHERE i = 29
+
+query III
+SELECT min(i), max(i), count(*) FROM ducklake.t
+----
+10	28	19
+
+statement ok
+SET VARIABLE with_deletes = (SELECT filename FROM ducklake.t WHERE i = 25)
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't', getvariable('with_deletes'))
+
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats ORDER BY column_id
+----
+10	19	true	true
+b10	b19	true	true
+
+query II
+EXPLAIN ANALYZE SELECT min(i), max(i) FROM ducklake.t
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# a partial delete leaves the table with a delete file: the stored bounds stay, but are no longer exact
+statement ok
+INSERT INTO ducklake.t SELECT range, 'd' || range FROM range(30, 40);
+
+statement ok
+DELETE FROM ducklake.t WHERE i = 15
+
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats ORDER BY column_id
+----
+10	39	true	true
+b10	d39	true	true
+
+# the remaining files are not delete-free, so the removal cannot prove new bounds and clears the column stats
+statement ok
+SET VARIABLE f3 = (SELECT filename FROM ducklake.t WHERE i = 35)
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't', getvariable('f3'))
+
+query I
+SELECT count(*) FROM dl.ducklake_table_column_stats
+----
+0
+
+query III
+SELECT min(i), max(i), count(*) FROM ducklake.t
+----
+10	19	9
+
+query II
+EXPLAIN ANALYZE SELECT min(i) FROM ducklake.t
+----
+analyzed_plan	<REGEX>:.*TABLE_SCAN.*
+
+# the stats of a table emptied by removing its last file reset
+statement ok
+SET VARIABLE f4 = (SELECT list(data_file) FROM ducklake_list_files('ducklake', 't'))
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't', getvariable('f4'))
+
+query III
+SELECT min(i), max(i), count(*) FROM ducklake.t
+----
+NULL	NULL	0
+
+statement ok
+INSERT INTO ducklake.t SELECT range, 'e' || range FROM range(50, 60);
+
+query III
+SELECT min(i), max(i), count(*) FROM ducklake.t
+----
+50	59	10
+
+# files of two tables removed in one transaction, one of them carrying deletes
+statement ok
+CREATE TABLE ducklake.t2(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.t2 FROM range(1000, 1010);
+
+statement ok
+INSERT INTO ducklake.t2 FROM range(1010, 1020);
+
+statement ok
+DELETE FROM ducklake.t2 WHERE i = 1015
+
+statement ok
+INSERT INTO ducklake.t SELECT range, 'f' || range FROM range(60, 70);
+
+statement ok
+SET VARIABLE t_file = (SELECT filename FROM ducklake.t WHERE i = 65)
+
+statement ok
+SET VARIABLE t2_file = (SELECT filename FROM ducklake.t2 WHERE i = 1016)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't', getvariable('t_file'))
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't2', getvariable('t2_file'))
+
+statement ok
+COMMIT
+
+# (the column stats of t were cleared above and are not recreated by later inserts)
+query IIIII
+SELECT table_id, min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats ORDER BY table_id, column_id
+----
+2	1000	1009	true	true
+
+query III
+SELECT min(i), max(i), count(*) FROM ducklake.t2
+----
+1000	1009	10
+
+query II
+EXPLAIN ANALYZE SELECT min(i), max(i) FROM ducklake.t2
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# a removal in a transaction that also inserts rows keeps the column stats exact
+statement ok
+CREATE TABLE ducklake.t3(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.t3 FROM range(0, 10);
+
+statement ok
+INSERT INTO ducklake.t3 FROM range(10, 20);
+
+statement ok
+SET VARIABLE t3_file = (SELECT filename FROM ducklake.t3 WHERE i = 15)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t3 FROM range(100, 110);
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't3', getvariable('t3_file'))
+
+statement ok
+COMMIT
+
+query III
+SELECT min(i), max(i), count(*) FROM ducklake.t3
+----
+0	109	20
+
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats WHERE table_id = 3
+----
+0	109	true	true
+
+query II
+EXPLAIN ANALYZE SELECT min(i), max(i) FROM ducklake.t3
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# inlined deletions against the removed file leave with it as well
+statement ok
+CREATE TABLE ducklake.t4(i INTEGER);
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 5, table_name => 't4')
+
+statement ok
+INSERT INTO ducklake.t4 FROM range(0, 10);
+
+statement ok
+INSERT INTO ducklake.t4 FROM range(10, 20);
+
+statement ok
+DELETE FROM ducklake.t4 WHERE i = 15
+
+query I
+SELECT count(*) FROM dl.ducklake_inlined_delete_4
+----
+1
+
+statement ok
+SET VARIABLE t4_file = (SELECT filename FROM ducklake.t4 WHERE i = 16)
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't4', getvariable('t4_file'))
+
+query III
+SELECT min(i), max(i), count(*) FROM ducklake.t4
+----
+0	9	10
+
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats WHERE table_id = 4
+----
+0	9	true	true
+
+query II
+EXPLAIN ANALYZE SELECT min(i), max(i) FROM ducklake.t4
+----
+analyzed_plan	<!REGEX>:.*TABLE_SCAN.*
+
+# an added default stays visible after removing a file and inserting rows
+statement ok
+CREATE TABLE ducklake.t5(i INTEGER);
+
+statement ok
+INSERT INTO ducklake.t5 FROM range(10);
+
+statement ok
+INSERT INTO ducklake.t5 FROM range(10, 20);
+
+statement ok
+SET VARIABLE t5_file = (SELECT filename FROM ducklake.t5 WHERE i = 16)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't5', getvariable('t5_file'))
+
+statement ok
+ALTER TABLE ducklake.t5 ADD COLUMN j INTEGER DEFAULT 42
+
+statement ok
+INSERT INTO ducklake.t5 VALUES (100, 100)
+
+statement ok
+COMMIT
+
+query III
+SELECT min(j), max(j), count(*) FROM ducklake.t5
+----
+42	100	11
+
+query I
+SELECT count(*) FROM ducklake.t5 WHERE j = 42
+----
+10
+
+# flushing the inlined deletions of the removed file in the removing transaction keeps the stats exact
+statement ok
+CREATE TABLE ducklake.t6(i INTEGER);
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 5, table_name => 't6')
+
+statement ok
+INSERT INTO ducklake.t6 FROM range(10);
+
+statement ok
+INSERT INTO ducklake.t6 FROM range(10, 20);
+
+statement ok
+SET VARIABLE t6_file = (SELECT filename FROM ducklake.t6 WHERE i = 16)
+
+statement ok
+DELETE FROM ducklake.t6 WHERE i = 15
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't6')
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't6', getvariable('t6_file'))
+
+statement ok
+COMMIT
+
+query III
+SELECT min(i), max(i), count(*) FROM ducklake.t6
+----
+0	9	10
+
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM dl.ducklake_table_column_stats WHERE table_id = 6
+----
+0	9	true	true
+
+# a flushed deletion of a remaining file leaves deleted rows, so the stats are cleared
+statement ok
+INSERT INTO ducklake.t6 FROM range(20, 30);
+
+statement ok
+DELETE FROM ducklake.t6 WHERE i = 5
+
+statement ok
+SET VARIABLE t6_file = (SELECT filename FROM ducklake.t6 WHERE i = 26)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't6')
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't6', getvariable('t6_file'))
+
+statement ok
+COMMIT
+
+query III
+SELECT min(i), max(i), count(*) FROM ducklake.t6
+----
+0	9	9
+
+query I
+SELECT count(*) FROM dl.ducklake_table_column_stats WHERE table_id = 6
+----
+0

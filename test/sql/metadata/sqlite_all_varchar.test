@@ -59,3 +59,39 @@ query I
 SELECT DISTINCT typeof(snapshot_id) FROM __ducklake_metadata_lake.ducklake_snapshot
 ----
 VARCHAR
+
+# CHECKPOINT runs on a connection with the user's settings and flushes the inlined data from the SQLite catalog
+
+statement ok
+SET sqlite_all_varchar = false
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_all_varchar_inlined.db' AS inlined_lake (DATA_PATH '{DATA_PATH}/sqlite_all_varchar_inlined', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE inlined_lake.t (i INTEGER, d DOUBLE, ts TIMESTAMP)
+
+statement ok
+INSERT INTO inlined_lake.t VALUES (1, 1.5, TIMESTAMP '2026-01-02 03:04:05'), (2, NULL, NULL)
+
+query I
+SELECT count(*) FROM ducklake_list_files('inlined_lake', 't')
+----
+0
+
+statement ok
+SET sqlite_all_varchar = true
+
+statement ok
+CHECKPOINT inlined_lake
+
+query I
+SELECT count(*) FROM ducklake_list_files('inlined_lake', 't')
+----
+1
+
+query IIIIII
+SELECT i, typeof(i), d, typeof(d), ts, typeof(ts) FROM inlined_lake.t ORDER BY i
+----
+1	INTEGER	1.5	DOUBLE	2026-01-02 03:04:05	TIMESTAMP
+2	INTEGER	NULL	DOUBLE	NULL	TIMESTAMP
