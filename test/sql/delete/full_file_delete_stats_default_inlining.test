@@ -6,7 +6,7 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/full_file_delete_stats_default_inlining.db
 
 test-env DATA_PATH {TEST_DIR}
 

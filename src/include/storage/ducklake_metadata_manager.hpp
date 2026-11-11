@@ -344,8 +344,8 @@ public:
 	//! Both used by the regular metadata-manager methods and by server-side commit, which runs the
 	//! SQL on a fresh Connection without going through the metadata-manager wrapper.
 	static string LatestSnapshotQuery();
-	//! With table ids only those tables' stats are read
-	static string GlobalTableStatsQuery(bool include_exactness, const vector<TableIndex> &table_ids = {});
+	static string GlobalTableStatsQuery(bool include_exactness, const vector<TableIndex> &table_ids = {},
+	                                    bool include_snapshot_id = false);
 	//! Pure parsers for the results of the above queries.
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
 	                                                  optional_ptr<string> catalog_version = nullptr);
@@ -365,8 +365,8 @@ public:
 	BuildCatalogForSnapshot(DuckLakeSnapshot snapshot,
 	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
 	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata = false);
-	//! The global stats of every table of the snapshot, or of the given tables
-	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot,
+	//! The global stats and their snapshot, optionally restricted to the given tables
+	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot, idx_t &latest_snapshot_id,
 	                                                            const vector<TableIndex> &table_ids = {});
 	//! Get the record count of every table that has global stats
 	virtual map<TableIndex, idx_t> GetTableRecordCounts(DuckLakeSnapshot snapshot);
@@ -674,6 +674,8 @@ protected:
 	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
 
 	virtual string GetLatestSnapshotQuery() const;
+	//! Read mutable global stats and their snapshot ID from the same metadata state
+	virtual string GetGlobalTableStatsQuery(const vector<TableIndex> &table_ids) const;
 	//! The changes of the snapshots from first_snapshot to last_snapshot that recorded a rewrite
 	virtual string GetRewriteSnapshotsQuery(idx_t first_snapshot, idx_t last_snapshot) const;
 
