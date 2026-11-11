@@ -1,0 +1,247 @@
+# name: test/sql/remove_files/remove_data_files.test
+# description: remove data files from a table by their path
+# group: [remove_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/remove_data_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER, s VARCHAR);
+
+statement ok
+INSERT INTO ducklake.t SELECT range, 'a' || range FROM range(10);
+
+statement ok
+INSERT INTO ducklake.t SELECT range, 'b' || range FROM range(10, 20);
+
+statement ok
+INSERT INTO ducklake.t SELECT range, 'c' || range FROM range(20, 30);
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't')
+----
+3
+
+statement ok
+SET VARIABLE third_file = (SELECT filename FROM ducklake.t WHERE i = 25)
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't', getvariable('third_file'))
+
+query III
+SELECT count(*), min(i), max(i) FROM ducklake.t
+----
+20	0	19
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't')
+----
+2
+
+# the removal is a snapshot like any other - the file still serves the previous snapshot
+query I
+SELECT count(*) FROM ducklake.t AT (VERSION => 4)
+----
+30
+
+query I
+SELECT changes FROM ducklake_snapshots('ducklake') WHERE snapshot_id = 5
+----
+{tables_deleted_from=[1]}
+
+# the file is left on disk until its snapshots expire
+query I
+SELECT count(*) FROM read_parquet(getvariable('third_file'))
+----
+10
+
+# a removed file is no longer part of the table
+statement error
+CALL ducklake_remove_data_files('ducklake', 't', getvariable('third_file'))
+----
+is not a data file of table
+
+statement error
+CALL ducklake_remove_data_files('ducklake', 't', 'nope.parquet')
+----
+is not a data file of table
+
+statement error
+CALL ducklake_remove_data_files('ducklake', 't', NULL)
+----
+File list cannot be NULL
+
+statement error
+CALL ducklake_remove_data_files('ducklake', 'nope', 'nope.parquet')
+----
+does not exist
+
+statement error
+CALL ducklake_remove_data_files('ducklake', NULL, 'nope.parquet')
+----
+Table name cannot be NULL
+
+statement error
+CALL ducklake_remove_data_files('ducklake', 't', ['nope.parquet', NULL])
+----
+File list cannot contain NULL
+
+# remove a list of files
+statement ok
+SET VARIABLE remaining = (SELECT list(data_file) FROM ducklake_list_files('ducklake', 't'))
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't', getvariable('remaining'))
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+0
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't')
+----
+0
+
+# removals roll back
+statement ok
+INSERT INTO ducklake.t SELECT range, 'd' || range FROM range(5);
+
+statement ok
+BEGIN
+
+statement ok
+SET VARIABLE f1 = (SELECT data_file FROM ducklake_list_files('ducklake', 't'))
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't', getvariable('f1'))
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+0
+
+statement ok
+ROLLBACK
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+5
+
+# listing a transaction-local file twice gives the ordinary error
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t SELECT range, 'e' || range FROM range(100, 110);
+
+statement ok
+SET VARIABLE local_file = (SELECT filename FROM ducklake.t WHERE i = 105)
+
+statement error
+CALL ducklake_remove_data_files('ducklake', 't', [getvariable('local_file'), getvariable('local_file')])
+----
+is not a data file of table
+
+statement ok
+ROLLBACK
+
+# a file written by the same transaction is removed before it is ever committed
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t SELECT range, 'e' || range FROM range(100, 110);
+
+statement ok
+SET VARIABLE local_file = (SELECT filename FROM ducklake.t WHERE i = 105)
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't', getvariable('local_file'))
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+5
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+5
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't')
+----
+1
+
+# the schema option
+statement ok
+CREATE SCHEMA ducklake.s2
+
+statement ok
+CREATE TABLE ducklake.s2.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.s2.t FROM range(3)
+
+statement ok
+SET VARIABLE f2 = (SELECT data_file FROM ducklake_list_files('ducklake', 't', schema => 's2'))
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't', getvariable('f2'), schema => 's2')
+
+query I
+SELECT count(*) FROM ducklake.s2.t
+----
+0
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+5
+
+# a committed file removed and added again in one transaction can be removed again
+statement ok
+SET VARIABLE readd = (SELECT data_file FROM ducklake_list_files('ducklake', 't'))
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't', getvariable('readd'))
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', getvariable('readd'), ignore_extra_columns => true)
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+5
+
+statement ok
+CALL ducklake_remove_data_files('ducklake', 't', getvariable('readd'))
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+0
+
+statement ok
+ROLLBACK
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+5
