@@ -3,15 +3,18 @@
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/parser/tableref/table_function_ref.hpp"
+#include "storage/ducklake_scan.hpp"
 
 namespace duckdb {
 
 ParquetFileScanner::ParquetFileScanner(ClientContext &context, const DuckLakeFileData &file, bool use_file_metadata)
     : context(context) {
 	auto &instance = DatabaseInstance::GetDatabase(context);
-	ExtensionLoader loader(instance, "ducklake");
-	auto &parquet_scan_entry = loader.GetTableFunction("parquet_scan");
-	parquet_scan = *parquet_scan_entry.functions.functions[0];
+	auto parquet_scan_entry = DuckLakeFunctions::TryGetParquetScan(instance);
+	if (!parquet_scan_entry) {
+		DuckLakeFunctions::ThrowMissingParquet();
+	}
+	parquet_scan = *parquet_scan_entry->functions.functions[0];
 
 	// Prepare the inputs for the bind
 	vector<Value> children;
