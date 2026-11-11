@@ -628,8 +628,8 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 }
 
 void DuckLakeUtil::SetNativeExtensionTypes(ClientContext &context) {
-	ResetExtensionSettings(context, {"sqlite_all_varchar", "binary_as_string", "pg_use_text_protocol", "pg_query_mode",
-	                                 "pg_use_binary_copy", "pg_array_as_varchar", "pg_numeric_as_varchar"});
+	ResetExtensionSettings(context, {"binary_as_string", "pg_use_text_protocol", "pg_query_mode", "pg_use_binary_copy",
+	                                 "pg_array_as_varchar", "pg_numeric_as_varchar"});
 }
 
 void DuckLakeUtil::ResetExtensionSettings(ClientContext &context, const vector<string> &names) {
