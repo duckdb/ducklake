@@ -984,6 +984,8 @@ private:
 	vector<idx_t> lineage_heads;
 	//! Whether the catalog holds any branch besides main, read once when reads are repeatable
 	optional_idx catalog_has_branches;
+	//! Guards the three caches below, the scans of one statement initialize in parallel
+	mutex listing_cache_lock;
 	//! Parsed file listings keyed by their query, statements repeat identical listings several times
 	unordered_map<string, shared_ptr<vector<DuckLakeFileListEntry>>> file_list_cache;
 	//! Parsed deletion scans of table_changes, which executes its queries twice per call
