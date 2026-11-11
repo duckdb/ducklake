@@ -870,9 +870,7 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = '
 	ExecuteMigration(migrate_query, false, "1.1", "2.0-dev1");
 }
 
-//! Rebuilds a snapshot table with its branch key, rows without a branch go to main
-//! The rebuilt copy is complete before the replaced table moves aside and every interruption point resumes, only the
-//! moment between the two renames has no table on a backend that commits each statement
+//! Rebuilds a snapshot table with its branch key and resumes an interrupted rebuild
 static string SnapshotTableRebuildSql(const string &table, const string &columns, const string &select_list,
                                       bool has_table, bool source_has_branch_id, bool has_rebuild_table,
                                       bool has_old_table) {
