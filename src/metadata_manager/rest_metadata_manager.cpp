@@ -943,9 +943,9 @@ static bool IsSkippedAdd(CatalogEntry &entry, const AlterInfo &info) {
 	}
 	if (alter.alter_table_type == AlterTableType::ADD_FIELD) {
 		auto &add = alter.Cast<AddFieldInfo>();
-		auto path = add.column_path;
-		path.push_back(add.new_field.Name());
-		return add.if_field_not_exists && table.TryGetFieldId(path);
+		// a path lookup does not enter every type of field (e.g. a VARIANT), so find the field in its parent
+		auto parent = add.if_field_not_exists ? table.TryGetFieldId(add.column_path) : nullptr;
+		return parent && parent->GetChildByName(add.new_field.Name());
 	}
 	return false;
 }
