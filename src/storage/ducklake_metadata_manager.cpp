@@ -1061,13 +1061,24 @@ string DuckLakeMetadataManager::RowVisibilityMigrationSql(const RowVisibilityAdd
 		result += GetRowVisibilityTableStatement(kind, key_columns) + "\n";
 	}
 	if (add.drop_end) {
-		// the ranges of main become its end events before the column goes away
 		vector<string> keys;
 		vector<string> key_matches;
+		vector<string> live_matches;
 		for (auto &key : key_columns) {
 			keys.push_back("t." + key);
 			key_matches.push_back(StringUtil::Format("e.%s = t.%s", key, key));
+			live_matches.push_back(StringUtil::Format("live.%s = %s.%s", key, table, key));
 		}
+		// a row superseded in its birth transaction goes, as an end it would hide the live row of the same birth
+		result += StringUtil::Format(R"(
+DELETE FROM {METADATA_CATALOG}.%s
+WHERE end_snapshot = begin_snapshot AND EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.%s live
+    WHERE %s AND live.begin_snapshot = %s.begin_snapshot
+    AND (live.end_snapshot IS NULL OR live.end_snapshot > live.begin_snapshot));
+)",
+		                             table, table, StringUtil::Join(live_matches, " AND "), table);
+		// the ranges of main become its end events before the column goes away
 		result += StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.ducklake_%s_visibility
 SELECT DISTINCT 0, %s, 0, t.begin_snapshot, t.end_snapshot
@@ -5121,27 +5132,24 @@ string DuckLakeMetadataManager::WriteRefinedTimestampStats(const map<TableIndex,
 	                                   "mapping_id IS NOT NULL");
 }
 
-static string DroppedColumnValues(const vector<DuckLakeDroppedColumn> &dropped_columns) {
-	return StringUtil::Join(dropped_columns, dropped_columns.size(), ", ", [](const DuckLakeDroppedColumn &col) {
+//! Names the dropped columns as a CTE, a VALUES list in a FROM clause is not portable to SQLite
+static string DroppedColumnsCte(const vector<DuckLakeDroppedColumn> &dropped_columns) {
+	auto values = StringUtil::Join(dropped_columns, dropped_columns.size(), ", ", [](const DuckLakeDroppedColumn &col) {
 		return StringUtil::Format("(%d, %d)", col.table_id.index, col.field_id.index);
 	});
+	return StringUtil::Format("\nWITH dropped_cols(tid, cid) AS (\nVALUES %s\n)\n", values);
 }
 
 static string ExpireDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns, const string &metadata_table) {
 	if (dropped_columns.empty()) {
 		return {};
 	}
-	auto values = DroppedColumnValues(dropped_columns);
-	return StringUtil::Format(R"(
-WITH dropped_cols(tid, cid) AS (
-VALUES %s
-)
-UPDATE {METADATA_CATALOG}.%s
+	return DroppedColumnsCte(dropped_columns) + StringUtil::Format(R"(UPDATE {METADATA_CATALOG}.%s
 SET end_snapshot = {SNAPSHOT_ID}
 FROM dropped_cols
 WHERE table_id=tid AND column_id=cid AND end_snapshot IS NULL
 ;)",
-	                          values, metadata_table);
+	                                                               metadata_table);
 }
 
 string DuckLakeMetadataManager::WriteDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns,
@@ -5153,10 +5161,9 @@ string DuckLakeMetadataManager::WriteDroppedColumns(const vector<DuckLakeDropped
 		return {};
 	}
 	// the version rows of the dropped columns that the commit chain sees are ended
-	auto filter = StringUtil::Format("EXISTS (SELECT 1 FROM (VALUES %s) dropped_cols(tid, cid) "
-	                                 "WHERE dropped_cols.tid = t.table_id AND dropped_cols.cid = t.column_id)",
-	                                 DroppedColumnValues(dropped_columns));
-	return EndRows(chain, "column", {"table_id", "column_id"}, filter);
+	string filter = "EXISTS (SELECT 1 FROM dropped_cols "
+	                "WHERE dropped_cols.tid = t.table_id AND dropped_cols.cid = t.column_id)";
+	return DroppedColumnsCte(dropped_columns) + EndRows(chain, "column", {"table_id", "column_id"}, filter);
 }
 
 string DuckLakeMetadataManager::WriteExpiredColumnTags(const vector<DuckLakeDroppedColumn> &dropped_columns) {

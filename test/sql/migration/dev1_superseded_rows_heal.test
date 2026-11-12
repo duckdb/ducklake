@@ -1,0 +1,215 @@
+# name: test/sql/migration/dev1_superseded_rows_heal.test
+# description: the heal drops a row an older build superseded at its birth, so no end hides the live row of that birth
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i2 INTEGER, j INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 2)
+
+# a spec replaced in the transaction that set it is born and ended in the same snapshot
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (j)
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (i2)
+
+statement ok
+COMMIT
+
+query III
+SELECT e.partition_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_partition_visibility e
+----
+2	3	3
+
+# the older dev build ended its rows in place and knew no birth branch
+statement ok
+ALTER TABLE meta.ducklake_column ADD COLUMN end_snapshot BIGINT
+
+statement ok
+DROP TABLE meta.ducklake_column_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_column DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_partition_info ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_partition_info SET end_snapshot = e.snapshot_id FROM meta.ducklake_partition_visibility e
+    WHERE e.partition_id = ducklake_partition_info.partition_id
+    AND e.row_snapshot = ducklake_partition_info.begin_snapshot
+
+statement ok
+DROP TABLE meta.ducklake_partition_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_partition_info DROP COLUMN branch_id
+
+# a rename in the creating transaction left the superseded row next to the live one, ended at their shared birth
+statement ok
+INSERT INTO meta.ducklake_column (column_id, begin_snapshot, end_snapshot, table_id, column_order, column_name,
+    column_type, initial_default, default_value, nulls_allowed, parent_column, default_value_type,
+    default_value_dialect)
+SELECT column_id, begin_snapshot, begin_snapshot, table_id, column_order, 'i', column_type, initial_default,
+    default_value, nulls_allowed, parent_column, default_value_type, default_value_dialect
+FROM meta.ducklake_column WHERE column_name = 'i2'
+
+query IIII
+SELECT column_id, begin_snapshot, end_snapshot, column_name FROM meta.ducklake_column ORDER BY column_name
+----
+1	1	1	i
+1	1	NULL	i2
+2	1	NULL	j
+
+query III
+SELECT partition_id, begin_snapshot, end_snapshot FROM meta.ducklake_partition_info ORDER BY partition_id
+----
+2	3	3
+3	3	NULL
+
+statement ok
+DETACH dl
+
+# a read only attach cannot backfill the companions
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    READ_ONLY)
+----
+attach it writable once
+
+# the writable attach heals the layout, the superseded row is gone and no end hides the live row of its birth
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT column_name FROM (DESCRIBE dl.t)
+----
+i2
+j
+
+query II
+SELECT i2, j FROM dl.t
+----
+1	2
+
+query III
+SELECT column_id, begin_snapshot, column_name FROM meta.ducklake_column ORDER BY column_name
+----
+1	1	i2
+2	1	j
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_column_visibility
+----
+0
+
+# the replaced spec has a key of its own, so it keeps its row and its end at its own snapshot
+query III
+SELECT partition_id, begin_snapshot, branch_id FROM meta.ducklake_partition_info ORDER BY partition_id
+----
+2	3	0
+3	3	0
+
+query III
+SELECT e.partition_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_partition_visibility e
+----
+2	3	3
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name IN ('ducklake_column', 'ducklake_partition_info') AND column_name = 'end_snapshot'
+----
+0
+
+# the healed catalog commits under the live spec
+statement ok
+INSERT INTO dl.t VALUES (3, 4)
+
+query II
+SELECT partition_key_index, partition_value FROM meta.ducklake_file_partition_value
+----
+0	3
+
+# a column added and dropped in one transaction is born and ended in the same snapshot, its field id stays taken
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN k INTEGER
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN k
+
+statement ok
+COMMIT
+
+query III
+SELECT c.column_name, e.row_snapshot, e.snapshot_id FROM meta.ducklake_column_visibility e
+    JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id
+    AND c.branch_id = e.row_branch_id AND c.begin_snapshot = e.row_snapshot
+----
+k	5	5
+
+# a heal of that layout keeps the row, no live row shares its birth
+statement ok
+ALTER TABLE meta.ducklake_column ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_column SET end_snapshot = e.snapshot_id FROM meta.ducklake_column_visibility e
+    WHERE e.table_id = ducklake_column.table_id AND e.column_id = ducklake_column.column_id
+    AND e.row_snapshot = ducklake_column.begin_snapshot
+
+statement ok
+DROP TABLE meta.ducklake_column_visibility
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 0)
+
+query III
+SELECT c.column_name, e.row_snapshot, e.snapshot_id FROM meta.ducklake_column_visibility e
+    JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id
+    AND c.branch_id = e.row_branch_id AND c.begin_snapshot = e.row_snapshot
+----
+k	5	5
+
+query I
+SELECT column_name FROM (DESCRIBE dl.t)
+----
+i2
+j
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN m INTEGER
+
+query II
+SELECT column_id, column_name FROM meta.ducklake_column ORDER BY column_id
+----
+1	i2
+2	j
+3	k
+4	m
+
+statement ok
+DETACH dl
