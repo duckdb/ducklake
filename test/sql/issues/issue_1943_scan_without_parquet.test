@@ -1,0 +1,32 @@
+# name: test/sql/issues/issue_1943_scan_without_parquet.test
+# description: Scanning a DuckLake table without the parquet extension is an error, not a crash
+# group: [issues]
+
+require parquet
+
+require ducklake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1943.ducklake' AS lake (DATA_PATH '{TEST_DIR}/issue_1943_data')
+
+statement ok
+CREATE TABLE lake.t AS SELECT range AS i FROM range(10)
+
+# restart without loading any extension, then load only ducklake
+restart no_extension_load
+
+require ducklake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/issue_1943.ducklake' AS lake (DATA_PATH '{TEST_DIR}/issue_1943_data', READ_ONLY)
+
+statement error
+SELECT count(*) FROM lake.t
+----
+Could not load the scan function for parquet. Try explicitly loading the parquet extension
+
+# the metadata is still readable
+query I
+SELECT count(*) FROM lake.snapshots()
+----
+2

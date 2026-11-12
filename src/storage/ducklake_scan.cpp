@@ -230,17 +230,29 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 	return result;
 }
 
+optional_ptr<TableFunctionCatalogEntry> DuckLakeFunctions::TryGetParquetScan(DatabaseInstance &instance) {
+	ExtensionHelper::TryAutoLoadExtension(instance, "parquet");
+	ExtensionLoader loader(instance, "ducklake");
+	auto parquet_entry = loader.TryGetTableFunction("parquet_scan");
+	if (!parquet_entry) {
+		return nullptr;
+	}
+	return parquet_entry->Cast<TableFunctionCatalogEntry>();
+}
+
+void DuckLakeFunctions::ThrowMissingParquet() {
+	throw MissingExtensionException(
+	    "Could not load the scan function for parquet. Try explicitly loading the parquet extension");
+}
+
 TableFunction DuckLakeFunctions::GetDuckLakeScanFunction(DatabaseInstance &instance) {
 	// The ducklake_scan function is constructed by grabbing the parquet scan from the Catalog, then injecting the
 	// DuckLakeMultiFileReader into it to create a DuckLake-based multi file read
-	ExtensionHelper::TryAutoLoadExtension(instance, "parquet");
-	ExtensionLoader loader(instance, "ducklake");
-
+	// Without parquet (this also runs at LOAD ducklake) the bind stays null, which BindDuckLakeScan reports
 	TableFunction function("ducklake_scan", {LogicalType::VARCHAR}, nullptr, nullptr);
-	auto parquet_entry = loader.TryGetTableFunction("parquet_scan");
-	if (parquet_entry) {
-		auto &parquet_scan = parquet_entry->Cast<TableFunctionCatalogEntry>();
-		function = *parquet_scan.functions.GetFunctionByOffset(0);
+	auto parquet_scan = TryGetParquetScan(instance);
+	if (parquet_scan) {
+		function = *parquet_scan->functions.GetFunctionByOffset(0);
 		function.get_multi_file_reader = DuckLakeMultiFileReader::CreateInstance;
 	}
 
@@ -341,9 +353,6 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Bou
 	// If ducklake_scan was registered before parquet was loaded, we set it now
 	if (!function.bind) {
 		function = BoundTableFunction(DuckLakeFunctions::GetDuckLakeScanFunction(*context.db));
-		if (!function.bind) {
-			throw InvalidInputException("ducklake_scan requires the parquet extension to be loaded");
-		}
 	}
 
 	// Look up the DuckLake catalog and table

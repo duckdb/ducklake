@@ -378,6 +378,10 @@ TableFunction DuckLakeTableEntry::GetScanFunction(ClientContext &context, unique
 }
 
 unique_ptr<FunctionData> DuckLakeFunctions::BindDuckLakeScan(ClientContext &context, BoundTableFunction &function) {
+	if (!function.bind) {
+		// the scan is a copy of parquet_scan, which was not available when it was constructed
+		ThrowMissingParquet();
+	}
 	vector<Value> inputs {Value("")};
 	named_argument_map_t param_map;
 	// the column types come from the catalog, so a session setting must not turn BLOB columns into VARCHAR
