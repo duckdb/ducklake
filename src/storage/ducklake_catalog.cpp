@@ -1634,10 +1634,6 @@ string DuckLakeCatalog::SchemaCacheKey(idx_t schema_version) const {
 	return StringUtil::Format("ducklake:%s:%s:schema:%llu", instance_id, GetName(), schema_version);
 }
 
-void DuckLakeCatalog::InvalidateTableStatsCache(idx_t snapshot_id, TableIndex table_id) {
-	GetObjectCacheInstance().Delete(StatsCacheKey(snapshot_id, table_id));
-}
-
 void DuckLakeCatalog::InvalidateTableStatsCaches(const unordered_set<idx_t> &snapshot_ids) {
 	auto &cache = GetObjectCacheInstance();
 	lock_guard<mutex> guard(cache_entries_lock);

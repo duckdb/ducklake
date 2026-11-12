@@ -461,8 +461,6 @@ public:
 	void AdvanceColumnsWithValues(idx_t snapshot_id);
 	void ForgetColumnsWithValues(const set<TableIndex> &table_ids);
 
-	//! Invalidate the cached table stats entry for a given stats cache key.
-	void InvalidateTableStatsCache(idx_t snapshot_id, TableIndex table_id);
 	//! Invalidate the cached table stats entries of this DuckLake for the given snapshots.
 	void InvalidateTableStatsCaches(const unordered_set<idx_t> &snapshot_ids);
 	//! Invalidate the cached schema entry for a given schema_version.
