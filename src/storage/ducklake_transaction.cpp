@@ -1879,9 +1879,10 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		catalog_version = schema_version;
 		committed_snapshot.schema_version = schema_version;
 	};
-	context.set_committed_snapshot_id = [&](idx_t snapshot_id, idx_t next_file_id) {
+	context.set_committed_snapshot_id = [&](idx_t snapshot_id, idx_t next_catalog_id, idx_t next_file_id) {
 		ducklake_catalog.SetCommittedSnapshotId(snapshot_id);
 		committed_snapshot.snapshot_id = snapshot_id;
+		committed_snapshot.next_catalog_id = next_catalog_id;
 		committed_snapshot.next_file_id = next_file_id;
 		ducklake_catalog.AdvanceColumnsWithValues(snapshot_id);
 	};

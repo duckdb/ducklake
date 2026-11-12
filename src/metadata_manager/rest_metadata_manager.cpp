@@ -1153,7 +1153,7 @@ void RESTMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tran
 		}
 		throw;
 	}
-	if (!response.snapshot_id.IsValid()) {
+	if (RESTIsNull(response.snapshot)) {
 		// nothing was written that creates a snapshot (e.g. only options were set)
 		flush_transaction.ApplyServerSideCommit(transaction_snapshot.schema_version);
 		return;
@@ -1176,11 +1176,8 @@ void RESTMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tran
 		option.table_id = TableIndex(setting.table_id.value);
 		catalog.SetConfigOption(option);
 	}
-	catalog.SetCommittedSnapshotId(response.snapshot_id.GetIndex());
-	if (!response.schema_version.IsValid()) {
-		throw InvalidInputException("DuckLake REST: the server did not return the schema version of the commit");
-	}
-	flush_transaction.ApplyServerSideCommit(response.schema_version.GetIndex(), response.next_file_id);
+	catalog.SetCommittedSnapshotId(response.snapshot.snapshot_id);
+	flush_transaction.ApplyServerSideCommit(response.snapshot.schema_version, response.snapshot.next_file_id);
 }
 
 } // namespace duckdb

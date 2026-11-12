@@ -1350,11 +1350,7 @@ RESTCommitTransactionResponse DuckLakeRESTCommit::Run(const RESTCommitTransactio
 	RESTCommitTransactionResponse result;
 	auto committed = transaction_ref->GetCommittedSnapshot();
 	if (committed.snapshot_id != DConstants::INVALID_INDEX) {
-		result.snapshot_id = committed.snapshot_id;
-		result.schema_version = committed.schema_version;
-		if (committed.next_file_id != DConstants::INVALID_INDEX) {
-			result.next_file_id = committed.next_file_id;
-		}
+		result.snapshot = committed;
 	}
 	for (auto &entry : transaction_ref->GetCommittedEntryOids()) {
 		auto placeholder = entry_placeholders.find(entry.second);

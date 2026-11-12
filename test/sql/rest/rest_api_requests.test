@@ -22,7 +22,7 @@ INSERT INTO dl.t VALUES (1, 'one'), (2, NULL)
 
 # several requests in one transaction, the created table is referred to with a placeholder
 query II
-SELECT response->>'$.snapshot_id', response->>'$.entry_ids[0].placeholder_id' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+SELECT response->>'$.snapshot.snapshot_id', response->>'$.entry_ids[0].placeholder_id' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
 '{"requests": [
   {"create_table": {"placeholder_id": -1, "schema_id": 0, "table_name": "t2", "columns": [{"column_name": "j", "column_type": {"id": "int64"}, "default": "42"}]}},
   {"alter": {"entry_id": -1, "alter": {"set_comment": {"entry_type": "TABLE_ENTRY", "comment": "created and altered"}}}}

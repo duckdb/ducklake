@@ -1192,11 +1192,7 @@ struct RESTCommitTransactionRequest : public RESTSnapshotReference {
 
 struct RESTCommitTransactionResponse {
 	//! The committed snapshot, absent if the requests did not create a snapshot (e.g. if they only set options).
-	optional_idx snapshot_id;
-	//! The schema version of the committed snapshot.
-	optional_idx schema_version;
-	//! The next file id of the committed snapshot.
-	optional_idx next_file_id;
+	DuckLakeSnapshot snapshot;
 	//! The entries the transaction created, with the ids the commit gave them.
 	vector<RESTCreatedEntry> entry_ids;
 	//! The options of the tables the transaction created or altered, with the ids the commit gave the tables.

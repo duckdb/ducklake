@@ -29,13 +29,9 @@ operation CommitTransaction {
 
     output := {
         /// The committed snapshot, absent if the requests did not create a snapshot (e.g. if they only set options).
-        snapshot_id: UInt64
-
-        /// The schema version of the committed snapshot.
-        schema_version: UInt64
-
-        /// The next file id of the committed snapshot.
-        next_file_id: UInt64
+        /// If other transactions committed since the snapshot of the request, its id is more than one above the id of
+        /// the snapshot of the request.
+        snapshot: Snapshot
 
         /// The entries the transaction created, with the ids the commit gave them.
         entry_ids: CreatedEntryList = []

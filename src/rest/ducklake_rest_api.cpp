@@ -1996,12 +1996,8 @@ RESTCommitTransactionRequest DuckLakeRESTSerializer::Read(RESTJsonIn in) {
 
 JSONMutableValue DuckLakeRESTSerializer::Write(JSONWriter &writer, const RESTCommitTransactionResponse &value) {
 	auto result = writer.CreateObject();
-	RESTWriteOptional<RESTUInt64Codec>(writer, result, "snapshot_id", value.snapshot_id,
-	                                   !RESTIsNull(value.snapshot_id));
-	RESTWriteOptional<RESTUInt64Codec>(writer, result, "schema_version", value.schema_version,
-	                                   !RESTIsNull(value.schema_version));
-	RESTWriteOptional<RESTUInt64Codec>(writer, result, "next_file_id", value.next_file_id,
-	                                   !RESTIsNull(value.next_file_id));
+	RESTWriteOptional<RESTObjectCodec<DuckLakeSnapshot>>(writer, result, "snapshot", value.snapshot,
+	                                                     !RESTIsNull(value.snapshot));
 	result.Add("entry_ids", RESTWriteValue<RESTListCodec<RESTObjectCodec<RESTCreatedEntry>>>(writer, value.entry_ids));
 	result.Add("table_options",
 	           RESTWriteValue<RESTListCodec<RESTObjectCodec<RESTOptionSetting>>>(writer, value.table_options));
@@ -2012,9 +2008,7 @@ template <>
 RESTCommitTransactionResponse DuckLakeRESTSerializer::Read(RESTJsonIn in) {
 	RESTExpectObject(in, "CommitTransactionResponse");
 	RESTCommitTransactionResponse result;
-	RESTReadOptional<RESTUInt64Codec>(in, "snapshot_id", result.snapshot_id);
-	RESTReadOptional<RESTUInt64Codec>(in, "schema_version", result.schema_version);
-	RESTReadOptional<RESTUInt64Codec>(in, "next_file_id", result.next_file_id);
+	RESTReadOptional<RESTObjectCodec<DuckLakeSnapshot>>(in, "snapshot", result.snapshot);
 	RESTReadOptional<RESTListCodec<RESTObjectCodec<RESTCreatedEntry>>>(in, "entry_ids", result.entry_ids);
 	RESTReadOptional<RESTListCodec<RESTObjectCodec<RESTOptionSetting>>>(in, "table_options", result.table_options);
 	return result;

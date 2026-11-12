@@ -154,7 +154,7 @@ struct DuckLakeCommitContext {
 	//! Publishes the new schema version onto the transaction.
 	std::function<void(idx_t)> set_catalog_version;
 	//! Records the committed snapshot id on the catalog.
-	std::function<void(idx_t snapshot_id, idx_t next_file_id)> set_committed_snapshot_id;
+	std::function<void(idx_t snapshot_id, idx_t next_catalog_id, idx_t next_file_id)> set_committed_snapshot_id;
 	//! Keeps the oids of the entries created by the commit on the catalog.
 	std::function<void(const ducklake_entry_oids_t &)> set_entry_oids = [](const ducklake_entry_oids_t &) {
 	};
