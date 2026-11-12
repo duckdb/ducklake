@@ -370,8 +370,8 @@ static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &c
 	}
 
 	// Query the inlined deletions with the delete file active when their data file was last visible
-	auto deletions_result =
-	    metadata_manager.Query(snapshot, StringUtil::Format(R"(
+	auto deletions_result = metadata_manager.Query(
+	    snapshot, StringUtil::Format(R"(
 SELECT del.file_id, data.path, data.path_is_relative, del.row_id, del.begin_snapshot,
        existing_del.delete_file_id, existing_del.path as del_path, existing_del.path_is_relative as del_path_is_relative,
        existing_del.begin_snapshot as del_begin_snapshot, existing_del.encryption_key as del_encryption_key,
@@ -383,10 +383,10 @@ LEFT JOIN %s existing_del
        AND {SNAPSHOT_ID} >= existing_del.begin_snapshot
        AND (existing_del.end_snapshot IS NULL
             OR existing_del.end_snapshot >= COALESCE(data.end_snapshot, {SNAPSHOT_ID} + 1))
-WHERE del.begin_snapshot <= {PARENT_VIEW_SNAPSHOT_ID}
+WHERE %s
 	)",
-	                                                        inlined_table_name, metadata_manager.DataFiles(),
-	                                                        metadata_manager.DeleteFiles(), table_id.index));
+	                                 inlined_table_name, metadata_manager.DataFiles(), metadata_manager.DeleteFiles(),
+	                                 table_id.index, metadata_manager.InlinedDeletionView("del", "{SNAPSHOT_ID}")));
 	deletions_result->ThrowIfError("Failed to query inlined file deletions for flush: ");
 
 	unordered_map<idx_t, FileDeleteInfo> files_to_flush;

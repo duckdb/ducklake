@@ -256,6 +256,12 @@
       "paths": [
         "test/sql/migration/dev1_heal_refuses_old_branches.test"
       ]
+    },
+    {
+      "reason": "The conflict read of a server side quack commit runs in the sidecar, so the client log never shows it",
+      "paths": [
+        "test/sql/deletion_inlining/inlined_file_deletes_concurrent_branch_column.test"
+      ]
     }
   ]
 }

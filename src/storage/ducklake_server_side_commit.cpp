@@ -702,9 +702,10 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	                                const vector<DuckLakeTableInfo> &, const vector<DuckLakeTableInfo> &) -> string {
 		return BuildInlinedDataInserts(new_data);
 	};
-	ctx.write_inlined_file_deletes = [](const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) -> string {
+	ctx.write_inlined_file_deletes = [this](const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) -> string {
 		bool created_new_table = false;
-		return DuckLakeMetadataManager::WriteNewInlinedFileDeletesSql(new_deletes, created_new_table);
+		return DuckLakeMetadataManager::WriteNewInlinedFileDeletesSql(new_deletes, created_new_table,
+		                                                              supports_v2_0_metadata);
 	};
 	ctx.get_table_stats = [this](TableIndex table_id) -> shared_ptr<DuckLakeTableStats> {
 		return GetExistingTableStats(table_id);
@@ -737,10 +738,10 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		if (InlinedFileDeletionTableExists(table_id)) {
 			inlined_deletion_table = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
 		}
-		auto sql =
-		    SubstitutePlaceholders(DuckLakeMetadataManager::GetNetDataFileRowCountSql(
-		                               table_id, inlined_deletion_table, supports_v2_0_metadata, string(), false, true),
-		                           transaction_snapshot);
+		auto sql = SubstitutePlaceholders(
+		    DuckLakeMetadataManager::GetNetDataFileRowCountSql(table_id, inlined_deletion_table, supports_v2_0_metadata,
+		                                                       DuckLakeBranchChain::Main(), false, true),
+		    transaction_snapshot);
 		auto result = RunQuery(sql, "read net data file row count");
 		for (auto &row : *result) {
 			return row.GetValue<idx_t>(0);

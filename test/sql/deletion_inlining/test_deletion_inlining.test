@@ -188,6 +188,12 @@ SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delet
 4	14	11
 0	40	11
 
+# the deletion rows carry the branch they were deleted on
+query I
+SELECT DISTINCT branch_id FROM ducklake_meta.ducklake_inlined_delete_1
+----
+0
+
 query IIII
 FROM ducklake_meta.ducklake_inlined_data_1_1 order by ALL
 ----

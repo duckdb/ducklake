@@ -60,7 +60,8 @@
         "test/sql/migration/v20_dev1_new_catalog.test",
         "test/sql/partitioning/epoch_version_gate.test",
         "test/sql/stats/stats_exactness_inlined.test",
-        "test/sql/types/null_type_version_gate.test"
+        "test/sql/types/null_type_version_gate.test",
+        "test/sql/migration/v11_to_v20_dev1_inlined_deletes.test"
       ]
     },
     {
@@ -229,7 +230,8 @@
         "test/sql/branches/branch_tag_above_fork.test",
         "test/sql/branches/branch_snapshot_changes_key.test",
         "test/sql/branches/branchless_skips_guards.test",
-        "test/sql/cleanup/expire_restarted_commit_cleanup.test"
+        "test/sql/cleanup/expire_restarted_commit_cleanup.test",
+        "test/sql/branches/branch_inlined_file_delete_row.test"
       ]
     },
     {
@@ -336,7 +338,10 @@
         "test/sql/stats/skip_stats_columns.test",
         "test/sql/stats/table_stats_null_totals.test",
         "test/sql/stats/table_stats_null_totals_retry.test",
-        "test/sql/transaction/transaction_conflicts_replaced_delete_file.test"
+        "test/sql/transaction/transaction_conflicts_replaced_delete_file.test",
+        "test/sql/deletion_inlining/inlined_file_delete_branch_column.test",
+        "test/sql/deletion_inlining/inlined_file_deletes_concurrent_branch_column.test",
+        "test/sql/migration/dev1_inlined_deletes_heal.test"
       ]
     }
   ]

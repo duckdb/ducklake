@@ -1510,9 +1510,9 @@ bool DuckLakeTransactionState::TryRecomputeGlobalStatsAfterDrop(TableIndex table
 		inlined_deletion_table = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
 	}
 	auto query_result = context.query_metadata_with_snapshot(
-	    snapshot, DuckLakeMetadataManager::GetDeleteCountForDataFilesSql(table_id, dropped_ids, inlined_deletion_table,
-	                                                                     context.supports_v2_0_metadata,
-	                                                                     FileVisibilityChain(context)));
+	    snapshot,
+	    DuckLakeMetadataManager::GetDeleteCountForDataFilesSql(table_id, dropped_ids, inlined_deletion_table,
+	                                                           context.supports_v2_0_metadata, context.commit_chain));
 	query_result->ThrowIfError("Failed to read the delete counts of dropped files from DuckLake: ");
 	idx_t dropped_delete_count = 0;
 	for (auto &row : *query_result) {
@@ -2696,7 +2696,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 
 	// delete the flushed inlined rows and inlined file deletions after the deletes of the transaction
 	batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(
-	    flushed_inlined_tables, flushed_inlined_file_deletions, context.InlinedColNames());
+	    flushed_inlined_tables, flushed_inlined_file_deletions, context.InlinedColNames(),
+	    context.supports_v2_0_metadata);
 	// the live files and inlined rows decide the stats that this commit cannot update from memory
 	batch_queries += DuckLakeMetadataManager::RefreshTableSizesSql(
 	    refreshed_table_sizes, refreshed_record_counts, context.supports_v2_0_metadata, FileVisibilityChain(context));
@@ -2766,9 +2767,11 @@ static set<DataFileIndex> GetFilesWithInlinedDeletesAfterSnapshot(TableIndex tab
 	if (!context.inlined_file_deletion_table_exists(table_id)) {
 		return result;
 	}
-	auto query = StringUtil::Format(
-	    "SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s WHERE begin_snapshot > {PARENT_VIEW_SNAPSHOT_ID};",
-	    DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id));
+	// the ids of a branch are contiguous, so writers on different branches never conflict
+	auto query = StringUtil::Format("SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s WHERE %sbegin_snapshot > "
+	                                "{SNAPSHOT_ID};",
+	                                DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id),
+	                                context.supports_v2_0_metadata ? "branch_id = {BRANCH_ID} AND " : "");
 	auto query_result = context.conflict_query_executor(query);
 	query_result->ThrowIfError("Failed to commit DuckLake transaction - failed to get files with "
 	                           "inlined deletions for conflict resolution:");

@@ -401,6 +401,10 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				// the version rows end in companion tables, which only a writable attach can backfill
 				throw InvalidInputException("This DuckLake catalog has the catalog tables of an older dev build, "
 				                            "attach it writable once to heal it");
+			} else if (!manager.HasInlinedDeletionShapes()) {
+				// the deletion rows carry their branch, which only a writable attach can add
+				throw InvalidInputException("This DuckLake catalog has the inlined deletion tables of an older dev "
+				                            "build, attach it writable once to heal it");
 			} else if ((manager.HasFileVisibilityTable() &&
 			            !manager.HasVisibilityEventShape("ducklake_file_visibility")) ||
 			           (manager.HasDeleteFileVisibilityTable() &&

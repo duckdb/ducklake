@@ -491,7 +491,7 @@ public:
 	//! With require_exact, the count is NULL if any visible file is only partially visible to the snapshot.
 	//! With exclude_new_files, the files of the commit, which can already be in the catalog, are not counted.
 	static string GetNetDataFileRowCountSql(TableIndex table_id, const Identifier &inlined_deletion_table,
-	                                        bool branch_aware, const string &chain_predicate,
+	                                        bool branch_aware, const DuckLakeBranchChain &chain,
 	                                        bool require_exact = false, bool exclude_new_files = false);
 	static string GetNetInlinedRowCountSql(const Identifier &inlined_table_name,
 	                                       const DuckLakeInlinedColNames &col_names);
@@ -634,10 +634,14 @@ public:
 	                                      const vector<string> &cells_per_row);
 	//! Static deterministic name of the per-table inlined deletion table.
 	static Identifier InlinedFileDeletionTableName(TableIndex table_id);
-	//! Pure SQL builder for inlined file deletions (CREATE TABLE IF NOT EXISTS + INSERT). Sets
-	//! created_new_table when a new ducklake_inlined_delete_<id> table was emitted.
+	//! The CREATE IF NOT EXISTS and INSERT of the inlined file deletions, with the branch of the commit from 2.0 on
 	static string WriteNewInlinedFileDeletesSql(const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes,
-	                                            bool &created_new_table);
+	                                            bool &created_new_table, bool branch_aware);
+	//! The inlined deletion rows of the chain view at the read snapshot, the rows at or below it before 2.0
+	static string InlinedDeletionView(bool branch_aware, const DuckLakeBranchChain &chain, const string &alias,
+	                                  const string &read_snapshot);
+	//! The inlined deletion rows the attached chain reads at the read snapshot
+	string InlinedDeletionView(const string &alias, const string &read_snapshot) const;
 	//! SQL branch of WriteNewInlinedFileDeletes — returns the CREATE/INSERT statements and marks the
 	//! metadata-manager cache for clearing when a new per-table deletion table is created.
 	string WriteNewInlinedFileDeletesSqlBatch(const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes);
@@ -667,10 +671,10 @@ public:
 	//! The registration with the highest schema version in the chain view
 	static string LatestInlinedTableQuery(idx_t table_id, bool branch_aware, const DuckLakeBranchChain &chain);
 	static string DropDataFiles(const set<DataFileIndex> &dropped_files, bool write_visibility);
-	//! The deletes recorded against the given data files of the table at the snapshot
+	//! The deletes recorded against the given data files of the table at the snapshot, read through the chain
 	static string GetDeleteCountForDataFilesSql(TableIndex table_id, const set<DataFileIndex> &file_ids,
 	                                            const Identifier &inlined_deletion_table, bool branch_aware,
-	                                            const string &chain_predicate);
+	                                            const DuckLakeBranchChain &chain);
 	//! Selects the given data files that are still in the metadata
 	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
 	//! Selects the given columns that a live data file of the table records values of, or holds the default of
@@ -771,10 +775,10 @@ public:
 	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types,
 	                                                     const Identifier &inlined_table_name);
 
-	//! The statements deleting the inlined rows and inlined file deletions that the transaction flushed
+	//! The statements deleting the flushed inlined rows and the flushed inlined file deletions of the committing branch
 	static string GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
 	                                               const map<TableIndex, idx_t> &flushed_file_deletions,
-	                                               const DuckLakeInlinedColNames &col_names);
+	                                               const DuckLakeInlinedColNames &col_names, bool branch_aware);
 	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids,
 	                              bool write_branch_id);
 
@@ -879,6 +883,8 @@ public:
 	string DataFiles(TableIndex table_id) const;
 	string DeleteFiles(TableIndex table_id) const;
 	bool HasMetadataColumn(const string &table, const string &column);
+	//! Scans the metadata schema into the memo, once per probe pass
+	void ProbeMetadataSchema();
 	//! Reads the columns of every table of the metadata schema into the memo, false when the catalog lists none
 	virtual bool ProbeMetadataColumns();
 	//! Drops the memo of a probe pass
@@ -914,6 +920,18 @@ public:
 	bool HasRowVisibilityShapes();
 	RowVisibilityAdditions ProbeRowVisibilityAdditions(const RowVisibilityKind &kind);
 	static string RowVisibilityMigrationSql(const RowVisibilityAdditions &add);
+	//! The heal step an inlined deletion table still needs, the branch column of its rows
+	struct InlinedDeletionAdditions {
+		Identifier table_name;
+		bool branch_column = true;
+	};
+	//! Whether the name is that of an inlined deletion table, ducklake_inlined_delete_<table id>
+	static bool IsInlinedDeletionTableName(const string &name);
+	//! The inlined deletion tables of the catalog with their heal steps, from the memo of the pass when complete
+	vector<InlinedDeletionAdditions> ProbeInlinedDeletionTables();
+	//! Whether every inlined deletion table carries the branch column
+	bool HasInlinedDeletionShapes();
+	static string InlinedDeletionMigrationSql(const InlinedDeletionAdditions &add);
 	//! The branch additions a dev catalog is missing, all of them for the 1.1 migration
 	struct V2_0Dev1Additions {
 		//! The snapshot tag table of 2.0 is created
@@ -953,6 +971,8 @@ public:
 		bool delete_file_visibility_migration = false;
 		//! The catalog tables whose version rows end in companion tables, one entry per kind
 		vector<RowVisibilityAdditions> row_additions;
+		//! The inlined deletion tables, whose rows gain the branch they were deleted on
+		vector<InlinedDeletionAdditions> deletion_tables;
 	};
 	V2_0Dev1Additions ProbeV2_0Dev1Additions();
 	void VerifyHealableV2_0Dev1(const V2_0Dev1Additions &missing);
