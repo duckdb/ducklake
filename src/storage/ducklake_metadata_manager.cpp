@@ -457,12 +457,16 @@ string DuckLakeMetadataManager::RowKeyType(const string &key) {
 	return "BIGINT";
 }
 
-string DuckLakeMetadataManager::RowKeyMatch(const string &left, const string &right, const string &key) {
+string DuckLakeMetadataManager::RowKey(const string &alias, const string &key) {
+	auto column = alias + "." + key;
 	if (RowKeyType(key) == "VARCHAR") {
-		return StringUtil::Format("%s = %s", DuckLakeUtil::WithBinaryCollation(left + "." + key),
-		                          DuckLakeUtil::WithBinaryCollation(right + "." + key));
+		return DuckLakeUtil::WithBinaryCollation(column);
 	}
-	return StringUtil::Format("%s.%s = %s.%s", left, key, right, key);
+	return column;
+}
+
+string DuckLakeMetadataManager::RowKeyMatch(const string &left, const string &right, const string &key) {
+	return StringUtil::Format("%s = %s", RowKey(left, key), RowKey(right, key));
 }
 
 string DuckLakeMetadataManager::GetRowVisibilityTableStatement(const string &kind, const vector<string> &key_columns) {
@@ -1113,8 +1117,9 @@ string DuckLakeMetadataManager::RowVisibilityMigrationSql(const RowVisibilityAdd
 		vector<string> key_matches;
 		vector<string> live_matches;
 		vector<string> end_matches;
+		// the distinct ends deduplicate by binary key, so a case folding collation of the session merges none
 		for (auto &key : key_columns) {
-			keys.push_back("t." + key);
+			keys.push_back(RowKey("t", key));
 			key_matches.push_back(RowKeyMatch("e", "t", key));
 			live_matches.push_back(RowKeyMatch("live", table, key));
 			end_matches.push_back(RowKeyMatch("live", visibility, key));
@@ -1418,7 +1423,7 @@ string DuckLakeMetadataManager::BranchRootCapValues(const vector<pair<idx_t, idx
 	return StringUtil::Join(rows, ", ");
 }
 
-set<idx_t> DuckLakeMetadataManager::GetBranchProtectedSnapshots(idx_t branch_id) {
+set<idx_t> DuckLakeMetadataManager::GetBranchProtectedSnapshots(idx_t branch_id, timestamp_tz_t start_time) {
 	set<idx_t> result;
 	if (!transaction.GetCatalog().SupportsBranching() || !HasBranches()) {
 		return result;
@@ -1433,7 +1438,8 @@ set<idx_t> DuckLakeMetadataManager::GetBranchProtectedSnapshots(idx_t branch_id)
 			result.insert(row.GetValue<idx_t>(0));
 		}
 	}
-	// a tag live in the view of another branch protects the snapshot of the branch it names
+	// a tag live in the view of another branch protects the snapshot of the branch it names until its time has passed
+	auto cutoff = Value::TIMESTAMPTZ(start_time).ToSQLString();
 	vector<string> tagged;
 	for (auto &chain : LoadBranchChains()) {
 		if (chain.BranchId() == branch_id) {
@@ -1442,8 +1448,8 @@ set<idx_t> DuckLakeMetadataManager::GetBranchProtectedSnapshots(idx_t branch_id)
 		auto live_tags = LiveRows(true, chain, "snapshot_tag", "t", "");
 		tagged.push_back(StringUtil::Format(R"(SELECT DISTINCT t.snapshot_id
 FROM %s
-WHERE t.snapshot_branch_id = %llu AND %s)",
-		                                    live_tags.from, branch_id, live_tags.filter));
+WHERE t.snapshot_branch_id = %llu AND (t.expires_at IS NULL OR t.expires_at::TIMESTAMPTZ > %s) AND %s)",
+		                                    live_tags.from, branch_id, cutoff, live_tags.filter));
 	}
 	if (tagged.empty()) {
 		return result;

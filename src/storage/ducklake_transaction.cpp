@@ -2188,7 +2188,8 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshots(const strin
 
 vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshotsInternal(const string &filter) {
 	auto protected_snapshots = TaggedSnapshotsInternal();
-	auto branch_protected = GetMetadataManager().GetBranchProtectedSnapshots(ducklake_catalog.AttachedBranchId());
+	auto branch_protected =
+	    GetMetadataManager().GetBranchProtectedSnapshots(ducklake_catalog.AttachedBranchId(), start_time);
 	protected_snapshots.insert(branch_protected.begin(), branch_protected.end());
 	string lineage_filter = filter;
 	if (ducklake_catalog.SupportsBranching()) {

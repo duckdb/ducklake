@@ -346,6 +346,8 @@ public:
 	static string RowTableName(const string &kind);
 	//! The type of a key column, the tag keys and names are text
 	static string RowKeyType(const string &key);
+	//! A key column of an alias, text keys carry the binary collation the tag writers compare by
+	static string RowKey(const string &alias, const string &key);
 	//! Matches a key column of two aliases, text keys compare byte for byte like the tag writers
 	static string RowKeyMatch(const string &left, const string &right, const string &key);
 	//! The companion table holding the end events of the version rows of a catalog table
@@ -784,8 +786,8 @@ public:
 	vector<pair<idx_t, idx_t>> LoadBranchRootCaps();
 	//! The root caps rendered as VALUES rows (branch_id, root_cap), empty without such branches
 	static string BranchRootCapValues(const vector<pair<idx_t, idx_t>> &root_caps);
-	//! The snapshots of a branch an expiry keeps, its head, the forks of other branches and the targets of their tags
-	set<idx_t> GetBranchProtectedSnapshots(idx_t branch_id);
+	//! The snapshots of a branch an expiry keeps, its head, the forks and the unexpired tag targets of other branches
+	set<idx_t> GetBranchProtectedSnapshots(idx_t branch_id, timestamp_tz_t start_time);
 	string FileVisibilityGuard(const string &visibility_table, const string &file_id_column, const string &alias = "f",
 	                           bool include_inherited = true);
 	//! The chain predicate of the attached branch with bare column names, preceded by AND, empty before 2.0

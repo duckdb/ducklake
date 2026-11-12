@@ -14,10 +14,6 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (
     METADATA_CATALOG 'metadata'
 )
 
-# a tag row is live while no end row names it
-statement ok
-CREATE VIEW live_column_tags AS SELECT t.* FROM metadata.ducklake_column_tag t WHERE NOT EXISTS (SELECT 1 FROM metadata.ducklake_column_tag_visibility e WHERE e.table_id = t.table_id AND e.column_id = t.column_id AND e.key = t.key AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)
-
 # A tag committed before the column is dropped must be closed with the column.
 statement ok
 CREATE TABLE ducklake.test(a INTEGER, b INTEGER)
@@ -28,11 +24,21 @@ COMMENT ON COLUMN ducklake.test.b IS 'drop me'
 statement ok
 ALTER TABLE ducklake.test DROP COLUMN b
 
+# the tag row stays and one end row names its birth, so no column comment is live
 query I
-SELECT count(*)
-FROM live_column_tags
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'ducklake' AND comment IS NOT NULL
 ----
 0
+
+query I
+SELECT value FROM metadata.ducklake_column_tag
+----
+drop me
+
+query I
+SELECT count(*) FROM metadata.ducklake_column_tag_visibility
+----
+1
 
 # Adding, commenting on, and dropping a column in one transaction must not
 # commit a tag for a column that never becomes visible.
@@ -54,11 +60,16 @@ ALTER TABLE ducklake.same_transaction DROP COLUMN b
 statement ok
 COMMIT
 
+# no tag row was written for the column that never became visible
 query I
-SELECT count(*)
-FROM live_column_tags
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'ducklake' AND comment IS NOT NULL
 ----
 0
+
+query I
+SELECT count(*) FROM metadata.ducklake_column_tag
+----
+1
 
 # Commenting on an existing column and dropping it in one transaction must not
 # leave an active tag behind either.
@@ -78,9 +89,12 @@ statement ok
 COMMIT
 
 query I
-SELECT count(*)
-FROM live_column_tags
-WHERE value = 'gone'
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'ducklake' AND comment IS NOT NULL
+----
+0
+
+query I
+SELECT count(*) FROM metadata.ducklake_column_tag WHERE value = 'gone'
 ----
 0
 
@@ -96,11 +110,9 @@ statement ok
 ALTER TABLE ducklake.renamed RENAME COLUMN c TO d
 
 query I
-SELECT count(*)
-FROM live_column_tags
-WHERE value = 'keep me'
+SELECT comment FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'renamed' AND column_name = 'd'
 ----
-1
+keep me
 
 # A comment set and renamed in one transaction must survive as well.
 statement ok
@@ -119,8 +131,13 @@ statement ok
 COMMIT
 
 query I
-SELECT count(*)
-FROM live_column_tags
-WHERE value = 'survives rename'
+SELECT comment FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'comment_then_rename'
+    AND column_name = 'd'
 ----
-1
+survives rename
+
+# the two comments that survived their renames are the live ones
+query I
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'ducklake' AND comment IS NOT NULL
+----
+2

@@ -1,0 +1,107 @@
+# name: test/sql/migration/dev1_tag_rows_heal_collation.test
+# description: the heal of the tag rows of an older dev build keeps one end per tag under a case folding collation
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# names differ in case like identifiers, so only ASCII letters fold, whatever the collation of the session
+statement ok
+SET GLOBAL default_collation = 'nocase'
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+# two tags born in one commit and dropped in one commit, so their ends differ in the name alone
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_create_tag('dl', 'Ö', version => 2)
+
+statement ok
+CALL ducklake_create_tag('dl', 'ö', version => 2)
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_drop_tag('dl', 'Ö')
+
+statement ok
+CALL ducklake_drop_tag('dl', 'ö')
+
+statement ok
+COMMIT
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl')
+----
+0
+
+# the older dev build ended its rows in place and knew no branch
+statement ok
+ALTER TABLE meta.ducklake_snapshot_tag ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_snapshot_tag SET end_snapshot = e.snapshot_id
+    FROM (SELECT DISTINCT row_snapshot, snapshot_id FROM meta.ducklake_snapshot_tag_visibility) e
+    WHERE e.row_snapshot = ducklake_snapshot_tag.begin_snapshot
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_tag_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_tag DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_tag DROP COLUMN snapshot_branch_id
+
+statement ok
+DETACH dl
+
+# the heal rebuilds the ends from the ranges, one per tag, and both tags stay dropped
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl')
+----
+0
+
+statement ok
+RESET GLOBAL default_collation
+
+query IIII
+SELECT t.tag_name, t.snapshot_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_snapshot_tag_visibility e
+    JOIN meta.ducklake_snapshot_tag t ON t.tag_name = e.tag_name AND t.branch_id = e.row_branch_id
+    AND t.begin_snapshot = e.row_snapshot
+    ORDER BY t.tag_name
+----
+Ö	2	3	4
+ö	2	3	4
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name = 'ducklake_snapshot_tag' AND column_name = 'end_snapshot'
+----
+0
+
+statement ok
+DETACH dl
