@@ -1412,13 +1412,15 @@ bool DuckLakeMetadataManager::ProbeMetadataColumns() {
 
 void DuckLakeMetadataManager::ResetProbedColumns() {
 	probed_columns.clear();
+	probed_metadata_schema = false;
 	probed_all_columns = false;
 }
 
 bool DuckLakeMetadataManager::HasMetadataColumn(const string &table, const string &column) {
 	// a reference to a missing column fails to bind, which makes some catalogs reload their schema
 	// one scan of the metadata schema serves every table a pass asks about, the probes of a pass clear the memo
-	if (!probed_all_columns) {
+	if (!probed_metadata_schema) {
+		probed_metadata_schema = true;
 		probed_all_columns = ProbeMetadataColumns();
 	}
 	auto entry = probed_columns.find(table);
@@ -2107,26 +2109,24 @@ static string BirthChainFilter(bool branch_aware, const DuckLakeBranchChain &cha
 
 string DuckLakeMetadataManager::InlinedTableRegistrations(bool branch_aware, const DuckLakeBranchChain &chain,
                                                           optional_idx table_id) {
-	if (!branch_aware) {
+	// a branch attach is read only, so every registration has a version row of main or none and main reads them all
+	if (!branch_aware || !chain.OnBranch()) {
 		return "{METADATA_CATALOG}.ducklake_inlined_data_tables";
 	}
 	string table_filter;
 	if (table_id.IsValid()) {
 		table_filter = StringUtil::Format("idt.table_id = %d AND ", table_id.GetIndex());
 	}
+	// the version rows are joined once rather than probed per registration
 	// a registration without any version row is the creation version, which every lineage of the table reads
 	return StringUtil::Format(R"((
 	SELECT idt.table_id, idt.table_name, idt.schema_version
 	FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
-	WHERE %s(EXISTS (
-		SELECT 1 FROM {METADATA_CATALOG}.ducklake_schema_versions sv
-		WHERE sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version%s
-	) OR NOT EXISTS (
-		SELECT 1 FROM {METADATA_CATALOG}.ducklake_schema_versions sv
-		WHERE sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version
-	))
+	LEFT JOIN {METADATA_CATALOG}.ducklake_schema_versions sv
+		ON sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version
+	WHERE %s(sv.table_id IS NULL OR %s)
 ))",
-	                          table_filter, BirthChainFilter(branch_aware, chain, "sv"));
+	                          table_filter, chain.Predicate("sv", "begin_snapshot"));
 }
 
 string DuckLakeMetadataManager::GetInlinedTableNamesSql(TableIndex table_id, bool branch_aware,
@@ -4411,7 +4411,7 @@ DuckLakeMetadataManager::LiveRowSource DuckLakeMetadataManager::LiveRows(bool br
 		source.filter = RangeVisibility(alias, read_snapshot);
 		return source;
 	}
-	// the ends of the view are joined once, a correlated NOT EXISTS costs the binder a few ms at every load
+	// the ends are filtered in a derived table of their own, so the read snapshot has to be a constant expression
 	auto &key_columns = RowKeyColumns(kind);
 	auto ends = alias + "_end";
 	vector<string> key_matches;

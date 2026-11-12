@@ -460,7 +460,7 @@ public:
 	                                     const DuckLakeInlinedColNames &col_names);
 	//! The columns of the table at the snapshot, read through the chain from 2.0 on
 	static string GetTableColumnSchemaSql(TableIndex table_id, bool branch_aware, const DuckLakeBranchChain &chain);
-	//! The inlined table registrations whose schema version is in the chain view, a valid table id is pushed down
+	//! The inlined table registrations the chain reads, filtered on a branch alone, a valid table id is pushed down
 	static string InlinedTableRegistrations(bool branch_aware, const DuckLakeBranchChain &chain,
 	                                        optional_idx table_id = optional_idx());
 	//! The inlined data tables of the table, read through the chain from 2.0 on
@@ -1073,6 +1073,8 @@ private:
 	optional_idx catalog_has_branches;
 	//! The columns of the metadata tables probed in the current pass, a missing table has none
 	unordered_map<string, vector<Identifier>> probed_columns;
+	//! Whether the pass scanned the metadata schema, a scan that listed no tables leaves the probes in the memo
+	bool probed_metadata_schema = false;
 	//! Whether the pass read the columns of every metadata table at once
 	bool probed_all_columns = false;
 	//! Guards the three caches below, the scans of one statement initialize in parallel
