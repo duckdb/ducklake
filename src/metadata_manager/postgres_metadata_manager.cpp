@@ -569,7 +569,6 @@ DuckLakeCatalogInfo PostgresMetadataManager::GetCatalogForSnapshot(DuckLakeSnaps
 		auto remote = statement;
 		SubstituteTransactionPlaceholders(snapshot, remote);
 		SubstituteCatalogPlaceholders(remote, schema);
-		// the json text comes back as the lists of structs the parser reads
 		vector<string> casts;
 		for (auto &column : list_columns) {
 			casts.push_back(

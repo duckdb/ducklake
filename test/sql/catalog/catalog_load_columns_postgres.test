@@ -6,6 +6,8 @@ require ducklake
 
 require parquet
 
+require json
+
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
 
 test-env DATA_PATH {TEST_DIR}
