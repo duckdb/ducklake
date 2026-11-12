@@ -63,5 +63,46 @@ SELECT j FROM dl.t ORDER BY j
 42
 100
 
+# the inclusive version migration of a legacy catalog holds the version row of a rename boundary twice
+query IIII
+SELECT begin_snapshot, schema_version, table_id, branch_id FROM meta.ducklake_schema_versions ORDER BY begin_snapshot
+----
+1	1	1	0
+3	2	1	0
+
+statement ok
+INSERT INTO meta.ducklake_schema_versions VALUES (1, 1, 1, 0)
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (DATA_PATH '{DATA_PATH}/branch_inlined_after_rename_files',
+    METADATA_CATALOG 'meta', BRANCH 'dev')
+
+# the branch reads the registration of the duplicated version once
+query I
+SELECT i FROM dev.t
+----
+42
+
+query I
+SELECT COUNT(*) FROM dev.t
+----
+1
+
+statement ok
+DETACH dev
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_inlined_after_rename_files',
+    METADATA_CATALOG 'meta')
+
+query I
+SELECT j FROM dl.t ORDER BY j
+----
+42
+100
+
 statement ok
 DETACH dl

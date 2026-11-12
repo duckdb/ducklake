@@ -211,5 +211,74 @@ SELECT column_id, column_name FROM meta.ducklake_column ORDER BY column_id
 3	k
 4	m
 
+# an older build backfilled the companion from the ends in place and stopped before it dropped the end column
+statement ok
+ALTER TABLE meta.ducklake_column ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_column SET end_snapshot = e.snapshot_id FROM meta.ducklake_column_visibility e
+    WHERE e.table_id = ducklake_column.table_id AND e.column_id = ducklake_column.column_id
+    AND e.row_snapshot = ducklake_column.begin_snapshot
+
+# the superseded row sits next to the live row of its birth again and its backfilled end names both
+statement ok
+INSERT INTO meta.ducklake_column (column_id, begin_snapshot, end_snapshot, table_id, column_order, column_name,
+    column_type, initial_default, default_value, nulls_allowed, parent_column, default_value_type,
+    default_value_dialect, branch_id)
+SELECT column_id, begin_snapshot, begin_snapshot, table_id, column_order, 'i', column_type, initial_default,
+    default_value, nulls_allowed, parent_column, default_value_type, default_value_dialect, branch_id
+FROM meta.ducklake_column WHERE column_name = 'i2'
+
+statement ok
+INSERT INTO meta.ducklake_column_visibility
+SELECT 0, table_id, column_id, 0, begin_snapshot, end_snapshot FROM meta.ducklake_column WHERE column_name = 'i'
+
+query IIII
+SELECT c.column_name, c.end_snapshot, e.row_snapshot, e.snapshot_id FROM meta.ducklake_column_visibility e
+    JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id
+    AND c.branch_id = e.row_branch_id AND c.begin_snapshot = e.row_snapshot
+    ORDER BY c.column_name
+----
+i	1	1	1
+i2	NULL	1	1
+k	5	5	5
+
+statement ok
+DETACH dl
+
+# the resumed heal drops the superseded row with its end, so the live row of that birth reads again
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT column_name FROM (DESCRIBE dl.t)
+----
+i2
+j
+m
+
+query III
+SELECT i2, j, m FROM dl.t ORDER BY i2
+----
+1	2	NULL
+3	4	NULL
+
+query II
+SELECT column_id, column_name FROM meta.ducklake_column ORDER BY column_id
+----
+1	i2
+2	j
+3	k
+4	m
+
+# the end of the column dropped in its own transaction is the only end left
+query III
+SELECT c.column_name, e.row_snapshot, e.snapshot_id FROM meta.ducklake_column_visibility e
+    JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id
+    AND c.branch_id = e.row_branch_id AND c.begin_snapshot = e.row_snapshot
+----
+k	5	5
+
 statement ok
 DETACH dl

@@ -1061,13 +1061,16 @@ string DuckLakeMetadataManager::RowVisibilityMigrationSql(const RowVisibilityAdd
 		result += GetRowVisibilityTableStatement(kind, key_columns) + "\n";
 	}
 	if (add.drop_end) {
+		auto visibility = "ducklake_" + kind + "_visibility";
 		vector<string> keys;
 		vector<string> key_matches;
 		vector<string> live_matches;
+		vector<string> end_matches;
 		for (auto &key : key_columns) {
 			keys.push_back("t." + key);
 			key_matches.push_back(StringUtil::Format("e.%s = t.%s", key, key));
 			live_matches.push_back(StringUtil::Format("live.%s = %s.%s", key, table, key));
+			end_matches.push_back(StringUtil::Format("live.%s = %s.%s", key, visibility, key));
 		}
 		// a row superseded in its birth transaction goes, as an end it would hide the live row of the same birth
 		result += StringUtil::Format(R"(
@@ -1078,17 +1081,26 @@ WHERE end_snapshot = begin_snapshot AND EXISTS (
     AND (live.end_snapshot IS NULL OR live.end_snapshot > live.begin_snapshot));
 )",
 		                             table, table, StringUtil::Join(live_matches, " AND "), table);
+		// the end an older backfill took from a superseded row goes too, it hides the live row of that birth
+		result += StringUtil::Format(R"(
+DELETE FROM {METADATA_CATALOG}.%s
+WHERE snapshot_id = row_snapshot AND EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.%s live
+    WHERE %s AND live.branch_id = %s.row_branch_id AND live.begin_snapshot = %s.row_snapshot
+    AND (live.end_snapshot IS NULL OR live.end_snapshot > live.begin_snapshot));
+)",
+		                             visibility, table, StringUtil::Join(end_matches, " AND "), visibility, visibility);
 		// the ranges of main become its end events before the column goes away
 		result += StringUtil::Format(R"(
-INSERT INTO {METADATA_CATALOG}.ducklake_%s_visibility
+INSERT INTO {METADATA_CATALOG}.%s
 SELECT DISTINCT 0, %s, 0, t.begin_snapshot, t.end_snapshot
 FROM {METADATA_CATALOG}.%s t
 WHERE t.end_snapshot IS NOT NULL AND NOT EXISTS (
-    SELECT 1 FROM {METADATA_CATALOG}.ducklake_%s_visibility e
+    SELECT 1 FROM {METADATA_CATALOG}.%s e
     WHERE e.branch_id = 0 AND %s AND e.row_branch_id = 0 AND e.row_snapshot = t.begin_snapshot);
 ALTER TABLE {METADATA_CATALOG}.%s DROP COLUMN end_snapshot;
 )",
-		                             kind, StringUtil::Join(keys, ", "), table, kind,
+		                             visibility, StringUtil::Join(keys, ", "), table, visibility,
 		                             StringUtil::Join(key_matches, " AND "), table);
 	}
 	return result;
@@ -2117,16 +2129,18 @@ string DuckLakeMetadataManager::InlinedTableRegistrations(bool branch_aware, con
 	if (table_id.IsValid()) {
 		table_filter = StringUtil::Format("idt.table_id = %d AND ", table_id.GetIndex());
 	}
-	// the version rows are joined once rather than probed per registration
 	// a registration without any version row is the creation version, which every lineage of the table reads
 	return StringUtil::Format(R"((
 	SELECT idt.table_id, idt.table_name, idt.schema_version
 	FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
-	LEFT JOIN {METADATA_CATALOG}.ducklake_schema_versions sv
-		ON sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version
-	WHERE %s(sv.table_id IS NULL OR %s)
+	LEFT JOIN (
+		SELECT sv.table_id, sv.schema_version, MAX(CASE WHEN %s THEN 1 ELSE 0 END) AS in_lineage
+		FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+		GROUP BY sv.table_id, sv.schema_version
+	) versions ON versions.table_id = idt.table_id AND versions.schema_version = idt.schema_version
+	WHERE %s(versions.table_id IS NULL OR versions.in_lineage = 1)
 ))",
-	                          table_filter, chain.Predicate("sv", "begin_snapshot"));
+	                          chain.Predicate("sv", "begin_snapshot"), table_filter);
 }
 
 string DuckLakeMetadataManager::GetInlinedTableNamesSql(TableIndex table_id, bool branch_aware,
