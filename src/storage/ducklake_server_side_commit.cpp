@@ -602,7 +602,9 @@ unique_ptr<DuckLakeStats> DuckLakeServerSideCommit::BuildStatsMap(vector<DuckLak
 
 vector<Identifier> DuckLakeServerSideCommit::LookupInlinedTableNames(TableIndex table_id) {
 	vector<Identifier> names;
-	auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), transaction_snapshot);
+	auto sql = SubstitutePlaceholders(
+	    DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id, supports_v2_0_metadata, DuckLakeBranchChain::Main()),
+	    transaction_snapshot);
 	auto result = RunQuery(sql, "lookup inlined table names");
 	for (auto &row : *result) {
 		names.push_back(row.GetValue<Identifier>(0));
@@ -615,7 +617,8 @@ const Identifier &DuckLakeServerSideCommit::ResolveInlinedTableName(TableIndex t
 	if (it != inlined_table_name_cache.end()) {
 		return it->second;
 	}
-	auto lookup = StringUtil::Replace(DuckLakeMetadataManager::LatestInlinedTableQuery(table_id.index),
+	auto lookup = StringUtil::Replace(DuckLakeMetadataManager::LatestInlinedTableQuery(
+	                                      table_id.index, supports_v2_0_metadata, DuckLakeBranchChain::Main()),
 	                                  "{METADATA_CATALOG}", schema_id) +
 	              ";";
 	auto result = RunQuery(lookup, "lookup inlined table name");

@@ -207,6 +207,7 @@
         "test/sql/branches/branch_spec_rows.test",
         "test/sql/branches/branch_expire_dry_run.test",
         "test/sql/branches/branch_gap_tag_commit.test",
+        "test/sql/branches/branch_inlined_after_rename.test",
         "test/sql/branches/branch_listing_after_main_flush.test",
         "test/sql/branches/branch_listing_overlapping_flush.test",
         "test/sql/branches/branch_nested_chain.test",

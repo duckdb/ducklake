@@ -2040,30 +2040,56 @@ ORDER BY col.column_order ASC)",
 	    table_id.index, RowFilter(branch_aware, chain, "col", "column", {"table_id", "column_id"}, "{SNAPSHOT_ID}"));
 }
 
-string DuckLakeMetadataManager::GetInlinedTableNamesSql(TableIndex table_id) {
-	return StringUtil::Format(R"(
-SELECT DISTINCT table_name
-FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
-WHERE table_id = %d)",
-	                          table_id.index);
-}
-
 //! The chain predicate over the begin snapshots of the rows under the alias, preceded by AND, empty before 2.0
 static string BirthChainFilter(bool branch_aware, const DuckLakeBranchChain &chain, const string &alias) {
 	return branch_aware ? " AND (" + chain.Predicate(alias, "begin_snapshot") + ")" : string();
 }
 
+string DuckLakeMetadataManager::InlinedTableRegistrations(bool branch_aware, const DuckLakeBranchChain &chain,
+                                                          optional_idx table_id) {
+	if (!branch_aware) {
+		return "{METADATA_CATALOG}.ducklake_inlined_data_tables";
+	}
+	string table_filter;
+	if (table_id.IsValid()) {
+		table_filter = StringUtil::Format("idt.table_id = %d AND ", table_id.GetIndex());
+	}
+	// a registration without any version row is the creation version, which every lineage of the table reads
+	return StringUtil::Format(R"((
+	SELECT idt.table_id, idt.table_name, idt.schema_version
+	FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+	WHERE %s(EXISTS (
+		SELECT 1 FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+		WHERE sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version%s
+	) OR NOT EXISTS (
+		SELECT 1 FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+		WHERE sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version
+	))
+))",
+	                          table_filter, BirthChainFilter(branch_aware, chain, "sv"));
+}
+
+string DuckLakeMetadataManager::GetInlinedTableNamesSql(TableIndex table_id, bool branch_aware,
+                                                        const DuckLakeBranchChain &chain) {
+	return StringUtil::Format(R"(
+SELECT DISTINCT idt.table_name
+FROM %s idt
+WHERE idt.table_id = %d)",
+	                          InlinedTableRegistrations(branch_aware, chain, table_id.index), table_id.index);
+}
+
 string DuckLakeMetadataManager::GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id, bool branch_aware,
                                                                       const DuckLakeBranchChain &chain) {
 	return StringUtil::Format(R"(
-SELECT table_name
-FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
-WHERE table_id = %d AND schema_version < (
+SELECT idt.table_name
+FROM %s idt
+WHERE idt.table_id = %d AND idt.schema_version < (
 	SELECT MAX(sv.schema_version)
 	FROM {METADATA_CATALOG}.ducklake_schema_versions sv
 	WHERE sv.table_id = %d AND sv.begin_snapshot <= {SNAPSHOT_ID}%s
 ))",
-	                          table_id.index, table_id.index, BirthChainFilter(branch_aware, chain, "sv"));
+	                          InlinedTableRegistrations(branch_aware, chain, table_id.index), table_id.index,
+	                          table_id.index, BirthChainFilter(branch_aware, chain, "sv"));
 }
 
 string DuckLakeMetadataManager::GetInlinedTableColumnsSql(optional_idx table_id, bool branch_aware,
@@ -2079,7 +2105,7 @@ WITH inlined AS (
 	SELECT idt.table_id, idt.table_name, COALESCE(sv.begin_snapshot, (
 		SELECT MIN(t.begin_snapshot) FROM {METADATA_CATALOG}.ducklake_table t WHERE t.table_id = idt.table_id%s
 	)) AS snapshot_id
-	FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+	FROM %s idt
 	LEFT JOIN {METADATA_CATALOG}.ducklake_schema_versions sv
 		ON sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version%s%s
 )
@@ -2088,12 +2114,14 @@ FROM inlined
 JOIN {METADATA_CATALOG}.ducklake_column col ON col.table_id = inlined.table_id AND col.parent_column IS NULL
 WHERE %s
 )",
-	    BirthChainFilter(branch_aware, chain, "t"), BirthChainFilter(branch_aware, chain, "sv"), table_filter,
+	    BirthChainFilter(branch_aware, chain, "t"), InlinedTableRegistrations(branch_aware, chain, table_id),
+	    BirthChainFilter(branch_aware, chain, "sv"), table_filter,
 	    RowFilter(branch_aware, chain, "col", "column", {"table_id", "column_id"}, "inlined.snapshot_id"));
 }
 
 identifier_set_t DuckLakeMetadataManager::GetInlinedTableNames(TableIndex table_id) {
-	auto result = Query(GetInlinedTableNamesSql(table_id));
+	auto &catalog = transaction.GetCatalog();
+	auto result = Query(GetInlinedTableNamesSql(table_id, catalog.SupportsBranching(), catalog.AttachedChain()));
 	result->ThrowIfError("Failed to get inlined data tables from DuckLake: ");
 	identifier_set_t table_names;
 	for (auto &row : *result) {
@@ -2168,7 +2196,7 @@ SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name,
 	) AS tag,
 	(
 		SELECT %s
-		FROM {METADATA_CATALOG}.ducklake_inlined_data_tables inlined_data_tables
+		FROM %s inlined_data_tables
 		WHERE inlined_data_tables.table_id = tbl.table_id
 	) AS inlined_data_tables,
 	path, path_is_relative,
@@ -2188,8 +2216,8 @@ WHERE %s
 ORDER BY table_id ASC, parent_column ASC NULLS FIRST, column_order ASC
 )",
 	        ListAggregation(TAG_FIELDS), RangeVisibility("tag", "{PARENT_VIEW_SNAPSHOT_ID}"),
-	        ListAggregation(INLINED_DATA_TABLES_FIELDS), ListAggregation(TAG_FIELDS),
-	        RangeVisibility("col_tag", "{PARENT_VIEW_SNAPSHOT_ID}"),
+	        ListAggregation(INLINED_DATA_TABLES_FIELDS), InlinedTableRegistrations(supports_v2_0_metadata, chain),
+	        ListAggregation(TAG_FIELDS), RangeVisibility("col_tag", "{PARENT_VIEW_SNAPSHOT_ID}"),
 	        RowFilter(supports_v2_0_metadata, chain, "col", "column", {"table_id", "column_id"}, "{SNAPSHOT_ID}"),
 	        RowFilter(supports_v2_0_metadata, chain, "tbl", "table", {"table_id"}, "{SNAPSHOT_ID}")));
 	result->ThrowIfError("Failed to get table information from DuckLake: ");
@@ -4739,12 +4767,13 @@ string DuckLakeMetadataManager::InlinedTableRegistrationTuple(idx_t table_id, co
 	return StringUtil::Format("(%d, %s, %d)", table_id, SQLString(table_name.GetIdentifierName()), schema_version);
 }
 
-string DuckLakeMetadataManager::LatestInlinedTableQuery(idx_t table_id) {
-	return StringUtil::Format(
-	    "SELECT table_name, schema_version FROM {METADATA_CATALOG}.ducklake_inlined_data_tables "
-	    "WHERE table_id = %d AND schema_version = ("
-	    "  SELECT MAX(schema_version) FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id = %d)",
-	    table_id, table_id);
+string DuckLakeMetadataManager::LatestInlinedTableQuery(idx_t table_id, bool branch_aware,
+                                                        const DuckLakeBranchChain &chain) {
+	auto registrations = InlinedTableRegistrations(branch_aware, chain, table_id);
+	return StringUtil::Format("SELECT idt.table_name, idt.schema_version FROM %s idt "
+	                          "WHERE idt.table_id = %d AND idt.schema_version = ("
+	                          "  SELECT MAX(latest.schema_version) FROM %s latest WHERE latest.table_id = %d)",
+	                          registrations, table_id, registrations, table_id);
 }
 
 string DuckLakeMetadataManager::GetColumnDefinitions(const vector<DuckLakeColumnInfo> &columns) {
@@ -5176,7 +5205,10 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 			schema_versions = transaction.GetCatalog().GetTableSchemaVersions(transaction, entry.table_id);
 		}
 		if (inlined_table_name.empty() && !new_inlined_table) {
-			auto query = LatestInlinedTableQuery(entry.table_id.index) + ";";
+			auto &catalog = transaction.GetCatalog();
+			auto query =
+			    LatestInlinedTableQuery(entry.table_id.index, catalog.SupportsBranching(), catalog.AttachedChain()) +
+			    ";";
 			auto result = Query(commit_snapshot, query);
 			for (auto &row : *result) {
 				if (!DuckLakeTableEntry::IsCurrentInlinedDataTable(row.GetValue<idx_t>(1),

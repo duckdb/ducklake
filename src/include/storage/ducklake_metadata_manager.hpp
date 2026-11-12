@@ -460,7 +460,11 @@ public:
 	                                     const DuckLakeInlinedColNames &col_names);
 	//! The columns of the table at the snapshot, read through the chain from 2.0 on
 	static string GetTableColumnSchemaSql(TableIndex table_id, bool branch_aware, const DuckLakeBranchChain &chain);
-	static string GetInlinedTableNamesSql(TableIndex table_id);
+	//! The inlined table registrations whose schema version is in the chain view, a valid table id is pushed down
+	static string InlinedTableRegistrations(bool branch_aware, const DuckLakeBranchChain &chain,
+	                                        optional_idx table_id = optional_idx());
+	//! The inlined data tables of the table, read through the chain from 2.0 on
+	static string GetInlinedTableNamesSql(TableIndex table_id, bool branch_aware, const DuckLakeBranchChain &chain);
 	//! The schema version rows are read through the chain from 2.0 on
 	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id, bool branch_aware,
 	                                                    const DuckLakeBranchChain &chain);
@@ -591,7 +595,8 @@ public:
 	                                 const DuckLakeInlinedColNames &col_names);
 	DuckLakeInlinedColNames InlinedColNames() const;
 	static string InlinedTableRegistrationTuple(idx_t table_id, const Identifier &table_name, idx_t schema_version);
-	static string LatestInlinedTableQuery(idx_t table_id);
+	//! The registration with the highest schema version in the chain view
+	static string LatestInlinedTableQuery(idx_t table_id, bool branch_aware, const DuckLakeBranchChain &chain);
 	static string DropDataFiles(const set<DataFileIndex> &dropped_files, bool write_visibility);
 	//! The deletes recorded against the given data files of the table at the snapshot
 	static string GetDeleteCountForDataFilesSql(TableIndex table_id, const set<DataFileIndex> &file_ids,
