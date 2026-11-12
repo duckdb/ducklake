@@ -6534,7 +6534,8 @@ string DuckLakeMetadataManager::InsertSnapshotSql(bool write_branch_id) {
 	// the key of branch and snapshot id gates concurrent commits, so other branches never conflict on DuckDB,
 	// Postgres and Quack, while the write lock of SQLite fails a writer with a stale read before it reaches the key
 	return StringUtil::Format(
-	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id%s)
+	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot
+(snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id%s)
 VALUES ({SNAPSHOT_ID}, {SNAPSHOT_TIME}, {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID}%s);)",
 	    write_branch_id ? ", branch_id" : "", write_branch_id ? ", {BRANCH_ID}" : "");
 }

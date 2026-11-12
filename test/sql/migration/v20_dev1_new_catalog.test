@@ -73,8 +73,7 @@ schema_version	BIGINT
 table_id	BIGINT
 branch_id	BIGINT
 
-# the version rows of the catalog tables carry their birth branch and end in companion tables, in the order a migrated
-# catalog has as well
+# the version rows carry their birth branch and end in companion tables, like a migrated catalog
 query I
 SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_table') ORDER BY column_index
 ----
