@@ -622,15 +622,15 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 		                                                   "pg_query_mode",       "pg_use_binary_copy",
 		                                                   "pg_array_as_varchar", "pg_numeric_as_varchar"};
 		if (READ_SETTINGS.count(entry.first.GetIdentifierName())) {
-			to.config.user_settings.SetUserSetting(setting_index, option.default_value);
+			ClientConfig::GetConfig(to).user_settings.SetUserSetting(setting_index, option.default_value);
 			continue;
 		}
-		if (!from.config.user_settings.IsSet(setting_index)) {
+		if (!ClientConfig::GetConfig(from).user_settings.IsSet(setting_index)) {
 			continue;
 		}
 		Value value;
 		from.TryGetCurrentUserSetting(setting_index, value);
-		to.config.user_settings.SetUserSetting(setting_index, std::move(value));
+		ClientConfig::GetConfig(to).user_settings.SetUserSetting(setting_index, std::move(value));
 	}
 }
 
@@ -641,7 +641,8 @@ void DuckLakeUtil::ResetExtensionSettings(ClientContext &context, const vector<s
 		if (!db_config.TryGetExtensionOption(Identifier(name), option) || !option.setting_index.IsValid()) {
 			continue;
 		}
-		context.config.user_settings.SetUserSetting(option.setting_index.GetIndex(), option.default_value);
+		ClientConfig::GetConfig(context).user_settings.SetUserSetting(option.setting_index.GetIndex(),
+		                                                              option.default_value);
 	}
 }
 
