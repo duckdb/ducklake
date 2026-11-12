@@ -1,0 +1,147 @@
+# name: test/sql/catalog/postgres_native_catalog_load.test
+# description: a Postgres catalog loads its schema with statements the server runs, the aggregates travel as json
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require json
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/postgres_native_catalog_load', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t1 (a INTEGER, b VARCHAR, s STRUCT(x INTEGER, y VARCHAR))
+
+statement ok
+COMMENT ON TABLE dl.t1 IS 'quote " backslash \ newline
+tab	unicode é 日本 braces {} [] colon: end'
+
+statement ok
+COMMENT ON COLUMN dl.t1.b IS 'col "b" \n literal'
+
+statement ok
+INSERT INTO dl.t1 VALUES (1, 'x', {'x': 1, 'y': 'y'})
+
+# a second inlined data table of t1
+statement ok
+ALTER TABLE dl.t1 ADD COLUMN d INTEGER DEFAULT 42
+
+statement ok
+INSERT INTO dl.t1 VALUES (2, 'z', NULL, 7)
+
+statement ok
+CREATE TABLE dl.t2 (a INTEGER, b INTEGER)
+
+statement ok
+COMMENT ON COLUMN dl.t2.a IS 't2 a'
+
+statement ok
+ALTER TABLE dl.t2 SET PARTITIONED BY (a)
+
+statement ok
+ALTER TABLE dl.t2 SET SORTED BY (b DESC NULLS FIRST)
+
+statement ok
+INSERT INTO dl.t2 SELECT range, 100 - range FROM range(50)
+
+statement ok
+CREATE VIEW dl.v AS SELECT a, b AS "b c" FROM dl.t1
+
+statement ok
+COMMENT ON VIEW dl.v IS 'view "c" \'
+
+statement ok
+COMMENT ON COLUMN dl.v.a IS 'view column "a"'
+
+statement ok
+CREATE MACRO dl.m(x, y := 'de"f') AS x || y
+
+statement ok
+CREATE MACRO dl.two() AS TABLE SELECT 2 AS v
+
+statement ok
+DETACH dl
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+query TT
+SELECT table_name, replace(replace(comment, chr(10), '<nl>'), chr(9), '<tab>') FROM duckdb_tables() WHERE database_name = 'dl' ORDER BY table_name
+----
+t1	quote " backslash \ newline<nl>tab<tab>unicode é 日本 braces {} [] colon: end
+t2	NULL
+
+statement ok
+CALL disable_logging()
+
+# the load ran its six statements on the server, with the three list aggregates as json
+query II
+SELECT count(DISTINCT query) FILTER (query LIKE '%json_agg(%'), count(*) FILTER (query LIKE '%LIST({%') FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+3	0
+
+query I
+SELECT count(DISTINCT query) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%postgres_query(%' AND query LIKE '%ducklake_%_visibility%'
+----
+6
+
+query TTT
+SELECT table_name, column_name, comment FROM duckdb_columns() WHERE database_name = 'dl' ORDER BY table_name, column_index
+----
+t1	a	NULL
+t1	b	col "b" \n literal
+t1	s	NULL
+t1	d	NULL
+t2	a	t2 a
+t2	b	NULL
+v	a	view column "a"
+v	b c	NULL
+
+query TT
+SELECT view_name, comment FROM duckdb_views() WHERE database_name = 'dl' AND NOT internal
+----
+v	view "c" \
+
+# the rows of both inlined data tables of t1 are read
+query IIII
+SELECT a, b, s, d FROM dl.t1 ORDER BY a
+----
+1	x	{'x': 1, 'y': y}	42
+2	z	NULL	7
+
+query I
+SELECT dl.m('a')
+----
+ade"f
+
+query I
+SELECT dl.m('a', y := 'b')
+----
+ab
+
+query I
+SELECT * FROM dl.two()
+----
+2
+
+# the partition spec of t2 is loaded, so a new file goes into its partition directory
+statement ok
+INSERT INTO dl.t2 VALUES (99, 1)
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 't2') WHERE data_file LIKE '%a=99%'
+----
+1

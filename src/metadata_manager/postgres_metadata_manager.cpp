@@ -1,6 +1,7 @@
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "common/ducklake_util.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/main/extension_helper.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_metadata_info.hpp"
@@ -529,9 +530,56 @@ void PostgresMetadataManager::ClearCache() {
 	result->ThrowIfError("Failed to clear the PostgreSQL metadata cache: ");
 }
 
-static string PostgresQuery(const string &remote_query) {
-	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
+static string PostgresQuery(const string &remote_query, const string &select_list = "*") {
+	return StringUtil::Format("SELECT %s FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)", select_list,
 	                          SQLString(remote_query));
+}
+
+//! The json extension casts the shipped aggregates back, a copy linked into the binary loads without autoloading
+static bool JsonExtensionAvailable(DatabaseInstance &db) {
+	if (db.ExtensionIsLoaded("json")) {
+		return true;
+	}
+	DuckDB wrapper(db);
+	if (ExtensionHelper::LoadExtension(wrapper, "json") == ExtensionLoadResult::LOADED_EXTENSION) {
+		return true;
+	}
+	return ExtensionHelper::TryAutoLoadExtension(db, "json");
+}
+
+//! The list aggregate of the server, a json array of objects whose json values nest as they are
+static string JsonAggregation(const vector<pair<string, string>> &fields, const string &order) {
+	auto fields_part = StringUtil::Join(fields, fields.size(), ", ", [](const pair<string, string> &entry) {
+		return "'" + entry.first + "', " + entry.second;
+	});
+	auto order_part = order.empty() ? string() : " ORDER BY " + order;
+	return "json_agg(json_build_object(" + fields_part + ")" + order_part + ")";
+}
+
+DuckLakeCatalogInfo PostgresMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot snapshot) {
+	auto &catalog = transaction.GetCatalog();
+	if (!JsonExtensionAvailable(catalog.GetDatabase())) {
+		return DuckLakeMetadataManager::GetCatalogForSnapshot(snapshot);
+	}
+	auto schema = SQLQuotedIdentifier::ToString(catalog.MetadataSchemaName());
+	CatalogLoadDialect dialect;
+	dialect.render_list_aggregation = JsonAggregation;
+	dialect.wrap_statement = [&](const string &statement, const vector<CatalogListColumn> &list_columns) {
+		// the server runs the statement as a whole, so only the live rows cross the wire
+		auto remote = statement;
+		SubstituteTransactionPlaceholders(snapshot, remote);
+		SubstituteCatalogPlaceholders(remote, schema);
+		// the json text comes back as the lists of structs the parser reads
+		vector<string> casts;
+		for (auto &column : list_columns) {
+			casts.push_back(
+			    StringUtil::Format("CAST(%s::JSON AS %s) AS %s", column.name, column.type.ToString(), column.name));
+		}
+		return PostgresQuery(remote, casts.empty() ? string("*") : "* REPLACE (" + StringUtil::Join(casts, ", ") + ")");
+	};
+	return BuildCatalogForSnapshot(
+	    snapshot, [this](DuckLakeSnapshot s, string q) { return Query(s, q); }, catalog.DataPath(), catalog.Separator(),
+	    catalog.SupportsV1_1Metadata(), catalog.SupportsBranching(), catalog.AttachedChain(), dialect);
 }
 
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {

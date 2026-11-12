@@ -2463,22 +2463,42 @@ LEFT JOIN (
 	                          StringUtil::Join(group_keys, ", "), name, StringUtil::Join(join_keys, " AND "));
 }
 
+string DuckLakeMetadataManager::CatalogLoadDialect::ListAggregation(const vector<pair<string, string>> &fields,
+                                                                    const string &order) const {
+	if (render_list_aggregation) {
+		return render_list_aggregation(fields, order);
+	}
+	return DuckLakeMetadataManager::ListAggregation(fields, order);
+}
+
+string DuckLakeMetadataManager::CatalogLoadDialect::Statement(const string &statement,
+                                                              const vector<CatalogListColumn> &list_columns) const {
+	if (wrap_statement) {
+		return wrap_statement(statement, list_columns);
+	}
+	return statement;
+}
+
 DuckLakeCatalogInfo DuckLakeMetadataManager::BuildCatalogForSnapshot(
     DuckLakeSnapshot snapshot, const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
     const string &base_data_path, const string &separator, bool supports_v1_1_metadata, bool supports_v2_0_metadata,
-    const DuckLakeBranchChain &chain) {
+    const DuckLakeBranchChain &chain, const CatalogLoadDialect &dialect) {
 	DuckLakeCatalogInfo catalog;
+	// the statements go to the executor in the SQL of the dialect, with the list columns the parser reads
+	auto run = [&](const string &statement, const vector<CatalogListColumn> &list_columns) {
+		return query_executor(snapshot, dialect.Statement(statement, list_columns));
+	};
 	// the tables that still carry ranges with the ids of main read at the parent view snapshot
 	// load the schema information
 	string parent_schema_select = supports_v1_1_metadata ? ", parent_schema_id" : "";
 	auto live_schemas = LiveRows(supports_v2_0_metadata, chain, "schema", "sch", "{SNAPSHOT_ID}");
-	auto result =
-	    query_executor(snapshot, StringUtil::Format(R"(
+	auto result = run(StringUtil::Format(R"(
 SELECT sch.schema_id, schema_uuid::VARCHAR, schema_name, path, path_is_relative%s
 FROM %s
 WHERE %s
 )",
-	                                                parent_schema_select, live_schemas.from, live_schemas.filter));
+	                                     parent_schema_select, live_schemas.from, live_schemas.filter),
+	                  {});
 	result->ThrowIfError("Failed to get schema information from DuckLake: ");
 	map<SchemaIndex, idx_t> schema_map;
 	for (auto &row : *result) {
@@ -2507,23 +2527,30 @@ WHERE %s
 	    {"key", "vct.key"},
 	    {"value", "vct.value"},
 	};
+	// the types of the list aggregates as the parser reads them
+	static const LogicalType TAG_TYPE =
+	    LogicalType::LIST(LogicalType::STRUCT({{"key", LogicalType::VARCHAR}, {"value", LogicalType::VARCHAR}}));
+	static const LogicalType INLINED_DATA_TABLES_TYPE = LogicalType::LIST(
+	    LogicalType::STRUCT({{"name", LogicalType::VARCHAR}, {"schema_version", LogicalType::BIGINT}}));
+	static const LogicalType VIEW_COLUMN_TAG_TYPE = LogicalType::LIST(LogicalType::STRUCT(
+	    {{"column_name", LogicalType::VARCHAR}, {"key", LogicalType::VARCHAR}, {"value", LogicalType::VARCHAR}}));
 
 	// load the table information
 	auto live_tables = LiveRows(supports_v2_0_metadata, chain, "table", "tbl", "{SNAPSHOT_ID}");
 	auto live_columns = LiveRows(supports_v2_0_metadata, chain, "column", "col", "{SNAPSHOT_ID}");
 	auto live_tags = LiveRows(supports_v2_0_metadata, chain, "tag", "tag", "{SNAPSHOT_ID}");
 	auto live_column_tags = LiveRows(supports_v2_0_metadata, chain, "column_tag", "col_tag", "{SNAPSHOT_ID}");
-	auto tag_join = GroupedListJoin("tag", ListAggregation(tag_fields("tag")), live_tags.from, live_tags.filter,
+	auto tag_join = GroupedListJoin("tag", dialect.ListAggregation(tag_fields("tag")), live_tags.from, live_tags.filter,
 	                                {{"tag.object_id", "tbl.table_id"}});
 	auto inlined_data_tables_join =
-	    GroupedListJoin("inlined_data_tables", ListAggregation(INLINED_DATA_TABLES_FIELDS),
+	    GroupedListJoin("inlined_data_tables", dialect.ListAggregation(INLINED_DATA_TABLES_FIELDS),
 	                    InlinedTableRegistrations(supports_v2_0_metadata, chain) + " inlined_data_tables", string(),
 	                    {{"inlined_data_tables.table_id", "tbl.table_id"}});
 	auto column_tags_join = GroupedListJoin(
-	    "column_tags", ListAggregation(tag_fields("col_tag")), live_column_tags.from, live_column_tags.filter,
+	    "column_tags", dialect.ListAggregation(tag_fields("col_tag")), live_column_tags.from, live_column_tags.filter,
 	    {{"col_tag.table_id", "tbl.table_id"}, {"col_tag.column_id", "col.column_id"}});
-	result = query_executor(snapshot, StringUtil::Format(
-	                                      R"(
+	result = run(StringUtil::Format(
+	                 R"(
 SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name, tag_agg.tag AS tag,
 	inlined_data_tables_agg.inlined_data_tables AS inlined_data_tables, path, path_is_relative,
 	col.column_id, column_name, column_type, initial_default, default_value, nulls_allowed, parent_column,
@@ -2537,8 +2564,9 @@ LEFT JOIN (
 WHERE %s
 ORDER BY tbl.table_id ASC, parent_column ASC NULLS FIRST, column_order ASC
 )",
-	                                      live_tables.from, live_columns.from, live_columns.filter, tag_join,
-	                                      inlined_data_tables_join, column_tags_join, live_tables.filter));
+	                 live_tables.from, live_columns.from, live_columns.filter, tag_join, inlined_data_tables_join,
+	                 column_tags_join, live_tables.filter),
+	             {{"tag", TAG_TYPE}, {"inlined_data_tables", INLINED_DATA_TABLES_TYPE}, {"column_tags", TAG_TYPE}});
 	result->ThrowIfError("Failed to get table information from DuckLake: ");
 	const idx_t COLUMN_INDEX_START = 8;
 	auto &tables = catalog.tables;
@@ -2627,23 +2655,26 @@ ORDER BY tbl.table_id ASC, parent_column ASC NULLS FIRST, column_order ASC
 	// load view information
 	string view_column_tags_select = "NULL AS view_column_tags";
 	string view_column_tags_join;
+	vector<CatalogListColumn> view_list_columns {{"tag", TAG_TYPE}};
 	if (supports_v1_1_metadata) {
 		auto live_view_column_tags = LiveRows(supports_v2_0_metadata, chain, "view_column_tag", "vct", "{SNAPSHOT_ID}");
 		view_column_tags_select = "view_column_tags_agg.view_column_tags AS view_column_tags";
-		view_column_tags_join =
-		    GroupedListJoin("view_column_tags", ListAggregation(VIEW_COLUMN_TAG_FIELDS), live_view_column_tags.from,
-		                    live_view_column_tags.filter, {{"vct.view_id", "view.view_id"}});
+		view_column_tags_join = GroupedListJoin("view_column_tags", dialect.ListAggregation(VIEW_COLUMN_TAG_FIELDS),
+		                                        live_view_column_tags.from, live_view_column_tags.filter,
+		                                        {{"vct.view_id", "view.view_id"}});
+		view_list_columns.push_back({"view_column_tags", VIEW_COLUMN_TAG_TYPE});
 	}
-	auto view_tag_join = GroupedListJoin("tag", ListAggregation(tag_fields("tag")), live_tags.from, live_tags.filter,
-	                                     {{"tag.object_id", "view.view_id"}});
+	auto view_tag_join = GroupedListJoin("tag", dialect.ListAggregation(tag_fields("tag")), live_tags.from,
+	                                     live_tags.filter, {{"tag.object_id", "view.view_id"}});
 	auto live_views = LiveRows(supports_v2_0_metadata, chain, "view", "view", "{SNAPSHOT_ID}");
-	result = query_executor(snapshot, StringUtil::Format(R"(
+	result = run(StringUtil::Format(R"(
 SELECT view.view_id, view_uuid, schema_id, view_name, dialect, sql, column_aliases, tag_agg.tag AS tag, %s
 FROM %s%s%s
 WHERE %s
 )",
-	                                                     view_column_tags_select, live_views.from, view_tag_join,
-	                                                     view_column_tags_join, live_views.filter));
+	                                view_column_tags_select, live_views.from, view_tag_join, view_column_tags_join,
+	                                live_views.filter),
+	             view_list_columns);
 	result->ThrowIfError("Failed to get view information from DuckLake: ");
 	auto &views = catalog.views;
 	for (auto &row : *result) {
@@ -2679,13 +2710,22 @@ WHERE %s
 		AND ducklake_macro_impl.impl_id = ducklake_macro_parameters.impl_id
 		)
 	)",
-	                                            ListAggregation(MACRO_PARAM_FIELDS, "column_id ASC"));
+	                                            dialect.ListAggregation(MACRO_PARAM_FIELDS, "column_id ASC"));
 	const vector<pair<string, string>> MACRO_IMPL_FIELDS = {
 	    {"dialect", "dialect"}, {"sql", "sql"}, {"type", "type"}, {"params", macro_param_query}};
+	static const LogicalType MACRO_PARAM_TYPE =
+	    LogicalType::LIST(LogicalType::STRUCT({{"parameter_name", LogicalType::VARCHAR},
+	                                           {"parameter_type", LogicalType::VARCHAR},
+	                                           {"default_value", LogicalType::VARCHAR},
+	                                           {"default_value_type", LogicalType::VARCHAR}}));
+	static const LogicalType MACRO_IMPL_TYPE = LogicalType::LIST(LogicalType::STRUCT({{"dialect", LogicalType::VARCHAR},
+	                                                                                  {"sql", LogicalType::VARCHAR},
+	                                                                                  {"type", LogicalType::VARCHAR},
+	                                                                                  {"params", MACRO_PARAM_TYPE}}));
 
 	// load macro information
 	auto live_macros = LiveRows(supports_v2_0_metadata, chain, "macro", "ducklake_macro", "{SNAPSHOT_ID}");
-	result = query_executor(snapshot, StringUtil::Format(R"(
+	result = run(StringUtil::Format(R"(
 SELECT schema_id, ducklake_macro.macro_id, macro_name, (
 		SELECT %s
 		FROM {METADATA_CATALOG}.ducklake_macro_impl
@@ -2694,8 +2734,8 @@ SELECT schema_id, ducklake_macro.macro_id, macro_name, (
 FROM %s
 WHERE %s
 )",
-	                                                     ListAggregation(MACRO_IMPL_FIELDS), live_macros.from,
-	                                                     live_macros.filter));
+	                                dialect.ListAggregation(MACRO_IMPL_FIELDS), live_macros.from, live_macros.filter),
+	             {{"impl", MACRO_IMPL_TYPE}});
 	result->ThrowIfError("Failed to get macro information from DuckLake: ");
 	auto &macros = catalog.macros;
 	for (auto &row : *result) {
@@ -2710,14 +2750,15 @@ WHERE %s
 
 	// load partition information
 	auto live_partitions = LiveRows(supports_v2_0_metadata, chain, "partition", "part", "{SNAPSHOT_ID}");
-	result = query_executor(snapshot, StringUtil::Format(R"(
+	result = run(StringUtil::Format(R"(
 SELECT part.partition_id, part.table_id, partition_key_index, column_id, transform
 FROM %s
 JOIN {METADATA_CATALOG}.ducklake_partition_column part_col ON part_col.partition_id = part.partition_id
 WHERE %s
 ORDER BY part.table_id ASC, part.partition_id ASC, partition_key_index ASC
 )",
-	                                                     live_partitions.from, live_partitions.filter));
+	                                live_partitions.from, live_partitions.filter),
+	             {});
 	result->ThrowIfError("Failed to get partition information from DuckLake: ");
 	auto &partitions = catalog.partitions;
 	for (auto &row : *result) {
@@ -2741,14 +2782,15 @@ ORDER BY part.table_id ASC, part.partition_id ASC, partition_key_index ASC
 
 	// load sort information
 	auto live_sorts = LiveRows(supports_v2_0_metadata, chain, "sort", "sort", "{SNAPSHOT_ID}");
-	result = query_executor(snapshot, StringUtil::Format(R"(
+	result = run(StringUtil::Format(R"(
 SELECT sort.sort_id, sort.table_id, sort_expr.sort_key_index, sort_expr.expression, sort_expr.dialect, sort_expr.sort_direction, sort_expr.null_order
 FROM %s
 JOIN {METADATA_CATALOG}.ducklake_sort_expression sort_expr ON sort_expr.sort_id = sort.sort_id
 WHERE %s
 ORDER BY sort.table_id ASC, sort.sort_id ASC, sort_expr.sort_key_index ASC
 )",
-	                                                     live_sorts.from, live_sorts.filter));
+	                                live_sorts.from, live_sorts.filter),
+	             {});
 	result->ThrowIfError("Failed to get sort information from DuckLake: ");
 	auto &sorts = catalog.sorts;
 	for (auto &row : *result) {

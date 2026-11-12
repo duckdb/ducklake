@@ -444,6 +444,21 @@ public:
 	//! Whether the result contains a column with the given name
 	static bool ResultHasColumn(QueryResult &result, const string &name);
 
+	//! A list aggregate column of a catalog load statement with the type the parser reads it as
+	struct CatalogListColumn {
+		string name;
+		LogicalType type;
+	};
+	//! The SQL of a catalog load, DuckDB SQL run as rendered unless a backend supplies its own
+	struct CatalogLoadDialect {
+		std::function<string(const vector<pair<string, string>> &, const string &)> render_list_aggregation;
+		std::function<string(const string &, const vector<CatalogListColumn> &)> wrap_statement;
+
+		//! The aggregate of the fields as a list of structs, in the order when one is given
+		string ListAggregation(const vector<pair<string, string>> &fields, const string &order = string()) const;
+		//! The statement the executor runs, which returns the list columns with the given types
+		string Statement(const string &statement, const vector<CatalogListColumn> &list_columns) const;
+	};
 	//! Get the catalog information for a specific snapshot
 	virtual DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot);
 	//! Transaction-free build of the catalog snapshot. Caller supplies a snapshot-aware query
@@ -453,7 +468,8 @@ public:
 	BuildCatalogForSnapshot(DuckLakeSnapshot snapshot,
 	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
 	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata,
-	                        bool supports_v2_0_metadata, const DuckLakeBranchChain &chain);
+	                        bool supports_v2_0_metadata, const DuckLakeBranchChain &chain,
+	                        const CatalogLoadDialect &dialect = CatalogLoadDialect());
 	//! The global stats of every table of the snapshot, or of the given tables
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot,
 	                                                            const vector<TableIndex> &table_ids = {});
