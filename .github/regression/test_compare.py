@@ -18,16 +18,6 @@ def measurement(old_timing, new_timing):
     return test_runner.benchmark_measurement([old_timing] * 5, [new_timing] * 5)
 
 
-def patched():
-    return mock.patch.multiple(
-        test_runner,
-        measurement_outcome=compare.measurement_outcome,
-        measurement_status=compare.measurement_status,
-        confirmation_run_count=compare.confirmation_run_count,
-        MIN_CONFIRMATION_RUNS=compare.MIN_CONFIRMATION_RUNS,
-    )
-
-
 class FreshBudgetTest(unittest.TestCase):
     """Starts every test with an unspent confirmation budget"""
 
@@ -56,8 +46,8 @@ def compare_benchmark(change, seconds=0.2, old_failure=None, new_failure=None):
     """Compares a PR that takes change times as long as the base, and returns the result and output"""
     old = FakeRunner("Base", seconds, 1, old_failure)
     new = FakeRunner("PR", seconds * change, 2, new_failure)
-    with patched(), mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
-        result = test_runner.run_adaptive_benchmark(old, new, "benchmark/example.benchmark", True, True)
+    with mock.patch("sys.stdout", new_callable=io.StringIO) as stdout:
+        result = compare.run_adaptive_benchmark(old, new, "benchmark/example.benchmark", True, True)
     return result, stdout.getvalue()
 
 
@@ -66,6 +56,9 @@ class MeasurementOutcomeTest(unittest.TestCase):
         cases = {
             "both": (measurement(0.2, 0.24), test_runner.OUTCOME_REGRESSION),
             "just above the floor": (measurement(0.05, 0.056), test_runner.OUTCOME_REGRESSION),
+            "exactly at the floor": (measurement(0.01, 0.015), test_runner.OUTCOME_REGRESSION),
+            "at the floor despite rounding": (measurement(0.025, 0.03), test_runner.OUTCOME_REGRESSION),
+            "at the floor from larger medians": (measurement(0.04, 0.045), test_runner.OUTCOME_REGRESSION),
             "below the floor": (measurement(0.03, 0.0345), test_runner.OUTCOME_NO_REGRESSION),
             "below the limit": (measurement(10.0, 10.5), test_runner.OUTCOME_NO_REGRESSION),
             "unchanged": (measurement(0.2, 0.2), test_runner.OUTCOME_NO_REGRESSION),
@@ -99,15 +92,20 @@ class ConfirmationRunCountTest(FreshBudgetTest):
                 self.assertEqual(compare.confirmation_run_count(value), count)
                 self.assertLessEqual(compare.confirmation_run_count(value), compare.DUCKDB_CONFIRMATION_RUN_COUNT(value))
 
-    def test_an_exhausted_budget_caps_confirmations_at_the_minimum(self):
-        spender = measurement(200.0, 220.0)
-        self.assertEqual(compare.confirmation_run_count(spender), compare.MIN_CONFIRMATION_RUNS)
-        fast = measurement(0.025, 0.03)
-        self.assertEqual(compare.confirmation_run_count(fast), compare.MIN_CONFIRMATION_RUNS)
+    def test_spending_stops_at_the_budget_while_cheap_candidates_still_confirm(self):
+        slow = measurement(30.0, 33.0)
+        self.assertEqual(compare.confirmation_run_count(slow), 10)
+        self.assertEqual(compare.confirmation_run_count(slow), 0)
+        self.assertEqual(compare.confirmation_run_count(measurement(0.025, 0.03)), 100)
+        self.assertLessEqual(compare._confirmation_seconds, compare.CONFIRMATION_BUDGET_SECONDS)
 
     def test_a_nearly_spent_budget_shrinks_confirmations_to_what_remains(self):
         compare._confirmation_seconds = compare.CONFIRMATION_BUDGET_SECONDS - 3.0
         self.assertEqual(compare.confirmation_run_count(measurement(0.025, 0.03)), 50)
+
+    def test_a_denied_confirmation_reserves_nothing(self):
+        self.assertEqual(compare.confirmation_run_count(measurement(200.0, 220.0)), 0)
+        self.assertEqual(compare._confirmation_seconds, 0.0)
 
 
 class AdaptiveBenchmarkTest(FreshBudgetTest):
@@ -130,6 +128,14 @@ class AdaptiveBenchmarkTest(FreshBudgetTest):
         self.assertEqual(test_runner.classify_result(result), test_runner.BUCKET_SLOWER)
         self.assertIn(compare.BELOW_FLOOR_STATUS, output)
         self.assertNotRegex(output, r"\| regression$")
+
+    def test_a_spent_budget_decides_on_the_initial_pairs(self):
+        compare._confirmation_seconds = compare.CONFIRMATION_BUDGET_SECONDS
+        result, output = compare_benchmark(1.12)
+        self.assertEqual((result.initial_runs, result.confirmation_runs), (test_runner.INITIAL_RUNS, 0))
+        self.assertEqual(test_runner.classify_result(result), test_runner.BUCKET_REGRESSION)
+        self.assertRegex(output, r"samples: benchmark/example\.benchmark: 10 pairs \| .* \| regression$")
+        self.assertNotIn("confirm:", output)
 
     def test_failures_keep_duckdb_handling(self):
         result, _ = compare_benchmark(1.0, new_failure="PR crashed")
@@ -189,6 +195,7 @@ class RegressionJobTest(unittest.TestCase):
         self.assertIn("::error::benchmark/regressed.benchmark (micro) is at least 10% and 5 ms slower", output)
         self.assertNotIn("::error::benchmark/below_floor.benchmark", output)
         self.assertNotIn("::error::benchmark/slower.benchmark", output)
+        self.assertIn("below the floor reports as slower", output)
 
 
 if __name__ == "__main__":
