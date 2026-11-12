@@ -305,9 +305,9 @@ FROM ducklake_metadata.ducklake_partition_info p WHERE table_id = getvariable('t
 ----
 2	1	1
 
-# resolve the column_id of b separately to keep the check below simple
+# resolve the column_id of b separately, one metadata scan per statement for the Quack catalog
 statement ok
-SET VARIABLE t_create_then_alter_b_col = (SELECT column_id FROM ducklake_metadata.ducklake_column c WHERE table_id = getvariable('t_create_then_alter_id') AND column_name = 'b' AND NOT EXISTS (SELECT 1 FROM ducklake_metadata.ducklake_column_visibility e WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id AND e.row_snapshot = c.begin_snapshot))
+SET VARIABLE t_create_then_alter_b_col = (SELECT column_id FROM ducklake_metadata.ducklake_column WHERE table_id = getvariable('t_create_then_alter_id') AND column_name = 'b')
 
 # the open partition row references column b (the ALTER's choice), not a (the inline create table's).
 query III
