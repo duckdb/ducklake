@@ -5708,6 +5708,49 @@ SET min_value=NULL, max_value=NULL%s WHERE table_id = %d AND (%s) = 0 AND EXISTS
 	return invalidate_bounds + ";\n" + refresh_totals;
 }
 
+string DuckLakeMetadataManager::RefreshTableFileTotalsSql(const set<TableIndex> &table_ids, bool include_exactness,
+                                                          bool supports_data_modifying_cte) {
+	if (table_ids.empty()) {
+		return string();
+	}
+	auto totals = StringUtil::Format(R"(WITH file_totals AS (
+SELECT stats.table_id,
+    CASE WHEN COUNT(data.record_count) = COUNT(data.data_file_id)
+         THEN COALESCE(SUM(data.record_count), 0) ELSE NULL END AS record_count,
+    COALESCE(SUM(data.file_size_bytes), 0) AS file_size_bytes
+FROM {METADATA_CATALOG}.ducklake_table_stats stats
+LEFT JOIN {METADATA_CATALOG}.ducklake_data_file data
+    ON data.table_id = stats.table_id AND data.end_snapshot IS NULL
+WHERE stats.table_id IN (%s)
+GROUP BY stats.table_id
+))",
+	                                 GenerateIDList(table_ids));
+	auto exactness = include_exactness ? ", min_is_exact=NULL, max_is_exact=NULL" : "";
+	auto invalidate_bounds = StringUtil::Format(R"(
+UPDATE {METADATA_CATALOG}.ducklake_table_column_stats AS column_stats
+SET min_value=NULL, max_value=NULL%s
+FROM file_totals totals
+JOIN {METADATA_CATALOG}.ducklake_table_stats stats ON stats.table_id = totals.table_id
+WHERE column_stats.table_id = totals.table_id
+  AND (stats.record_count IS NULL OR stats.record_count <> totals.record_count)
+  AND (SELECT COALESCE(SUM(del.delete_count), 0)
+       FROM {METADATA_CATALOG}.ducklake_delete_file del
+       JOIN {METADATA_CATALOG}.ducklake_data_file data ON data.data_file_id = del.data_file_id
+       WHERE data.table_id = totals.table_id AND data.end_snapshot IS NULL AND del.end_snapshot IS NULL) = 0
+)",
+	                                            exactness);
+	auto refresh_totals = R"(
+UPDATE {METADATA_CATALOG}.ducklake_table_stats AS stats
+SET record_count = totals.record_count, file_size_bytes = totals.file_size_bytes
+FROM file_totals totals WHERE stats.table_id = totals.table_id;
+)";
+	if (supports_data_modifying_cte) {
+		return totals + ", invalidated_bounds AS (" + invalidate_bounds + " RETURNING column_stats.table_id) " +
+		       refresh_totals;
+	}
+	return totals + invalidate_bounds + ";\n" + totals + refresh_totals;
+}
+
 string DuckLakeMetadataManager::RefreshTableSizesSql(const set<TableIndex> &table_ids) {
 	string batch_query;
 	for (auto &table_id : table_ids) {

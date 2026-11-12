@@ -2617,12 +2617,22 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	for (auto &entry : new_data.new_inlined_data) {
 		pending_inlined_rows[entry.table_id] += entry.data->Count();
 	}
+	set<TableIndex> file_totals;
 	for (auto &table_id : refreshed_row_counts) {
+		auto has_inlined_file_deletions = context.inlined_file_deletion_table_exists(table_id);
+		auto refresh_file_size = refreshed_table_sizes.erase(table_id) > 0;
+		if (inlined_tables[table_id].empty() && pending_inlined_rows[table_id] == 0 && !has_inlined_file_deletions &&
+		    refresh_file_size) {
+			file_totals.insert(table_id);
+			continue;
+		}
 		batch_queries += DuckLakeMetadataManager::RefreshTableRowCountSql(
 		    table_id, inlined_tables[table_id], pending_inlined_rows[table_id], context.InlinedColNames(),
-		    context.supports_v1_1_metadata, context.inlined_file_deletion_table_exists(table_id),
-		    refreshed_table_sizes.erase(table_id) > 0, context.supports_data_modifying_cte);
+		    context.supports_v1_1_metadata, has_inlined_file_deletions, refresh_file_size,
+		    context.supports_data_modifying_cte);
 	}
+	batch_queries += DuckLakeMetadataManager::RefreshTableFileTotalsSql(file_totals, context.supports_v1_1_metadata,
+	                                                                    context.supports_data_modifying_cte);
 	batch_queries += DuckLakeMetadataManager::RefreshTableSizesSql(refreshed_table_sizes);
 
 	// Tracking for tables that had schema changes

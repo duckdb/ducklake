@@ -571,6 +571,9 @@ public:
 	static string InsertTableColumnStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
 	//! Set the stored table sizes to the size of the live data files
 	static string RefreshTableSizesSql(const set<TableIndex> &table_ids);
+	//! Refresh tables without inlined rows or inlined file deletions together.
+	static string RefreshTableFileTotalsSql(const set<TableIndex> &table_ids, bool include_exactness,
+	                                        bool supports_data_modifying_cte);
 	static string RefreshTableRowCountSql(TableIndex table_id, const set<string> &inlined_tables,
 	                                      idx_t pending_inlined_rows, const DuckLakeInlinedColNames &col_names,
 	                                      bool include_exactness, bool has_inlined_file_deletions,
