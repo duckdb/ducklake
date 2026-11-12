@@ -324,8 +324,8 @@ void DuckLakeMetadataManager::InitializeDuckLake(bool has_explicit_schema, DuckL
 	string schema_version_value = branch_aware ? "0" : "NULL";
 	initialize_query +=
 	    StringUtil::Format(R"(
-INSERT INTO {METADATA_CATALOG}.ducklake_snapshot
-(snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id%s)
+INSERT INTO {METADATA_CATALOG}.ducklake_snapshot (snapshot_id, snapshot_time, schema_version,
+                                                  next_catalog_id, next_file_id%s)
 VALUES (0, NOW(), 0, 1, 0%s);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"',  NULL, NULL, NULL%s);
 INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '%s'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
@@ -6630,8 +6630,8 @@ string DuckLakeMetadataManager::InsertSnapshotSql(bool write_branch_id) {
 	// the key of branch and snapshot id gates concurrent commits, so other branches never conflict on DuckDB,
 	// Postgres and Quack, while the write lock of SQLite fails a writer with a stale read before it reaches the key
 	return StringUtil::Format(
-	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot
-(snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id%s)
+	    R"(INSERT INTO {METADATA_CATALOG}.ducklake_snapshot (snapshot_id, snapshot_time, schema_version,
+                                                  next_catalog_id, next_file_id%s)
 VALUES ({SNAPSHOT_ID}, {SNAPSHOT_TIME}, {SCHEMA_VERSION}, {NEXT_CATALOG_ID}, {NEXT_FILE_ID}%s);)",
 	    write_branch_id ? ", branch_id" : "", write_branch_id ? ", {BRANCH_ID}" : "");
 }
