@@ -80,6 +80,26 @@ bool QuackMetadataManager::InlinedDeletionTableExists(const Identifier &table_na
 	return ListedInlinedDeletionTableExists(table_name, [&]() { return Query(query); });
 }
 
+bool QuackMetadataManager::ProbeMetadataColumns() {
+	// duckdb_columns() lists every column of the server's metadata schema, so one statement serves every probe
+	string query = "SELECT table_name, column_name FROM duckdb_columns() WHERE database_name = current_database() "
+	               "AND schema_name = {METADATA_SCHEMA_NAME_LITERAL} ORDER BY table_name, column_index";
+	auto result = Query(query);
+	if (!result->HasError()) {
+		for (auto &row : *result) {
+			probed_columns[row.GetValue<string>(0)].push_back(Identifier(row.GetValue<string>(1)));
+		}
+		if (probed_columns.find("ducklake_metadata") != probed_columns.end()) {
+			return true;
+		}
+	}
+	// a failed listing or a schema without the metadata table falls back to probing table by table
+	// LCOV_EXCL_START
+	probed_columns.clear();
+	return false;
+	// LCOV_EXCL_STOP
+}
+
 void QuackMetadataManager::ClearCache() {
 	lock_guard<std::recursive_mutex> guard(transaction.GetCatalog().GetMetadataQueryLock());
 	string clear = "CALL quack_clear_cache();";

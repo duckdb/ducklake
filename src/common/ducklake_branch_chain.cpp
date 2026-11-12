@@ -77,26 +77,27 @@ static string ColumnPrefix(const string &prefix) {
 	return prefix.empty() ? string() : prefix + ".";
 }
 
-string DuckLakeBranchChain::Predicate(const string &prefix, const string &snapshot_column) const {
+string DuckLakeBranchChain::Predicate(const string &prefix, const string &snapshot_column,
+                                      const string &branch_column) const {
 	auto column_prefix = ColumnPrefix(prefix);
 	vector<string> arms;
 	for (auto &segment : segments) {
 		auto &cap = segment.last_snapshot;
 		if (cap.IsValid()) {
-			arms.push_back(StringUtil::Format("(%sbranch_id = %llu AND %s%s <= %llu)", column_prefix, segment.branch_id,
-			                                  column_prefix, snapshot_column, cap.GetIndex()));
+			arms.push_back(StringUtil::Format("(%s%s = %llu AND %s%s <= %llu)", column_prefix, branch_column,
+			                                  segment.branch_id, column_prefix, snapshot_column, cap.GetIndex()));
 		} else {
-			arms.push_back(StringUtil::Format("%sbranch_id = %llu", column_prefix, segment.branch_id));
+			arms.push_back(StringUtil::Format("%s%s = %llu", column_prefix, branch_column, segment.branch_id));
 		}
 	}
 	return StringUtil::Join(arms, " OR ");
 }
 
 string DuckLakeBranchChain::ViewPredicate(const string &prefix, const string &snapshot_column,
-                                          const string &read_snapshot) const {
+                                          const string &read_snapshot, const string &branch_column) const {
 	// the read snapshot caps every arm of the chain predicate
-	return StringUtil::Format("(%s) AND %s%s <= %s", Predicate(prefix, snapshot_column), ColumnPrefix(prefix),
-	                          snapshot_column, read_snapshot);
+	return StringUtil::Format("(%s) AND %s%s <= %s", Predicate(prefix, snapshot_column, branch_column),
+	                          ColumnPrefix(prefix), snapshot_column, read_snapshot);
 }
 
 const DuckLakeBranchSegment &DuckLakeBranchChain::SegmentOf(idx_t snapshot_id) const {

@@ -1,0 +1,60 @@
+# name: test/sql/data_inlining/inlining_branch_column_name.test
+# description: the bare branch_id name of the row visibility columns stays a user column of inlined tables
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET ducklake_default_data_inlining_row_limit = 100
+
+# the bare name is a regular user column, inlined like any other
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlining_branch_column_name')
+
+statement ok
+CREATE TABLE dl.t (branch_id INTEGER, v INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 10)
+
+query II
+SELECT table_name, file_count FROM ducklake_table_info('dl') ORDER BY table_name
+----
+t	0
+
+query II
+SELECT branch_id, v FROM dl.t
+----
+1	10
+
+statement ok
+DETACH dl
+
+# a 1.0 catalog reserves the three bare names of its range rows, the bare branch name is not among them
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_v10.db' AS dl10 (DATA_PATH '{DATA_PATH}/inlining_branch_column_name_v10', DUCKLAKE_VERSION '1.0')
+
+statement ok
+CREATE TABLE dl10.t (branch_id INTEGER, v INTEGER)
+
+statement ok
+INSERT INTO dl10.t VALUES (1, 10)
+
+query II
+SELECT table_name, file_count FROM ducklake_table_info('dl10') ORDER BY table_name
+----
+t	0
+
+query II
+SELECT branch_id, v FROM dl10.t
+----
+1	10
+
+statement ok
+DETACH dl10

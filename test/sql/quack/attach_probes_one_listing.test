@@ -1,0 +1,60 @@
+# name: test/sql/quack/attach_probes_one_listing.test
+# description: the attach of a Quack catalog probes the columns of every metadata table in one server statement
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/attach_probes_one_listing', DATA_INLINING_ROW_LIMIT 5)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+# an inlined data table
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range(10)
+
+# an inlined deletion table
+statement ok
+DELETE FROM dl.t WHERE i = 5
+
+statement ok
+DETACH dl
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/attach_probes_one_listing', DATA_INLINING_ROW_LIMIT 5)
+
+statement ok
+CALL disable_logging()
+
+# one listing of the metadata columns serves every probe of the attach
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%duckdb_columns()%'
+----
+1
+
+# no table is probed on its own
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%LIMIT 0%'
+----
+0
+
+query I
+SELECT count(*) FROM dl.t
+----
+11
+
+statement ok
+DETACH dl

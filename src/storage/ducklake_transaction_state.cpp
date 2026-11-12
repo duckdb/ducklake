@@ -2355,8 +2355,7 @@ static FloatWidenedBounds GetFloatBoundsToRewrite(DuckLakeCommitState &commit_st
 	string live = "c.end_snapshot IS NULL";
 	string chain_filter;
 	if (context.supports_v2_0_metadata) {
-		live = DuckLakeMetadataManager::RowVisibility(context.commit_chain, "c", "column", {"table_id", "column_id"},
-		                                              "{SNAPSHOT_ID}");
+		live = DuckLakeMetadataManager::RowVisibility(context.commit_chain, "c", "column", "{SNAPSHOT_ID}");
 		chain_filter = " AND (" + context.commit_chain.Predicate("c", "begin_snapshot") + ")";
 	}
 	auto query = StringUtil::Format(R"(

@@ -14,7 +14,7 @@ string DuckLakeMetadataManagerV2_0<Base>::GetCreateTableStatements() {
 	result += DuckLakeMetadataManager::GetFileVisibilityTableStatement() + "\n";
 	result += DuckLakeMetadataManager::GetDeleteFileVisibilityTableStatement() + "\n";
 	for (auto &kind : DuckLakeMetadataManager::RowVisibilityKinds()) {
-		result += DuckLakeMetadataManager::GetRowVisibilityTableStatement(kind.kind, kind.key_columns) + "\n";
+		result += DuckLakeMetadataManager::GetRowVisibilityTableStatement(kind) + "\n";
 	}
 	return result;
 }
