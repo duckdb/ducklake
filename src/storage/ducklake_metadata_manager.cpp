@@ -5702,8 +5702,7 @@ SET min_value=NULL, max_value=NULL%s WHERE table_id = %d AND (%s) = 0 AND EXISTS
 	    "UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count = (%s)%s WHERE table_id = %d;", row_count,
 	    file_size, table_id.index);
 	if (supports_data_modifying_cte) {
-		// READ COMMITTED cleanup can remove ended inlined rows between statements. Both updates must count the
-		// same stored rows, or the new total could make bounds that include deleted values appear exact.
+		// Both updates read one snapshot so a cleanup in between cannot make stale bounds exact.
 		return "WITH invalidated_bounds AS (" + invalidate_bounds + " RETURNING table_id) " + refresh_totals;
 	}
 	return invalidate_bounds + ";\n" + refresh_totals;
