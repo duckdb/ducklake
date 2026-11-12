@@ -488,6 +488,18 @@ public:
 	//! The visibility predicate of the version rows under the layout of the catalog
 	static string RowFilter(bool branch_aware, const DuckLakeBranchChain &chain, const string &alias,
 	                        const string &kind, const vector<string> &key_columns, const string &read_snapshot);
+	//! The version rows of a catalog table joined with the ends of the chain view at the read snapshot
+	struct LiveRowSource {
+		//! The row table under its alias, from 2.0 on with the ends joined under the alias suffixed by _end
+		string from;
+		//! The rows born in the view that no end of the view closes
+		string filter;
+	};
+	//! The live version rows of a kind under the alias, the ends are joined once instead of a correlated probe
+	static LiveRowSource LiveRows(bool branch_aware, const DuckLakeBranchChain &chain, const string &kind,
+	                              const string &alias, const string &read_snapshot);
+	//! The key columns naming an entity of a kind
+	static const vector<string> &RowKeyColumns(const string &kind);
 	//! The end events of the version rows the filter selects under the alias t that the commit chain sees
 	static string EndRows(const DuckLakeBranchChain &chain, const string &kind, const vector<string> &key_columns,
 	                      const string &filter);
@@ -809,6 +821,10 @@ public:
 	string DataFiles(TableIndex table_id) const;
 	string DeleteFiles(TableIndex table_id) const;
 	bool HasMetadataColumn(const string &table, const string &column);
+	//! Reads the columns of every table of the metadata schema into the memo, false when the catalog lists none
+	bool ProbeMetadataColumns();
+	//! Drops the memo of a probe pass
+	void ResetProbedColumns();
 	bool HasAnyFileRangeColumns();
 	bool HasAllFileRangeColumns();
 	bool HasBranchZeroFileVisibility(const string &file_table, const string &file_column, bool has_visibility_table,
@@ -1057,6 +1073,8 @@ private:
 	optional_idx catalog_has_branches;
 	//! The columns of the metadata tables probed in the current pass, a missing table has none
 	unordered_map<string, vector<Identifier>> probed_columns;
+	//! Whether the pass read the columns of every metadata table at once
+	bool probed_all_columns = false;
 	//! Guards the three caches below, the scans of one statement initialize in parallel
 	mutex listing_cache_lock;
 	//! Parsed file listings keyed by their query, statements repeat identical listings several times

@@ -20,6 +20,7 @@
 #include "storage/ducklake_table_entry.hpp"
 #include "duckdb.hpp"
 #include "duckdb/main/appender.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "metadata_manager/quack_metadata_manager.hpp"
 #include "duckdb/main/attached_database.hpp"
@@ -663,7 +664,7 @@ void DuckLakeMetadataManager::ExecuteMigration(string migrate_query, bool allow_
 	}
 	auto result = Execute(migrate_query);
 	// the statements changed the shapes the probes memoized
-	probed_columns.clear();
+	ResetProbedColumns();
 	result->ThrowIfError("Failed to migrate DuckLake from v" + from_version + " to v" + to_version + ":");
 }
 
@@ -1362,15 +1363,62 @@ bool DuckLakeMetadataManager::HasDeleteFileVisibilityTable() {
 	return HasMetadataColumn("ducklake_delete_file_visibility", "branch_id");
 }
 
+bool DuckLakeMetadataManager::ProbeMetadataColumns() {
+	auto &ducklake_catalog = transaction.GetCatalog();
+	auto &context = *transaction.GetConnection().context;
+	try {
+		context.RunFunctionInTransaction([&]() {
+			auto &catalog = Catalog::GetCatalog(context, ducklake_catalog.MetadataDatabaseName());
+			auto schema =
+			    catalog.GetSchema(context, ducklake_catalog.MetadataSchemaName(), OnEntryNotFound::RETURN_NULL);
+			if (!schema) {
+				return;
+			}
+			schema->Scan(context, CatalogType::TABLE_ENTRY, [&](CatalogEntry &entry) {
+				if (entry.type != CatalogType::TABLE_ENTRY) {
+					return;
+				}
+				vector<Identifier> columns;
+				for (auto &column : entry.Cast<TableCatalogEntry>().GetColumns().Logical()) {
+					columns.push_back(column.Name());
+				}
+				probed_columns[entry.name.GetIdentifierName()] = std::move(columns);
+			});
+		});
+	} catch (std::exception &) {
+		// LCOV_EXCL_START
+		probed_columns.clear();
+		return false;
+		// LCOV_EXCL_STOP
+	}
+	// a metadata server keeps its tables off the local catalog, which then lists not even the metadata table
+	if (probed_columns.find("ducklake_metadata") == probed_columns.end()) {
+		probed_columns.clear();
+		return false;
+	}
+	return true;
+}
+
+void DuckLakeMetadataManager::ResetProbedColumns() {
+	probed_columns.clear();
+	probed_all_columns = false;
+}
+
 bool DuckLakeMetadataManager::HasMetadataColumn(const string &table, const string &column) {
 	// a reference to a missing column fails to bind, which makes some catalogs reload their schema
-	// one probe per table serves every column a pass asks about, the probes of a pass clear the memo
+	// one scan of the metadata schema serves every table a pass asks about, the probes of a pass clear the memo
+	if (!probed_all_columns) {
+		probed_all_columns = ProbeMetadataColumns();
+	}
 	auto entry = probed_columns.find(table);
 	if (entry == probed_columns.end()) {
-		auto result = Query(StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", table));
 		vector<Identifier> columns;
-		if (!result->HasError()) {
-			columns = result->GetNames();
+		if (!probed_all_columns) {
+			// a catalog that lists no tables is probed table by table
+			auto result = Query(StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", table));
+			if (!result->HasError()) {
+				columns = result->GetNames();
+			}
 		}
 		entry = probed_columns.emplace(table, std::move(columns)).first;
 	}
@@ -1490,7 +1538,7 @@ bool DuckLakeMetadataManager::HasBranchZeroVisibility() {
 }
 
 bool DuckLakeMetadataManager::HasV2_0Dev1Additions() {
-	probed_columns.clear();
+	ResetProbedColumns();
 	return HasRowVisibilityShapes() && HasSnapshotTagTable() && HasBranchTable() && HasBranchTableShape() &&
 	       HasSnapshotRemapTable() && HasSnapshotRemapShape() && HasSnapshotBranchColumn() &&
 	       HasSnapshotChangesBranchColumn() && HasSchemaVersionsBranchColumn() && !HasSnapshotRebuildTable() &&
@@ -1504,7 +1552,7 @@ bool DuckLakeMetadataManager::HasV2_0Dev1Additions() {
 }
 
 DuckLakeMetadataManager::V2_0Dev1Additions DuckLakeMetadataManager::ProbeV2_0Dev1Additions() {
-	probed_columns.clear();
+	ResetProbedColumns();
 	V2_0Dev1Additions missing;
 	for (auto &kind : RowVisibilityKinds()) {
 		missing.row_additions.push_back(ProbeRowVisibilityAdditions(kind));
@@ -2031,13 +2079,14 @@ string DuckLakeMetadataManager::GetTableColumnSchemaSql(TableIndex table_id, boo
 	// Return the full flattened schema: top-level roots (parent_column IS NULL) and every nested leaf, each with its
 	// own column_id (== FieldIndex) and its own leaf column_type. Callers distinguish roots from leaves via
 	// parent_column. column_order == column_id for every row, so the ordering stays deterministic.
+	auto live = LiveRows(branch_aware, chain, "column", "col", "{SNAPSHOT_ID}");
 	return StringUtil::Format(
 	    R"(
 SELECT col.column_id, col.column_name, col.column_type, col.parent_column
-FROM {METADATA_CATALOG}.ducklake_column col
+FROM %s
 WHERE col.table_id = %d AND %s
 ORDER BY col.column_order ASC)",
-	    table_id.index, RowFilter(branch_aware, chain, "col", "column", {"table_id", "column_id"}, "{SNAPSHOT_ID}"));
+	    live.from, table_id.index, live.filter);
 }
 
 //! The chain predicate over the begin snapshots of the rows under the alias, preceded by AND, empty before 2.0
@@ -2146,14 +2195,14 @@ DuckLakeCatalogInfo DuckLakeMetadataManager::BuildCatalogForSnapshot(
 	// the tables that still carry ranges with the ids of main read at the parent view snapshot
 	// load the schema information
 	string parent_schema_select = supports_v1_1_metadata ? ", parent_schema_id" : "";
-	auto result = query_executor(snapshot, StringUtil::Format(R"(
-SELECT schema_id, schema_uuid::VARCHAR, schema_name, path, path_is_relative%s
-FROM {METADATA_CATALOG}.ducklake_schema sch
+	auto live_schemas = LiveRows(supports_v2_0_metadata, chain, "schema", "sch", "{SNAPSHOT_ID}");
+	auto result =
+	    query_executor(snapshot, StringUtil::Format(R"(
+SELECT sch.schema_id, schema_uuid::VARCHAR, schema_name, path, path_is_relative%s
+FROM %s
 WHERE %s
 )",
-	                                                          parent_schema_select,
-	                                                          RowFilter(supports_v2_0_metadata, chain, "sch", "schema",
-	                                                                    {"schema_id"}, "{SNAPSHOT_ID}")));
+	                                                parent_schema_select, live_schemas.from, live_schemas.filter));
 	result->ThrowIfError("Failed to get schema information from DuckLake: ");
 	map<SchemaIndex, idx_t> schema_map;
 	for (auto &row : *result) {
@@ -2184,15 +2233,16 @@ WHERE %s
 	};
 
 	// load the table information
-	result = query_executor(
-	    snapshot,
-	    StringUtil::Format(
-	        R"(
+	auto live_tables = LiveRows(supports_v2_0_metadata, chain, "table", "tbl", "{SNAPSHOT_ID}");
+	auto live_columns = LiveRows(supports_v2_0_metadata, chain, "column", "col", "{SNAPSHOT_ID}");
+	result = query_executor(snapshot,
+	                        StringUtil::Format(
+	                            R"(
 SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name,
 	(
 		SELECT %s
 		FROM {METADATA_CATALOG}.ducklake_tag tag
-		WHERE object_id=table_id AND %s
+		WHERE object_id=tbl.table_id AND %s
 	) AS tag,
 	(
 		SELECT %s
@@ -2206,20 +2256,20 @@ SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name,
 		FROM {METADATA_CATALOG}.ducklake_column_tag col_tag
 		WHERE col_tag.table_id=tbl.table_id AND col_tag.column_id=col.column_id AND %s
 	) AS column_tags, default_value_type
-FROM {METADATA_CATALOG}.ducklake_table tbl
+FROM %s
 LEFT JOIN (
-	SELECT *
-	FROM {METADATA_CATALOG}.ducklake_column col
+	SELECT col.*
+	FROM %s
 	WHERE %s
-) col USING (table_id)
+) col ON col.table_id = tbl.table_id
 WHERE %s
-ORDER BY table_id ASC, parent_column ASC NULLS FIRST, column_order ASC
+ORDER BY tbl.table_id ASC, parent_column ASC NULLS FIRST, column_order ASC
 )",
-	        ListAggregation(TAG_FIELDS), RangeVisibility("tag", "{PARENT_VIEW_SNAPSHOT_ID}"),
-	        ListAggregation(INLINED_DATA_TABLES_FIELDS), InlinedTableRegistrations(supports_v2_0_metadata, chain),
-	        ListAggregation(TAG_FIELDS), RangeVisibility("col_tag", "{PARENT_VIEW_SNAPSHOT_ID}"),
-	        RowFilter(supports_v2_0_metadata, chain, "col", "column", {"table_id", "column_id"}, "{SNAPSHOT_ID}"),
-	        RowFilter(supports_v2_0_metadata, chain, "tbl", "table", {"table_id"}, "{SNAPSHOT_ID}")));
+	                            ListAggregation(TAG_FIELDS), RangeVisibility("tag", "{PARENT_VIEW_SNAPSHOT_ID}"),
+	                            ListAggregation(INLINED_DATA_TABLES_FIELDS),
+	                            InlinedTableRegistrations(supports_v2_0_metadata, chain), ListAggregation(TAG_FIELDS),
+	                            RangeVisibility("col_tag", "{PARENT_VIEW_SNAPSHOT_ID}"), live_tables.from,
+	                            live_columns.from, live_columns.filter, live_tables.filter));
 	result->ThrowIfError("Failed to get table information from DuckLake: ");
 	const idx_t COLUMN_INDEX_START = 8;
 	auto &tables = catalog.tables;
@@ -2316,21 +2366,20 @@ ORDER BY table_id ASC, parent_column ASC NULLS FIRST, column_order ASC
 	                                                        ListAggregation(VIEW_COLUMN_TAG_FIELDS),
 	                                                        RangeVisibility("vct", "{PARENT_VIEW_SNAPSHOT_ID}"))
 	                                   : ",\n\tNULL AS view_column_tags";
-	result = query_executor(
-	    snapshot,
-	    StringUtil::Format(R"(
-SELECT view_id, view_uuid, schema_id, view_name, dialect, sql, column_aliases,
+	auto live_views = LiveRows(supports_v2_0_metadata, chain, "view", "view", "{SNAPSHOT_ID}");
+	result = query_executor(snapshot, StringUtil::Format(R"(
+SELECT view.view_id, view_uuid, schema_id, view_name, dialect, sql, column_aliases,
 	(
 		SELECT %s
 		FROM {METADATA_CATALOG}.ducklake_tag tag
-		WHERE object_id=view_id AND %s
+		WHERE object_id=view.view_id AND %s
 	) AS tag%s
-FROM {METADATA_CATALOG}.ducklake_view view
+FROM %s
 WHERE %s
 )",
-	                       ListAggregation(TAG_FIELDS), RangeVisibility("tag", "{PARENT_VIEW_SNAPSHOT_ID}"),
-	                       view_column_tags_select,
-	                       RowFilter(supports_v2_0_metadata, chain, "view", "view", {"view_id"}, "{SNAPSHOT_ID}")));
+	                                                     ListAggregation(TAG_FIELDS),
+	                                                     RangeVisibility("tag", "{PARENT_VIEW_SNAPSHOT_ID}"),
+	                                                     view_column_tags_select, live_views.from, live_views.filter));
 	result->ThrowIfError("Failed to get view information from DuckLake: ");
 	auto &views = catalog.views;
 	for (auto &row : *result) {
@@ -2371,18 +2420,18 @@ WHERE %s
 	    {"dialect", "dialect"}, {"sql", "sql"}, {"type", "type"}, {"params", macro_param_query}};
 
 	// load macro information
+	auto live_macros = LiveRows(supports_v2_0_metadata, chain, "macro", "ducklake_macro", "{SNAPSHOT_ID}");
 	result = query_executor(snapshot, StringUtil::Format(R"(
 SELECT schema_id, ducklake_macro.macro_id, macro_name, (
 		SELECT %s
 		FROM {METADATA_CATALOG}.ducklake_macro_impl
 		WHERE ducklake_macro.macro_id = ducklake_macro_impl.macro_id
 	) AS impl
-FROM {METADATA_CATALOG}.ducklake_macro
+FROM %s
 WHERE %s
 )",
-	                                                     ListAggregation(MACRO_IMPL_FIELDS),
-	                                                     RowFilter(supports_v2_0_metadata, chain, "ducklake_macro",
-	                                                               "macro", {"macro_id"}, "{SNAPSHOT_ID}")));
+	                                                     ListAggregation(MACRO_IMPL_FIELDS), live_macros.from,
+	                                                     live_macros.filter));
 	result->ThrowIfError("Failed to get macro information from DuckLake: ");
 	auto &macros = catalog.macros;
 	for (auto &row : *result) {
@@ -2396,15 +2445,15 @@ WHERE %s
 	}
 
 	// load partition information
+	auto live_partitions = LiveRows(supports_v2_0_metadata, chain, "partition", "part", "{SNAPSHOT_ID}");
 	result = query_executor(snapshot, StringUtil::Format(R"(
-SELECT partition_id, part.table_id, partition_key_index, column_id, transform
-FROM {METADATA_CATALOG}.ducklake_partition_info part
-JOIN {METADATA_CATALOG}.ducklake_partition_column part_col USING (partition_id)
+SELECT part.partition_id, part.table_id, partition_key_index, column_id, transform
+FROM %s
+JOIN {METADATA_CATALOG}.ducklake_partition_column part_col ON part_col.partition_id = part.partition_id
 WHERE %s
-ORDER BY part.table_id ASC, partition_id ASC, partition_key_index ASC
+ORDER BY part.table_id ASC, part.partition_id ASC, partition_key_index ASC
 )",
-	                                                     RowFilter(supports_v2_0_metadata, chain, "part", "partition",
-	                                                               {"partition_id"}, "{SNAPSHOT_ID}")));
+	                                                     live_partitions.from, live_partitions.filter));
 	result->ThrowIfError("Failed to get partition information from DuckLake: ");
 	auto &partitions = catalog.partitions;
 	for (auto &row : *result) {
@@ -2427,15 +2476,15 @@ ORDER BY part.table_id ASC, partition_id ASC, partition_key_index ASC
 	}
 
 	// load sort information
+	auto live_sorts = LiveRows(supports_v2_0_metadata, chain, "sort", "sort", "{SNAPSHOT_ID}");
 	result = query_executor(snapshot, StringUtil::Format(R"(
 SELECT sort.sort_id, sort.table_id, sort_expr.sort_key_index, sort_expr.expression, sort_expr.dialect, sort_expr.sort_direction, sort_expr.null_order
-FROM {METADATA_CATALOG}.ducklake_sort_info sort
-JOIN {METADATA_CATALOG}.ducklake_sort_expression sort_expr USING (sort_id)
+FROM %s
+JOIN {METADATA_CATALOG}.ducklake_sort_expression sort_expr ON sort_expr.sort_id = sort.sort_id
 WHERE %s
 ORDER BY sort.table_id ASC, sort.sort_id ASC, sort_expr.sort_key_index ASC
 )",
-	                                                     RowFilter(supports_v2_0_metadata, chain, "sort", "sort",
-	                                                               {"sort_id"}, "{SNAPSHOT_ID}")));
+	                                                     live_sorts.from, live_sorts.filter));
 	result->ThrowIfError("Failed to get sort information from DuckLake: ");
 	auto &sorts = catalog.sorts;
 	for (auto &row : *result) {
@@ -4330,6 +4379,46 @@ string DuckLakeMetadataManager::RowFilter(bool branch_aware, const DuckLakeBranc
 		return RangeVisibility(alias, read_snapshot);
 	}
 	return RowVisibility(chain, alias, kind, key_columns, read_snapshot);
+}
+
+const vector<string> &DuckLakeMetadataManager::RowKeyColumns(const string &kind) {
+	for (auto &entry : RowVisibilityKinds()) {
+		if (entry.kind == kind) {
+			return entry.key_columns;
+		}
+	}
+	throw InternalException("Unknown DuckLake row visibility kind %s", kind);
+}
+
+DuckLakeMetadataManager::LiveRowSource DuckLakeMetadataManager::LiveRows(bool branch_aware,
+                                                                         const DuckLakeBranchChain &chain,
+                                                                         const string &kind, const string &alias,
+                                                                         const string &read_snapshot) {
+	LiveRowSource source;
+	source.from = StringUtil::Format("{METADATA_CATALOG}.%s %s", RowTableName(kind), alias);
+	if (!branch_aware) {
+		source.filter = RangeVisibility(alias, read_snapshot);
+		return source;
+	}
+	// the ends of the view are joined once, a correlated NOT EXISTS costs the binder a few ms at every load
+	auto &key_columns = RowKeyColumns(kind);
+	auto ends = alias + "_end";
+	vector<string> key_matches;
+	for (auto &key : key_columns) {
+		key_matches.push_back(StringUtil::Format("%s.%s = %s.%s", ends, key, alias, key));
+	}
+	source.from += StringUtil::Format(R"(
+LEFT JOIN (
+	SELECT %s, row_branch_id, row_snapshot
+	FROM {METADATA_CATALOG}.ducklake_%s_visibility
+	WHERE %s
+) %s ON %s AND %s.row_branch_id = %s.branch_id AND %s.row_snapshot = %s.begin_snapshot)",
+	                                  StringUtil::Join(key_columns, ", "), kind,
+	                                  chain.ViewPredicate("", "snapshot_id", read_snapshot), ends,
+	                                  StringUtil::Join(key_matches, " AND "), ends, alias, ends, alias);
+	source.filter = StringUtil::Format("(%s) AND %s.row_snapshot IS NULL",
+	                                   chain.ViewPredicate(alias, "begin_snapshot", read_snapshot), ends);
+	return source;
 }
 
 string DuckLakeMetadataManager::EndRows(const DuckLakeBranchChain &chain, const string &kind,
@@ -8229,17 +8318,16 @@ vector<DuckLakeTableSizeInfo> DuckLakeMetadataManager::GetTableSizes(DuckLakeSna
 	auto &catalog = transaction.GetCatalog();
 	auto branch_aware = catalog.SupportsBranching();
 	auto &chain = catalog.AttachedChain();
-	auto result =
-	    Query(snapshot,
-	          StringUtil::Format(
-	              R"(
+	auto live_tables = LiveRows(branch_aware, chain, "table", "tbl", "{SNAPSHOT_ID}");
+	auto result = Query(snapshot, StringUtil::Format(
+	                                  R"(
 SELECT
-	schema_id, table_id, table_name, table_uuid,
+	schema_id, tbl.table_id, table_name, table_uuid,
 	data_file_info.file_count AS data_file_count,
 	data_file_info.total_file_size AS data_total_size,
 	delete_file_info.file_count AS delete_file_count,
 	delete_file_info.total_file_size AS delete_total_size
-FROM {METADATA_CATALOG}.ducklake_table tbl, LATERAL (
+FROM %s, LATERAL (
 	SELECT COUNT(*) file_count, SUM(file_size_bytes) total_file_size
 	FROM %s df
 	WHERE df.table_id = tbl.table_id AND %s
@@ -8250,9 +8338,10 @@ FROM {METADATA_CATALOG}.ducklake_table tbl, LATERAL (
 ) delete_file_info
 WHERE %s
 )",
-	              DataFileSource(branch_aware, chain, "{METADATA_CATALOG}"), RangeVisibility("df", "{SNAPSHOT_ID}"),
-	              DeleteFileSource(branch_aware, chain, "{METADATA_CATALOG}"), RangeVisibility("df", "{SNAPSHOT_ID}"),
-	              RowFilter(branch_aware, chain, "tbl", "table", {"table_id"}, "{SNAPSHOT_ID}")));
+	                                  live_tables.from, DataFileSource(branch_aware, chain, "{METADATA_CATALOG}"),
+	                                  RangeVisibility("df", "{SNAPSHOT_ID}"),
+	                                  DeleteFileSource(branch_aware, chain, "{METADATA_CATALOG}"),
+	                                  RangeVisibility("df", "{SNAPSHOT_ID}"), live_tables.filter));
 	for (auto &row : *result) {
 		DuckLakeTableSizeInfo table_size;
 		table_size.schema_id = SchemaIndex(row.GetValue<idx_t>(0));
