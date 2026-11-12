@@ -1,0 +1,44 @@
+# name: test/sql/general/scan_profiling_rows_scanned.test
+# description: The profiler reports the rows a DuckLake scan reads from data files and inlined data
+# group: [general]
+
+require ducklake
+
+require parquet
+
+require json
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/scan_profiling_rows_scanned', DATA_INLINING_ROW_LIMIT 10)
+
+# written to a data file
+statement ok
+CREATE TABLE ducklake.t AS SELECT range AS i FROM range(1000)
+
+# inlined in the catalog
+statement ok
+INSERT INTO ducklake.t VALUES (1000), (1001), (1002)
+
+statement ok
+PRAGMA enable_profiling = 'json'
+
+statement ok
+PRAGMA profiling_output = '{TEST_DIR}/scan_profiling_rows_scanned.json'
+
+statement ok
+SET tracked_metrics = ['operator.rows_scanned', 'query.total_rows_scanned']
+
+statement ok
+SELECT * FROM ducklake.t
+
+statement ok
+PRAGMA disable_profiling
+
+query I
+SELECT query.total_rows_scanned FROM '{TEST_DIR}/scan_profiling_rows_scanned.json'
+----
+1003
