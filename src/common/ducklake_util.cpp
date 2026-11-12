@@ -617,12 +617,12 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 			// LCOV_EXCL_STOP
 		}
 		auto setting_index = option.setting_index.GetIndex();
-		if (!from.config.user_settings.IsSet(setting_index)) {
+		if (!ClientConfig::GetConfig(from).user_settings.IsSet(setting_index)) {
 			continue;
 		}
 		Value value;
 		from.TryGetCurrentUserSetting(setting_index, value);
-		to.config.user_settings.SetUserSetting(setting_index, std::move(value));
+		ClientConfig::GetConfig(to).user_settings.SetUserSetting(setting_index, std::move(value));
 	}
 	SetNativeExtensionTypes(to);
 }
@@ -639,7 +639,8 @@ void DuckLakeUtil::ResetExtensionSettings(ClientContext &context, const vector<s
 		if (!db_config.TryGetExtensionOption(Identifier(name), option) || !option.setting_index.IsValid()) {
 			continue;
 		}
-		context.config.user_settings.SetUserSetting(option.setting_index.GetIndex(), option.default_value);
+		ClientConfig::GetConfig(context).user_settings.SetUserSetting(option.setting_index.GetIndex(),
+		                                                              option.default_value);
 	}
 }
 
