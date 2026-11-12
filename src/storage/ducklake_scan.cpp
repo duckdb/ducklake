@@ -48,6 +48,11 @@ static void DuckLakeGetMetrics(TableFunctionGetMetricsInput &input) {
 	auto &gstate = input.global_state->Cast<MultiFileGlobalState>();
 	auto &file_list = gstate.file_list.Cast<DuckLakeMultiFileList>();
 
+	// This replaces the multi-file scan's own get_metrics, so it also has to report the rows scanned that one would
+	if (input.local_state) {
+		input.operator_metrics.rows_scanned = input.local_state->Cast<MultiFileLocalState>().rows_scanned;
+	}
+
 	// Count different types of files
 	auto files_loaded = gstate.file_index.load();
 	auto &files = file_list.GetFiles();
