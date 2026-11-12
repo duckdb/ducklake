@@ -2442,6 +2442,27 @@ DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnaps
 	    ducklake_catalog.AttachedChain());
 }
 
+//! A list aggregate grouped by its keys and joined on them, a correlated subquery would run once per outer row
+static string GroupedListJoin(const string &name, const string &aggregate, const string &from, const string &filter,
+                              const vector<pair<string, string>> &keys) {
+	vector<string> group_keys;
+	vector<string> join_keys;
+	for (auto &key : keys) {
+		group_keys.push_back(key.first);
+		auto column = key.first.substr(key.first.find('.') + 1);
+		join_keys.push_back(StringUtil::Format("%s_agg.%s = %s", name, column, key.second));
+	}
+	auto where = filter.empty() ? string() : "\n\tWHERE " + filter;
+	return StringUtil::Format(R"(
+LEFT JOIN (
+	SELECT %s, %s AS %s
+	FROM %s%s
+	GROUP BY %s
+) %s_agg ON %s)",
+	                          StringUtil::Join(group_keys, ", "), aggregate, name, from, where,
+	                          StringUtil::Join(group_keys, ", "), name, StringUtil::Join(join_keys, " AND "));
+}
+
 DuckLakeCatalogInfo DuckLakeMetadataManager::BuildCatalogForSnapshot(
     DuckLakeSnapshot snapshot, const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
     const string &base_data_path, const string &separator, bool supports_v1_1_metadata, bool supports_v2_0_metadata,
@@ -2492,41 +2513,32 @@ WHERE %s
 	auto live_columns = LiveRows(supports_v2_0_metadata, chain, "column", "col", "{SNAPSHOT_ID}");
 	auto live_tags = LiveRows(supports_v2_0_metadata, chain, "tag", "tag", "{SNAPSHOT_ID}");
 	auto live_column_tags = LiveRows(supports_v2_0_metadata, chain, "column_tag", "col_tag", "{SNAPSHOT_ID}");
-	result = query_executor(snapshot,
-	                        StringUtil::Format(
-	                            R"(
-SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name,
-	(
-		SELECT %s
-		FROM %s
-		WHERE tag.object_id = tbl.table_id AND %s
-	) AS tag,
-	(
-		SELECT %s
-		FROM %s inlined_data_tables
-		WHERE inlined_data_tables.table_id = tbl.table_id
-	) AS inlined_data_tables,
-	path, path_is_relative,
+	auto tag_join = GroupedListJoin("tag", ListAggregation(tag_fields("tag")), live_tags.from, live_tags.filter,
+	                                {{"tag.object_id", "tbl.table_id"}});
+	auto inlined_data_tables_join =
+	    GroupedListJoin("inlined_data_tables", ListAggregation(INLINED_DATA_TABLES_FIELDS),
+	                    InlinedTableRegistrations(supports_v2_0_metadata, chain) + " inlined_data_tables", string(),
+	                    {{"inlined_data_tables.table_id", "tbl.table_id"}});
+	auto column_tags_join = GroupedListJoin(
+	    "column_tags", ListAggregation(tag_fields("col_tag")), live_column_tags.from, live_column_tags.filter,
+	    {{"col_tag.table_id", "tbl.table_id"}, {"col_tag.column_id", "col.column_id"}});
+	result = query_executor(snapshot, StringUtil::Format(
+	                                      R"(
+SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name, tag_agg.tag AS tag,
+	inlined_data_tables_agg.inlined_data_tables AS inlined_data_tables, path, path_is_relative,
 	col.column_id, column_name, column_type, initial_default, default_value, nulls_allowed, parent_column,
-	(
-		SELECT %s
-		FROM %s
-		WHERE col_tag.table_id = tbl.table_id AND col_tag.column_id = col.column_id AND %s
-	) AS column_tags, default_value_type
+	column_tags_agg.column_tags AS column_tags, default_value_type
 FROM %s
 LEFT JOIN (
 	SELECT col.*
 	FROM %s
 	WHERE %s
-) col ON col.table_id = tbl.table_id
+) col ON col.table_id = tbl.table_id%s%s%s
 WHERE %s
 ORDER BY tbl.table_id ASC, parent_column ASC NULLS FIRST, column_order ASC
 )",
-	                            ListAggregation(tag_fields("tag")), live_tags.from, live_tags.filter,
-	                            ListAggregation(INLINED_DATA_TABLES_FIELDS),
-	                            InlinedTableRegistrations(supports_v2_0_metadata, chain),
-	                            ListAggregation(tag_fields("col_tag")), live_column_tags.from, live_column_tags.filter,
-	                            live_tables.from, live_columns.from, live_columns.filter, live_tables.filter));
+	                                      live_tables.from, live_columns.from, live_columns.filter, tag_join,
+	                                      inlined_data_tables_join, column_tags_join, live_tables.filter));
 	result->ThrowIfError("Failed to get table information from DuckLake: ");
 	const idx_t COLUMN_INDEX_START = 8;
 	auto &tables = catalog.tables;
@@ -2613,32 +2625,25 @@ ORDER BY tbl.table_id ASC, parent_column ASC NULLS FIRST, column_order ASC
 		}
 	}
 	// load view information
-	string view_column_tags_select = ",\n\tNULL AS view_column_tags";
+	string view_column_tags_select = "NULL AS view_column_tags";
+	string view_column_tags_join;
 	if (supports_v1_1_metadata) {
 		auto live_view_column_tags = LiveRows(supports_v2_0_metadata, chain, "view_column_tag", "vct", "{SNAPSHOT_ID}");
-		view_column_tags_select = StringUtil::Format(R"(,
-	(
-		SELECT %s
-		FROM %s
-		WHERE vct.view_id = view.view_id AND %s
-	) AS view_column_tags)",
-		                                             ListAggregation(VIEW_COLUMN_TAG_FIELDS),
-		                                             live_view_column_tags.from, live_view_column_tags.filter);
+		view_column_tags_select = "view_column_tags_agg.view_column_tags AS view_column_tags";
+		view_column_tags_join =
+		    GroupedListJoin("view_column_tags", ListAggregation(VIEW_COLUMN_TAG_FIELDS), live_view_column_tags.from,
+		                    live_view_column_tags.filter, {{"vct.view_id", "view.view_id"}});
 	}
+	auto view_tag_join = GroupedListJoin("tag", ListAggregation(tag_fields("tag")), live_tags.from, live_tags.filter,
+	                                     {{"tag.object_id", "view.view_id"}});
 	auto live_views = LiveRows(supports_v2_0_metadata, chain, "view", "view", "{SNAPSHOT_ID}");
-	result = query_executor(snapshot,
-	                        StringUtil::Format(R"(
-SELECT view.view_id, view_uuid, schema_id, view_name, dialect, sql, column_aliases,
-	(
-		SELECT %s
-		FROM %s
-		WHERE tag.object_id = view.view_id AND %s
-	) AS tag%s
-FROM %s
+	result = query_executor(snapshot, StringUtil::Format(R"(
+SELECT view.view_id, view_uuid, schema_id, view_name, dialect, sql, column_aliases, tag_agg.tag AS tag, %s
+FROM %s%s%s
 WHERE %s
 )",
-	                                           ListAggregation(tag_fields("tag")), live_tags.from, live_tags.filter,
-	                                           view_column_tags_select, live_views.from, live_views.filter));
+	                                                     view_column_tags_select, live_views.from, view_tag_join,
+	                                                     view_column_tags_join, live_views.filter));
 	result->ThrowIfError("Failed to get view information from DuckLake: ");
 	auto &views = catalog.views;
 	for (auto &row : *result) {

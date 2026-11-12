@@ -148,7 +148,8 @@
         "test/sql/comments/comment_on_view_column_invalid.test",
         "test/sql/comments/comment_on_view_column_update.test",
         "test/sql/comments/copy_database_view_column_comments.test",
-        "test/sql/comments/drop_view_expires_view_column_tags.test"
+        "test/sql/comments/drop_view_expires_view_column_tags.test",
+        "test/sql/catalog/catalog_load_grouped_aggregates.test"
       ]
     },
     {
