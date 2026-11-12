@@ -23,6 +23,31 @@ CREATE VIEW dl.gone AS SELECT 1 AS i
 statement ok
 DROP VIEW dl.gone
 
+# the same for a column, a partition spec, a sort spec and a macro
+statement ok
+ALTER TABLE dl.t ADD COLUMN j INTEGER
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN j
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (i)
+
+statement ok
+ALTER TABLE dl.t RESET PARTITIONED BY
+
+statement ok
+ALTER TABLE dl.t SET SORTED BY (i)
+
+statement ok
+ALTER TABLE dl.t RESET SORTED BY
+
+statement ok
+CREATE MACRO dl.add_one(x) AS x + 1
+
+statement ok
+DROP MACRO dl.add_one
+
 statement error
 SELECT * FROM meta.ducklake_branch
 ----
@@ -65,6 +90,14 @@ SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
 1	0
 2	0
 3	0
+4	0
+5	0
+6	0
+7	0
+8	0
+9	0
+10	0
+11	0
 
 query II
 SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
@@ -73,11 +106,23 @@ SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snaps
 1	0
 2	0
 3	0
+4	0
+5	0
+6	0
+7	0
+8	0
+9	0
+10	0
+11	0
 
 query II
-SELECT begin_snapshot, branch_id FROM meta.ducklake_schema_versions
+SELECT begin_snapshot, branch_id FROM meta.ducklake_schema_versions ORDER BY begin_snapshot
 ----
 1	0
+4	0
+5	0
+6	0
+7	0
 
 # the migrated snapshot table is keyed by branch and snapshot
 statement error
@@ -157,6 +202,80 @@ query II
 SELECT (SELECT COUNT(*) FROM meta.ducklake_schema_visibility), (SELECT COUNT(*) FROM meta.ducklake_table_visibility)
 ----
 0	0
+
+# the column, spec and macro rows carry their birth branch and their ends moved to the companion tables
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_column') ORDER BY column_index
+----
+column_id
+begin_snapshot
+table_id
+column_order
+column_name
+column_type
+initial_default
+default_value
+nulls_allowed
+parent_column
+default_value_type
+default_value_dialect
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_partition_info') ORDER BY column_index
+----
+partition_id
+table_id
+begin_snapshot
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_sort_info') ORDER BY column_index
+----
+sort_id
+table_id
+begin_snapshot
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_macro') ORDER BY column_index
+----
+schema_id
+macro_id
+macro_name
+begin_snapshot
+branch_id
+
+query IIIII
+SELECT e.branch_id, c.column_name, e.row_branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_column_visibility e JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id
+----
+0	j	0	4	5
+
+query III
+SELECT e.branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_partition_visibility e
+----
+0	6	7
+
+query III
+SELECT e.branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_sort_visibility e
+----
+0	8	9
+
+query IIII
+SELECT m.macro_name, e.row_branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_macro_visibility e JOIN meta.ducklake_macro m ON m.macro_id = e.macro_id
+----
+add_one	0	10	11
+
+query I
+SELECT column_name FROM (DESCRIBE dl.t)
+----
+i
+
+query I
+SELECT column_name FROM (DESCRIBE FROM dl.t AT (VERSION => 4))
+----
+i
+j
 
 query I
 SELECT * FROM dl.t

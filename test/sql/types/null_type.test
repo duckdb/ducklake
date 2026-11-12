@@ -31,7 +31,7 @@ id	INTEGER
 n	"NULL"
 
 query I
-SELECT column_type FROM ducklake_meta.ducklake_column WHERE column_name = 'n' AND end_snapshot IS NULL
+SELECT column_type FROM ducklake_meta.ducklake_column c WHERE column_name = 'n' AND NOT EXISTS (SELECT 1 FROM ducklake_meta.ducklake_column_visibility e WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id AND e.row_snapshot = c.begin_snapshot)
 ----
 null
 
@@ -163,7 +163,7 @@ SELECT COUNT(*) FILTER (WHERE min_value IS NOT NULL OR max_value IS NOT NULL), B
 FROM ducklake_meta.ducklake_file_column_stats s
 JOIN ducklake_meta.ducklake_data_file f USING (data_file_id)
 WHERE s.table_id = (SELECT table_id FROM ducklake_meta.ducklake_table t WHERE table_name = 'null_tbl' AND NOT EXISTS (SELECT 1 FROM ducklake_meta.ducklake_table_visibility e WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot))
-  AND column_id = (SELECT column_id FROM ducklake_meta.ducklake_column WHERE column_name = 'n' AND end_snapshot IS NULL AND table_id = (SELECT table_id FROM ducklake_meta.ducklake_table t WHERE table_name = 'null_tbl' AND NOT EXISTS (SELECT 1 FROM ducklake_meta.ducklake_table_visibility e WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)))
+  AND column_id = (SELECT column_id FROM ducklake_meta.ducklake_column c WHERE column_name = 'n' AND NOT EXISTS (SELECT 1 FROM ducklake_meta.ducklake_column_visibility e WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id AND e.row_snapshot = c.begin_snapshot) AND table_id = (SELECT table_id FROM ducklake_meta.ducklake_table t WHERE table_name = 'null_tbl' AND NOT EXISTS (SELECT 1 FROM ducklake_meta.ducklake_table_visibility e WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)))
 ----
 0	true
 
@@ -171,7 +171,7 @@ query III
 SELECT contains_null::INTEGER, min_value, max_value
 FROM ducklake_meta.ducklake_table_column_stats
 WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table t WHERE table_name = 'null_tbl' AND NOT EXISTS (SELECT 1 FROM ducklake_meta.ducklake_table_visibility e WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot))
-  AND column_id = (SELECT column_id FROM ducklake_meta.ducklake_column WHERE column_name = 'n' AND end_snapshot IS NULL AND table_id = (SELECT table_id FROM ducklake_meta.ducklake_table t WHERE table_name = 'null_tbl' AND NOT EXISTS (SELECT 1 FROM ducklake_meta.ducklake_table_visibility e WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)))
+  AND column_id = (SELECT column_id FROM ducklake_meta.ducklake_column c WHERE column_name = 'n' AND NOT EXISTS (SELECT 1 FROM ducklake_meta.ducklake_column_visibility e WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id AND e.row_snapshot = c.begin_snapshot) AND table_id = (SELECT table_id FROM ducklake_meta.ducklake_table t WHERE table_name = 'null_tbl' AND NOT EXISTS (SELECT 1 FROM ducklake_meta.ducklake_table_visibility e WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)))
 ----
 1	NULL	NULL
 

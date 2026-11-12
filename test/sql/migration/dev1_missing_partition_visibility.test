@@ -1,0 +1,54 @@
+# name: test/sql/migration/dev1_missing_partition_visibility.test
+# description: a catalog whose partition specs lost their end column and the companion that replaced it cannot be healed
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, j INTEGER)
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (i)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 2)
+
+statement ok
+ALTER TABLE dl.t RESET PARTITIONED BY
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN j
+
+# the reset spec and the dropped column end in their companions
+query II
+SELECT (SELECT COUNT(*) FROM meta.ducklake_partition_visibility), (SELECT COUNT(*) FROM meta.ducklake_column_visibility)
+----
+1	1
+
+# the companion holds the only record of the reset, the spec rows keep their info suffix
+statement ok
+DROP TABLE meta.ducklake_partition_visibility
+
+statement ok
+DETACH dl
+
+# a read only attach cannot recreate the companion
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+attach it writable once
+
+# an empty companion would bring the reset spec back, so the writable attach refuses to heal
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+----
+Cannot heal this DuckLake catalog: the end snapshots of the catalog rows were dropped and the visibility rows that replaced them are missing

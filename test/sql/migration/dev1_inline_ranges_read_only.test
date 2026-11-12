@@ -82,6 +82,42 @@ statement ok
 DROP TABLE meta.ducklake_view_visibility
 
 statement ok
+ALTER TABLE meta.ducklake_column ADD COLUMN end_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_column DROP COLUMN branch_id
+
+statement ok
+DROP TABLE meta.ducklake_column_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_partition_info ADD COLUMN end_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_partition_info DROP COLUMN branch_id
+
+statement ok
+DROP TABLE meta.ducklake_partition_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_sort_info ADD COLUMN end_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_sort_info DROP COLUMN branch_id
+
+statement ok
+DROP TABLE meta.ducklake_sort_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_macro ADD COLUMN end_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_macro DROP COLUMN branch_id
+
+statement ok
+DROP TABLE meta.ducklake_macro_visibility
+
+statement ok
 DETACH dl
 
 # a read only attach cannot add the visibility tables and reads the ranges instead
@@ -138,14 +174,14 @@ SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_nam
 
 # and the version rows of the catalog tables into rows with a birth branch and a companion
 query II
-SELECT COUNT(*) FILTER (WHERE column_name = 'branch_id'), COUNT(*) FILTER (WHERE column_name = 'end_snapshot') FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name IN ('ducklake_schema', 'ducklake_table', 'ducklake_view')
+SELECT COUNT(*) FILTER (WHERE column_name = 'branch_id'), COUNT(*) FILTER (WHERE column_name = 'end_snapshot') FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name IN ('ducklake_schema', 'ducklake_table', 'ducklake_view', 'ducklake_column', 'ducklake_partition_info', 'ducklake_sort_info', 'ducklake_macro')
 ----
-3	0
+7	0
 
-query I
-SELECT COUNT(*) FROM meta.ducklake_table_visibility
+query III
+SELECT (SELECT COUNT(*) FROM meta.ducklake_table_visibility), (SELECT COUNT(*) FROM meta.ducklake_column_visibility), (SELECT COUNT(*) FROM meta.ducklake_macro_visibility)
 ----
-0
+0	0	0
 
 statement ok
 DETACH dl

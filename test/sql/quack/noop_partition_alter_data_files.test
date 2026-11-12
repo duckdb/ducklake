@@ -42,9 +42,9 @@ COMMIT;
 
 query I
 SELECT COUNT(*)
-FROM __ducklake_metadata_ducklake.ducklake_partition_info
+FROM __ducklake_metadata_ducklake.ducklake_partition_info p
 WHERE table_id = 1
-  AND end_snapshot IS NULL;
+  AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_partition_visibility e WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot);
 ----
 1
 

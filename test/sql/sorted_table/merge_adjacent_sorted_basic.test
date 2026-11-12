@@ -204,13 +204,19 @@ statement ok
 CALL ducklake_expire_snapshots('ducklake', older_than => now());
 
 # This should be empty now that there are no snapshots remaining that rely on this table
-query IIII
+query III
 SELECT
-si.sort_id, si.table_id, si.begin_snapshot, si.end_snapshot 
+si.sort_id, si.table_id, si.begin_snapshot
 FROM __ducklake_metadata_ducklake.ducklake_sort_info si
 WHERE 
 si.table_id = 1
 ----
+
+# the ends of the removed sort rows are gone with them
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_sort_visibility
+----
+0
 
 # This should be empty now that there are no snapshots remaining that rely on this table
 query IIIIIII

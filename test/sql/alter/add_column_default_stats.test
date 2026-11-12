@@ -139,7 +139,6 @@ FROM ducklake_meta.ducklake_table_column_stats s
 JOIN ducklake_meta.ducklake_table t USING (table_id)
 JOIN ducklake_meta.ducklake_column c USING (table_id, column_id)
 WHERE t.table_name = 't_del'
-  AND c.end_snapshot IS NULL
   AND c.column_name = 'b'
 ----
 5	5

@@ -53,13 +53,11 @@ x
 statement ok
 USE ducklake
 
-# Every scan of ducklake_column sent to Postgres has the snapshot filter of a loaded catalog
+# Every scan of ducklake_column sent to Postgres has the branch and snapshot filter of a loaded catalog
 query I
 SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
-	(SELECT bool_or(contains(query, printf('"begin_snapshot" <= %d AND ("end_snapshot" > %d OR "end_snapshot" IS NULL)',
-	                                       getvariable('latest'), getvariable('latest'))))
-	    AND bool_or(contains(query, printf('"begin_snapshot" <= %d AND ("end_snapshot" > %d OR "end_snapshot" IS NULL)',
-	                                       getvariable('with_x'), getvariable('with_x'))))
+	(SELECT bool_or(contains(query, printf('"branch_id" = 0 AND "begin_snapshot" <= %d', getvariable('latest'))))
+	    AND bool_or(contains(query, printf('"branch_id" = 0 AND "begin_snapshot" <= %d', getvariable('with_x'))))
 	    AND bool_and(contains(query, '"begin_snapshot" <= '))
 	 FROM (SELECT message AS query FROM duckdb_logs WHERE type = 'PostgresQueryLog') logs
 	 WHERE contains(query, '"ducklake_column" '))

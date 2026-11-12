@@ -329,6 +329,18 @@ public:
 	virtual string GetSchemaTableStatement();
 	virtual string GetTableTableStatement();
 	virtual string GetViewTableStatement();
+	virtual string GetColumnTableStatement();
+	virtual string GetPartitionInfoTableStatement();
+	virtual string GetMacroTableStatement();
+	virtual string GetSortInfoTableStatement();
+	//! A catalog table whose version rows end in a companion table, with the key columns naming an entity
+	struct RowVisibilityKind {
+		string kind;
+		vector<string> key_columns;
+	};
+	static const vector<RowVisibilityKind> &RowVisibilityKinds();
+	//! The row table of a kind, the partition and sort specs keep their info suffix
+	static string RowTableName(const string &kind);
 	//! The companion table holding the end events of the version rows of a catalog table
 	static string GetRowVisibilityTableStatement(const string &kind, const vector<string> &key_columns);
 	virtual string GetDataFileTableStatement();
@@ -446,7 +458,8 @@ public:
 	//! The rows that are stored, deleted ones included, and the rows that are live
 	static string GetInlinedRowCountsSql(const Identifier &inlined_table_name,
 	                                     const DuckLakeInlinedColNames &col_names);
-	static string GetTableColumnSchemaSql(TableIndex table_id);
+	//! The columns of the table at the snapshot, read through the chain from 2.0 on
+	static string GetTableColumnSchemaSql(TableIndex table_id, bool branch_aware, const DuckLakeBranchChain &chain);
 	static string GetInlinedTableNamesSql(TableIndex table_id);
 	//! The schema version rows are read through the chain from 2.0 on
 	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id, bool branch_aware,
@@ -481,7 +494,7 @@ public:
 	                                  const string &filter_column, const string &id_list);
 	static string DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags, bool branch_aware,
 	                        const DuckLakeBranchChain &chain);
-	static string DropMacros(const set<MacroIndex> &ids);
+	static string DropMacros(const set<MacroIndex> &ids, bool branch_aware, const DuckLakeBranchChain &chain);
 
 	//! Emits the INSERT for new schemas. Caller supplies resolved paths (one per schema, same order)
 	//! since path resolution depends on the catalog's data_path / separator (instance state).
@@ -496,7 +509,8 @@ public:
 	//! Emits the partition-key diff SQL. Caller supplies the existing partition state (fetched
 	//! via GetCatalogForSnapshot) since the diff is computed against it.
 	static string WriteNewPartitionKeys(const vector<DuckLakePartitionInfo> &existing_partitions,
-	                                    const vector<DuckLakePartitionInfo> &new_partitions);
+	                                    const vector<DuckLakePartitionInfo> &new_partitions, bool branch_aware,
+	                                    const DuckLakeBranchChain &chain);
 	//! Maps the id of a last new spec that equals the committed spec, which is not written, to the committed id
 	static unordered_map<idx_t, idx_t>
 	GetUnchangedPartitionIds(const vector<DuckLakePartitionInfo> &existing_partitions,
@@ -504,8 +518,10 @@ public:
 	//! Emits the sort-key diff SQL. Caller supplies the existing sort state (fetched via
 	//! GetCatalogForSnapshot) since the diff is computed against it.
 	static string WriteNewSortKeys(const vector<DuckLakeSortInfo> &existing_sorts,
-	                               const vector<DuckLakeSortInfo> &new_sorts);
-	static string WriteDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns);
+	                               const vector<DuckLakeSortInfo> &new_sorts, bool branch_aware,
+	                               const DuckLakeBranchChain &chain);
+	static string WriteDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns, bool branch_aware,
+	                                  const DuckLakeBranchChain &chain);
 	//! Formats a column set as a SQL list of (table_id, column_id) rows
 	static string WriteColumnIdPairs(const map<TableIndex, set<FieldIndex>> &columns);
 	//! Rewrite the bounds of committed files and tables written while a widened column was FLOAT
@@ -515,9 +531,9 @@ public:
 	static string WriteRefinedTimestampStats(const map<TableIndex, set<FieldIndex>> &refined_columns,
 	                                         idx_t next_file_id);
 	static string WriteExpiredColumnTags(const vector<DuckLakeDroppedColumn> &dropped_columns);
-	static string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns);
+	static string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns, bool branch_aware);
 	//! Columns added and dropped in the same commit, which begin and end in its snapshot
-	static string WriteDroppedNewColumns(const vector<DuckLakeNewColumn> &columns);
+	static string WriteDroppedNewColumns(const vector<DuckLakeNewColumn> &columns, bool branch_aware);
 	static string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);
 	static string WriteNewTableOptions(const vector<DuckLakeConfigOption> &new_options);
 	static string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags);
@@ -585,14 +601,15 @@ public:
 	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
 	//! Selects the given columns that a live data file of the table records values of, or holds the default of
 	static string GetColumnsWithRecordedValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
-	                                              bool branch_aware, const string &chain_predicate);
+	                                              bool branch_aware, const DuckLakeBranchChain &chain);
 	//! Selects the given columns that may hold values other than NULL in a live data file of the table
 	static string GetColumnsWithFileValuesSql(TableIndex table_id, const set<FieldIndex> &column_ids,
 	                                          const map<FieldIndex, idx_t> &null_default_columns, bool branch_aware,
 	                                          const string &chain_predicate);
 	//! Selects the versions of the given columns with their begin snapshot, whether their initial default is NULL and
 	//! whether they are top level columns
-	static string GetColumnDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids);
+	static string GetColumnDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids, bool branch_aware,
+	                                   const DuckLakeBranchChain &chain);
 	//! Selects the number of live inlined values of each check, the checks of a table are consecutive
 	static string GetInlinedValuesSql(const vector<DuckLakeInlinedValueCheck> &checks,
 	                                  const DuckLakeInlinedColNames &col_names);
@@ -609,7 +626,7 @@ public:
 	                                  const vector<DuckLakePath> &resolved_paths, bool write_row_group_count,
 	                                  bool write_visibility, bool include_branch_bookkeeping = true,
 	                                  const string &branch_root_caps = string());
-	static string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros);
+	static string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros, bool branch_aware);
 
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
 	static string WriteNewColumnMappings(const vector<DuckLakeColumnMappingInfo> &new_column_mappings);
@@ -707,6 +724,8 @@ public:
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	//! Deletes the metadata that only the deleted snapshots referenced, once the caller checked the catalog version
 	virtual void CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
+	//! Deletes the ends whose version row is gone
+	void DeleteOrphanRowEnds(const string &kind, const vector<string> &key_columns);
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	//! The tables with data files that are not dropped
 	unordered_set<idx_t> GetTablesWithLiveDataFiles();
@@ -798,6 +817,10 @@ public:
 	virtual void AddV2_0Dev1Additions();
 	//! The heal steps a versioned catalog table still needs, the branch column, the companion and the end column drop
 	struct RowVisibilityAdditions {
+		string kind;
+		vector<string> key_columns;
+		//! A missing row table is left to its reader, so no heal step is emitted for it
+		bool present = true;
 		bool branch_column = true;
 		bool visibility_table = true;
 		//! The end column is still present, read into the companion and then dropped
@@ -805,9 +828,10 @@ public:
 	};
 	//! Whether the version rows of a catalog table carry a birth branch and end in a companion
 	bool HasRowVisibilityShape(const string &kind);
-	RowVisibilityAdditions ProbeRowVisibilityAdditions(const string &kind);
-	static string RowVisibilityMigrationSql(const string &kind, const vector<string> &key_columns,
-	                                        const RowVisibilityAdditions &add);
+	//! Whether every versioned catalog table has that shape
+	bool HasRowVisibilityShapes();
+	RowVisibilityAdditions ProbeRowVisibilityAdditions(const RowVisibilityKind &kind);
+	static string RowVisibilityMigrationSql(const RowVisibilityAdditions &add);
 	//! The branch additions a dev catalog is missing, all of them for the 1.1 migration
 	struct V2_0Dev1Additions {
 		//! The snapshot tag table of 2.0 is created
@@ -845,10 +869,8 @@ public:
 		//! Backup tables of an interrupted rewrite, consumed and dropped
 		bool file_visibility_migration = false;
 		bool delete_file_visibility_migration = false;
-		//! The catalog tables whose version rows end in companion tables
-		RowVisibilityAdditions schema_rows;
-		RowVisibilityAdditions table_rows;
-		RowVisibilityAdditions view_rows;
+		//! The catalog tables whose version rows end in companion tables, one entry per kind
+		vector<RowVisibilityAdditions> row_additions;
 	};
 	V2_0Dev1Additions ProbeV2_0Dev1Additions();
 	void VerifyHealableV2_0Dev1(const V2_0Dev1Additions &missing);

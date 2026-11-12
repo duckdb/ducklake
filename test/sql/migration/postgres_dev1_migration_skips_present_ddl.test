@@ -105,6 +105,42 @@ CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_view DR
 statement ok
 CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_view_visibility')
 
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_column ADD COLUMN end_snapshot BIGINT')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_column DROP COLUMN branch_id')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_column_visibility')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_partition_info ADD COLUMN end_snapshot BIGINT')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_partition_info DROP COLUMN branch_id')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_partition_visibility')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_sort_info ADD COLUMN end_snapshot BIGINT')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_sort_info DROP COLUMN branch_id')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_sort_visibility')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_macro ADD COLUMN end_snapshot BIGINT')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_macro DROP COLUMN branch_id')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_macro_visibility')
+
 # the snapshot tables and the schema versions of a dev catalog carry no branch
 statement ok
 CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_snapshot DROP COLUMN branch_id')

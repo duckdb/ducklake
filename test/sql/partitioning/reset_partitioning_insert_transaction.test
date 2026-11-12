@@ -50,7 +50,7 @@ SELECT count(*) FILTER (WHERE partition_id IS NOT NULL), count(*) FILTER (WHERE 
 2	1
 
 query I
-SELECT count(*) FROM meta.ducklake_partition_info JOIN meta.ducklake_partition_column USING (partition_id) WHERE end_snapshot IS NULL
+SELECT count(*) FROM meta.ducklake_partition_info p JOIN meta.ducklake_partition_column USING (partition_id) WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_visibility e WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot)
 ----
 0
 

@@ -296,7 +296,7 @@ SELECT id, ts FROM evo_tbl ORDER BY id
 2	2021-06-01 00:00:00
 
 query II
-SELECT pc.transform, pi.end_snapshot IS NULL FROM ducklake_metadata.ducklake_partition_info pi JOIN ducklake_metadata.ducklake_partition_column pc USING (partition_id) WHERE pi.table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'evo_tbl') ORDER BY pi.partition_id
+SELECT pc.transform, NOT EXISTS (SELECT 1 FROM ducklake_metadata.ducklake_partition_visibility e WHERE e.partition_id = pi.partition_id AND e.row_branch_id = pi.branch_id AND e.row_snapshot = pi.begin_snapshot) FROM ducklake_metadata.ducklake_partition_info pi JOIN ducklake_metadata.ducklake_partition_column pc USING (partition_id) WHERE pi.table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'evo_tbl') ORDER BY pi.partition_id
 ----
 year	false
 epoch_year	true

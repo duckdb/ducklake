@@ -1,0 +1,257 @@
+# name: test/sql/migration/dev1_entity_rows_heal.test
+# description: the column, partition, sort and macro tables of an older dev build, ended in place and without companions, heal on a writable attach and are refused read only
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, j INTEGER)
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (i)
+
+statement ok
+ALTER TABLE dl.t SET SORTED BY (j)
+
+statement ok
+CREATE MACRO dl.add_one(x) AS x + 1
+
+statement ok
+INSERT INTO dl.t VALUES (1, 2)
+
+statement ok
+ALTER TABLE dl.t RENAME COLUMN j TO j2
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (j2)
+
+statement ok
+ALTER TABLE dl.t RESET SORTED BY
+
+statement ok
+DROP MACRO dl.add_one
+
+query II
+SELECT i, j2 FROM dl.t
+----
+1	2
+
+# the older dev build ended its rows in place and knew no birth branch
+statement ok
+ALTER TABLE meta.ducklake_column ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_column SET end_snapshot = e.snapshot_id FROM meta.ducklake_column_visibility e WHERE e.table_id = ducklake_column.table_id AND e.column_id = ducklake_column.column_id AND e.row_snapshot = ducklake_column.begin_snapshot
+
+statement ok
+DROP TABLE meta.ducklake_column_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_column DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_partition_info ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_partition_info SET end_snapshot = e.snapshot_id FROM meta.ducklake_partition_visibility e WHERE e.partition_id = ducklake_partition_info.partition_id AND e.row_snapshot = ducklake_partition_info.begin_snapshot
+
+statement ok
+DROP TABLE meta.ducklake_partition_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_partition_info DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_sort_info ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_sort_info SET end_snapshot = e.snapshot_id FROM meta.ducklake_sort_visibility e WHERE e.sort_id = ducklake_sort_info.sort_id AND e.row_snapshot = ducklake_sort_info.begin_snapshot
+
+statement ok
+DROP TABLE meta.ducklake_sort_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_sort_info DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_macro ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_macro SET end_snapshot = e.snapshot_id FROM meta.ducklake_macro_visibility e WHERE e.macro_id = ducklake_macro.macro_id AND e.row_snapshot = ducklake_macro.begin_snapshot
+
+statement ok
+DROP TABLE meta.ducklake_macro_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_macro DROP COLUMN branch_id
+
+statement ok
+DETACH dl
+
+# a read only attach cannot backfill the companions
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+attach it writable once
+
+# the writable attach heals the layout and reads the same catalog
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT column_name FROM (DESCRIBE dl.t)
+----
+i
+j2
+
+query II
+SELECT i, j2 FROM dl.t
+----
+1	2
+
+query I
+SELECT j FROM dl.t AT (VERSION => 5)
+----
+2
+
+statement error
+SELECT dl.main.add_one(1)
+----
+does not exist
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_column') ORDER BY column_index
+----
+column_id
+begin_snapshot
+table_id
+column_order
+column_name
+column_type
+initial_default
+default_value
+nulls_allowed
+parent_column
+default_value_type
+default_value_dialect
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_partition_info') ORDER BY column_index
+----
+partition_id
+table_id
+begin_snapshot
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_sort_info') ORDER BY column_index
+----
+sort_id
+table_id
+begin_snapshot
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_macro') ORDER BY column_index
+----
+schema_id
+macro_id
+macro_name
+begin_snapshot
+branch_id
+
+# the ends were rebuilt from the ranges
+query III
+SELECT c.column_name, e.row_snapshot, e.snapshot_id FROM meta.ducklake_column_visibility e JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id AND c.branch_id = e.row_branch_id AND c.begin_snapshot = e.row_snapshot
+----
+j	1	6
+
+query II
+SELECT e.row_snapshot, e.snapshot_id FROM meta.ducklake_partition_visibility e JOIN meta.ducklake_partition_info p ON p.partition_id = e.partition_id AND p.branch_id = e.row_branch_id AND p.begin_snapshot = e.row_snapshot
+----
+2	7
+
+# the rename of j rewrote the sort key, so the reset ended the rewritten sort
+query II
+SELECT e.row_snapshot, e.snapshot_id FROM meta.ducklake_sort_visibility e JOIN meta.ducklake_sort_info s ON s.sort_id = e.sort_id AND s.branch_id = e.row_branch_id AND s.begin_snapshot = e.row_snapshot ORDER BY e.row_snapshot
+----
+3	6
+6	8
+
+query III
+SELECT m.macro_name, e.row_snapshot, e.snapshot_id FROM meta.ducklake_macro_visibility e JOIN meta.ducklake_macro m ON m.macro_id = e.macro_id AND m.branch_id = e.row_branch_id AND m.begin_snapshot = e.row_snapshot
+----
+add_one	4	9
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name IN ('ducklake_column', 'ducklake_partition_info', 'ducklake_sort_info', 'ducklake_macro') AND column_name = 'end_snapshot'
+----
+0
+
+# the healed catalog commits
+statement ok
+INSERT INTO dl.t VALUES (3, 4)
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN i
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_column_visibility
+----
+2
+
+query I
+SELECT j2 FROM dl.t ORDER BY j2
+----
+2
+4
+
+# a heal interrupted after some of the ends were copied resumes with the rest
+statement ok
+ALTER TABLE meta.ducklake_column ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_column SET end_snapshot = e.snapshot_id FROM meta.ducklake_column_visibility e WHERE e.table_id = ducklake_column.table_id AND e.column_id = ducklake_column.column_id AND e.row_snapshot = ducklake_column.begin_snapshot
+
+statement ok
+DELETE FROM meta.ducklake_column_visibility WHERE column_id = (SELECT column_id FROM meta.ducklake_column WHERE column_name = 'i')
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+attach it writable once
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query III
+SELECT c.column_name, e.row_snapshot, e.snapshot_id FROM meta.ducklake_column_visibility e JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id AND c.branch_id = e.row_branch_id AND c.begin_snapshot = e.row_snapshot ORDER BY e.snapshot_id
+----
+j	1	6
+i	1	11
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_column' AND column_name = 'end_snapshot'
+----
+0
+
+query I
+SELECT column_name FROM (DESCRIBE dl.t)
+----
+j2
+
+statement ok
+DETACH dl

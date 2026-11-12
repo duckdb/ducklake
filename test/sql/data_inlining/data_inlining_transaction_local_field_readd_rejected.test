@@ -81,7 +81,7 @@ SELECT k FROM ducklake.t WHERE s.b = 8
 query III
 SELECT s.contains_null::BOOLEAN, s.min_value, s.max_value FROM ducklake_meta.ducklake_table_column_stats s
 JOIN ducklake_meta.ducklake_column c USING (table_id, column_id)
-WHERE c.column_name = 'b' AND c.end_snapshot IS NULL
+WHERE c.column_name = 'b' AND NOT EXISTS (SELECT 1 FROM ducklake_meta.ducklake_column_visibility e WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id AND e.row_snapshot = c.begin_snapshot)
 ----
 true	8	8
 

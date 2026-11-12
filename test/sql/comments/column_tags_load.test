@@ -29,7 +29,7 @@ statement ok
 INSERT INTO __ducklake_metadata_lake.ducklake_column_tag
 SELECT c.table_id, c.column_id, c.begin_snapshot, NULL, 'owner', 'maintenance'
 FROM __ducklake_metadata_lake.ducklake_column c JOIN __ducklake_metadata_lake.ducklake_table t USING (table_id)
-WHERE t.table_name = 'tagged' AND c.column_name = 'id' AND c.end_snapshot IS NULL
+WHERE t.table_name = 'tagged' AND c.column_name = 'id'
 
 statement ok
 DETACH lake

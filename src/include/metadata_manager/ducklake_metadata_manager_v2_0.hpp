@@ -26,6 +26,10 @@ public:
 	string GetSchemaTableStatement() override;
 	string GetTableTableStatement() override;
 	string GetViewTableStatement() override;
+	string GetColumnTableStatement() override;
+	string GetPartitionInfoTableStatement() override;
+	string GetMacroTableStatement() override;
+	string GetSortInfoTableStatement() override;
 	string GetDataFileTableStatement() override;
 	string GetDeleteFileTableStatement() override;
 	string GetInitialDataStatements() override;

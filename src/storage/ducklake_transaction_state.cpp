@@ -510,7 +510,7 @@ static bool UpdateNestedField(vector<DuckLakeColumnInfo> &fields, FieldIndex par
 			} else {
 				if (removed) {
 					removed->column_info = std::move(fields[i]);
-					removed->parent_idx = parent_id.index;
+					removed->parent_idx = parent_id.IsValid() ? optional_idx(parent_id.index) : optional_idx();
 				}
 				fields.erase(fields.begin() + i);
 			}
@@ -539,12 +539,37 @@ static bool UpdateNestedAddedField(NewTableInfo &result, const unordered_map<idx
 	return false;
 }
 
+//! Replaces or removes a field of a table the transaction creates, since it is written with that table
+static bool UpdateCreatedTableField(NewTableInfo &result, optional_idx created_table, FieldIndex field_id,
+                                    optional_ptr<const DuckLakeColumnInfo> replacement,
+                                    optional_ptr<DuckLakeNewColumn> removed = nullptr) {
+	if (!created_table.IsValid()) {
+		return false;
+	}
+	auto &table = result.new_tables[created_table.GetIndex()];
+	if (!UpdateNestedField(table.columns, FieldIndex(), field_id, replacement, removed)) {
+		return false;
+	}
+	if (removed) {
+		removed->table_id = table.id;
+	}
+	return true;
+}
+
 void CancelOrDropField(TableIndex table_id, FieldIndex field_id, bool readded, NewTableInfo &result,
-                       unordered_map<idx_t, idx_t> &txn_added_fields) {
+                       unordered_map<idx_t, idx_t> &txn_added_fields, optional_idx created_table) {
 	DuckLakeNewColumn nested_field;
 	if (UpdateNestedAddedField(result, txn_added_fields, field_id, nullptr, nested_field)) {
 		if (!readded) {
 			result.dropped_new_columns.push_back(std::move(nested_field));
+		}
+		return;
+	}
+	DuckLakeNewColumn created_field;
+	if (UpdateCreatedTableField(result, created_table, field_id, nullptr, created_field)) {
+		if (!readded) {
+			// files written in this transaction can hold the field id, so it stays taken like that of an added column
+			result.dropped_new_columns.push_back(std::move(created_field));
 		}
 		return;
 	}
@@ -582,7 +607,7 @@ void RenameEmittedEntry(vector<T> &entries, TableIndex remapped_id, const Identi
 }
 
 void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_info, NewTableInfo &result,
-                         unordered_map<idx_t, idx_t> &txn_added_fields) {
+                         unordered_map<idx_t, idx_t> &txn_added_fields, optional_idx created_table) {
 	auto &new_fields = change_info.new_fields;
 	auto is_readded = [&](const FieldIndex &field_id) {
 		return std::any_of(new_fields.begin(), new_fields.end(), [&](const DuckLakeNewColumn &new_col) {
@@ -591,13 +616,15 @@ void HandleChangedFields(TableIndex table_id, const ColumnChangeInfo &change_inf
 	};
 	unordered_set<idx_t> replaced_fields;
 	for (auto &new_col_info : change_info.new_fields) {
-		if (UpdateNestedAddedField(result, txn_added_fields, new_col_info.column_info.id, new_col_info.column_info)) {
+		if (UpdateNestedAddedField(result, txn_added_fields, new_col_info.column_info.id, new_col_info.column_info) ||
+		    UpdateCreatedTableField(result, created_table, new_col_info.column_info.id, new_col_info.column_info)) {
 			replaced_fields.insert(new_col_info.column_info.id.index);
 		}
 	}
 	for (auto &dropped_field_id : change_info.dropped_fields) {
 		if (!replaced_fields.count(dropped_field_id.index)) {
-			CancelOrDropField(table_id, dropped_field_id, is_readded(dropped_field_id), result, txn_added_fields);
+			CancelOrDropField(table_id, dropped_field_id, is_readded(dropped_field_id), result, txn_added_fields,
+			                  created_table);
 		}
 	}
 	for (auto &new_col_info : change_info.new_fields) {
@@ -1619,12 +1646,13 @@ void DuckLakeTransactionState::RemoveColumnsWithValues(TableIndex table_id, set<
                                                        const DuckLakeCommitContext &context) const {
 	// most columns with values are found without reading the statistics of each live file
 	RemoveReturnedColumns(DuckLakeMetadataManager::GetColumnsWithRecordedValuesSql(
-	                          table_id, columns, context.supports_v2_0_metadata, FileVisibilityChain(context)),
+	                          table_id, columns, context.supports_v2_0_metadata, context.commit_chain),
 	                      columns, context);
 	if (columns.empty()) {
 		return;
 	}
-	auto defaults = context.conflict_query_executor(DuckLakeMetadataManager::GetColumnDefaultsSql(table_id, columns));
+	auto defaults = context.conflict_query_executor(DuckLakeMetadataManager::GetColumnDefaultsSql(
+	    table_id, columns, context.supports_v2_0_metadata, context.commit_chain));
 	defaults->ThrowIfError("Failed to commit DuckLake transaction - failed to get the defaults of a table:");
 	// the snapshot each column with a NULL initial default was added in
 	map<FieldIndex, idx_t> null_default_columns;
@@ -1887,6 +1915,8 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 	// Used to decide whether a column is a newly added column in this transaction
 	// Maps from field_index.index to the index of the column in result.new_columns.
 	unordered_map<idx_t, idx_t> txn_added_fields;
+	// the index in result.new_tables of a table created in this transaction, whose columns are written with it
+	optional_idx created_table;
 
 	// traverse in reverse order
 	bool column_schema_change = false;
@@ -1961,16 +1991,17 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			auto committed_table_id = commit_state.GetTableId(table);
 
 			auto added_column = txn_added_fields.find(local_change.field_index.index);
+			auto column_info = table.GetColumnInfo(local_change.field_index);
 			if (added_column != txn_added_fields.end()) {
 				// a column added in this transaction is written with its fields
-				ReplaceQueuedField(result.new_columns[added_column->second].column_info,
-				                   table.GetColumnInfo(local_change.field_index));
-			} else {
+				ReplaceQueuedField(result.new_columns[added_column->second].column_info, column_info);
+			} else if (!UpdateCreatedTableField(result, created_table, local_change.field_index, column_info)) {
 				// drop the committed column and insert it with the updated info
-				CancelOrDropField(committed_table_id, local_change.field_index, true, result, txn_added_fields);
+				CancelOrDropField(committed_table_id, local_change.field_index, true, result, txn_added_fields,
+				                  created_table);
 				DuckLakeNewColumn new_col;
 				new_col.table_id = committed_table_id;
-				new_col.column_info = table.GetColumnInfo(local_change.field_index);
+				new_col.column_info = std::move(column_info);
 				txn_added_fields[local_change.field_index.index] = result.new_columns.size();
 				result.new_columns.push_back(std::move(new_col));
 			}
@@ -1984,7 +2015,8 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			// drop the indicated column
 			// note that in case of nested types we might be dropping multiple columns here
 			auto &changed_fields = table.GetChangedFields();
-			HandleChangedFields(commit_state.GetTableId(table), changed_fields, result, txn_added_fields);
+			HandleChangedFields(commit_state.GetTableId(table), changed_fields, result, txn_added_fields,
+			                    created_table);
 			for (auto &field_index : changed_fields.refined_timestamp_fields) {
 				commit_state.refined_timestamp_columns[commit_state.GetTableId(table)].insert(field_index);
 			}
@@ -2040,6 +2072,9 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			auto new_table = DuckLakeTransaction::GetNewTable(commit_state, table);
 			auto new_table_id = new_table.id;
 			result.new_tables.push_back(std::move(new_table));
+			if (local_change.type == LocalChangeType::CREATED) {
+				created_table = result.new_tables.size() - 1;
+			}
 
 			// remap the table in the commit state
 			commit_state.committed_tables.emplace(old_table_id, new_table_id);
@@ -2303,11 +2338,19 @@ static FloatWidenedBounds GetFloatBoundsToRewrite(DuckLakeCommitState &commit_st
 	if (column_pairs.empty()) {
 		return result;
 	}
+	// the version rows of the commit chain, the live ones are those not ended before the commit snapshot
+	string live = "c.end_snapshot IS NULL";
+	string chain_filter;
+	if (context.supports_v2_0_metadata) {
+		live = DuckLakeMetadataManager::RowVisibility(context.commit_chain, "c", "column", {"table_id", "column_id"},
+		                                              "{SNAPSHOT_ID}");
+		chain_filter = " AND (" + context.commit_chain.Predicate("c", "begin_snapshot") + ")";
+	}
 	auto query = StringUtil::Format(R"(
-SELECT table_id, column_id, column_type, end_snapshot
-FROM {METADATA_CATALOG}.ducklake_column WHERE (table_id, column_id) IN (%s))",
-	                                column_pairs);
-	auto query_result = context.query_metadata(query);
+SELECT c.table_id, c.column_id, c.column_type, %s
+FROM {METADATA_CATALOG}.ducklake_column c WHERE (c.table_id, c.column_id) IN (%s)%s)",
+	                                live, column_pairs, chain_filter);
+	auto query_result = context.query_metadata_with_snapshot(commit_state.commit_snapshot, query);
 	query_result->ThrowIfError("Failed to read column types before widening FLOAT bounds: ");
 	auto float_type = DuckLakeTypes::ToString(LogicalType::FLOAT);
 	map<TableIndex, set<FieldIndex>> live_float;
@@ -2317,7 +2360,7 @@ FROM {METADATA_CATALOG}.ducklake_column WHERE (table_id, column_id) IN (%s))",
 		auto field_index = FieldIndex(row.GetValue<idx_t>(1));
 		if (row.GetValue<string>(2) != float_type) {
 			older_type[table_id].insert(field_index);
-		} else if (row.IsNull(3)) {
+		} else if (row.GetValue<bool>(3)) {
 			live_float[table_id].insert(field_index);
 		}
 	}
@@ -2374,11 +2417,13 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	}
 
 	if (!dropped_scalar_macros.empty()) {
-		batch_queries += DuckLakeMetadataManager::DropMacros(dropped_scalar_macros);
+		batch_queries += DuckLakeMetadataManager::DropMacros(dropped_scalar_macros, context.supports_v2_0_metadata,
+		                                                     context.commit_chain);
 	}
 
 	if (!dropped_table_macros.empty()) {
-		batch_queries += DuckLakeMetadataManager::DropMacros(dropped_table_macros);
+		batch_queries += DuckLakeMetadataManager::DropMacros(dropped_table_macros, context.supports_v2_0_metadata,
+		                                                     context.commit_chain);
 	}
 	if (!dropped_schemas.empty()) {
 		set<SchemaIndex> dropped_schema_ids;
@@ -2460,7 +2505,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			    context.supports_v1_1_metadata, context.supports_v2_0_metadata, context.commit_chain);
 		}
 		batch_queries +=
-		    DuckLakeMetadataManager::WriteNewPartitionKeys(existing_catalog.partitions, result.new_partition_keys);
+		    DuckLakeMetadataManager::WriteNewPartitionKeys(existing_catalog.partitions, result.new_partition_keys,
+		                                                   context.supports_v2_0_metadata, context.commit_chain);
 		auto unchanged_partition_ids =
 		    DuckLakeMetadataManager::GetUnchangedPartitionIds(existing_catalog.partitions, result.new_partition_keys);
 		for (auto &partition_id : commit_state.committed_partition_ids) {
@@ -2478,7 +2524,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		}
 		batch_queries += DuckLakeMetadataManager::WriteFloatWidenedStats(float_bounds.widened, float_bounds.cleared,
 		                                                                 commit_snapshot.next_file_id);
-		batch_queries += DuckLakeMetadataManager::WriteDroppedColumns(result.dropped_columns);
+		batch_queries += DuckLakeMetadataManager::WriteDroppedColumns(
+		    result.dropped_columns, context.supports_v2_0_metadata, context.commit_chain);
 		// Truly dropped columns - i.e. not re-added under the same field id in this commit, as
 		// happens for RENAME/ALTER - also expire their committed column tags (GH #1310).
 		vector<DuckLakeDroppedColumn> expired_column_tags;
@@ -2493,19 +2540,21 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			}
 		}
 		batch_queries += DuckLakeMetadataManager::WriteExpiredColumnTags(expired_column_tags);
-		batch_queries += DuckLakeMetadataManager::WriteNewColumns(result.new_columns);
-		batch_queries += DuckLakeMetadataManager::WriteDroppedNewColumns(result.dropped_new_columns);
+		batch_queries += DuckLakeMetadataManager::WriteNewColumns(result.new_columns, context.supports_v2_0_metadata);
+		batch_queries +=
+		    DuckLakeMetadataManager::WriteDroppedNewColumns(result.dropped_new_columns, context.supports_v2_0_metadata);
 		batch_queries += WriteAddedFieldStats(result.added_fields, stats, context);
 		batch_queries += context.write_inlined_tables(commit_snapshot, result.new_inlined_data_tables,
 		                                              commit_state.replaced_inlined_tables);
-		batch_queries += DuckLakeMetadataManager::WriteNewSortKeys(existing_catalog.sorts, result.new_sort_keys);
+		batch_queries += DuckLakeMetadataManager::WriteNewSortKeys(
+		    existing_catalog.sorts, result.new_sort_keys, context.supports_v2_0_metadata, context.commit_chain);
 		new_tables_result = result.new_tables;
 		new_inlined_data_tables_result = result.new_inlined_data_tables;
 	}
 
 	if (!new_scalar_macros.empty() || !new_table_macros.empty()) {
 		auto result = GetNewMacros(commit_state, transaction_changes);
-		batch_queries += DuckLakeMetadataManager::WriteNewMacros(result.new_macros);
+		batch_queries += DuckLakeMetadataManager::WriteNewMacros(result.new_macros, context.supports_v2_0_metadata);
 	}
 
 	// write new name maps

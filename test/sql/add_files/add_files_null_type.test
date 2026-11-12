@@ -46,7 +46,7 @@ SELECT typeof(n), typeof(l), typeof(s) FROM ducklake.test LIMIT 1
 query IIII
 SELECT value_count, null_count, min_value, max_value
 FROM ducklake_meta.ducklake_file_column_stats
-WHERE column_id = (SELECT column_id FROM ducklake_meta.ducklake_column WHERE column_name = 'n' AND end_snapshot IS NULL)
+WHERE column_id = (SELECT column_id FROM ducklake_meta.ducklake_column c WHERE column_name = 'n' AND NOT EXISTS (SELECT 1 FROM ducklake_meta.ducklake_column_visibility e WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id AND e.row_snapshot = c.begin_snapshot))
 ----
 0	5	NULL	NULL
 

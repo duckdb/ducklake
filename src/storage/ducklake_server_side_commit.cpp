@@ -216,11 +216,16 @@ void DuckLakeServerSideCommit::ReadColumnTypes() {
 	if (table_ids.empty()) {
 		return;
 	}
-	auto query = StringUtil::Format("SELECT col.table_id, col.column_id, col.column_type "
-	                                "FROM %s.ducklake_column col "
-	                                "WHERE col.end_snapshot IS NULL "
-	                                "AND col.table_id IN (%s)",
-	                                schema_id, JoinIds(table_ids));
+	// the server commits on main, so the live columns are those of main at the transaction snapshot
+	auto query =
+	    SubstitutePlaceholders(StringUtil::Format("SELECT col.table_id, col.column_id, col.column_type "
+	                                              "FROM {METADATA_CATALOG}.ducklake_column col "
+	                                              "WHERE %s AND col.table_id IN (%s)",
+	                                              DuckLakeMetadataManager::RowFilter(
+	                                                  supports_v2_0_metadata, DuckLakeBranchChain::Main(), "col",
+	                                                  "column", {"table_id", "column_id"}, "{SNAPSHOT_ID}"),
+	                                              JoinIds(table_ids)),
+	                           transaction_snapshot);
 	auto result = RunQuery(query, "read column types");
 	for (auto &row : *result) {
 		column_types.emplace(make_pair(TableIndex(AsIdx(row, 0)), FieldIndex(AsIdx(row, 1))),
@@ -709,8 +714,9 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	};
 	ctx.get_table_column_schema = [this](TableIndex table_id) {
 		vector<DuckLakeColumnSchemaEntry> schema;
-		auto sql =
-		    SubstitutePlaceholders(DuckLakeMetadataManager::GetTableColumnSchemaSql(table_id), transaction_snapshot);
+		auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetTableColumnSchemaSql(
+		                                      table_id, supports_v2_0_metadata, DuckLakeBranchChain::Main()),
+		                                  transaction_snapshot);
 		auto result = RunQuery(sql, "read table column schema");
 		for (auto &row : *result) {
 			// parent_column IS NULL => top-level root; otherwise a nested leaf carrying its own leaf type.

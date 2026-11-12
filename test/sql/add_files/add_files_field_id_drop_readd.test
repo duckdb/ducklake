@@ -65,8 +65,8 @@ SELECT s FROM ducklake.test
 {'i': 2, 'j': 20}
 
 query TIT
-SELECT column_name, column_id, CASE WHEN end_snapshot IS NULL THEN 'live' ELSE 'dropped' END
-FROM metadata.ducklake_column
+SELECT column_name, column_id, CASE WHEN NOT EXISTS (SELECT 1 FROM metadata.ducklake_column_visibility e WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id AND e.row_snapshot = c.begin_snapshot) THEN 'live' ELSE 'dropped' END
+FROM metadata.ducklake_column c
 WHERE column_name = 'j'
 ORDER BY column_id
 ----

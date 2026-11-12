@@ -5,7 +5,7 @@
 #
 # Bug: When SET DEFAULT is applied multiple times to the same column within a single
 # transaction, the commit generates a drop+add pair for EACH alteration. This inserts
-# duplicate rows in ducklake_column (both with end_snapshot IS NULL), causing a
+# duplicate live rows in ducklake_column, causing a
 # "Column with name X already exists!" error on next table access.
 #
 
