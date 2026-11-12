@@ -325,6 +325,15 @@ public:
 	void ResetConfigOption(const DuckLakeConfigOption &option);
 
 	void SetCommitMessage(const DuckLakeSnapshotCommit &option);
+	//! The initial default of the column that the next ADD COLUMN or ADD FIELD adds, set by the REST server
+	void SetInitialDefault(Value value) {
+		initial_default = std::move(value);
+	}
+	Value TakeInitialDefault() {
+		Value result = std::move(initial_default);
+		initial_default = Value();
+		return result;
+	}
 
 	void CreateSnapshotTag(const string &name, idx_t snapshot_id, const Value &expires_at);
 	void DropSnapshotTag(const string &name);
@@ -518,6 +527,7 @@ private:
 	bool expired_in_metadata_transaction = false;
 	//! The files the metadata transaction removed from the deletion schedule
 	vector<DuckLakeFileForCleanup> cleaned_up_files;
+	Value initial_default;
 
 	atomic<idx_t> catalog_version;
 	mutex transaction_views_lock;

@@ -465,7 +465,6 @@ Request:
 | `snapshot_id` | `uint64` (optional) | The id of the snapshot. |
 | `commit_info` | [`CommitInfo`](#commitinfo) (optional) | The commit information of the snapshot. |
 | `retry` | [`RetryConfig`](#retryconfig) (optional) | How the server retries the commit on conflicts. |
-| `time_zone` | `string` (optional) | The time zone of the client session, in which the server casts the defaults of added columns. |
 | `requests` | list of `commit_request` (default `[]`) | The changes, applied in order, e.g. `[{"create_table": {...}}, {"insert_rows": {...}}]`. |
 
 Response:
@@ -770,6 +769,7 @@ The definition of a column in a catalog change.
 | `column_name` | `string` | The name of the column. |
 | `column_type` | `logical_type` | The type of the column. |
 | `default` | `string` (optional) | The default of the column, as a SQL expression. |
+| `initial_default` | `string` (optional) | The value for rows that exist before the column is added, cast to the column type. A client sends it when the default is a literal, in the time zone of its session, as the server does not know that zone. |
 | `comment` | `string` (optional) | The comment of the column. |
 | `not_null` | `bool` (default `false`) | Whether the column is `NOT NULL`. |
 

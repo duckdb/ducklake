@@ -349,6 +349,8 @@ JSONMutableValue DuckLakeRESTSerializer::Write(JSONWriter &writer, const RESTCol
 	result.Add("column_type", RESTWriteValue<RESTLogicalTypeCodec>(writer, value.column_type));
 	RESTWriteOptional<RESTStringCodec>(writer, result, "default", value.default_value,
 	                                   !RESTIsNull(value.default_value));
+	RESTWriteOptional<RESTStringCodec>(writer, result, "initial_default", value.initial_default,
+	                                   !RESTIsNull(value.initial_default));
 	RESTWriteOptional<RESTStringCodec>(writer, result, "comment", value.comment, !RESTIsNull(value.comment));
 	result.Add("not_null", RESTWriteValue<RESTBoolCodec>(writer, value.not_null));
 	return result;
@@ -361,6 +363,7 @@ RESTColumnDefinition DuckLakeRESTSerializer::Read(RESTJsonIn in) {
 	RESTReadValue<RESTStringCodec>(in.Get("column_name"), result.column_name);
 	RESTReadValue<RESTLogicalTypeCodec>(in.Get("column_type"), result.column_type);
 	RESTReadOptional<RESTStringCodec>(in, "default", result.default_value);
+	RESTReadOptional<RESTStringCodec>(in, "initial_default", result.initial_default);
 	RESTReadOptional<RESTStringCodec>(in, "comment", result.comment);
 	RESTReadOptional<RESTBoolCodec>(in, "not_null", result.not_null, false);
 	return result;
@@ -1975,7 +1978,6 @@ JSONMutableValue DuckLakeRESTSerializer::Write(JSONWriter &writer, const RESTCom
 	RESTWriteOptional<RESTObjectCodec<DuckLakeSnapshotCommit>>(writer, result, "commit_info", value.commit_info,
 	                                                           !RESTIsNull(value.commit_info));
 	RESTWriteOptional<RESTObjectCodec<RESTRetryConfig>>(writer, result, "retry", value.retry, !RESTIsNull(value.retry));
-	RESTWriteOptional<RESTStringCodec>(writer, result, "time_zone", value.time_zone, !RESTIsNull(value.time_zone));
 	result.Add("requests", RESTWriteValue<RESTListCodec<RESTCommitRequestCodec>>(writer, value.requests));
 	return result;
 }
@@ -1988,7 +1990,6 @@ RESTCommitTransactionRequest DuckLakeRESTSerializer::Read(RESTJsonIn in) {
 	RESTReadOptional<RESTUInt64Codec>(in, "snapshot_id", result.snapshot_id);
 	RESTReadOptional<RESTObjectCodec<DuckLakeSnapshotCommit>>(in, "commit_info", result.commit_info);
 	RESTReadOptional<RESTObjectCodec<RESTRetryConfig>>(in, "retry", result.retry);
-	RESTReadOptional<RESTStringCodec>(in, "time_zone", result.time_zone);
 	RESTReadOptional<RESTListCodec<RESTCommitRequestCodec>>(in, "requests", result.requests);
 	return result;
 }

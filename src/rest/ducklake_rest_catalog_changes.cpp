@@ -5,6 +5,8 @@
 #include "duckdb/parser/parsed_data/alter_table_info.hpp"
 #include "duckdb/parser/parsed_data/comment_on_column_info.hpp"
 #include "duckdb/parser/parser.hpp"
+#include "common/ducklake_util.hpp"
+#include "storage/ducklake_field_data.hpp"
 
 namespace duckdb {
 
@@ -31,7 +33,8 @@ static unique_ptr<ParsedExpression> ReadExpression(const string &expression) {
 	return Parser::GetBuiltinParser().ParseSingleExpression(expression);
 }
 
-RESTColumnDefinition DuckLakeRESTCatalogChanges::WriteColumn(const ColumnDefinition &column, bool not_null) {
+RESTColumnDefinition DuckLakeRESTCatalogChanges::WriteColumn(const ColumnDefinition &column, bool not_null,
+                                                             const Value &initial_default) {
 	RESTColumnDefinition result;
 	result.column_name = column.GetName().GetIdentifierName();
 	result.column_type = column.GetType();
@@ -41,8 +44,33 @@ RESTColumnDefinition DuckLakeRESTCatalogChanges::WriteColumn(const ColumnDefinit
 	if (!column.Comment().IsNull()) {
 		result.comment = column.Comment().ToString();
 	}
+	if (!initial_default.IsNull()) {
+		result.initial_default = initial_default.ToString();
+	}
 	result.not_null = not_null;
 	return result;
+}
+
+Value DuckLakeRESTCatalogChanges::GetInitialDefault(ClientContext &context, const ColumnDefinition &column) {
+	idx_t column_id = 0;
+	return DuckLakeFieldId::FieldIdFromColumn(column, column_id, context)->GetColumnData().initial_default;
+}
+
+Value DuckLakeRESTCatalogChanges::ReadInitialDefault(ClientContext &context, const RESTColumnDefinition &column) {
+	if (column.initial_default.has_value) {
+		return Value(column.initial_default.value).DefaultCastAs(column.column_type);
+	}
+	if (!column.default_value.empty()) {
+		auto expression = ReadExpression(column.default_value);
+		Value literal;
+		if (!DuckLakeUtil::TryGetLiteralValue(*expression, literal) &&
+		    DuckLakeUtil::TryGetLiteralValue(*expression, literal, context)) {
+			throw InvalidInputException("The default of column \"%s\" depends on the time zone, send the "
+			                            "initial_default of the column as well",
+			                            column.column_name);
+		}
+	}
+	return Value(column.column_type);
 }
 
 ColumnDefinition DuckLakeRESTCatalogChanges::ReadColumn(ClientContext &context, const RESTColumnDefinition &column) {
@@ -57,7 +85,7 @@ ColumnDefinition DuckLakeRESTCatalogChanges::ReadColumn(ClientContext &context, 
 	return result;
 }
 
-unique_ptr<RESTAlteration> DuckLakeRESTCatalogChanges::WriteAlter(const AlterInfo &info) {
+unique_ptr<RESTAlteration> DuckLakeRESTCatalogChanges::WriteAlter(ClientContext &context, const AlterInfo &info) {
 	switch (info.type) {
 	case AlterType::ALTER_TABLE: {
 		auto &alter = info.Cast<AlterTableInfo>();
@@ -84,7 +112,8 @@ unique_ptr<RESTAlteration> DuckLakeRESTCatalogChanges::WriteAlter(const AlterInf
 		case AlterTableType::ADD_COLUMN: {
 			auto &add = alter.Cast<AddColumnInfo>();
 			auto result = make_uniq<RESTAddColumn>();
-			result->column = WriteColumn(add.new_column, add.add_column_constraints.add_not_null);
+			result->column = WriteColumn(add.new_column, add.add_column_constraints.add_not_null,
+			                             GetInitialDefault(context, add.new_column));
 			result->if_not_exists = add.if_column_not_exists;
 			return std::move(result);
 		}
@@ -92,7 +121,7 @@ unique_ptr<RESTAlteration> DuckLakeRESTCatalogChanges::WriteAlter(const AlterInf
 			auto &add = alter.Cast<AddFieldInfo>();
 			auto result = make_uniq<RESTAddField>();
 			result->column_path = WritePath(add.column_path);
-			result->field = WriteColumn(add.new_field, false);
+			result->field = WriteColumn(add.new_field, false, GetInitialDefault(context, add.new_field));
 			result->if_not_exists = add.if_field_not_exists;
 			return std::move(result);
 		}

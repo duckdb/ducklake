@@ -977,6 +977,11 @@ structure ColumnDefinition {
     @cppMember("default_value")
     default: String
 
+    /// The value for rows that exist before the column is added, cast to the column type. A client sends it when the
+    /// default is a literal, in the time zone of its session, as the server does not know that zone.
+    @cppType("RESTOptional<string>")
+    initial_default: String
+
     /// The comment of the column.
     @cppType("RESTOptional<string>")
     comment: String

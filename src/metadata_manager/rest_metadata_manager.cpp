@@ -860,8 +860,9 @@ void RESTMetadataManager::OnCreateTable(DuckLakeSchemaEntry &schema, const Creat
 		// fail with the error of a commit to a metadata database, rather than on a type the server cannot parse
 		DuckLakeTypes::ToString(column.GetType());
 		DuckLakeTypes::CheckSupportedType(column.GetType(), version);
+		auto &initial_default = table.GetFieldData().GetByRootIndex(column.Physical()).GetColumnData().initial_default;
 		request.columns.push_back(
-		    DuckLakeRESTCatalogChanges::WriteColumn(column, not_null_fields.count(column.Name()) > 0));
+		    DuckLakeRESTCatalogChanges::WriteColumn(column, not_null_fields.count(column.Name()) > 0, initial_default));
 	}
 	for (auto &key : info.partition_keys) {
 		request.partitioned_by.push_back(key->ToString());
@@ -941,7 +942,8 @@ void RESTMetadataManager::OnAlterEntry(CatalogEntry &entry, const AlterInfo &inf
 	} else {
 		request.entry_id = ToRequestId(entry.Cast<DuckLakeViewEntry>().GetViewId().index);
 	}
-	request.alter = DuckLakeRESTCatalogChanges::WriteAlter(info);
+	auto context = transaction.context.lock();
+	request.alter = DuckLakeRESTCatalogChanges::WriteAlter(*context, info);
 }
 
 void RESTMetadataManager::OnDropEntry(CatalogEntry &entry) {
@@ -1141,10 +1143,6 @@ void RESTMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tran
 	request.retry->retry_wait_ms = retry_config.retry_wait_ms;
 	request.retry->retry_backoff = retry_config.retry_backoff;
 	auto context = flush_transaction.context.lock();
-	Value time_zone;
-	if (context && context->TryGetCurrentSetting("TimeZone", time_zone)) {
-		request.time_zone = time_zone.ToString();
-	}
 	RESTCommitTransactionResponse response;
 	try {
 		response = GetClient().CommitTransaction(request);

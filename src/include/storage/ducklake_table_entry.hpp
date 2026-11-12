@@ -246,7 +246,7 @@ public:
 	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change);
 	// ! Create a DuckLakeTableEntry from an ADD COLUMN, the context reads the default of the existing rows
 	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change,
-	                   ClientContext &context);
+	                   ClientContext &context, const Value &initial_default = Value());
 	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, SetDefaultLocalChange local_change,
 	                   ClientContext &context);
 

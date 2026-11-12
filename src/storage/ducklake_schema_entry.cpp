@@ -113,7 +113,7 @@ optional_ptr<CatalogEntry>
 DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction, BoundCreateTableInfo &info, string table_uuid,
                                          string table_data_path, unique_ptr<DuckLakePartition> prebuilt_partition_data,
                                          unique_ptr<DuckLakeSort> prebuilt_sort_data,
-                                         map<string, string> prebuilt_table_options) {
+                                         map<string, string> prebuilt_table_options, vector<Value> initial_defaults) {
 	auto &duck_transaction = transaction.transaction->Cast<DuckLakeTransaction>();
 	auto &base_info = info.Base();
 	// check if we have an existing entry with this name
@@ -124,7 +124,8 @@ DuckLakeSchemaEntry::CreateTableExtended(CatalogTransaction transaction, BoundCr
 	auto table_id = TableIndex(duck_transaction.GetLocalCatalogId());
 	// generate field ids based on the column ids
 	idx_t column_id = 1;
-	auto field_data = DuckLakeFieldData::FromColumns(base_info.columns, column_id, transaction.GetContext());
+	auto field_data =
+	    DuckLakeFieldData::FromColumns(base_info.columns, column_id, transaction.GetContext(), initial_defaults);
 	vector<DuckLakeInlinedTableInfo> inlined_tables;
 	auto table_entry = make_uniq<DuckLakeTableEntry>(ParentCatalog(), *this, base_info, table_id, std::move(table_uuid),
 	                                                 std::move(table_data_path), std::move(field_data), column_id,

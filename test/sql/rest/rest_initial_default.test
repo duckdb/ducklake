@@ -1,0 +1,47 @@
+# name: test/sql/rest/rest_initial_default.test
+# description: A REST client sends the initial default of a literal default, as the server does not know its time zone
+# group: [rest]
+
+require json
+
+require icu
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+statement ok
+SET TimeZone = 'America/Los_Angeles'
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+# the existing rows get the instant of the time zone of the client
+statement ok
+ALTER TABLE dl.t ADD COLUMN c TIMESTAMPTZ DEFAULT '2024-01-01 00:00:00'
+
+query I
+SELECT c = TIMESTAMPTZ '2024-01-01 08:00:00+00' FROM dl.t
+----
+true
+
+# a default that depends on the time zone needs the initial default of the client
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"create_table": {"placeholder_id": -1, "schema_id": 0, "table_name": "u", "columns": [{"column_name": "c", "column_type": {"id": "timestamptz"}, "default": "CAST(''2024-01-01 00:00:00'' AS TIMESTAMPTZ)"}]}}]}')
+----
+400	The default of column "c" depends on the time zone, send the initial_default of the column as well
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"create_table": {"placeholder_id": -1, "schema_id": 0, "table_name": "u", "columns": [{"column_name": "c", "column_type": {"id": "timestamptz"}, "default": "CAST(''2024-01-01 00:00:00'' AS TIMESTAMPTZ)", "initial_default": "2024-01-01 08:00:00+00"}]}}]}')
+----
+200
+
+# defaults that do not depend on the time zone need none
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"create_table": {"placeholder_id": -1, "schema_id": 0, "table_name": "v", "columns": [{"column_name": "j", "column_type": {"id": "int64"}, "default": "42"}]}}]}')
+----
+200

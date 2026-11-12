@@ -175,12 +175,12 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 
 // ALTER TABLE ADD COLUMN
 DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change,
-                                       ClientContext &context)
+                                       ClientContext &context, const Value &initial_default)
     : DuckLakeTableEntry(parent, info, local_change) {
 	LogicalIndex new_col_idx(columns.LogicalColumnCount() - 1);
 	auto &new_col = GetColumn(new_col_idx);
 	idx_t next_col = next_column_id.GetIndex();
-	field_data = DuckLakeFieldData::AddColumn(*field_data, new_col, next_col, context);
+	field_data = DuckLakeFieldData::AddColumn(*field_data, new_col, next_col, context, initial_default);
 	next_column_id = next_col;
 }
 
@@ -873,7 +873,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 	CheckSupportedType(info.new_column.Type());
 
 	RequireNextColumnId(transaction);
-	auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::ADD_COLUMN, context);
+	auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::ADD_COLUMN, context,
+	                                               transaction.TakeInitialDefault());
 
 	if (transaction.HasTransactionInlinedData(GetTableId())) {
 		auto &new_table = new_entry->Cast<DuckLakeTableEntry>();
@@ -1249,7 +1250,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 
 	// generate a new field id for the column
 	auto next_field_id = next_column_id.GetIndex();
-	auto child_field_id = DuckLakeFieldId::FieldIdFromColumn(info.new_field, next_field_id, context.get());
+	auto child_field_id = DuckLakeFieldId::FieldIdFromColumn(info.new_field, next_field_id, context.get(), false,
+	                                                         transaction.TakeInitialDefault());
 	next_column_id = next_field_id;
 
 	ValidateAddedFieldsCanSkipStats(parent_id, *child_field_id);

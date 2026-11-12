@@ -50,7 +50,8 @@ public:
 	                                               string table_uuid, string table_data_path,
 	                                               unique_ptr<DuckLakePartition> prebuilt_partition_data = nullptr,
 	                                               unique_ptr<DuckLakeSort> prebuilt_sort_data = nullptr,
-	                                               map<string, string> prebuilt_table_options = {});
+	                                               map<string, string> prebuilt_table_options = {},
+	                                               vector<Value> initial_defaults = {});
 	//! Data path for a new table in this schema, derived from the schema path, table name and uuid
 	string GenerateTableDataPath(const string &table_uuid, const string &table_name) const;
 	unique_ptr<CreateInfo> GetInfo() const override;

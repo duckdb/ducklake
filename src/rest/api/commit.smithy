@@ -23,9 +23,6 @@ operation CommitTransaction {
         /// How the server retries the commit on conflicts.
         retry: RetryConfig
 
-        /// The time zone of the client session, in which the server casts the defaults of added columns.
-        time_zone: String
-
         /// The changes, applied in order, e.g. `[{"create_table": {...}}, {"insert_rows": {...}}]`.
         requests: CommitRequestList = []
     }

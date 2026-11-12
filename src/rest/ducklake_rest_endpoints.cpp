@@ -1002,8 +1002,10 @@ void DuckLakeRESTCommit::CreateTable(RESTCreateTableRequest &parameters) {
 	auto schema_path = GetSchemaPath(parameters.schema_id);
 	auto &schema = GetSchema(schema_path);
 	auto info = make_uniq<CreateTableInfo>(schema, Identifier(parameters.table_name));
+	vector<Value> initial_defaults;
 	for (auto &column : parameters.columns) {
 		auto logical_index = LogicalIndex(info->columns.LogicalColumnCount());
+		initial_defaults.push_back(DuckLakeRESTCatalogChanges::ReadInitialDefault(context, column));
 		info->columns.AddColumn(DuckLakeRESTCatalogChanges::ReadColumn(context, column));
 		if (column.not_null) {
 			info->constraints.push_back(make_uniq<NotNullConstraint>(logical_index));
@@ -1028,7 +1030,7 @@ void DuckLakeRESTCommit::CreateTable(RESTCreateTableRequest &parameters) {
 		path = schema.GenerateTableDataPath(uuid, bound_info.Base().GetTableName().GetIdentifierName());
 	}
 	auto entry = schema.CreateTableExtended(catalog.GetCatalogTransaction(context), bound_info, std::move(uuid),
-	                                        std::move(path));
+	                                        std::move(path), nullptr, nullptr, {}, std::move(initial_defaults));
 	if (!entry) {
 		// LCOV_EXCL_START
 		// a conflict throws, as the request has no IF NOT EXISTS
@@ -1080,6 +1082,18 @@ void DuckLakeRESTCommit::CreateMacro(RESTCreateMacroRequest &parameters) {
 	}
 }
 
+//! The initial default of the column or field that an alteration adds, NULL for other alterations
+static Value GetAddedInitialDefault(ClientContext &context, const RESTAlteration &alteration) {
+	switch (alteration.type) {
+	case RESTAlterationType::ADD_COLUMN:
+		return DuckLakeRESTCatalogChanges::ReadInitialDefault(context, alteration.Cast<RESTAddColumn>().column);
+	case RESTAlterationType::ADD_FIELD:
+		return DuckLakeRESTCatalogChanges::ReadInitialDefault(context, alteration.Cast<RESTAddField>().field);
+	default:
+		return Value();
+	}
+}
+
 void DuckLakeRESTCommit::Alter(RESTAlterRequest &parameters) {
 	auto &name = GetEntryName(parameters.entry_id);
 	if (name.type != CatalogType::TABLE_ENTRY && name.type != CatalogType::VIEW_ENTRY) {
@@ -1087,7 +1101,9 @@ void DuckLakeRESTCommit::Alter(RESTAlterRequest &parameters) {
 	}
 	AlterEntryData entry(GetEntryQualifiedName(name.schema_path, name.name), OnEntryNotFound::THROW_EXCEPTION);
 	auto info = DuckLakeRESTCatalogChanges::ReadAlter(context, *parameters.alter, entry);
+	transaction.SetInitialDefault(GetAddedInitialDefault(context, *parameters.alter));
 	catalog.Alter(context, *info);
+	transaction.SetInitialDefault(Value());
 	if (parameters.alter->type == RESTAlterationType::RENAME_TABLE) {
 		name.name = parameters.alter->Cast<RESTRenameTable>().new_name;
 	} else if (parameters.alter->type == RESTAlterationType::RENAME_VIEW) {
@@ -1317,11 +1333,6 @@ RESTCommitTransactionResponse DuckLakeRESTCommit::Run(const RESTCommitTransactio
 	}
 	if (parameters.commit_info) {
 		transaction.SetCommitMessage(*parameters.commit_info);
-	}
-	Value server_time_zone;
-	if (!parameters.time_zone.empty() && context.TryGetCurrentSetting("TimeZone", server_time_zone)) {
-		// the defaults of added columns are cast in the time zone of the client
-		request.connection.Query("SET TimeZone = " + SQLString::ToString(parameters.time_zone))->ThrowIfError();
 	}
 	auto &requests = parameters.requests;
 	for (idx_t i = 0; i < requests.size(); i++) {

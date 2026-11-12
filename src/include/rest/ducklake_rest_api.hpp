@@ -651,6 +651,8 @@ struct RESTColumnDefinition {
 	LogicalType column_type;
 	//! The default of the column, as a SQL expression.
 	string default_value;
+	//! The value for rows that exist before the column is added, cast to the column type. A client sends it when the
+	RESTOptional<string> initial_default;
 	//! The comment of the column.
 	RESTOptional<string> comment;
 	//! Whether the column is `NOT NULL`.
@@ -1184,8 +1186,6 @@ struct RESTCommitTransactionRequest : public RESTSnapshotReference {
 	unique_ptr<DuckLakeSnapshotCommit> commit_info;
 	//! How the server retries the commit on conflicts.
 	unique_ptr<RESTRetryConfig> retry;
-	//! The time zone of the client session, in which the server casts the defaults of added columns.
-	string time_zone;
 	//! The changes, applied in order, e.g. `[{"create_table": {...}}, {"insert_rows": {...}}]`.
 	vector<unique_ptr<RESTCommitRequest>> requests;
 };
