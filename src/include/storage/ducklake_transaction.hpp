@@ -215,8 +215,11 @@ public:
 
 	//! Keep a schema cache entry alive for as long as this transaction lives. Transaction-local catalog entries hold
 	//! bare references into the cached catalog set, and those references are read again at commit time, so the entry
-	//! must not be evicted from the ObjectCache in between.
-	void PinSchemaCacheEntry(shared_ptr<DuckLakeSchemaCacheEntry> entry);
+	//! must not be evicted from the ObjectCache in between. Returns the entry already pinned for the key, if any.
+	shared_ptr<DuckLakeSchemaCacheEntry> PinSchemaCacheEntry(const string &key,
+	                                                         shared_ptr<DuckLakeSchemaCacheEntry> entry);
+	//! The schema cache entry pinned for the key, if any
+	shared_ptr<DuckLakeSchemaCacheEntry> GetPinnedSchemaCacheEntry(const string &key);
 
 	DuckLakeSnapshot GetSnapshot();
 	DuckLakeSnapshot GetSnapshot(optional_ptr<BoundAtClause> at_clause,
