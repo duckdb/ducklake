@@ -18,12 +18,12 @@ CREATE TABLE dl.t AS SELECT 42 AS i
 
 # the first statement of the migration ran before the run stopped
 statement ok
-CREATE TABLE meta.ducklake_snapshot_tag(tag_name VARCHAR, snapshot_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, expires_at TIMESTAMPTZ)
+CREATE TABLE meta.ducklake_snapshot_tag(tag_name VARCHAR, snapshot_id BIGINT, begin_snapshot BIGINT, expires_at TIMESTAMPTZ, snapshot_branch_id BIGINT DEFAULT 0, branch_id BIGINT DEFAULT 0)
 
 statement ok
 DETACH dl
 
-# the migration skips the table it finds
+# the migration skips the table it finds and adds its companion, since the table holds no row the ends are complete
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
 
@@ -32,10 +32,10 @@ SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
 2.0-dev1
 
-query I
-SELECT COUNT(*) FROM meta.ducklake_snapshot_tag
+query II
+SELECT (SELECT COUNT(*) FROM meta.ducklake_snapshot_tag), (SELECT COUNT(*) FROM meta.ducklake_snapshot_tag_visibility)
 ----
-0
+0	0
 
 query IIII
 SELECT branch_id, branch_name, parent_id, parent_branch_snapshot FROM meta.ducklake_branch

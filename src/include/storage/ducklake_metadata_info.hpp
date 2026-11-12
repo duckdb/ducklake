@@ -333,10 +333,13 @@ struct DuckLakeBranchInfo {
 struct DuckLakeSnapshotTagInfo {
 	string name;
 	idx_t snapshot_id;
-	//! NULL when the tagged snapshot is gone
+	//! The branch of the tagged snapshot
+	idx_t snapshot_branch_id = 0;
+	//! NULL when the tagged snapshot is gone or outside the view of the attached branch
 	Value snapshot_time;
-	//! The snapshot that created the tag, unset until its transaction commits
+	//! The snapshot that created the tag, unset until its transaction commits, and the branch of that snapshot
 	optional_idx created_snapshot_id;
+	idx_t created_branch_id = 0;
 	//! NULL when the tag does not expire
 	Value expires_at = Value(LogicalType::TIMESTAMP_TZ);
 };

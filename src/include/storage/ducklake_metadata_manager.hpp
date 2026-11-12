@@ -333,6 +333,9 @@ public:
 	virtual string GetPartitionInfoTableStatement();
 	virtual string GetMacroTableStatement();
 	virtual string GetSortInfoTableStatement();
+	virtual string GetTagTableStatement();
+	virtual string GetColumnTagTableStatement();
+	virtual string GetViewColumnTagTableStatement();
 	//! A catalog table whose version rows end in a companion table, with the key columns naming an entity
 	struct RowVisibilityKind {
 		string kind;
@@ -341,6 +344,10 @@ public:
 	static const vector<RowVisibilityKind> &RowVisibilityKinds();
 	//! The row table of a kind, the partition and sort specs keep their info suffix
 	static string RowTableName(const string &kind);
+	//! The type of a key column, the tag keys and names are text
+	static string RowKeyType(const string &key);
+	//! Matches a key column of two aliases, text keys compare byte for byte like the tag writers
+	static string RowKeyMatch(const string &left, const string &right, const string &key);
 	//! The companion table holding the end events of the version rows of a catalog table
 	static string GetRowVisibilityTableStatement(const string &kind, const vector<string> &key_columns);
 	virtual string GetDataFileTableStatement();
@@ -480,6 +487,9 @@ public:
 	virtual vector<DuckLakeFileForCleanup> GetFilesForCleanup(const string &filter, CleanupType type);
 
 	virtual void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files);
+	//! The chain predicate over a snapshot column, capped by the read snapshot unless that is empty
+	static string ChainView(const DuckLakeBranchChain &chain, const string &prefix, const string &snapshot_column,
+	                        const string &read_snapshot);
 	//! The version rows of a catalog table born in the chain view at the read snapshot and not ended in it
 	static string RowVisibility(const DuckLakeBranchChain &chain, const string &alias, const string &kind,
 	                            const vector<string> &key_columns, const string &read_snapshot);
@@ -546,14 +556,19 @@ public:
 	//! Clear the bounds of added files of the columns retyped to a finer timestamp unit, and of their tables
 	static string WriteRefinedTimestampStats(const map<TableIndex, set<FieldIndex>> &refined_columns,
 	                                         idx_t next_file_id);
-	static string WriteExpiredColumnTags(const vector<DuckLakeDroppedColumn> &dropped_columns);
+	static string WriteExpiredColumnTags(const vector<DuckLakeDroppedColumn> &dropped_columns, bool branch_aware,
+	                                     const DuckLakeBranchChain &chain);
 	static string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns, bool branch_aware);
 	//! Columns added and dropped in the same commit, which begin and end in its snapshot
 	static string WriteDroppedNewColumns(const vector<DuckLakeNewColumn> &columns, bool branch_aware);
-	static string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);
+	//! A new tag value writes a version row and ends the one it overwrites in the same commit
+	static string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags, bool branch_aware,
+	                           const DuckLakeBranchChain &chain);
 	static string WriteNewTableOptions(const vector<DuckLakeConfigOption> &new_options);
-	static string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags);
-	static string WriteNewViewColumnTags(const vector<DuckLakeViewColumnTagInfo> &new_tags);
+	static string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags, bool branch_aware,
+	                                 const DuckLakeBranchChain &chain);
+	static string WriteNewViewColumnTags(const vector<DuckLakeViewColumnTagInfo> &new_tags, bool branch_aware,
+	                                     const DuckLakeBranchChain &chain);
 	//! SQL that writes new data files, shared with the server-side commit path. Returns SQL with
 	//! {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders. Caller supplies resolved paths (one per file,
 	//! same order) since path policy differs across callers (schema-relative vs. always-absolute).
@@ -724,16 +739,17 @@ public:
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const string &filter = string());
 	//! The snapshots in the column order of ducklake_snapshots, then next_file_id
 	unique_ptr<QueryResult> ReadSnapshots(const string &filter);
-	//! The live snapshot tags, with the times of their snapshots if requested
+	//! The snapshot tags born in the view of the attached branch, with the times of their snapshots if requested
 	virtual vector<DuckLakeSnapshotTagInfo> GetSnapshotTags(bool with_snapshot_time = true);
-	//! The snapshot of the live snapshot tag with the name, if any
-	optional_idx GetTaggedSnapshot(const string &name);
+	//! The live snapshot tag with the name, if any
+	unique_ptr<DuckLakeSnapshotTagInfo> GetTaggedSnapshot(const string &name);
 	//! The snapshot id of a VERSION value, a snapshot id or the name of a snapshot tag
 	idx_t ResolveSnapshotVersion(const Value &version);
 	static string WriteSnapshotTagChanges(const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &created,
-	                                      const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped);
+	                                      const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped,
+	                                      const DuckLakeBranchChain &chain);
 	//! Ends the row of a committed tag at the snapshot of the commit
-	static string EndSnapshotTagSql(const DuckLakeSnapshotTagInfo &tag);
+	static string EndSnapshotTagSql(const DuckLakeSnapshotTagInfo &tag, const DuckLakeBranchChain &chain);
 	//! The branch id is a placeholder in a commit batch and a literal where no snapshot substitutes it
 	static string DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots, bool branch_aware,
 	                                 const string &branch_id = "{BRANCH_ID}");
@@ -768,7 +784,7 @@ public:
 	vector<pair<idx_t, idx_t>> LoadBranchRootCaps();
 	//! The root caps rendered as VALUES rows (branch_id, root_cap), empty without such branches
 	static string BranchRootCapValues(const vector<pair<idx_t, idx_t>> &root_caps);
-	//! The snapshots of a branch that an expiry keeps, the caps other branches read it up to and its head
+	//! The snapshots of a branch an expiry keeps, its head, the forks of other branches and the targets of their tags
 	set<idx_t> GetBranchProtectedSnapshots(idx_t branch_id);
 	string FileVisibilityGuard(const string &visibility_table, const string &file_id_column, const string &alias = "f",
 	                           bool include_inherited = true);
@@ -843,10 +859,14 @@ public:
 		//! A missing row table is left to its reader, so no heal step is emitted for it
 		bool present = true;
 		bool branch_column = true;
+		//! The snapshot tags gain the branch of the tagged snapshot
+		bool target_branch_column = false;
 		bool visibility_table = true;
 		//! The end column is still present, read into the companion and then dropped
 		bool drop_end = true;
 	};
+	//! Whether a metadata table holds a row
+	bool TableHasRows(const string &table);
 	//! Whether the version rows of a catalog table carry a birth branch and end in a companion
 	bool HasRowVisibilityShape(const string &kind);
 	//! Whether every versioned catalog table has that shape

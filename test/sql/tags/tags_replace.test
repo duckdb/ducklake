@@ -45,7 +45,7 @@ SELECT snapshot_id, changes FROM ducklake_snapshots('dl') WHERE snapshot_id IN (
 
 # the old row ends where the new one begins
 query IIII
-SELECT tag_name, snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_snapshot_tag ORDER BY begin_snapshot
+SELECT t.tag_name, t.snapshot_id, t.begin_snapshot, e.snapshot_id FROM meta.ducklake_snapshot_tag t LEFT JOIN meta.ducklake_snapshot_tag_visibility e ON e.tag_name = t.tag_name AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot ORDER BY t.begin_snapshot
 ----
 release	2	4	6
 release	5	6	NULL
@@ -320,7 +320,7 @@ statement ok
 CALL ducklake_replace_tag('dl', 'release', version => 4)
 
 query III
-SELECT snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_snapshot_tag WHERE tag_name = 'release' AND begin_snapshot >= 13 ORDER BY begin_snapshot
+SELECT t.snapshot_id, t.begin_snapshot, e.snapshot_id FROM meta.ducklake_snapshot_tag t LEFT JOIN meta.ducklake_snapshot_tag_visibility e ON e.tag_name = t.tag_name AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot WHERE t.tag_name = 'release' AND t.begin_snapshot >= 13 ORDER BY t.begin_snapshot
 ----
 4	13	15
 4	15	NULL
@@ -349,7 +349,7 @@ statement ok
 COMMIT
 
 query III
-SELECT snapshot_id, begin_snapshot, end_snapshot FROM meta.ducklake_snapshot_tag WHERE tag_name = 'release' AND begin_snapshot >= 15 ORDER BY begin_snapshot
+SELECT t.snapshot_id, t.begin_snapshot, e.snapshot_id FROM meta.ducklake_snapshot_tag t LEFT JOIN meta.ducklake_snapshot_tag_visibility e ON e.tag_name = t.tag_name AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot WHERE t.tag_name = 'release' AND t.begin_snapshot >= 15 ORDER BY t.begin_snapshot
 ----
 4	15	16
 4	16	NULL

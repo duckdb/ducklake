@@ -1,0 +1,261 @@
+# name: test/sql/migration/dev1_tag_rows_heal.test
+# description: the tag tables of an older dev build, ended in place and without companions, heal on a writable attach and are refused read only
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, j INTEGER)
+
+statement ok
+COMMENT ON TABLE dl.t IS 'first'
+
+statement ok
+COMMENT ON COLUMN dl.t.j IS 'col j'
+
+statement ok
+CREATE VIEW dl.v AS SELECT 1 AS x
+
+statement ok
+COMMENT ON COLUMN dl.v.x IS 'first x'
+
+statement ok
+INSERT INTO dl.t VALUES (1, 2)
+
+statement ok
+CALL ducklake_create_tag('dl', 'release', version => 6)
+
+statement ok
+COMMENT ON TABLE dl.t IS 'second'
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN j
+
+statement ok
+COMMENT ON COLUMN dl.v.x IS 'second x'
+
+statement ok
+CALL ducklake_replace_tag('dl', 'release', version => 8)
+
+# the older dev build ended its rows in place and knew no branch
+statement ok
+ALTER TABLE meta.ducklake_tag ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_tag SET end_snapshot = e.snapshot_id FROM meta.ducklake_tag_visibility e WHERE e.object_id = ducklake_tag.object_id AND e.key = ducklake_tag.key AND e.row_snapshot = ducklake_tag.begin_snapshot
+
+statement ok
+DROP TABLE meta.ducklake_tag_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_tag DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_column_tag ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_column_tag SET end_snapshot = e.snapshot_id FROM meta.ducklake_column_tag_visibility e WHERE e.table_id = ducklake_column_tag.table_id AND e.column_id = ducklake_column_tag.column_id AND e.key = ducklake_column_tag.key AND e.row_snapshot = ducklake_column_tag.begin_snapshot
+
+statement ok
+DROP TABLE meta.ducklake_column_tag_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_column_tag DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_view_column_tag ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_view_column_tag SET end_snapshot = e.snapshot_id FROM meta.ducklake_view_column_tag_visibility e WHERE e.view_id = ducklake_view_column_tag.view_id AND e.column_name = ducklake_view_column_tag.column_name AND e.key = ducklake_view_column_tag.key AND e.row_snapshot = ducklake_view_column_tag.begin_snapshot
+
+statement ok
+DROP TABLE meta.ducklake_view_column_tag_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_view_column_tag DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_tag ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_snapshot_tag SET end_snapshot = e.snapshot_id FROM meta.ducklake_snapshot_tag_visibility e WHERE e.tag_name = ducklake_snapshot_tag.tag_name AND e.row_snapshot = ducklake_snapshot_tag.begin_snapshot
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_tag_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_tag DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_tag DROP COLUMN snapshot_branch_id
+
+statement ok
+DETACH dl
+
+# a read only attach cannot backfill the companions
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+attach it writable once
+
+# the writable attach heals the layout and reads the same catalog
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT comment FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 't'
+----
+second
+
+query II
+SELECT column_name, comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 't'
+----
+i	NULL
+
+query I
+SELECT comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 'v'
+----
+second x
+
+query III
+SELECT tag_name, snapshot_id, created_snapshot_id FROM ducklake_tags('dl')
+----
+release	8	11
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'release')
+----
+1
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_tag') ORDER BY column_index
+----
+object_id
+begin_snapshot
+key
+value
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_column_tag') ORDER BY column_index
+----
+table_id
+column_id
+begin_snapshot
+key
+value
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_view_column_tag') ORDER BY column_index
+----
+view_id
+column_name
+begin_snapshot
+key
+value
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_snapshot_tag') ORDER BY column_index
+----
+tag_name
+snapshot_id
+begin_snapshot
+expires_at
+snapshot_branch_id
+branch_id
+
+# the ends were rebuilt from the ranges
+query III
+SELECT t.value, e.row_snapshot, e.snapshot_id FROM meta.ducklake_tag_visibility e JOIN meta.ducklake_tag t ON t.object_id = e.object_id AND t.key = e.key AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+----
+first	2	8
+
+query III
+SELECT t.value, e.row_snapshot, e.snapshot_id FROM meta.ducklake_column_tag_visibility e JOIN meta.ducklake_column_tag t ON t.table_id = e.table_id AND t.column_id = e.column_id AND t.key = e.key AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+----
+col j	3	9
+
+query III
+SELECT t.value, e.row_snapshot, e.snapshot_id FROM meta.ducklake_view_column_tag_visibility e JOIN meta.ducklake_view_column_tag t ON t.view_id = e.view_id AND t.column_name = e.column_name AND t.key = e.key AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+----
+first x	5	10
+
+query IIII
+SELECT t.snapshot_id, t.snapshot_branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_snapshot_tag_visibility e JOIN meta.ducklake_snapshot_tag t ON t.tag_name = e.tag_name AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+----
+6	0	7	11
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name IN ('ducklake_tag', 'ducklake_column_tag', 'ducklake_view_column_tag', 'ducklake_snapshot_tag') AND column_name = 'end_snapshot'
+----
+0
+
+# the healed catalog commits
+statement ok
+COMMENT ON TABLE dl.t IS 'third'
+
+statement ok
+CALL ducklake_drop_tag('dl', 'release')
+
+query III
+SELECT t.value, e.row_snapshot, e.snapshot_id FROM meta.ducklake_tag_visibility e JOIN meta.ducklake_tag t ON t.object_id = e.object_id AND t.key = e.key AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot ORDER BY e.snapshot_id
+----
+first	2	8
+second	8	12
+
+query III
+SELECT t.snapshot_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_snapshot_tag_visibility e JOIN meta.ducklake_snapshot_tag t ON t.tag_name = e.tag_name AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot ORDER BY e.snapshot_id
+----
+6	7	11
+8	11	13
+
+# a heal interrupted after some of the ends were copied resumes with the rest
+statement ok
+ALTER TABLE meta.ducklake_tag ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_tag SET end_snapshot = e.snapshot_id FROM meta.ducklake_tag_visibility e WHERE e.object_id = ducklake_tag.object_id AND e.key = ducklake_tag.key AND e.row_snapshot = ducklake_tag.begin_snapshot
+
+statement ok
+DELETE FROM meta.ducklake_tag_visibility WHERE row_snapshot = 8
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+attach it writable once
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query III
+SELECT t.value, e.row_snapshot, e.snapshot_id FROM meta.ducklake_tag_visibility e JOIN meta.ducklake_tag t ON t.object_id = e.object_id AND t.key = e.key AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot ORDER BY e.snapshot_id
+----
+first	2	8
+second	8	12
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_tag' AND column_name = 'end_snapshot'
+----
+0
+
+query I
+SELECT comment FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 't'
+----
+third
+
+statement ok
+DETACH dl

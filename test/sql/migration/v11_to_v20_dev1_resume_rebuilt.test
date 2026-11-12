@@ -18,7 +18,7 @@ CREATE TABLE dl.t AS SELECT 42 AS i
 
 # the run stopped after the tag, branch and remap tables and both snapshot table rebuilds
 statement ok
-CREATE TABLE meta.ducklake_snapshot_tag(tag_name VARCHAR, snapshot_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, expires_at TIMESTAMPTZ)
+CREATE TABLE meta.ducklake_snapshot_tag(tag_name VARCHAR, snapshot_id BIGINT, begin_snapshot BIGINT, expires_at TIMESTAMPTZ, snapshot_branch_id BIGINT DEFAULT 0, branch_id BIGINT DEFAULT 0)
 
 statement ok
 CREATE TABLE meta.ducklake_branch(branch_id BIGINT PRIMARY KEY, branch_name VARCHAR, parent_id BIGINT, parent_branch_snapshot BIGINT)

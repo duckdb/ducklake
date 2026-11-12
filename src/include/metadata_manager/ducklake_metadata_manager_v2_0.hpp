@@ -30,6 +30,9 @@ public:
 	string GetPartitionInfoTableStatement() override;
 	string GetMacroTableStatement() override;
 	string GetSortInfoTableStatement() override;
+	string GetTagTableStatement() override;
+	string GetColumnTagTableStatement() override;
+	string GetViewColumnTagTableStatement() override;
 	string GetDataFileTableStatement() override;
 	string GetDeleteFileTableStatement() override;
 	string GetInitialDataStatements() override;

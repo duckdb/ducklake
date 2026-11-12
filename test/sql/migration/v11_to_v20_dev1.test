@@ -48,6 +48,31 @@ CREATE MACRO dl.add_one(x) AS x + 1
 statement ok
 DROP MACRO dl.add_one
 
+# and for the tags, a changed value ends the old row in place under 1.1
+statement ok
+COMMENT ON TABLE dl.t IS 'first'
+
+statement ok
+COMMENT ON TABLE dl.t IS 'second'
+
+statement ok
+CREATE VIEW dl.tagged AS SELECT 1 AS i
+
+statement ok
+COMMENT ON COLUMN dl.tagged.i IS 'view column'
+
+statement ok
+COMMENT ON COLUMN dl.tagged.i IS 'view column 2'
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN k INTEGER
+
+statement ok
+COMMENT ON COLUMN dl.t.k IS 'column'
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN k
+
 statement error
 SELECT * FROM meta.ducklake_branch
 ----
@@ -98,6 +123,14 @@ SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
 9	0
 10	0
 11	0
+12	0
+13	0
+14	0
+15	0
+16	0
+17	0
+18	0
+19	0
 
 query II
 SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
@@ -114,6 +147,14 @@ SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snaps
 9	0
 10	0
 11	0
+12	0
+13	0
+14	0
+15	0
+16	0
+17	0
+18	0
+19	0
 
 query II
 SELECT begin_snapshot, branch_id FROM meta.ducklake_schema_versions ORDER BY begin_snapshot
@@ -123,6 +164,8 @@ SELECT begin_snapshot, branch_id FROM meta.ducklake_schema_versions ORDER BY beg
 5	0
 6	0
 7	0
+17	0
+19	0
 
 # the migrated snapshot table is keyed by branch and snapshot
 statement error
@@ -137,13 +180,14 @@ SELECT column_name, CASE WHEN column_name = 'expires_at' AND data_type = 'VARCHA
 tag_name	VARCHAR
 snapshot_id	BIGINT
 begin_snapshot	BIGINT
-end_snapshot	BIGINT
 expires_at	TIMESTAMP WITH TIME ZONE
+snapshot_branch_id	BIGINT
+branch_id	BIGINT
 
-query I
-SELECT COUNT(*) FROM meta.ducklake_snapshot_tag
+query II
+SELECT (SELECT COUNT(*) FROM meta.ducklake_snapshot_tag), (SELECT COUNT(*) FROM meta.ducklake_snapshot_tag_visibility)
 ----
-0
+0	0
 
 query I
 SELECT COUNT(*) FROM meta.ducklake_file_visibility
@@ -247,9 +291,10 @@ begin_snapshot
 branch_id
 
 query IIIII
-SELECT e.branch_id, c.column_name, e.row_branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_column_visibility e JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id
+SELECT e.branch_id, c.column_name, e.row_branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_column_visibility e JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id ORDER BY e.snapshot_id
 ----
 0	j	0	4	5
+0	k	0	17	19
 
 query III
 SELECT e.branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_partition_visibility e
@@ -265,6 +310,61 @@ query IIII
 SELECT m.macro_name, e.row_branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_macro_visibility e JOIN meta.ducklake_macro m ON m.macro_id = e.macro_id
 ----
 add_one	0	10	11
+
+# the tag rows carry their birth branch and the overwritten and dropped values end in the companion tables
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_tag') ORDER BY column_index
+----
+object_id
+begin_snapshot
+key
+value
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_column_tag') ORDER BY column_index
+----
+table_id
+column_id
+begin_snapshot
+key
+value
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_view_column_tag') ORDER BY column_index
+----
+view_id
+column_name
+begin_snapshot
+key
+value
+branch_id
+
+query IIII
+SELECT t.value, e.row_branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_tag_visibility e JOIN meta.ducklake_tag t ON t.object_id = e.object_id AND t.key = e.key AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+----
+first	0	12	13
+
+query IIII
+SELECT t.value, e.row_branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_column_tag_visibility e JOIN meta.ducklake_column_tag t ON t.table_id = e.table_id AND t.column_id = e.column_id AND t.key = e.key AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+----
+column	0	18	19
+
+query IIII
+SELECT t.value, e.row_branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_view_column_tag_visibility e JOIN meta.ducklake_view_column_tag t ON t.view_id = e.view_id AND t.column_name = e.column_name AND t.key = e.key AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+----
+view column	0	15	16
+
+query I
+SELECT comment FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 't'
+----
+second
+
+query I
+SELECT comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 'tagged'
+----
+view column 2
 
 query I
 SELECT column_name FROM (DESCRIBE dl.t)

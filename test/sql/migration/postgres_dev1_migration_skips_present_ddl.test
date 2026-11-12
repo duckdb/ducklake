@@ -27,6 +27,13 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
 
+# a changed comment ends the old tag row in place under 1.1
+statement ok
+COMMENT ON TABLE dl.t IS 'first'
+
+statement ok
+COMMENT ON TABLE dl.t IS 'second'
+
 statement ok
 DETACH dl
 
@@ -141,6 +148,37 @@ CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_macro D
 statement ok
 CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_macro_visibility')
 
+# the tag tables of a dev catalog likewise, their keys are text
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_tag ADD COLUMN end_snapshot BIGINT')
+
+statement ok
+CALL postgres_execute('pg', 'UPDATE dev1_skips_present_ddl.ducklake_tag t SET end_snapshot = e.snapshot_id FROM dev1_skips_present_ddl.ducklake_tag_visibility e WHERE e.object_id = t.object_id AND e.key = t.key AND e.row_snapshot = t.begin_snapshot')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_tag DROP COLUMN branch_id')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_tag_visibility')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_column_tag ADD COLUMN end_snapshot BIGINT')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_column_tag DROP COLUMN branch_id')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_column_tag_visibility')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_view_column_tag ADD COLUMN end_snapshot BIGINT')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_view_column_tag DROP COLUMN branch_id')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_view_column_tag_visibility')
+
 # the snapshot tables and the schema versions of a dev catalog carry no branch
 statement ok
 CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_snapshot DROP COLUMN branch_id')
@@ -193,6 +231,23 @@ query I
 SELECT count(*) FROM postgres_query('pg', 'SELECT 1 FROM information_schema.tables WHERE table_schema = ''dev1_skips_present_ddl'' AND table_name IN (''ducklake_schema_visibility'', ''ducklake_table_visibility'', ''ducklake_view_visibility'')')
 ----
 3
+
+# the tag tables too, the recreated snapshot tag table carries the branch of its target
+query III
+SELECT count(*) FILTER (WHERE column_name = 'branch_id'), count(*) FILTER (WHERE column_name = 'end_snapshot'), count(*) FILTER (WHERE column_name = 'snapshot_branch_id') FROM postgres_query('pg', 'SELECT column_name FROM information_schema.columns WHERE table_schema = ''dev1_skips_present_ddl'' AND table_name IN (''ducklake_tag'', ''ducklake_column_tag'', ''ducklake_view_column_tag'', ''ducklake_snapshot_tag'')')
+----
+4	0	1
+
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT 1 FROM information_schema.tables WHERE table_schema = ''dev1_skips_present_ddl'' AND table_name IN (''ducklake_tag_visibility'', ''ducklake_column_tag_visibility'', ''ducklake_view_column_tag_visibility'', ''ducklake_snapshot_tag_visibility'')')
+----
+4
+
+# the end of the first comment was rebuilt from its range
+query III
+SELECT * FROM postgres_query('pg', 'SELECT t.value, e.row_snapshot, e.snapshot_id FROM dev1_skips_present_ddl.ducklake_tag_visibility e JOIN dev1_skips_present_ddl.ducklake_tag t ON t.object_id = e.object_id AND t.key = e.key AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot')
+----
+first	2	3
 
 statement ok
 CALL postgres_execute('pg', 'DROP SCHEMA dev1_skips_present_ddl CASCADE')

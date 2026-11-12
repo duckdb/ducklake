@@ -86,6 +86,24 @@ string DuckLakeMetadataManagerV2_0<Base>::GetSortInfoTableStatement() {
 }
 
 template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetTagTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_tag(object_id BIGINT, begin_snapshot BIGINT, key VARCHAR, value "
+	       "VARCHAR, branch_id BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetColumnTagTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_column_tag(table_id BIGINT, column_id BIGINT, begin_snapshot "
+	       "BIGINT, key VARCHAR, value VARCHAR, branch_id BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetViewColumnTagTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_view_column_tag(view_id BIGINT, column_name VARCHAR, "
+	       "begin_snapshot BIGINT, key VARCHAR, value VARCHAR, branch_id BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
 string DuckLakeMetadataManagerV2_0<Base>::GetDataFileTableStatement() {
 	return "CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(data_file_id BIGINT PRIMARY KEY, table_id BIGINT, "
 	       "file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, record_count BIGINT, "

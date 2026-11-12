@@ -397,16 +397,29 @@ void DuckLakeTransactionState::CheckTaggedSnapshotsExist(const DuckLakeCommitCon
 	if (new_snapshot_tags.empty()) {
 		return;
 	}
-	// tags name snapshots of main, whose ids other branches hold as well from 2.0 on
-	auto result = context.conflict_query_executor(StringUtil::Format(
-	    "SELECT snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id IN (%s)%s",
-	    TaggedSnapshotIdList(new_snapshot_tags), context.supports_v2_0_metadata ? " AND branch_id = 0" : ""));
-	set<idx_t> existing;
+	// a tag names a snapshot of a branch, other branches hold the same ids from 2.0 on
+	string filter;
+	if (context.supports_v2_0_metadata) {
+		vector<string> targets;
+		for (auto &tag : new_snapshot_tags) {
+			targets.push_back(StringUtil::Format("(branch_id = %llu AND snapshot_id = %llu)",
+			                                     tag.second.snapshot_branch_id, tag.second.snapshot_id));
+		}
+		filter = StringUtil::Join(targets, " OR ");
+	} else {
+		filter = StringUtil::Format("snapshot_id IN (%s)", TaggedSnapshotIdList(new_snapshot_tags));
+	}
+	auto result = context.conflict_query_executor(
+	    StringUtil::Format("SELECT snapshot_id, %s FROM {METADATA_CATALOG}.ducklake_snapshot WHERE %s",
+	                       context.supports_v2_0_metadata ? "branch_id" : "0", filter));
+	set<pair<idx_t, idx_t>> existing;
 	for (auto &row : *result) {
-		existing.insert(row.GetValue<idx_t>(0));
+		existing.emplace(row.GetValue<idx_t>(1), row.GetValue<idx_t>(0));
 	}
 	for (auto &tag : new_snapshot_tags) {
-		if (existing.find(tag.second.snapshot_id) == existing.end()) {
+		auto target = make_pair(context.supports_v2_0_metadata ? tag.second.snapshot_branch_id : idx_t(0),
+		                        tag.second.snapshot_id);
+		if (existing.find(target) == existing.end()) {
 			throw TransactionException("Transaction conflict - attempting to create tag %s for snapshot %d"
 			                           " - but another transaction has expired the snapshot",
 			                           tag.first, tag.second.snapshot_id);
@@ -2433,7 +2446,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::DropSchemas(dropped_schema_ids, context.supports_v2_0_metadata,
 		                                                      context.commit_chain);
 	}
-	batch_queries += DuckLakeMetadataManager::WriteSnapshotTagChanges(new_snapshot_tags, dropped_snapshot_tags);
+	batch_queries += DuckLakeMetadataManager::WriteSnapshotTagChanges(new_snapshot_tags, dropped_snapshot_tags,
+	                                                                  context.commit_chain);
 	auto relative_paths = [&](const auto &entries) {
 		vector<DuckLakePath> result;
 		result.reserve(entries.size());
@@ -2517,10 +2531,13 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			}
 		}
 		batch_queries += DuckLakeMetadataManager::WriteNewViews(result.new_views, context.supports_v2_0_metadata);
-		batch_queries += DuckLakeMetadataManager::WriteNewTags(result.new_tags);
-		batch_queries += DuckLakeMetadataManager::WriteNewColumnTags(result.new_column_tags);
+		batch_queries += DuckLakeMetadataManager::WriteNewTags(result.new_tags, context.supports_v2_0_metadata,
+		                                                       context.commit_chain);
+		batch_queries += DuckLakeMetadataManager::WriteNewColumnTags(
+		    result.new_column_tags, context.supports_v2_0_metadata, context.commit_chain);
 		if (context.supports_v1_1_metadata) {
-			batch_queries += DuckLakeMetadataManager::WriteNewViewColumnTags(result.new_view_column_tags);
+			batch_queries += DuckLakeMetadataManager::WriteNewViewColumnTags(
+			    result.new_view_column_tags, context.supports_v2_0_metadata, context.commit_chain);
 		}
 		batch_queries += DuckLakeMetadataManager::WriteFloatWidenedStats(float_bounds.widened, float_bounds.cleared,
 		                                                                 commit_snapshot.next_file_id);
@@ -2539,7 +2556,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 				expired_column_tags.push_back(dropped_col);
 			}
 		}
-		batch_queries += DuckLakeMetadataManager::WriteExpiredColumnTags(expired_column_tags);
+		batch_queries += DuckLakeMetadataManager::WriteExpiredColumnTags(
+		    expired_column_tags, context.supports_v2_0_metadata, context.commit_chain);
 		batch_queries += DuckLakeMetadataManager::WriteNewColumns(result.new_columns, context.supports_v2_0_metadata);
 		batch_queries +=
 		    DuckLakeMetadataManager::WriteDroppedNewColumns(result.dropped_new_columns, context.supports_v2_0_metadata);
@@ -3060,7 +3078,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 					    DuckLakeMetadataManager::DeleteSnapshotsSql(expired_snapshots, context.supports_v2_0_metadata);
 				}
 				for (auto &tag : expiry.tags) {
-					batch_queries += DuckLakeMetadataManager::EndSnapshotTagSql(tag);
+					batch_queries += DuckLakeMetadataManager::EndSnapshotTagSql(tag, context.commit_chain);
 				}
 				batch_queries +=
 				    CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);

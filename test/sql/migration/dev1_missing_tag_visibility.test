@@ -1,0 +1,76 @@
+# name: test/sql/migration/dev1_missing_tag_visibility.test
+# description: a catalog whose tag rows lost the companion that holds their ends cannot be healed unless the table holds no rows
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+COMMENT ON TABLE dl.t IS 'first'
+
+statement ok
+COMMENT ON TABLE dl.t IS 'second'
+
+statement ok
+CREATE VIEW dl.v AS SELECT 1 AS x
+
+# the view column tags hold no row, so an empty companion is the right one
+statement ok
+DROP TABLE meta.ducklake_view_column_tag_visibility
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+attach it writable once
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_view_column_tag_visibility
+----
+0
+
+statement ok
+COMMENT ON COLUMN dl.v.x IS 'x'
+
+statement ok
+COMMENT ON COLUMN dl.v.x IS 'y'
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_view_column_tag_visibility
+----
+1
+
+# the companion of the tags holds the only record of the replaced comment
+statement ok
+DROP TABLE meta.ducklake_tag_visibility
+
+statement ok
+DETACH dl
+
+# a read only attach cannot recreate the companion
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+attach it writable once
+
+# an empty companion would bring the first comment back next to the second, so the writable attach refuses to heal
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+----
+Cannot heal this DuckLake catalog: the end snapshots of the catalog rows were dropped and the visibility rows that replaced them are missing

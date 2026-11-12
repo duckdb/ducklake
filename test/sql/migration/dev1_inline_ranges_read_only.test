@@ -117,6 +117,46 @@ ALTER TABLE meta.ducklake_macro DROP COLUMN branch_id
 statement ok
 DROP TABLE meta.ducklake_macro_visibility
 
+# the tag tables too, the snapshot tags knew no branch of their target
+statement ok
+ALTER TABLE meta.ducklake_tag ADD COLUMN end_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_tag DROP COLUMN branch_id
+
+statement ok
+DROP TABLE meta.ducklake_tag_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_column_tag ADD COLUMN end_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_column_tag DROP COLUMN branch_id
+
+statement ok
+DROP TABLE meta.ducklake_column_tag_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_view_column_tag ADD COLUMN end_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_view_column_tag DROP COLUMN branch_id
+
+statement ok
+DROP TABLE meta.ducklake_view_column_tag_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_tag ADD COLUMN end_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_tag DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_tag DROP COLUMN snapshot_branch_id
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_tag_visibility
+
 statement ok
 DETACH dl
 
@@ -173,15 +213,15 @@ SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_nam
 0
 
 # and the version rows of the catalog tables into rows with a birth branch and a companion
-query II
-SELECT COUNT(*) FILTER (WHERE column_name = 'branch_id'), COUNT(*) FILTER (WHERE column_name = 'end_snapshot') FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name IN ('ducklake_schema', 'ducklake_table', 'ducklake_view', 'ducklake_column', 'ducklake_partition_info', 'ducklake_sort_info', 'ducklake_macro')
-----
-7	0
-
 query III
-SELECT (SELECT COUNT(*) FROM meta.ducklake_table_visibility), (SELECT COUNT(*) FROM meta.ducklake_column_visibility), (SELECT COUNT(*) FROM meta.ducklake_macro_visibility)
+SELECT COUNT(*) FILTER (WHERE column_name = 'branch_id'), COUNT(*) FILTER (WHERE column_name = 'end_snapshot'), COUNT(*) FILTER (WHERE column_name = 'snapshot_branch_id') FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name IN ('ducklake_schema', 'ducklake_table', 'ducklake_view', 'ducklake_column', 'ducklake_partition_info', 'ducklake_sort_info', 'ducklake_macro', 'ducklake_tag', 'ducklake_column_tag', 'ducklake_view_column_tag', 'ducklake_snapshot_tag')
 ----
-0	0	0
+11	0	1
+
+query IIII
+SELECT (SELECT COUNT(*) FROM meta.ducklake_table_visibility), (SELECT COUNT(*) FROM meta.ducklake_column_visibility), (SELECT COUNT(*) FROM meta.ducklake_macro_visibility), (SELECT COUNT(*) FROM meta.ducklake_tag_visibility)
+----
+0	0	0	0
 
 statement ok
 DETACH dl

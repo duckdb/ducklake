@@ -26,8 +26,8 @@ statement ok
 COMMENT ON COLUMN lake.tagged.v IS 'a comment'
 
 statement ok
-INSERT INTO __ducklake_metadata_lake.ducklake_column_tag
-SELECT c.table_id, c.column_id, c.begin_snapshot, NULL, 'owner', 'maintenance'
+INSERT INTO __ducklake_metadata_lake.ducklake_column_tag (table_id, column_id, begin_snapshot, key, value, branch_id)
+SELECT c.table_id, c.column_id, c.begin_snapshot, 'owner', 'maintenance', 0
 FROM __ducklake_metadata_lake.ducklake_column c JOIN __ducklake_metadata_lake.ducklake_table t USING (table_id)
 WHERE t.table_name = 'tagged' AND c.column_name = 'id'
 

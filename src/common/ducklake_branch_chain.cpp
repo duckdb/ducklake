@@ -111,6 +111,16 @@ const DuckLakeBranchSegment &DuckLakeBranchChain::SegmentOf(idx_t snapshot_id) c
 	// LCOV_EXCL_STOP
 }
 
+bool DuckLakeBranchChain::Contains(idx_t branch_id, idx_t snapshot_id) const {
+	for (auto &segment : segments) {
+		if (segment.branch_id != branch_id) {
+			continue;
+		}
+		return !segment.last_snapshot.IsValid() || snapshot_id <= segment.last_snapshot.GetIndex();
+	}
+	return false;
+}
+
 idx_t DuckLakeBranchChain::OwnerOf(idx_t snapshot_id) const {
 	return SegmentOf(snapshot_id).branch_id;
 }
