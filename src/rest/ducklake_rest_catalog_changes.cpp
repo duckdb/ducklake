@@ -63,8 +63,9 @@ Value DuckLakeRESTCatalogChanges::ReadInitialDefault(ClientContext &context, con
 	if (!column.default_value.empty()) {
 		auto expression = ReadExpression(column.default_value);
 		Value literal;
-		if (!DuckLakeUtil::TryGetLiteralValue(*expression, literal) &&
-		    DuckLakeUtil::TryGetLiteralValue(*expression, literal, context)) {
+		// the session casts a literal to or from a time zone type, a NULL is the same in every zone
+		if (DuckLakeUtil::TryGetLiteralValue(*expression, literal, context) && !literal.IsNull() &&
+		    (DuckLakeUtil::DependsOnTimeZone(column.column_type) || DuckLakeUtil::DependsOnTimeZone(literal.type()))) {
 			throw InvalidInputException("The default of column \"%s\" depends on the time zone, send the "
 			                            "initial_default of the column as well",
 			                            column.column_name);

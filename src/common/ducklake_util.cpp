@@ -812,8 +812,7 @@ void DuckLakeUtil::ValidateConfigOptionScope(const string &option, bool has_sche
 	}
 }
 
-//! Whether a cast to or from the type reads an instant in the time zone of the session, also in a nested type
-static bool DependsOnTimeZone(const LogicalType &type) {
+bool DuckLakeUtil::DependsOnTimeZone(const LogicalType &type) {
 	return TypeVisitor::Contains(type, [](const LogicalType &child) {
 		switch (child.id()) {
 		case LogicalTypeId::TIMESTAMP_TZ:
@@ -847,7 +846,7 @@ bool DuckLakeUtil::TryGetLiteralValue(const ParsedExpression &expr, Value &resul
 	optional<Value> value;
 	if (context) {
 		value = literal.TryCastAs(*context, target_type);
-	} else if (DependsOnTimeZone(target_type) || DependsOnTimeZone(literal.type())) {
+	} else if (DuckLakeUtil::DependsOnTimeZone(target_type) || DuckLakeUtil::DependsOnTimeZone(literal.type())) {
 		// the session decides what the cast gives, so it stays an expression
 		return false;
 	} else {

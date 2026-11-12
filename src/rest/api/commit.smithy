@@ -29,8 +29,8 @@ operation CommitTransaction {
 
     output := {
         /// The committed snapshot, absent if the requests did not create a snapshot (e.g. if they only set options).
-        /// If other transactions committed since the snapshot of the request, its id is more than one above the id of
-        /// the snapshot of the request.
+        /// If other transactions created snapshots since the snapshot of the request, its id is more than one above the
+        /// id of the snapshot of the request.
         snapshot: Snapshot
 
         /// The entries the transaction created, with the ids the commit gave them.

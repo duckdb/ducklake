@@ -930,7 +930,30 @@ static LogicalType GetAlteredType(const AlterInfo &info) {
 	}
 }
 
+//! Whether an ADD COLUMN or ADD FIELD with IF NOT EXISTS finds the column or field, so the ALTER changes nothing
+static bool IsSkippedAdd(CatalogEntry &entry, const AlterInfo &info) {
+	if (entry.type != CatalogType::TABLE_ENTRY || info.type != AlterType::ALTER_TABLE) {
+		return false;
+	}
+	auto &table = entry.Cast<DuckLakeTableEntry>();
+	auto &alter = info.Cast<AlterTableInfo>();
+	if (alter.alter_table_type == AlterTableType::ADD_COLUMN) {
+		auto &add = alter.Cast<AddColumnInfo>();
+		return add.if_column_not_exists && table.ColumnExists(add.new_column.Name());
+	}
+	if (alter.alter_table_type == AlterTableType::ADD_FIELD) {
+		auto &add = alter.Cast<AddFieldInfo>();
+		auto path = add.column_path;
+		path.push_back(add.new_field.Name());
+		return add.if_field_not_exists && table.TryGetFieldId(path);
+	}
+	return false;
+}
+
 void RESTMetadataManager::OnAlterEntry(CatalogEntry &entry, const AlterInfo &info) {
+	if (IsSkippedAdd(entry, info)) {
+		return;
+	}
 	auto altered_type = GetAlteredType(info);
 	if (altered_type.id() != LogicalTypeId::INVALID) {
 		DuckLakeTypes::ToString(altered_type);
@@ -1142,7 +1165,6 @@ void RESTMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tran
 	request.retry->max_retry_count = retry_config.max_retry_count;
 	request.retry->retry_wait_ms = retry_config.retry_wait_ms;
 	request.retry->retry_backoff = retry_config.retry_backoff;
-	auto context = flush_transaction.context.lock();
 	RESTCommitTransactionResponse response;
 	try {
 		response = GetClient().CommitTransaction(request);

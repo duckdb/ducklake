@@ -471,7 +471,7 @@ Response:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `snapshot` | [`Snapshot`](#snapshot) (optional) | The committed snapshot, absent if the requests did not create a snapshot (e.g. if they only set options). If other transactions committed since the snapshot of the request, its id is more than one above the id of the snapshot of the request. |
+| `snapshot` | [`Snapshot`](#snapshot) (optional) | The committed snapshot, absent if the requests did not create a snapshot (e.g. if they only set options). If other transactions created snapshots since the snapshot of the request, its id is more than one above the id of the snapshot of the request. |
 | `entry_ids` | list of [`CreatedEntry`](#createdentry) (default `[]`) | The entries the transaction created, with the ids the commit gave them. |
 | `table_options` | list of [`OptionSetting`](#optionsetting) (default `[]`) | The options of the tables the transaction created or altered, with the ids the commit gave the tables. |
 
@@ -767,7 +767,7 @@ The definition of a column in a catalog change.
 | `column_name` | `string` | The name of the column. |
 | `column_type` | `logical_type` | The type of the column. |
 | `default` | `string` (optional) | The default of the column, as a SQL expression. |
-| `initial_default` | `string` (optional) | The value for rows that exist before the column is added, cast to the column type. A client sends it when the default is a literal, in the time zone of its session, as the server does not know that zone. |
+| `initial_default` | `string` (optional) | The text of the value that rows from before the column was added get, already cast to the column type. A client evaluates a literal default in the time zone of its session and sends the result, with an explicit offset for `TIMESTAMPTZ` and `TIMETZ`, and may omit a NULL. A request with a literal default that depends on the time zone and no `initial_default` is rejected, as the server does not know the time zone of the client. |
 | `comment` | `string` (optional) | The comment of the column. |
 | `not_null` | `bool` (default `false`) | Whether the column is `NOT NULL`. |
 

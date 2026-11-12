@@ -42,6 +42,8 @@ public:
 	//! File systems allow at most 255 bytes in a file name
 	static constexpr idx_t MAX_FILE_NAME_LENGTH = 255;
 
+	//! Whether a cast to or from the type reads an instant in the time zone of the session, also in a nested type
+	static bool DependsOnTimeZone(const LogicalType &type);
 	//! The value of a literal or of a cast over one, a cast of a time zone type needs the context
 	static bool TryGetLiteralValue(const ParsedExpression &expr, Value &result,
 	                               optional_ptr<ClientContext> context = nullptr);

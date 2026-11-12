@@ -977,8 +977,10 @@ structure ColumnDefinition {
     @cppMember("default_value")
     default: String
 
-    /// The value for rows that exist before the column is added, cast to the column type. A client sends it when the
-    /// default is a literal, in the time zone of its session, as the server does not know that zone.
+    /// The text of the value that rows from before the column was added get, already cast to the column type.
+    /// A client evaluates a literal default in the time zone of its session and sends the result, with an explicit
+    /// offset for `TIMESTAMPTZ` and `TIMETZ`, and may omit a NULL. A request with a literal default that depends on the
+    /// time zone and no `initial_default` is rejected, as the server does not know the time zone of the client.
     @cppType("RESTOptional<string>")
     initial_default: String
 

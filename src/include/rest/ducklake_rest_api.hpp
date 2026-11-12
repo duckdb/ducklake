@@ -9,6 +9,7 @@
 #pragma once
 
 #include "rest/ducklake_rest_codec.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "common/ducklake_snapshot.hpp"
 #include "common/ducklake_data_file.hpp"
 #include "storage/ducklake_metadata_info.hpp"
@@ -231,8 +232,13 @@ struct DuckLakeRESTSerializer {
 	//! Reads the body of a response of a content type
 	template <class T>
 	static T ReadResponse(RESTHttpResponse &response) {
-		RESTJsonReader document(response.body);
-		return Read<T>(document.Root());
+		// the server answered, so a body that cannot be read leaves the outcome of the request unknown
+		try {
+			RESTJsonReader document(response.body);
+			return Read<T>(document.Root());
+		} catch (std::exception &ex) {
+			throw IOException("DuckLake REST: could not read the response: %s", ErrorData(ex).RawMessage());
+		}
 	}
 
 	static JSONMutableValue Write(JSONWriter &writer, const RESTAddColumn &value);
@@ -651,7 +657,7 @@ struct RESTColumnDefinition {
 	LogicalType column_type;
 	//! The default of the column, as a SQL expression.
 	string default_value;
-	//! The value for rows that exist before the column is added, cast to the column type. A client sends it when the
+	//! The text of the value that rows from before the column was added get, already cast to the column type.
 	RESTOptional<string> initial_default;
 	//! The comment of the column.
 	RESTOptional<string> comment;

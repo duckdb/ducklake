@@ -1284,7 +1284,7 @@ def generate_header(spec):
     lines.append("")
     lines.append("#pragma once")
     lines.append("")
-    includes = ["rest/ducklake_rest_codec.hpp"]
+    includes = ["rest/ducklake_rest_codec.hpp", "duckdb/common/error_data.hpp"]
     for section in spec.sections:
         for include in section.includes:
             if include not in includes:
@@ -1392,8 +1392,15 @@ def generate_header(spec):
     lines.append("\t//! Reads the body of a response of a content type")
     lines.append("\ttemplate <class T>")
     lines.append("\tstatic T ReadResponse(RESTHttpResponse &response) {")
-    lines.append("\t\tRESTJsonReader document(response.body);")
-    lines.append("\t\treturn Read<T>(document.Root());")
+    lines.append("\t\t// the server answered, so a body that cannot be read leaves the outcome of the request unknown")
+    lines.append("\t\ttry {")
+    lines.append("\t\t\tRESTJsonReader document(response.body);")
+    lines.append("\t\t\treturn Read<T>(document.Root());")
+    lines.append("\t\t} catch (std::exception &ex) {")
+    lines.append(
+        '\t\t\tthrow IOException("DuckLake REST: could not read the response: %s", ErrorData(ex).RawMessage());'
+    )
+    lines.append("\t\t}")
     lines.append("\t}")
     lines.append("")
     for obj in all_objects:

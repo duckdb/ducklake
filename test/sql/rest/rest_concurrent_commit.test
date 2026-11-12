@@ -52,9 +52,9 @@ SELECT count(*) FROM dl2.a
 ----
 1
 
-# the response holds the committed snapshot, which is above the snapshot of the request after other commits
-query II
-SELECT status, (response->>'$.snapshot.snapshot_id')::BIGINT > 1 AND response->>'$.snapshot.next_catalog_id' IS NOT NULL
+# the response holds the committed snapshot, which other commits moved ahead of the snapshot 1 that the request is based on
+query IIIII
+SELECT status, response->>'$.snapshot.snapshot_id', response->>'$.snapshot.schema_version', response->>'$.snapshot.next_catalog_id', response->>'$.snapshot.next_file_id'
 FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"snapshot_id": 1, "requests": [{"create_schema": {"placeholder_id": -1, "schema_name": "s"}}]}')
 ----
-200	true
+200	6	4	4	2
