@@ -30,15 +30,16 @@ SELECT count(*) FROM duckdb_columns() WHERE database_name = 'ducklake' AND comme
 ----
 0
 
-query I
-SELECT value FROM metadata.ducklake_column_tag
+query IIIIII
+SELECT table_id, column_id, key, value, branch_id, begin_snapshot FROM metadata.ducklake_column_tag
 ----
-drop me
+1	2	comment	drop me	0	2
 
-query I
-SELECT count(*) FROM metadata.ducklake_column_tag_visibility
+query IIIIIII
+SELECT branch_id, table_id, column_id, key, row_branch_id, row_snapshot, snapshot_id
+FROM metadata.ducklake_column_tag_visibility
 ----
-1
+0	1	2	comment	0	2	3
 
 # Adding, commenting on, and dropping a column in one transaction must not
 # commit a tag for a column that never becomes visible.
