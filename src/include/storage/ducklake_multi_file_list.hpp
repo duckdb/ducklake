@@ -41,7 +41,8 @@ public:
 	unique_ptr<NodeStatistics> GetCardinality(ClientContext &context) const override;
 	DuckLakeTableEntry &GetTable();
 	unique_ptr<MultiFileList> Copy() const override;
-	vector<DuckLakeFileListExtendedEntry> GetFilesExtended() const;
+	vector<DuckLakeFileListExtendedEntry> GetFilesExtended(bool include_partition_values = false,
+	                                                       const vector<idx_t> &stats_columns = {}) const;
 	const vector<DuckLakeFileListEntry> &GetFiles() const;
 	//! Sets the columns that the scan reads (field ids of top-level columns), before the file list is read: metadata
 	//! managers that return the inlined rows with the file list only have to return these columns

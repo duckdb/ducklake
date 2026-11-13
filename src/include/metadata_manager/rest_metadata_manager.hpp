@@ -70,7 +70,8 @@ public:
 	vector<DuckLakeFileListExtendedEntry>
 	GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                         const FilterPushdownInfo *filter_info = nullptr,
-	                         optional_ptr<const vector<DuckLakeProjectedColumn>> projection = nullptr) override;
+	                         optional_ptr<const vector<DuckLakeProjectedColumn>> projection = nullptr,
+	                         bool include_partition_values = false, const vector<idx_t> &stats_columns = {}) override;
 	unique_ptr<QueryResult> ReadInlinedDataInsertions(DuckLakeSnapshot start_snapshot, DuckLakeSnapshot end_snapshot,
 	                                                  const Identifier &inlined_table_name,
 	                                                  const vector<string> &columns_to_read) override;

@@ -197,6 +197,8 @@ void DuckLakeInitializer::AttachMetadata(DuckLakeTransaction &transaction) {
 	auto catalog_type = transaction.GetMetadataCatalog().GetCatalogType();
 	catalog.SetMetadataCatalogType(catalog_type);
 	catalog.SetMetadataProfile(DuckLakeMetadataProfiles::Get(*context.db).Find(catalog_type));
+	// The metadata extension may have been autoloaded after the internal connection was created.
+	DuckLakeUtil::SetNativeExtensionTypes(*transaction.GetConnection().context);
 	// the connection was opened before the profile was known
 	DuckLakeUtil::ResetExtensionSettings(*transaction.GetConnection().context,
 	                                     catalog.MetadataProfile().reset_settings);

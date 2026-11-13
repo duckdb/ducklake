@@ -1,0 +1,84 @@
+# name: test/sql/metadata/postgres_catalog_cache.test
+# description: Internal DuckLake connections preserve warm PostgreSQL catalog caches
+# group: [metadata]
+
+require ducklake
+
+require postgres_scanner
+
+require-env DUCKLAKE_CONNECTION postgres:dbname=ducklakedb
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/pg_catalog_cache')
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (42)
+
+# Verify that the log filter sees a cold catalog lookup.
+statement ok
+CALL enable_logging('PostgresQueryLog')
+
+statement ok
+CALL postgres_clear_cache()
+
+query I
+SELECT i FROM lake.t
+----
+42
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('PostgresQueryLog') WHERE query LIKE '%JOIN pg_attribute%'
+----
+true
+
+statement ok
+CALL truncate_duckdb_logs()
+
+foreach scope GLOBAL SESSION
+
+foreach value false true
+
+statement ok
+SET {scope} pg_array_as_varchar = {value}
+
+# Warm the cache after the caller changes the setting.
+query I
+SELECT i FROM lake.t
+----
+42
+
+statement ok
+CALL enable_logging('PostgresQueryLog')
+
+query I
+SELECT i FROM lake.t
+----
+42
+
+statement ok
+CALL disable_logging()
+
+# Read the inlined row without fetching PostgreSQL's table definitions again.
+query II
+SELECT count(*) FILTER (WHERE query LIKE '%JOIN pg_attribute%'), count(*) > 0
+FROM duckdb_logs_parsed('PostgresQueryLog')
+----
+0	true
+
+statement ok
+CALL truncate_duckdb_logs()
+
+endloop
+
+statement ok
+SET {scope} pg_array_as_varchar = false
+
+endloop

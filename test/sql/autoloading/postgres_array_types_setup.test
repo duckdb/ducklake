@@ -1,0 +1,38 @@
+# name: test/sql/autoloading/postgres_array_types_setup.test
+# description: Prepare the PostgreSQL fixture in a separate process before testing metadata extension autoload
+# group: [autoloading]
+
+require-env DUCKLAKE_POSTGRES_AUTOLOAD
+
+require-env DUCKLAKE_CONNECTION
+
+require-env LOCAL_EXTENSION_REPO
+
+require-env DUCKLAKE_POSTGRES_AUTOLOAD_DATA_PATH
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS array_autoload CASCADE')
+
+statement ok
+DETACH pg
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DUCKLAKE_POSTGRES_AUTOLOAD_DATA_PATH}', METADATA_SCHEMA 'array_autoload', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(p INTEGER)
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO lake.t VALUES (1), (2)

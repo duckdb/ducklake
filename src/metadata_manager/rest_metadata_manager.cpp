@@ -425,7 +425,8 @@ RESTMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapsho
 vector<DuckLakeFileListExtendedEntry>
 RESTMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                                               const FilterPushdownInfo *filter_info,
-                                              optional_ptr<const vector<DuckLakeProjectedColumn>> projection) {
+                                              optional_ptr<const vector<DuckLakeProjectedColumn>> projection,
+                                              bool include_partition_values, const vector<idx_t> &stats_columns) {
 	D_ASSERT(!IsTransactionLocal(table.GetTableId()));
 	RESTSelectRequest request;
 	request.snapshot = snapshot;
