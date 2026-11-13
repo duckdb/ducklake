@@ -1676,8 +1676,7 @@ bool DuckLakeCatalog::InlinedTableIsEmpty(DuckLakeTransaction &transaction, cons
 	if (!empty_inlined_tables_snapshot.IsValid() || empty_inlined_tables_snapshot.GetIndex() != snapshot_id) {
 		return false;
 	}
-	// a flush moves the rows into a file dated at their snapshot, a transaction that loaded its snapshot before
-	// the one that found the table empty may not see the file yet
+	// a transaction whose view predates the flush that emptied the table may not see the flushed file yet
 	auto entry = empty_inlined_tables.find(table_name);
 	return entry != empty_inlined_tables.end() && HeadsAtOrAfter(heads, entry->second);
 }

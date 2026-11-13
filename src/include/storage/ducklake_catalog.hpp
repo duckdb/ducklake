@@ -520,8 +520,7 @@ public:
 	//! The columns found with values stay valid for the snapshot of a commit that directly follows theirs
 	void AdvanceColumnsWithValues(idx_t snapshot_id);
 	void ForgetColumnsWithValues(const set<TableIndex> &table_ids);
-	//! Whether a scan under the lineage heads of the transaction or earlier ones found no live rows in the inlined
-	//! table at the snapshot, which the transaction then skips
+	//! Whether a scan with the same or earlier lineage heads found no live rows in the inlined table at the snapshot
 	bool InlinedTableIsEmpty(DuckLakeTransaction &transaction, const Identifier &table_name, idx_t snapshot_id);
 	void SetInlinedTableEmpty(DuckLakeTransaction &transaction, const Identifier &table_name, idx_t snapshot_id);
 
@@ -637,8 +636,7 @@ private:
 	mutex columns_with_values_lock;
 	optional_idx columns_with_values_snapshot;
 	set<pair<idx_t, idx_t>> columns_with_values;
-	//! The inlined tables without live rows at the snapshot of the latest scan that found one, each with the lowest
-	//! lineage heads of a transaction that found it empty
+	//! The inlined tables a scan found without live rows at one snapshot, each with the lowest heads that saw it empty
 	mutex empty_inlined_tables_lock;
 	optional_idx empty_inlined_tables_snapshot;
 	identifier_map_t<vector<idx_t>> empty_inlined_tables;
