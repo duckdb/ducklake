@@ -1,0 +1,283 @@
+# name: test/sql/rest/rest_projection.test
+# description: Inlined rows are read with the columns that a scan needs over the DuckLake REST API
+# group: [rest]
+
+require ducklake
+
+require parquet
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, s VARCHAR, d DOUBLE)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 'one', 1.5), (2, NULL, 2.5), (3, 'three', NULL)
+
+# a column is added: the inlined rows have two schema versions
+statement ok
+ALTER TABLE dl.t ADD COLUMN e INTEGER DEFAULT 7
+
+statement ok
+INSERT INTO dl.t VALUES (4, 'four', 4.5, 40)
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+3
+4
+
+query I
+SELECT s FROM dl.t ORDER BY s NULLS FIRST
+----
+NULL
+four
+one
+three
+
+query II
+SELECT i, e FROM dl.t ORDER BY i
+----
+1	7
+2	7
+3	7
+4	40
+
+query III
+SELECT d, s, i FROM dl.t ORDER BY i
+----
+1.5	one	1
+2.5	NULL	2
+NULL	three	3
+4.5	four	4
+
+query I
+SELECT count(*) FROM dl.t
+----
+4
+
+query I
+SELECT count(*) FROM dl.t WHERE d > 2
+----
+2
+
+query I
+SELECT sum(e) FROM dl.t WHERE s IS NOT NULL
+----
+54
+
+# scans with other columns in a transaction
+statement ok
+BEGIN
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+3
+4
+
+query I
+SELECT s FROM dl.t ORDER BY s NULLS FIRST
+----
+NULL
+four
+one
+three
+
+query I
+SELECT d FROM dl.t ORDER BY d NULLS FIRST
+----
+NULL
+1.5
+2.5
+4.5
+
+query IIII
+SELECT * FROM dl.t ORDER BY i
+----
+1	one	1.5	7
+2	NULL	2.5	7
+3	three	NULL	7
+4	four	4.5	40
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+3
+4
+
+# the transaction's own changes are applied to the rows
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+statement ok
+INSERT INTO dl.t VALUES (5, 'five', 5.5, 50)
+
+query II
+SELECT s, e FROM dl.t ORDER BY e, s NULLS FIRST
+----
+one	7
+three	7
+four	40
+five	50
+
+statement ok
+COMMIT
+
+query II
+SELECT i, e FROM dl.t ORDER BY i
+----
+1	7
+3	7
+4	40
+5	50
+
+# the same table is scanned twice in a query, with other columns
+query II
+SELECT a.i, b.s FROM dl.t a JOIN dl.t b ON a.i = b.i ORDER BY a.i
+----
+1	one
+3	three
+4	four
+5	five
+
+query III
+SELECT a.i, b.d, c.e FROM dl.t a JOIN dl.t b ON a.i = b.i JOIN dl.t c ON a.i = c.i ORDER BY a.i
+----
+1	1.5	7
+3	NULL	7
+4	4.5	40
+5	5.5	50
+
+query I
+SELECT count(*) FROM dl.t a, dl.t b WHERE a.i < b.i AND a.s IS NOT NULL
+----
+6
+
+query I
+SELECT (SELECT sum(e) FROM dl.t) + (SELECT count(s) FROM dl.t)
+----
+108
+
+# scans of the same table that run at the same time, with other columns
+query I
+SELECT s FROM dl.t UNION ALL SELECT CAST(d AS VARCHAR) FROM dl.t UNION ALL SELECT CAST(e AS VARCHAR) FROM dl.t ORDER BY 1 NULLS FIRST
+----
+NULL
+1.5
+4.5
+40
+5.5
+50
+7
+7
+five
+four
+one
+three
+
+statement ok
+BEGIN
+
+query II
+SELECT a.i, b.e FROM dl.t a JOIN dl.t b ON a.i = b.i ORDER BY a.i
+----
+1	7
+3	7
+4	40
+5	50
+
+query II
+SELECT a.s, b.d FROM dl.t a JOIN dl.t b ON a.i = b.i ORDER BY a.i
+----
+one	1.5
+three	NULL
+four	4.5
+five	5.5
+
+statement ok
+COMMIT
+
+# the change feed reads the columns it needs
+statement ok
+SET VARIABLE latest = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+query IIII
+SELECT i, s, e, change_type FROM dl.table_changes('t', 0, getvariable('latest')) WHERE i = 4 ORDER BY change_type
+----
+4	four	40	insert
+
+query I
+SELECT count(*) FROM dl.table_changes('t', 0, getvariable('latest')) WHERE change_type = 'insert'
+----
+5
+
+query I
+SELECT count(*) FROM dl.table_insertions('t', 0, getvariable('latest'))
+----
+5
+
+query II
+SELECT s, i FROM dl.table_insertions('t', 0, getvariable('latest')) WHERE i >= 4 ORDER BY i
+----
+four	4
+five	5
+
+query II
+SELECT d, e FROM dl.table_insertions('t', 0, getvariable('latest')) WHERE i >= 4 ORDER BY i
+----
+4.5	40
+5.5	50
+
+# change feeds that are scanned at the same time with other columns
+query I
+SELECT count(*) FROM (
+	SELECT s FROM dl.table_insertions('t', 0, getvariable('latest'))
+	UNION ALL SELECT CAST(d AS VARCHAR) FROM dl.table_insertions('t', 0, getvariable('latest'))
+	UNION ALL SELECT CAST(e AS VARCHAR) FROM dl.table_insertions('t', 0, getvariable('latest'))
+	UNION ALL SELECT CAST(i AS VARCHAR) FROM dl.table_insertions('t', 0, getvariable('latest'))
+)
+----
+20
+
+# scans that run at the same time read the same cached rows: many scans with other columns, many times
+statement ok
+SET threads=4
+
+loop n 0 25
+
+query II
+SELECT count(*), count(s) + count(d) + count(e) + count(i) FROM (
+	SELECT s, NULL::DOUBLE AS d, NULL::INTEGER AS e, NULL::INTEGER AS i FROM dl.t
+	UNION ALL SELECT NULL, d, NULL, NULL FROM dl.t
+	UNION ALL SELECT NULL, NULL, e, NULL FROM dl.t
+	UNION ALL SELECT NULL, NULL, NULL, i FROM dl.t
+	UNION ALL SELECT s, NULL, NULL, NULL FROM dl.t
+)
+----
+20	19
+
+query I
+SELECT sum(e) + sum(i) + sum(length(s)) FROM (
+	SELECT e, 0 AS i, 0 AS s_len, NULL AS s FROM dl.t
+	UNION ALL SELECT 0, i, 0, NULL FROM dl.t
+	UNION ALL SELECT 0, 0, 0, s FROM dl.t
+) t(e, i, s_len, s)
+----
+133
+
+endloop
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template
