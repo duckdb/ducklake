@@ -1,0 +1,27 @@
+# name: test/sql/comments/comment_on_macro.test
+# description: DuckLake refuses comments on macros
+# group: [comments]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_macro_comment/')
+
+statement ok
+CREATE MACRO ducklake.add_one(x) AS x + 1
+
+statement error
+COMMENT ON MACRO ducklake.add_one IS 'adds one'
+----
+Unsupported catalog type for SET COMMENT in DuckLake
+
+query I
+SELECT ducklake.add_one(41)
+----
+42

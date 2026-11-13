@@ -1,0 +1,181 @@
+# name: test/sql/rest/rest_inlined_changes.test
+# description: Inlined rows of a REST catalog: struct fields that changed, changes between snapshots, scans in a transaction
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 10)
+
+# inlined rows of a struct whose fields changed
+statement ok
+CREATE TABLE dl.s(i INTEGER, s STRUCT(a INTEGER, b VARCHAR))
+
+statement ok
+INSERT INTO dl.s VALUES (1, {'a': 1, 'b': 'x'})
+
+statement ok
+ALTER TABLE dl.s ADD COLUMN s.c INTEGER
+
+statement ok
+INSERT INTO dl.s VALUES (2, {'a': 2, 'b': 'y', 'c': 3})
+
+query II
+SELECT i, s FROM dl.s ORDER BY i
+----
+1	{'a': 1, 'b': x, 'c': NULL}
+2	{'a': 2, 'b': y, 'c': 3}
+
+query II
+SELECT i, s.a FROM dl.s ORDER BY i
+----
+1	1
+2	2
+
+statement ok
+SET VARIABLE latest = (SELECT id FROM ducklake_current_snapshot('dl'))
+
+query II
+SELECT rowid, s FROM ducklake_table_insertions('dl', 'main', 's', 0, getvariable('latest')) ORDER BY ALL
+----
+0	{'a': 1, 'b': x, 'c': NULL}
+1	{'a': 2, 'b': y, 'c': 3}
+
+statement ok
+DELETE FROM dl.s WHERE i = 1
+
+statement ok
+SET VARIABLE latest = (SELECT id FROM ducklake_current_snapshot('dl'))
+
+query II
+SELECT rowid, s FROM ducklake_table_deletions('dl', 'main', 's', 0, getvariable('latest')) ORDER BY ALL
+----
+0	{'a': 1, 'b': x, 'c': NULL}
+
+query III
+SELECT rowid, change_type, i FROM ducklake_table_changes('dl', 'main', 's', 0, getvariable('latest')) ORDER BY ALL
+----
+0	delete	1
+0	insert	1
+1	insert	2
+
+# changes read in one transaction with other columns
+statement ok
+BEGIN
+
+query I
+SELECT i FROM ducklake_table_insertions('dl', 'main', 's', 0, getvariable('latest')) ORDER BY ALL
+----
+1
+2
+
+query II
+SELECT i, s.b FROM ducklake_table_insertions('dl', 'main', 's', 0, getvariable('latest')) ORDER BY ALL
+----
+1	x
+2	y
+
+query I
+SELECT s.a FROM ducklake_table_deletions('dl', 'main', 's', 0, getvariable('latest')) ORDER BY ALL
+----
+1
+
+query I
+SELECT i FROM ducklake_table_deletions('dl', 'main', 's', 0, getvariable('latest')) ORDER BY ALL
+----
+1
+
+statement ok
+COMMIT
+
+# scans in one transaction that read other fields of a struct
+statement ok
+BEGIN
+
+query I
+SELECT s.a FROM dl.s
+----
+2
+
+query I
+SELECT s.b FROM dl.s
+----
+y
+
+query I
+SELECT s FROM dl.s
+----
+{'a': 2, 'b': y, 'c': 3}
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+query I
+SELECT s.a FROM ducklake_table_insertions('dl', 'main', 's', 0, getvariable('latest')) ORDER BY ALL
+----
+1
+2
+
+query I
+SELECT s FROM ducklake_table_insertions('dl', 'main', 's', 0, getvariable('latest')) ORDER BY ALL
+----
+{'a': 1, 'b': x, 'c': NULL}
+{'a': 2, 'b': y, 'c': 3}
+
+statement ok
+COMMIT
+
+# rows deleted by the transaction itself
+statement ok
+INSERT INTO dl.s VALUES (3, {'a': 3, 'b': 'z', 'c': 4})
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.s WHERE i = 2
+
+query I
+SELECT i FROM dl.s
+----
+3
+
+statement ok
+UPDATE dl.s SET i = 4 WHERE i = 3
+
+query II
+SELECT i, s.b FROM dl.s
+----
+4	z
+
+statement ok
+COMMIT
+
+# a renamed field and a type that was widened
+statement ok
+CREATE TABLE dl.r(i INTEGER, s STRUCT(a INTEGER, b INTEGER))
+
+statement ok
+INSERT INTO dl.r VALUES (1, {'a': 1, 'b': 2})
+
+statement ok
+SET VARIABLE r_version = (SELECT id FROM ducklake_current_snapshot('dl'))
+
+statement ok
+ALTER TABLE dl.r RENAME s.a TO aa
+
+statement ok
+ALTER TABLE dl.r ALTER i TYPE BIGINT
+
+query II
+SELECT i, s FROM dl.r
+----
+1	{'aa': 1, 'b': 2}
+
+query II
+SELECT i, s FROM dl.r AT (VERSION => getvariable('r_version'))
+----
+1	{'a': 1, 'b': 2}

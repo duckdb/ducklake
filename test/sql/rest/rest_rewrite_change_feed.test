@@ -1,0 +1,40 @@
+# name: test/sql/rest/rest_rewrite_change_feed.test
+# description: The change feed of a REST client leaves out the rows that a rewrite moved into a merged file
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+statement ok
+CALL ducklake_rewrite_data_files('dl', 't', delete_threshold => 0)
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+query I rest_db:rest_server_con
+SELECT i FROM ducklake_table_insertions('rest_lake', 'main', 't', 4, 6) ORDER BY i
+----
+3
+
+query I
+SELECT i FROM ducklake_table_insertions('dl', 'main', 't', 4, 6) ORDER BY i
+----
+3
+
+include test/template/rest_teardown.test_template
