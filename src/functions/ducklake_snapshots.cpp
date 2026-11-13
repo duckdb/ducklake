@@ -190,6 +190,8 @@ static unique_ptr<FunctionData> DuckLakeSnapshotsBind(ClientContext &context, Ta
                                                       vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
+	// the result depends on the catalog state that concurrent commits change
+	transaction.MarkCatalogStateRead();
 
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto result = make_uniq<DuckLakeSnapshotsBindData>();

@@ -225,6 +225,82 @@ static set<TableIndex> GetRenamedAfterSnapshot(const string &metadata_table_name
 	return result;
 }
 
+bool DuckLakeTransactionState::ReadTableChangedByOthers(const SnapshotChangeInformation &other_changes,
+                                                        TableIndex except_table) const {
+	for (auto &entry : table_reads) {
+		auto table_id = entry.first;
+		if (table_id == except_table) {
+			continue;
+		}
+		for (auto changed : {&other_changes.inserted_tables, &other_changes.tables_deleted_from,
+		                     &other_changes.tables_inserted_inlined, &other_changes.tables_deleted_inlined,
+		                     &other_changes.altered_tables, &other_changes.dropped_tables}) {
+			if (changed->find(table_id) != changed->end()) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool DuckLakeTransactionState::InsertMayDependOnReads(TableIndex table_id,
+                                                      const SnapshotChangeInformation &other_changes) const {
+	// a blind append cannot be changed by a delete that committed first: the serial order is the delete, then
+	// the insert. That order only holds if nothing the transaction read was changed since its snapshot - neither the
+	// table, nor any other table it read.
+	return !tracks_table_reads || reads_catalog_state || table_reads.find(table_id) != table_reads.end() ||
+	       ReadTableChangedByOthers(other_changes, table_id);
+}
+
+bool DuckLakeTransactionState::GetInsertedFileQueries(TableIndex table_id, vector<string> &queries) const {
+	auto scope = delete_conflict_scopes.find(table_id);
+	if (!tracks_table_reads || reads_catalog_state || scope == delete_conflict_scopes.end() ||
+	    scope->second.IsTableWide()) {
+		return false;
+	}
+	queries = scope->second.inserted_file_queries;
+	auto reads = table_reads.find(table_id);
+	if (reads != table_reads.end()) {
+		for (auto &read_id : reads->second) {
+			auto read_scope = read_scopes.find(read_id);
+			if (read_scope == read_scopes.end() || read_scope->second.empty()) {
+				// a read that never started, or that any inserted file could change
+				return false;
+			}
+			if (std::find(queries.begin(), queries.end(), read_scope->second) == queries.end()) {
+				queries.push_back(read_scope->second);
+			}
+		}
+	}
+	// the commit runs every query - past a few, one check against any insert is cheaper
+	return queries.size() <= DuckLakeDeleteConflictScope::MAX_INSERTED_FILE_QUERIES;
+}
+
+void DuckLakeTransactionState::CheckDeleteAgainstInserts(TableIndex table_id,
+                                                         const SnapshotChangeInformation &other_changes,
+                                                         const DuckLakeCommitContext &context) const {
+	// inlined inserts have no file statistics to check the deletes against
+	ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
+	if (other_changes.inserted_tables.find(table_id) == other_changes.inserted_tables.end()) {
+		return;
+	}
+	// the deletes ran against a snapshot without the rows inserted since - they conflict only if one of those rows
+	// could have changed what the transaction read from the table: the rows a delete matched, or any other read
+	// the serial order is the insert, then the delete - which only holds if the other tables the transaction read
+	// were not changed since its snapshot either
+	vector<string> queries;
+	if (ReadTableChangedByOthers(other_changes, table_id) || !GetInsertedFileQueries(table_id, queries)) {
+		ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
+		return;
+	}
+	for (auto &query : queries) {
+		auto conflicting_file = context.conflict_query_executor(query)->Fetch();
+		if (conflicting_file && conflicting_file->size() > 0) {
+			ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
+		}
+	}
+}
+
 void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformation &changes,
                                                  const SnapshotChangeInformation &other_changes,
                                                  DuckLakeSnapshot transaction_snapshot,
@@ -280,27 +356,30 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 	for (auto &table_id : changes.tables_inserted_into) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "insert into table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "insert into table", "altered it");
-		ConflictCheck(table_id, other_changes.tables_deleted_from, "insert into table", "deleted from it");
+		if (InsertMayDependOnReads(table_id, other_changes)) {
+			ConflictCheck(table_id, other_changes.tables_deleted_from, "insert into table", "deleted from it");
+		}
 		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "insert into table",
 		              "deleted inlined data from it");
 	}
 	for (auto &table_id : changes.tables_inserted_inlined) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "insert into table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "insert into table", "altered it");
-		ConflictCheck(table_id, other_changes.tables_deleted_from, "insert into table", "deleted from it");
+		if (InsertMayDependOnReads(table_id, other_changes)) {
+			ConflictCheck(table_id, other_changes.tables_deleted_from, "insert into table", "deleted from it");
+		}
 		ConflictCheck(table_id, other_changes.tables_deleted_inlined, "insert into table",
 		              "deleted inlined data from it");
 	}
 	for (auto &table_id : changes.tables_deleted_from) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "delete from table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "delete from table", "altered it");
-		ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
-		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
 	}
 	// a delete that matched no rows must still conflict with concurrent inserts to the same table
-	for (auto &table_id : changes.tables_delete_attempted) {
-		ConflictCheck(table_id, other_changes.inserted_tables, "delete from table", "inserted into it");
-		ConflictCheck(table_id, other_changes.tables_inserted_inlined, "delete from table", "inserted into it");
+	set<TableIndex> tables_deleting = changes.tables_deleted_from;
+	tables_deleting.insert(changes.tables_delete_attempted.begin(), changes.tables_delete_attempted.end());
+	for (auto &table_id : tables_deleting) {
+		CheckDeleteAgainstInserts(table_id, other_changes, context);
 	}
 	CheckFileConflicts(changes, other_changes, context);
 	// inlined deletes of data file rows conflict per file in CheckFileConflicts

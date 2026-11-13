@@ -50,6 +50,12 @@ public:
 	optional_ptr<const FilterPushdownInfo> GetFilterInfo() const {
 		return filter_info.get();
 	}
+	DuckLakeFunctionInfo &GetReadInfo() const {
+		return read_info;
+	}
+	//! The query for the data files committed after the snapshot of the scan that its static filters could match,
+	//! empty if none of them can rule out a file. Dynamic filters are left out: they only hold for the rows read.
+	string GetCommittedFileQuery() const;
 
 	bool CanUseGlobalStats() const;
 	//! Whether filters can prune files by their stats

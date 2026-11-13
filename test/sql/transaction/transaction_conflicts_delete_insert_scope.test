@@ -1,0 +1,738 @@
+# name: test/sql/transaction/transaction_conflicts_delete_insert_scope.test
+# description: a delete conflicts only with concurrent inserts it could have matched, a blind insert never conflicts with a concurrent delete
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_delete_insert_scope', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE TABLE ducklake.t(hour INTEGER, n INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t SET PARTITIONED BY (hour)
+
+statement ok
+INSERT INTO ducklake.t VALUES (10, 1), (11, 2), (12, 3)
+
+# a delete of one partition commits after an insert into another partition
+statement ok con1
+BEGIN
+
+query I con1
+DELETE FROM ducklake.t WHERE hour = 10
+----
+1
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (13, 4)
+
+statement ok con1
+COMMIT
+
+query II
+SELECT hour, n FROM ducklake.t ORDER BY ALL
+----
+11	2
+12	3
+13	4
+
+# a blind insert commits after a delete of another partition
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.t VALUES (14, 5)
+
+query I con2
+DELETE FROM ducklake.t WHERE hour = 11
+----
+1
+
+statement ok con1
+COMMIT
+
+query II
+SELECT hour, n FROM ducklake.t ORDER BY ALL
+----
+12	3
+13	4
+14	5
+
+# a blind insert commits after a delete of the partition it inserts into: the delete serializes first
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.t VALUES (12, 6)
+
+query I con2
+DELETE FROM ducklake.t WHERE hour = 12
+----
+1
+
+statement ok con1
+COMMIT
+
+query II
+SELECT hour, n FROM ducklake.t ORDER BY ALL
+----
+12	6
+13	4
+14	5
+
+# a delete commits after an insert into the partition it deletes from: conflict
+statement ok con1
+BEGIN
+
+query I con1
+DELETE FROM ducklake.t WHERE hour = 13
+----
+1
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (13, 7)
+
+statement error con1
+COMMIT
+----
+another transaction has inserted into it
+
+query II
+SELECT hour, n FROM ducklake.t ORDER BY ALL
+----
+12	6
+13	4
+13	7
+14	5
+
+# an upsert of an absent key: the delete matched no rows, but still conflicts with an insert of a row it would have
+# matched
+statement ok con1
+BEGIN
+
+query I con1
+DELETE FROM ducklake.t WHERE hour = 15
+----
+0
+
+statement ok con1
+INSERT INTO ducklake.t VALUES (15, 0)
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (15, 8)
+
+statement error con1
+COMMIT
+----
+another transaction has inserted into it
+
+# but not with an insert of rows it could not match
+statement ok con1
+BEGIN
+
+query I con1
+DELETE FROM ducklake.t WHERE hour = 16
+----
+0
+
+statement ok con1
+INSERT INTO ducklake.t VALUES (16, 0)
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (17, 9)
+
+statement ok con1
+COMMIT
+
+query I
+DELETE FROM ducklake.t WHERE hour = 16
+----
+1
+
+# a range filter is checked against the statistics of the inserted files
+statement ok con1
+BEGIN
+
+query I con1
+DELETE FROM ducklake.t WHERE hour <= 12
+----
+1
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (20, 10), (21, 11)
+
+statement ok con1
+COMMIT
+
+statement ok con1
+BEGIN
+
+query I con1
+DELETE FROM ducklake.t WHERE hour >= 21
+----
+1
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (18, 12), (22, 13)
+
+statement error con1
+COMMIT
+----
+another transaction has inserted into it
+
+# a filter on a column that is not a partition column is checked against the column statistics
+statement ok con1
+BEGIN
+
+query I con1
+DELETE FROM ducklake.t WHERE n = 4
+----
+1
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (13, 100)
+
+statement ok con1
+COMMIT
+
+query II
+SELECT hour, n FROM ducklake.t ORDER BY ALL
+----
+13	7
+13	100
+14	5
+15	8
+17	9
+18	12
+20	10
+21	11
+22	13
+
+# an update is a delete: it conflicts only with inserts it could have matched
+statement ok con1
+BEGIN
+
+query I con1
+UPDATE ducklake.t SET n = n + 1000 WHERE hour = 14
+----
+1
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (30, 14)
+
+statement ok con1
+COMMIT
+
+statement ok con1
+BEGIN
+
+query I con1
+UPDATE ducklake.t SET n = n + 1000 WHERE hour = 30
+----
+1
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (30, 15)
+
+statement error con1
+COMMIT
+----
+another transaction has inserted into it
+
+# a delete without filters that can rule out a file conflicts with any insert
+statement ok con1
+BEGIN
+
+query I con1
+DELETE FROM ducklake.t WHERE hour IN (SELECT 13)
+----
+2
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (40, 16)
+
+statement error con1
+COMMIT
+----
+another transaction has inserted into it
+
+# a delete that also reads other data conflicts with any insert, even if it has filters that rule out the insert
+statement ok con1
+BEGIN
+
+query I con1
+DELETE FROM ducklake.t WHERE hour = 13 AND n IN (SELECT n FROM ducklake.t WHERE hour = 13)
+----
+2
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (42, 18)
+
+statement error con1
+COMMIT
+----
+another transaction has inserted into it
+
+statement ok
+DELETE FROM ducklake.t WHERE hour = 42
+
+statement ok con1
+BEGIN
+
+query I con1
+DELETE FROM ducklake.t WHERE n % 2 = 0
+----
+6
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (41, 17)
+
+statement error con1
+COMMIT
+----
+another transaction has inserted into it
+
+# an insert of a transaction that read the table conflicts with a concurrent delete
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.t SELECT hour + 100, n FROM ducklake.t WHERE hour = 13
+
+query I con2
+DELETE FROM ducklake.t WHERE hour = 22
+----
+1
+
+statement error con1
+COMMIT
+----
+another transaction has deleted from it
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM ducklake.t WHERE hour = 13
+----
+2
+
+statement ok con1
+INSERT INTO ducklake.t VALUES (50, 2)
+
+query I con2
+DELETE FROM ducklake.t WHERE hour = 21
+----
+1
+
+statement error con1
+COMMIT
+----
+another transaction has deleted from it
+
+# reading another table does not make an insert conflict with deletes from this one
+statement ok
+CREATE TABLE ducklake.other AS SELECT 1 AS i
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM ducklake.other
+----
+1
+
+statement ok con1
+INSERT INTO ducklake.t VALUES (51, 3)
+
+query I con2
+DELETE FROM ducklake.t WHERE hour = 20
+----
+1
+
+statement ok con1
+COMMIT
+
+query II
+SELECT hour, n FROM ducklake.t ORDER BY ALL
+----
+13	7
+13	100
+14	1005
+15	8
+17	9
+18	12
+30	14
+30	15
+40	16
+41	17
+51	3
+
+# a rewrite of a closed partition: the rewrite and the appends to other partitions both commit, in either order
+statement ok
+COPY (SELECT 107 AS n) TO '{DATA_PATH}/ducklake_delete_insert_scope/main/t/hour=13/rewrite.parquet'
+
+statement ok con1
+BEGIN
+
+query I con1
+DELETE FROM ducklake.t WHERE hour = 13
+----
+2
+
+statement ok con1
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/ducklake_delete_insert_scope/main/t/hour=13/rewrite.parquet')
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (60, 1)
+
+statement ok con1
+COMMIT
+
+statement ok
+COPY (SELECT 1005 AS n) TO '{DATA_PATH}/ducklake_delete_insert_scope/main/t/hour=14/rewrite.parquet'
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.t VALUES (61, 1)
+
+statement ok con2
+BEGIN
+
+query I con2
+DELETE FROM ducklake.t WHERE hour = 14
+----
+1
+
+statement ok con2
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/ducklake_delete_insert_scope/main/t/hour=14/rewrite.parquet')
+
+statement ok con2
+COMMIT
+
+statement ok con1
+COMMIT
+
+query II
+SELECT hour, n FROM ducklake.t WHERE hour IN (13, 14, 60, 61) ORDER BY ALL
+----
+13	107
+14	1005
+60	1
+61	1
+
+# an inlined insert has no file statistics: a delete conflicts with it whatever it matched
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}_inlined' AS inlined (DATA_PATH '{DATA_PATH}/ducklake_delete_insert_scope_inlined', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE inlined.t AS SELECT range::INTEGER AS hour FROM range(100)
+
+statement ok con1
+BEGIN
+
+query I con1
+DELETE FROM inlined.t WHERE hour = 10
+----
+1
+
+statement ok con2
+INSERT INTO inlined.t VALUES (200)
+
+statement error con1
+COMMIT
+----
+another transaction has inserted into it
+
+# past 32 distinct delete statements on a table, its deletes conflict with any insert
+statement ok con1
+BEGIN
+
+loop i 0 40
+
+statement ok con1
+DELETE FROM ducklake.t WHERE hour = 1000 + ${i}
+
+endloop
+
+statement ok con1
+INSERT INTO ducklake.t VALUES (70, 1)
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (71, 1)
+
+statement error con1
+COMMIT
+----
+another transaction has inserted into it
+
+# a repeated delete statement is checked once, and stays scoped
+statement ok con1
+BEGIN
+
+loop i 0 40
+
+statement ok con1
+DELETE FROM ducklake.t WHERE hour = 1000
+
+endloop
+
+statement ok con1
+INSERT INTO ducklake.t VALUES (72, 1)
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (73, 1)
+
+statement ok con1
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.t WHERE hour BETWEEN 70 AND 73
+----
+3
+
+# an insert that read the table through a metadata function conflicts with a concurrent delete
+statement ok
+CREATE TABLE ducklake.r1(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.r1 VALUES (0)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.r1 SELECT file_count::INTEGER FROM ducklake_table_info('ducklake') WHERE table_name = 'r1'
+
+statement ok con2
+DELETE FROM ducklake.r1
+
+statement error con1
+COMMIT
+----
+another transaction has deleted from it
+
+query I
+SELECT count(*) FROM ducklake.r1
+----
+0
+
+# a delete conflicts with an insert that changes what the transaction read from the table before it
+statement ok
+INSERT INTO ducklake.r1 VALUES (1)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.r1 SELECT count(*)::INTEGER + 10 FROM ducklake.r1
+
+statement ok con1
+DELETE FROM ducklake.r1 WHERE i = 1
+
+statement ok con2
+INSERT INTO ducklake.r1 SELECT 2 FROM ducklake.r1 WHERE i = 1
+
+statement error con1
+COMMIT
+----
+another transaction has inserted into it
+
+query I
+SELECT i FROM ducklake.r1 ORDER BY i
+----
+1
+2
+
+# a partition rewrite that first reads the partition still commits alongside an append to another partition
+statement ok
+COPY (SELECT 108 AS n) TO '{DATA_PATH}/ducklake_delete_insert_scope/main/t/hour=13/rewrite_read.parquet'
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT sum(n) FROM ducklake.t WHERE hour = 13
+----
+107
+
+query I con1
+DELETE FROM ducklake.t WHERE hour = 13
+----
+1
+
+statement ok con1
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/ducklake_delete_insert_scope/main/t/hour=13/rewrite_read.parquet')
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (80, 1)
+
+statement ok con1
+COMMIT
+
+query II
+SELECT hour, n FROM ducklake.t WHERE hour IN (13, 80) ORDER BY ALL
+----
+13	108
+80	1
+
+# but an insert into the partition it read conflicts, even if the delete itself could not match it
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM ducklake.t WHERE hour = 80
+----
+1
+
+query I con1
+DELETE FROM ducklake.t WHERE hour = 13
+----
+1
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (80, 2)
+
+statement error con1
+COMMIT
+----
+another transaction has inserted into it
+
+# a delete after reading catalog state conflicts with any insert
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) > 0 FROM ducklake_snapshots('ducklake')
+----
+true
+
+query I con1
+DELETE FROM ducklake.t WHERE hour = 13
+----
+1
+
+statement ok con2
+INSERT INTO ducklake.t VALUES (81, 1)
+
+statement error con1
+COMMIT
+----
+another transaction has inserted into it
+
+# an insert that read another table conflicts with a concurrent delete, if that table changed too
+statement ok
+CREATE TABLE ducklake.c_src(i INTEGER)
+
+statement ok
+CREATE TABLE ducklake.c_dst(x INTEGER)
+
+statement ok
+INSERT INTO ducklake.c_src VALUES (1)
+
+statement ok
+INSERT INTO ducklake.c_dst VALUES (1)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.c_dst SELECT 1 FROM ducklake.c_src
+
+statement ok con2
+BEGIN
+
+statement ok con2
+DELETE FROM ducklake.c_src
+
+statement ok con2
+DELETE FROM ducklake.c_dst WHERE x = 1
+
+statement ok con2
+COMMIT
+
+statement error con1
+COMMIT
+----
+another transaction has deleted from it
+
+query I
+SELECT count(*) FROM ducklake.c_dst
+----
+0
+
+# reading another table that nobody changed keeps the insert a blind append
+statement ok
+INSERT INTO ducklake.c_src VALUES (2)
+
+statement ok
+CREATE TABLE ducklake.c_cfg AS SELECT 5 AS v
+
+statement ok
+INSERT INTO ducklake.c_dst VALUES (7)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO ducklake.c_dst SELECT v FROM ducklake.c_cfg
+
+query I con2
+DELETE FROM ducklake.c_dst WHERE x = 7
+----
+1
+
+statement ok con1
+COMMIT
+
+query I
+SELECT x FROM ducklake.c_dst ORDER BY x
+----
+5
+
+# a delete that read another table conflicts with a concurrent insert, if that table changed too
+statement ok
+INSERT INTO ducklake.c_dst VALUES (8)
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM ducklake.c_src
+----
+1
+
+query I con1
+DELETE FROM ducklake.c_dst WHERE x = 8
+----
+1
+
+statement ok con2
+BEGIN
+
+statement ok con2
+INSERT INTO ducklake.c_src VALUES (3)
+
+statement ok con2
+INSERT INTO ducklake.c_dst VALUES (9)
+
+statement ok con2
+COMMIT
+
+statement error con1
+COMMIT
+----
+another transaction has inserted into it

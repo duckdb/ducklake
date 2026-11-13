@@ -564,6 +564,10 @@ string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 	auto schema = SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName());
 	auto remote_query = DuckLakeMetadataManager::GenerateFileListQuery(
 	    table, snapshot, filter_info, dynamic_filters, runtime_filter_stats_columns, file_list_type, schema);
+	if (remote_query.empty()) {
+		// a COMMITTED_AFTER filter that cannot rule out any file
+		return remote_query;
+	}
 	// placeholders inside the literal are not replaced later
 	SubstituteSnapshotPlaceholders(snapshot, remote_query);
 	return PostgresQuery(remote_query);

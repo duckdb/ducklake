@@ -373,6 +373,10 @@ public:
 	virtual vector<DuckLakeFileListEntry> GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                                                       const FilterPushdownInfo *filter_info = nullptr,
 	                                                       bool include_local_changes = true);
+	//! A query for a data file of the table committed after the snapshot whose statistics do not rule out a row
+	//! matching the filter, which returns no rows if there is none. Empty if the filter cannot rule out any file.
+	string GetCommittedFileMatchingFilterQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
+	                                           const FilterPushdownInfo &filter_info);
 	virtual vector<DuckLakeFileListEntry> GetTableInsertions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot,
 	                                                         DuckLakeSnapshot snapshot);
 	virtual vector<DuckLakeDeleteScanEntry> GetTableDeletions(DuckLakeTableEntry &table,
@@ -670,7 +674,8 @@ public:
 	string GetPathSeparator(const string &path);
 
 protected:
-	enum class FileListType : uint8_t { SCAN, EXTENDED };
+	//! COMMITTED_AFTER: the first data file committed after the snapshot that the filter could match
+	enum class FileListType : uint8_t { SCAN, EXTENDED, COMMITTED_AFTER };
 	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
 
 	virtual string GetLatestSnapshotQuery() const;

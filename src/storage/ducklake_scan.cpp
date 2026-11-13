@@ -273,7 +273,9 @@ DuckLakeFunctionInfo::DuckLakeFunctionInfo(DuckLakeTableEntry &table, DuckLakeTr
 
 shared_ptr<DuckLakeFunctionInfo>
 DuckLakeFunctionInfo::Create(DuckLakeTableEntry &table, DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
+	// every scan of the table is created here - what the transaction inserts or deletes can depend on what it read
 	auto result = make_shared_ptr<DuckLakeFunctionInfo>(table, transaction, snapshot);
+	result->read_id = transaction.MarkTableRead(table.GetTableId());
 	result->table_name = table.name;
 	result->column_names = table.GetColumns().GetColumnNames();
 	result->column_types = table.GetColumns().GetColumnTypes();

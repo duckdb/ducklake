@@ -14,6 +14,22 @@
 namespace duckdb {
 struct DuckLakeAddedFields;
 
+//! What the deletes of a transaction on one table could have matched, for the conflict check against concurrent
+//! inserts into the table
+struct DuckLakeDeleteConflictScope {
+	//! Past this many distinct queries the deletes conflict with any concurrent insert into the table
+	static constexpr idx_t MAX_INSERTED_FILE_QUERIES = 32;
+	//! A delete without usable filters could have matched any inserted row
+	bool table_wide = false;
+	//! One query per delete statement, each returns the data files committed after the snapshot of its scan that
+	//! the filters of the statement could match
+	vector<string> inserted_file_queries;
+
+	bool IsTableWide() const {
+		return table_wide || inserted_file_queries.empty();
+	}
+};
+
 struct DuckLakeColumnSchemaEntry {
 	FieldIndex field_index;
 	Identifier column_name;
@@ -204,6 +220,16 @@ public:
 	                                  ErrorData &error);
 	void CheckForConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                       DuckLakeSnapshot transaction_snapshot, const DuckLakeCommitContext &context) const;
+	//! Whether an insert of this transaction into the table can depend on what the transaction read from it
+	bool InsertMayDependOnReads(TableIndex table_id, const SnapshotChangeInformation &other_changes) const;
+	//! Whether another transaction changed a table this transaction read, other than the given one, since its snapshot
+	bool ReadTableChangedByOthers(const SnapshotChangeInformation &other_changes, TableIndex except_table) const;
+	//! The queries for the files a concurrent insert added that could change what the transaction read from the table
+	//! or deleted from it. False if any inserted file could.
+	bool GetInsertedFileQueries(TableIndex table_id, vector<string> &queries) const;
+	//! Fails when a concurrent insert into the table added rows that a delete of this transaction could have matched
+	void CheckDeleteAgainstInserts(TableIndex table_id, const SnapshotChangeInformation &other_changes,
+	                               const DuckLakeCommitContext &context) const;
 	//! Fails when a snapshot tagged by this transaction was expired meanwhile
 	void CheckTaggedSnapshotsExist(const DuckLakeCommitContext &context) const;
 	//! The ids of the snapshots the tags point at, as a SQL list
@@ -323,6 +349,23 @@ public:
 	map<TableIndex, DroppedDataFileStats> dropped_file_stats;
 	set<TableIndex> tables_deleted_from;
 	set<TableIndex> tables_delete_attempted;
+	//! What the deletes of this transaction could have matched, per table. A table without an entry conflicts
+	//! with any concurrent insert, as on the server-side commit path, which does not stage them.
+	map<TableIndex, DuckLakeDeleteConflictScope> delete_conflict_scopes;
+	//! Whether table_reads lists every scan of this transaction. Without it an insert conflicts with any concurrent
+	//! delete from the table, and a delete with any concurrent insert, as on the server-side commit path, which does
+	//! not stage them.
+	bool tracks_table_reads = false;
+	//! The reads of each table this transaction scanned, by read id
+	map<TableIndex, set<idx_t>> table_reads;
+	//! Per read id, the query for the data files committed after the snapshot of the read that its filters could
+	//! match - empty when a concurrently inserted file could change what it read whatever it holds. A read that never
+	//! started has no entry.
+	unordered_map<idx_t, string> read_scopes;
+	//! Whether the transaction read catalog state through a metadata function (file counts, file lists, snapshots),
+	//! which any concurrent change to a table can change
+	bool reads_catalog_state = false;
+	idx_t next_read_id = 0;
 	unique_ptr<DuckLakeCatalogSet> new_schemas;
 	map<SchemaIndex, reference<DuckLakeSchemaEntry>> dropped_schemas;
 	LocalTableChanges local_changes;

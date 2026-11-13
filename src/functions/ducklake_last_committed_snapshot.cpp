@@ -14,6 +14,8 @@ static unique_ptr<FunctionData> DuckLakeLastCommittedSnapshotBind(ClientContext 
                                                                   vector<Identifier> &names) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
+	// the result depends on the catalog state that concurrent commits change
+	transaction.MarkCatalogStateRead();
 	auto &duck_catalog = transaction.GetCatalog();
 	names.emplace_back("id");
 	return_types.emplace_back(LogicalType::UBIGINT);

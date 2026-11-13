@@ -60,6 +60,8 @@ struct DuckLakeFunctionInfo : public TableFunctionInfo {
 	string flush_sort_order_sql;
 	//! Whether the scan sees the uncommitted changes of its transaction, which an AT clause excludes
 	bool include_local_changes = true;
+	//! Identifies this read of the table within its transaction, see DuckLakeTransaction::MarkTableRead
+	idx_t read_id = DConstants::INVALID_INDEX;
 
 	shared_ptr<DuckLakeTransaction> GetTransaction();
 	bool CanUseGlobalStats();
