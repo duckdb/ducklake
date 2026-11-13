@@ -229,9 +229,7 @@ class RegressionRunTest(unittest.TestCase):
 
     def test_other_arguments_reach_the_comparison(self):
         self.assertEqual(self.main("--threads", "2", "--benchmark-argument", "sf=1"), 0)
-        self.assertEqual(
-            self.compare.call_args.args[2][4:], ["--threads", "2", "--benchmark-argument", "sf=1", "--samples", "10"]
-        )
+        self.assertEqual(self.compare.call_args.args[2][4:], ["--threads", "2", "--benchmark-argument", "sf=1"])
 
     def test_interrupt_drops_databases(self):
         self.compare.side_effect = KeyboardInterrupt
@@ -257,10 +255,10 @@ class RegressionRunTest(unittest.TestCase):
         self.compare.side_effect = compare
         self.assertEqual(self.main(), 1)
         self.assertEqual(self.compare.call_count, 1)
-        self.assertEqual(self.compare.call_args.args[0], run.RUNNER)
+        self.assertEqual(self.compare.call_args.args[0], run.COMPARE)
         self.assertEqual(self.dropped(), self.created()[::-1])
         self.assertIn(
-            "::error::benchmark/example.benchmark (micro_postgres) is 10% or more slower",
+            "::error::benchmark/example.benchmark (micro_postgres) is at least 10% and 5 ms slower",
             self.stdout.getvalue(),
         )
 
