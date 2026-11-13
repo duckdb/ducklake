@@ -1,0 +1,47 @@
+# name: test/sql/rest/rest_failed_commit.test
+# description: The client removes the files of a transaction whose commit failed
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok con1
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok con1
+CREATE TABLE dl.t AS SELECT i FROM range(10) t(i)
+
+query I con1
+SELECT count(*) FROM glob('{TEST_DIR}/**/*.parquet')
+----
+1
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t SELECT i FROM range(100) t(i)
+
+query I con1
+SELECT count(*) FROM glob('{TEST_DIR}/**/*.parquet')
+----
+2
+
+# the table is dropped by another transaction, so the commit fails
+statement ok con2
+DROP TABLE dl.t
+
+statement error con1
+COMMIT
+----
+<REGEX>:.*
+
+# the file of the failed transaction is gone
+query I con1
+SELECT count(*) FROM glob('{TEST_DIR}/**/*.parquet')
+----
+1
+
+statement ok con1
+DETACH dl
+
+include test/template/rest_teardown.test_template

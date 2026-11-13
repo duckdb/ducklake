@@ -1,0 +1,98 @@
+# name: test/sql/rest/rest_delete.test
+# description: Delete and update rows through the DuckLake REST API
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+# inlined rows
+statement ok
+CREATE TABLE dl.inlined(i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO dl.inlined VALUES (1, 'a'), (2, 'b'), (3, 'c')
+
+statement ok
+DELETE FROM dl.inlined WHERE i = 2
+
+query II
+FROM dl.inlined ORDER BY i
+----
+1	a
+3	c
+
+statement ok
+UPDATE dl.inlined SET s = 'updated' WHERE i = 3
+
+query II
+FROM dl.inlined ORDER BY i
+----
+1	a
+3	updated
+
+# rows in data files
+statement ok
+CREATE TABLE dl.files AS SELECT range i FROM range(10000)
+
+statement ok
+DELETE FROM dl.files WHERE i % 2 = 0
+
+query II
+SELECT count(*), sum(i) FROM dl.files
+----
+5000	25000000
+
+statement ok
+UPDATE dl.files SET i = i + 1 WHERE i < 100
+
+query II
+SELECT count(*), sum(i) FROM dl.files
+----
+5000	25000050
+
+# delete everything
+statement ok
+DELETE FROM dl.files
+
+query I
+SELECT count(*) FROM dl.files
+----
+0
+
+# time travel to before the deletes
+query I
+SELECT count(*) FROM dl.files AT (VERSION => 5)
+----
+10000
+
+query II rest_db:rest_server_con
+FROM rest_lake.inlined ORDER BY i
+----
+1	a
+3	updated
+
+# delete in the same transaction as the insert
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.inlined VALUES (4, 'd'), (5, 'e')
+
+statement ok
+DELETE FROM dl.inlined WHERE i = 4 OR i = 1
+
+statement ok
+COMMIT
+
+query II
+FROM dl.inlined ORDER BY i
+----
+3	updated
+5	e
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

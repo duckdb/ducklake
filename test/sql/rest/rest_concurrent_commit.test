@@ -1,0 +1,60 @@
+# name: test/sql/rest/rest_concurrent_commit.test
+# description: A REST commit that follows commits of other connections returns its snapshot, and the client sees the changes in between
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok con1
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+# a second catalog with a client of its own stands for another connection
+statement ok con2
+ATTACH 'ducklake:rest:{rest_server}' AS dl2
+
+statement ok con1
+CREATE TABLE dl.a(i INTEGER)
+
+statement ok con1
+CREATE TABLE dl.b(i INTEGER)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.a VALUES (1)
+
+# another connection changes the schema while the transaction is open
+statement ok con2
+ALTER TABLE dl2.b ADD COLUMN j INTEGER DEFAULT 7
+
+statement ok con1
+COMMIT
+
+# the connection that committed after the change sees it
+query II con1
+SELECT column_name, ordinal_position FROM information_schema.columns WHERE table_catalog = 'dl' AND table_name = 'b' ORDER BY ordinal_position
+----
+i	1
+j	2
+
+statement ok con1
+INSERT INTO dl.b VALUES (1, 2)
+
+query II con2
+SELECT * FROM dl2.b
+----
+1	2
+
+query I con2
+SELECT count(*) FROM dl2.a
+----
+1
+
+# the response holds the committed snapshot, which other commits moved ahead of the snapshot 1 that the request is based on
+query IIIII
+SELECT status, response->>'$.snapshot.snapshot_id', response->>'$.snapshot.schema_version', response->>'$.snapshot.next_catalog_id', response->>'$.snapshot.next_file_id'
+FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"snapshot_id": 1, "requests": [{"create_schema": {"placeholder_id": -1, "schema_name": "s"}}]}')
+----
+200	6	4	4	2
