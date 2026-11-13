@@ -209,8 +209,9 @@ struct DuckLakeDeleteFileInfo {
 	DataFileIndex id;
 	TableIndex table_id;
 	DataFileIndex data_file_id;
-	//! The delete file this one replaces, so branch mappings move to the replacement
+	//! The delete file this one replaces and its writer, the branch of the add event the commit read it through
 	DataFileIndex overwritten_delete_file_id;
+	idx_t overwritten_delete_file_branch_id = 0;
 	string path;
 	DeleteFileFormat format = DeleteFileFormat::PARQUET;
 	idx_t delete_count;
@@ -518,6 +519,8 @@ struct DuckLakeFileListExtendedEntry {
 	optional_idx row_id_start;
 	optional_idx snapshot_id;
 	optional_idx delete_file_begin_snapshot;
+	//! The writer of the delete file, the branch of the add event the lineage reads it through
+	idx_t delete_file_branch_id = 0;
 	idx_t row_count;
 	idx_t delete_count = 0;
 	MappingIndex mapping_id;
@@ -542,6 +545,8 @@ struct DuckLakeInlinedFileDeletionEntry {
 	DataFileIndex delete_file_id;
 	DuckLakeFileData delete_file;
 	idx_t delete_file_begin_snapshot = 0;
+	//! The writer of the delete file, the branch of the add event the lineage reads it through
+	idx_t delete_file_branch_id = 0;
 };
 
 //! End snapshots of deleted inlined row versions, keyed by row id and begin snapshot

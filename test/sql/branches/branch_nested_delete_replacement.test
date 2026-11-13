@@ -60,12 +60,10 @@ SELECT COUNT(*) FROM meta.ducklake_delete_file
 ----
 1
 
-# every branch of the chain gets an add event for the replacement at the begin of the old file
+# the replacement carries the add event of main alone, which both branches read through the fork
 query III
 SELECT branch_id, snapshot_id, is_delete::BOOLEAN FROM meta.ducklake_delete_file_visibility WHERE branch_id <> 0 ORDER BY branch_id
 ----
-1	3	false
-2	3	false
 
 # the branches apply only the deletes dated up to their fork
 query I

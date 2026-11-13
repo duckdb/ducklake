@@ -35,6 +35,8 @@
         "test/sql/compaction/merge_adjacent_empty_tables.test",
         "test/sql/compaction/merge_adjacent_inlined_deletion_lookup.test",
         "test/sql/data_inlining/inlined_commit_append.test",
+        "test/sql/delete/delete_file_events_main.test",
+        "test/sql/delete/delete_replacement_commit_statements.test",
         "test/sql/delete/extended_file_list_metadata_query.test",
         "test/sql/issues/issue_1146_column_insert_batches.test",
         "test/sql/issues/issue_1398_bulk_table_stats.test",
@@ -806,7 +808,9 @@
         "test/sql/branches/branch_rewrite_snapshots_view.test",
         "test/sql/branches/branch_version_space.test",
         "test/sql/branches/branch_schema_versions_lineage.test",
-        "test/sql/branches/branch_feed_previous_delete_tie.test"
+        "test/sql/branches/branch_feed_previous_delete_tie.test",
+        "test/sql/branches/branch_delete_file_choice.test",
+        "test/sql/branches/branch_replacement_writes_no_branch_rows.test"
       ]
     }
   ]

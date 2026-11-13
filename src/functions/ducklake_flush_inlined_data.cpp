@@ -331,6 +331,7 @@ struct FileDeleteInfo {
 	DataFileIndex existing_delete_file_id;
 	string existing_delete_path;
 	idx_t existing_delete_begin_snapshot = 0;
+	idx_t existing_delete_branch_id = 0;
 	string existing_delete_encryption_key;
 	DeleteFileFormat existing_delete_format = DeleteFileFormat::PARQUET;
 };
@@ -357,6 +358,7 @@ static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &c
 				file_info.existing_delete_file_id = deletion.delete_file_id;
 				file_info.existing_delete_path = deletion.delete_file.path;
 				file_info.existing_delete_begin_snapshot = deletion.delete_file_begin_snapshot;
+				file_info.existing_delete_branch_id = deletion.delete_file_branch_id;
 				file_info.existing_delete_encryption_key = deletion.delete_file.encryption_key;
 				file_info.existing_delete_format = deletion.delete_file.format;
 			}
@@ -440,6 +442,7 @@ static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &c
 			delete_file.overwrites_existing_delete = true;
 			delete_file.overwritten_delete_file.delete_file_id = file_info.existing_delete_file_id;
 			delete_file.overwritten_delete_file.path = file_info.existing_delete_path;
+			delete_file.overwritten_delete_file.branch_id = file_info.existing_delete_branch_id;
 		}
 
 		delete_files.push_back(std::move(delete_file));

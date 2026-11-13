@@ -789,9 +789,17 @@ DuckLakeTransactionState::GetNewDeleteFiles(const DuckLakeCommitState &commit_st
 		auto &table_changes = entry.second;
 		for (auto &file_entry : table_changes.new_delete_files) {
 			for (auto &file : file_entry.second) {
-				if (file.overwritten_delete_file.delete_file_id.IsValid()) {
-					// track the old delete file for deletion from metadata and disk
-					overwritten_delete_files.push_back(file.overwritten_delete_file);
+				auto &overwritten = file.overwritten_delete_file;
+				if (overwritten.delete_file_id.IsValid()) {
+					if (overwritten.branch_id != commit_state.commit_snapshot.branch_id) {
+						// a branch ends an inherited delete file with an event of its own once branches write
+						throw InternalException("GetNewDeleteFiles: delete file %llu of branch %llu replaced on "
+						                        "branch %llu",
+						                        overwritten.delete_file_id.index, overwritten.branch_id,
+						                        commit_state.commit_snapshot.branch_id);
+					}
+					// the replaced file of the commit branch goes with its row, its events and its data
+					overwritten_delete_files.push_back(overwritten);
 				}
 				auto delete_file = DuckLakeTransaction::GetNewDeleteFile(table_id, commit_state, file);
 				result.push_back(std::move(delete_file));
@@ -2621,7 +2629,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		for (auto &entry : dropped_files) {
 			dropped_indexes.insert(entry.second);
 		}
-		batch_queries += DuckLakeMetadataManager::DropDataFiles(dropped_indexes, context.supports_v2_0_metadata);
+		batch_queries += DuckLakeMetadataManager::DropDataFiles(dropped_indexes, context.supports_v2_0_metadata,
+		                                                        context.commit_chain);
 		bool recomputed_stats = false;
 		batch_queries += UpdateStatsForDroppedFiles(stats, context, attempt_dropped_file_stats, recomputed_stats);
 		if (recomputed_stats && commit_snapshot.next_file_id == initial_next_file_id) {
@@ -2636,16 +2645,9 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		auto file_list = GetNewDeleteFiles(commit_state, overwritten_delete_files);
 		batch_queries += DuckLakeMetadataManager::DeleteOverwrittenDeleteFiles(
 		    overwritten_delete_files, relative_paths(overwritten_delete_files));
-		// a server side batch is frozen before its retries, so only client side commits skip the suppression
-		bool include_branch_bookkeeping = !context.has_branches || context.has_branches();
-		// the branches inherit a retro dated or replaced delete file up to their root caps
-		string branch_root_caps;
-		if (include_branch_bookkeeping && context.branch_root_caps) {
-			branch_root_caps = context.branch_root_caps();
-		}
 		batch_queries += DuckLakeMetadataManager::WriteNewDeleteFiles(
 		    file_list, table_relative_paths(file_list, &DuckLakeDeleteFileInfo::path), context.supports_v1_1_metadata,
-		    context.supports_v2_0_metadata, include_branch_bookkeeping, branch_root_caps);
+		    context.supports_v2_0_metadata);
 
 		// write new inlined file deletes (for parquet files)
 		auto inlined_file_deletes = GetNewInlinedFileDeletes(commit_state);
@@ -2657,7 +2659,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		auto &merge_compacted_files = compaction_merge_adjacent_changes.compacted_files;
 		batch_queries += DuckLakeMetadataManager::WriteCompactions(
 		    merge_compacted_files, CompactionType::MERGE_ADJACENT_TABLES, relative_paths(merge_compacted_files),
-		    context.supports_v2_0_metadata);
+		    context.supports_v2_0_metadata, context.commit_chain);
 		batch_queries += write_data_files_sql(compaction_merge_adjacent_changes.new_files);
 
 		auto compaction_rewrite_delete_changes = GetCompactionChanges(commit_state, CompactionType::REWRITE_DELETES);
@@ -2665,7 +2667,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		// REWRITE_DELETES ignores resolved_paths; pass empty.
 		batch_queries += DuckLakeMetadataManager::WriteCompactions(
 		    compaction_rewrite_delete_changes.compacted_files, CompactionType::REWRITE_DELETES, vector<DuckLakePath>(),
-		    context.supports_v2_0_metadata);
+		    context.supports_v2_0_metadata, context.commit_chain);
 
 		// Rewriting deletes physically removes deleted rows, so the affected tables can become delete-free
 		// again. Recompute their EXACT global stats from the post-rewrite file set so MIN/MAX can once more be

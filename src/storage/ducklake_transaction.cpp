@@ -1537,6 +1537,7 @@ DuckLakeDeleteFileInfo DuckLakeTransaction::GetNewDeleteFile(TableIndex table_id
 	delete_file.begin_snapshot = file.begin_snapshot;
 	delete_file.max_snapshot = file.max_snapshot;
 	delete_file.overwritten_delete_file_id = file.overwritten_delete_file.delete_file_id;
+	delete_file.overwritten_delete_file_branch_id = file.overwritten_delete_file.branch_id;
 	return delete_file;
 }
 
@@ -1670,12 +1671,6 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.get_snapshot = [&]() {
 		return GetSnapshot();
-	};
-	context.has_branches = [&]() {
-		return metadata_manager->HasBranches();
-	};
-	context.branch_root_caps = [&]() {
-		return DuckLakeMetadataManager::BranchRootCapValues(metadata_manager->LoadBranchRootCaps());
 	};
 	vector<DuckLakeSnapshotInfo> committed_expiry;
 	bool expired_by_statements = false;

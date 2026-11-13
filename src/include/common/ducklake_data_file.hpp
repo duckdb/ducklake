@@ -36,6 +36,8 @@ enum class DeleteFileSource : uint8_t {
 struct DuckLakeOverwrittenDeleteFile {
 	DataFileIndex delete_file_id;
 	string path;
+	//! The writer of the replaced file, the branch of the add event the commit read it through
+	idx_t branch_id = 0;
 };
 
 struct DuckLakeDeleteFile {

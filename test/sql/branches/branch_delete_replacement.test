@@ -1,5 +1,5 @@
 # name: test/sql/branches/branch_delete_replacement.test
-# description: replacing a delete file on main moves branch mappings onto the cumulative replacement
+# description: replacing a delete file on main deletes the events of a branch on the old file, the branch reads the replacement through its fork
 # group: [branches]
 
 require ducklake
@@ -53,7 +53,7 @@ SELECT i FROM dl.t
 ----
 3
 
-# the old file is gone and the branch events moved to the replacement
+# the old file is gone with the events of the branch on it, the replacement holds the add event of main alone
 query I
 SELECT COUNT(*) FROM meta.ducklake_delete_file
 ----
@@ -67,7 +67,7 @@ SELECT COUNT(*) FROM meta.ducklake_files_scheduled_for_deletion
 query I
 SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility WHERE branch_id = 1
 ----
-1
+0
 
 # the change feed reports each deletion once
 query I
@@ -112,7 +112,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_del
 query I
 SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility WHERE branch_id = 1
 ----
-1
+0
 
 statement ok
 DETACH dl

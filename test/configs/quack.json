@@ -242,6 +242,12 @@
       ]
     },
     {
+      "reason": "The commit batch of a quack catalog is sent through quack_query_by_name, so the client log holds no delete file event insert to count",
+      "paths": [
+        "test/sql/delete/delete_replacement_commit_statements.test"
+      ]
+    },
+    {
       "reason": "A quack catalog commits each statement, so its commits keep sending inlined rows as SQL text",
       "paths": [
         "test/sql/data_inlining/inlined_commit_append.test"

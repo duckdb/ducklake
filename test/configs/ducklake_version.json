@@ -255,7 +255,9 @@
         "test/sql/branches/branch_rewrite_snapshots_view.test",
         "test/sql/branches/branch_version_space.test",
         "test/sql/branches/branch_schema_versions_lineage.test",
-        "test/sql/branches/branch_feed_previous_delete_tie.test"
+        "test/sql/branches/branch_feed_previous_delete_tie.test",
+        "test/sql/branches/branch_delete_file_choice.test",
+        "test/sql/branches/branch_replacement_writes_no_branch_rows.test"
       ]
     },
     {
@@ -268,6 +270,8 @@
     {
       "reason": "Queries the 2.0 visibility tables, which a 1.0 catalog does not have",
       "paths": [
+        "test/sql/delete/delete_file_events_main.test",
+        "test/sql/delete/delete_replacement_commit_statements.test",
         "test/sql/add_files/add_files_field_id_drop_readd.test",
         "test/sql/alter/create_table_drop_column_same_transaction.test",
         "test/sql/compaction/expire_snapshots_entity_rows.test",

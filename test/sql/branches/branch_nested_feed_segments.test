@@ -75,8 +75,14 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS feature (METADATA_CATALOG 'meta', BRANCH 'feature')
 
-# the inlined delete of main, the delete file of dev and the delete file of feature each report their snapshot on feature
-# the whole range (3, 5) waits for the delete file choice of the next batch, until then both live files are current
+# the inlined delete of main, the delete file of dev and the delete file of feature each report their snapshot on feature once
+query IIII
+FROM feature.table_changes('t', 3, 5) ORDER BY ALL
+----
+3	0	delete	1
+4	1	delete	2
+5	2	delete	3
+
 query IIII
 FROM feature.table_changes('t', 3, 3) ORDER BY ALL
 ----
@@ -114,6 +120,13 @@ CALL ducklake_flush_inlined_data('lake')
 
 # after the flush the delete of main is a dated delete file read up to the cap of main's segment
 query IIII
+FROM feature.table_changes('t', 3, 5) ORDER BY ALL
+----
+3	0	delete	1
+4	1	delete	2
+5	2	delete	3
+
+query IIII
 FROM feature.table_changes('t', 3, 3) ORDER BY ALL
 ----
 3	0	delete	1
@@ -127,6 +140,13 @@ query IIII
 FROM feature.table_changes('t', 5, 5) ORDER BY ALL
 ----
 5	2	delete	3
+
+# dev chooses its own file over the flushed one of main and reads both dates from it
+query IIII
+FROM dev.table_changes('t', 3, 4) ORDER BY ALL
+----
+3	0	delete	1
+4	1	delete	2
 
 query IIII
 FROM dev.table_changes('t', 4, 4) ORDER BY ALL

@@ -1,5 +1,5 @@
 # name: test/sql/branches/branch_nested_retro_delete_history.test
-# description: a flushed delete file of main ends on a nested branch where its parent suppressed it, so a historical read applies one delete file
+# description: a flushed delete file of main is chosen on a nested branch below the begin of the files of its chain alone, so a historical read applies one delete file
 # group: [branches]
 
 require ducklake
@@ -124,12 +124,10 @@ SELECT i FROM lake.t AT (VERSION => 3) ORDER BY i
 3
 4
 
-# both branches suppress the flushed file from their first own delete file on
+# the flush writes no event of a branch, each branch chooses the delete file of the segment nearest itself
 query III
 SELECT branch_id, snapshot_id, is_delete::BOOLEAN FROM meta.ducklake_delete_file_visibility WHERE branch_id <> 0 AND delete_file_id NOT IN (1099511627776, 2199023255552) ORDER BY branch_id
 ----
-1	4	true
-2	5	true
 
 query I
 SELECT i FROM dev.t ORDER BY i
@@ -149,7 +147,7 @@ SELECT i FROM feature.t ORDER BY i
 ----
 4
 
-# the suppression of dev ends the flushed file at 4 on feature too, the earlier delete of the chain wins
+# at 4 the file of dev is live on feature and chosen over the flushed one of main
 query I
 SELECT i FROM feature.t AT (VERSION => 4) ORDER BY i
 ----

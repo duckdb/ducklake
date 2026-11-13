@@ -69,11 +69,10 @@ SELECT i FROM lake.t ORDER BY i
 3
 4
 
-# the flushed delete file is suppressed on feature from its own delete file on, dev has none and inherits it
+# the flush writes no event of a branch, feature chooses its own delete file over the flushed one and dev inherits it
 query III
 SELECT branch_id, snapshot_id, is_delete::BOOLEAN FROM meta.ducklake_delete_file_visibility WHERE branch_id <> 0 AND delete_file_id <> 2199023255552
 ----
-2	4	true
 
 query I
 SELECT i FROM feature.t ORDER BY i
