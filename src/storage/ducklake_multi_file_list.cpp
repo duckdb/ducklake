@@ -757,6 +757,14 @@ void DuckLakeMultiFileList::GetFilesForTable() const {
 	auto &transaction = *transaction_ref;
 	inlined_data_tables =
 	    read_info.table.GetInlinedDataTables(transaction, read_info.snapshot, read_info.include_local_changes);
+	// the inlined tables an earlier scan found without live rows at this snapshot have nothing to read
+	auto &catalog = transaction.GetCatalog();
+	inlined_data_tables.erase(std::remove_if(inlined_data_tables.begin(), inlined_data_tables.end(),
+	                                         [&](const DuckLakeInlinedTableInfo &table) {
+		                                         return catalog.InlinedTableIsEmpty(table.table_name,
+		                                                                            read_info.snapshot.snapshot_id);
+	                                         }),
+	                          inlined_data_tables.end());
 	identifier_map_t<shared_ptr<DuckLakeCommittedInlinedRows>> inlined_rows;
 	if (!IsTransactionLocal(read_info.table_id)) {
 		files = ReadCommittedFiles(transaction, inlined_rows);

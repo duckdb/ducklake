@@ -229,6 +229,9 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 			}
 			data = metadata_manager.TransformInlinedData(*query_result, expected_types, table_name);
 		}
+		if (read_info.scan_type == DuckLakeScanType::SCAN_TABLE && data->data->Count() == 0) {
+			transaction->GetCatalog().SetInlinedTableEmpty(table_name, read_info.snapshot.snapshot_id);
+		}
 		if (!virtual_columns.empty()) {
 			auto scan_types = data->data->Types();
 			scan_chunk.Initialize(context, scan_types);

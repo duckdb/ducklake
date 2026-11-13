@@ -1656,6 +1656,23 @@ void DuckLakeCatalog::ForgetColumnsWithValues(const set<TableIndex> &table_ids) 
 	}
 }
 
+bool DuckLakeCatalog::InlinedTableIsEmpty(const Identifier &table_name, idx_t snapshot_id) {
+	lock_guard<mutex> guard(empty_inlined_tables_lock);
+	if (!empty_inlined_tables_snapshot.IsValid() || empty_inlined_tables_snapshot.GetIndex() != snapshot_id) {
+		return false;
+	}
+	return empty_inlined_tables.count(table_name) > 0;
+}
+
+void DuckLakeCatalog::SetInlinedTableEmpty(const Identifier &table_name, idx_t snapshot_id) {
+	lock_guard<mutex> guard(empty_inlined_tables_lock);
+	if (!empty_inlined_tables_snapshot.IsValid() || empty_inlined_tables_snapshot.GetIndex() != snapshot_id) {
+		empty_inlined_tables.clear();
+		empty_inlined_tables_snapshot = snapshot_id;
+	}
+	empty_inlined_tables.insert(table_name);
+}
+
 string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) const {
 	// the instance id alone keeps the keys apart, and the stats do not depend on the name of the DuckLake
 	return StringUtil::Format("ducklake:%s:stats:%llu:table:%llu", instance_id, next_file_id, table_id.index);

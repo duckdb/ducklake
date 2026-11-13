@@ -520,6 +520,9 @@ public:
 	//! The columns found with values stay valid for the snapshot of a commit that directly follows theirs
 	void AdvanceColumnsWithValues(idx_t snapshot_id);
 	void ForgetColumnsWithValues(const set<TableIndex> &table_ids);
+	//! Whether a scan found no live rows in the inlined table at the snapshot, which later scans then skip
+	bool InlinedTableIsEmpty(const Identifier &table_name, idx_t snapshot_id);
+	void SetInlinedTableEmpty(const Identifier &table_name, idx_t snapshot_id);
 
 	//! Invalidate the cached table stats entry for a given stats cache key.
 	void InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id);
@@ -633,6 +636,10 @@ private:
 	mutex columns_with_values_lock;
 	optional_idx columns_with_values_snapshot;
 	set<pair<idx_t, idx_t>> columns_with_values;
+	//! The inlined tables without live rows at the snapshot of the latest scan that found one
+	mutex empty_inlined_tables_lock;
+	optional_idx empty_inlined_tables_snapshot;
+	identifier_set_t empty_inlined_tables;
 	//! The schema versions of each table at the schema version they were looked up at, guarded by the same lock
 	unordered_map<idx_t, pair<idx_t, DuckLakeTableSchemaVersions>> table_schema_versions;
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit
