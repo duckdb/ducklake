@@ -12,6 +12,7 @@
 #include "duckdb/function/scalar_function.hpp"
 #include "duckdb/storage/storage_extension.hpp"
 #include "storage/ducklake_log_type.hpp"
+#include "rest/ducklake_rest_server.hpp"
 
 namespace duckdb {
 
@@ -50,6 +51,18 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    "ducklake_write_deletion_vectors",
 	    "[EXPERIMENTAL] Write Iceberg V3 deletion vectors (puffin) instead of positional delete files (parquet)",
 	    LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);
+
+	DuckLakeRESTServeFunction rest_serve;
+	loader.RegisterFunction(rest_serve);
+
+	DuckLakeRESTStopFunction rest_stop;
+	loader.RegisterFunction(rest_stop);
+
+	DuckLakeRESTRequestFunction rest_request;
+	loader.RegisterFunction(rest_request);
+
+	DuckLakeRESTRowsFunction rest_rows;
+	loader.RegisterFunction(rest_rows);
 
 	DuckLakeSnapshotsFunction snapshots;
 	loader.RegisterFunction(snapshots);
@@ -119,6 +132,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	DuckLakeCurrentSnapshotFunction current_snapshot;
 	loader.RegisterFunction(current_snapshot);
+
+	DuckLakeMetadataTableFunction metadata_table;
+	loader.RegisterFunction(metadata_table);
 
 	DuckLakeLastCommittedSnapshotFunction last_committed;
 	loader.RegisterFunction(last_committed);

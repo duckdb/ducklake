@@ -1,0 +1,45 @@
+# name: test/sql/rest/rest_insert_files.test
+# description: Insert rows that are written to Parquet files through the DuckLake REST API
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+statement ok
+CREATE TABLE dl.t AS SELECT range i, 'v' || range s FROM range(10000)
+
+query III
+SELECT count(*), sum(i), max(s) FROM dl.t
+----
+10000	49995000	v9999
+
+statement ok
+INSERT INTO dl.t SELECT range, NULL FROM range(10000, 12000)
+
+query IIII
+SELECT count(*), sum(i), count(s), min(i) FROM dl.t
+----
+12000	71994000	10000	0
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 't')
+----
+2
+
+query III rest_db:rest_server_con
+SELECT count(*), sum(i), count(s) FROM rest_lake.t
+----
+12000	71994000	10000
+
+# filters on the files
+query I
+SELECT count(*) FROM dl.t WHERE i >= 11990
+----
+10
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

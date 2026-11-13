@@ -1,0 +1,117 @@
+# name: test/sql/data_inlining/data_inlining_schema_evolution_rows.test
+# description: inlined rows that were written before schema changes are read in the schema of the table
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_schema_evolution_rows', DATA_INLINING_ROW_LIMIT 100)
+
+statement ok
+CREATE TABLE dl.t(id INTEGER, st STRUCT(a INTEGER, b VARCHAR), l STRUCT(x INTEGER)[], m MAP(VARCHAR, STRUCT(p INTEGER)), dropped INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1, {'a': 10, 'b': 'one'}, [{'x': 1}, {'x': 2}], MAP {'k': {'p': 100}}, 111)
+
+# a new column with a default: older rows have the default
+statement ok
+ALTER TABLE dl.t ADD COLUMN c INTEGER DEFAULT 5
+
+statement ok
+INSERT INTO dl.t VALUES (2, {'a': 20, 'b': 'two'}, [{'x': 3}], MAP {'k': {'p': 200}}, 222, 7)
+
+# a new field in a struct, in a list of structs and in a map
+statement ok
+ALTER TABLE dl.t ADD COLUMN st.z INTEGER
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN l.element.y VARCHAR
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN m.value.q INTEGER
+
+statement ok
+INSERT INTO dl.t VALUES (3, {'a': 30, 'b': 'three', 'z': 33}, [{'x': 4, 'y': 'four'}], MAP {'k': {'p': 300, 'q': 3}}, 333, 8)
+
+# a type promotion, a rename and a dropped column
+statement ok
+ALTER TABLE dl.t ALTER id SET DATA TYPE BIGINT
+
+statement ok
+ALTER TABLE dl.t RENAME COLUMN c TO renamed
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN dropped
+
+statement ok
+INSERT INTO dl.t VALUES (4, {'a': 40, 'b': 'four', 'z': 44}, [{'x': 5, 'y': 'five'}], MAP {'k': {'p': 400, 'q': 4}}, 9)
+
+query IIIIII
+SELECT id, st, l, m, renamed, typeof(id) FROM dl.t ORDER BY id
+----
+1	{'a': 10, 'b': one, 'z': NULL}	[{'x': 1, 'y': NULL}, {'x': 2, 'y': NULL}]	{k={'p': 100, 'q': NULL}}	5	BIGINT
+2	{'a': 20, 'b': two, 'z': NULL}	[{'x': 3, 'y': NULL}]	{k={'p': 200, 'q': NULL}}	7	BIGINT
+3	{'a': 30, 'b': three, 'z': 33}	[{'x': 4, 'y': four}]	{k={'p': 300, 'q': 3}}	8	BIGINT
+4	{'a': 40, 'b': four, 'z': 44}	[{'x': 5, 'y': five}]	{k={'p': 400, 'q': 4}}	9	BIGINT
+
+# projections and filters
+query II
+SELECT id, renamed FROM dl.t WHERE renamed > 5 ORDER BY id
+----
+2	7
+3	8
+4	9
+
+query I
+SELECT st.z FROM dl.t ORDER BY id
+----
+NULL
+NULL
+33
+44
+
+query I
+SELECT count(*) FROM dl.t
+----
+4
+
+# rows written under every version can be deleted and updated
+statement ok
+DELETE FROM dl.t WHERE id = 1
+
+statement ok
+UPDATE dl.t SET renamed = 70 WHERE id = 2
+
+query II
+SELECT id, renamed FROM dl.t ORDER BY id
+----
+2	70
+3	8
+4	9
+
+query I
+SELECT count(*) FROM dl.t
+----
+3
+
+# the table at an earlier snapshot
+query I
+SELECT count(*) FROM dl.t AT (VERSION => 2)
+----
+1
+
+# the inlined rows that changed
+statement ok
+SET VARIABLE last_snapshot = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+query II
+SELECT id, renamed FROM ducklake_table_deletions('dl', 'main', 't', 0, getvariable('last_snapshot')) ORDER BY ALL
+----
+1	5
+2	7

@@ -86,7 +86,8 @@
         "test/sql/add_files/add_files_null_type.test",
         "test/sql/macros/test_null_default.test",
         "test/sql/macros/typed_null_default.test",
-        "test/sql/geo/null_to_geometry_promotion_stats.test"
+        "test/sql/geo/null_to_geometry_promotion_stats.test",
+        "test/sql/rest/rest_null_type_column.test"
       ]
     },
     {
@@ -122,7 +123,8 @@
         "test/sql/comments/comment_on_view_column_invalid.test",
         "test/sql/comments/comment_on_view_column_update.test",
         "test/sql/comments/copy_database_view_column_comments.test",
-        "test/sql/comments/drop_view_expires_view_column_tags.test"
+        "test/sql/comments/drop_view_expires_view_column_tags.test",
+        "test/sql/rest/rest_view_column_comment.test"
       ]
     },
     {
@@ -173,6 +175,18 @@
         "test/sql/delete/deletion_vector_multi_snapshot.test",
         "test/sql/delete/deletion_vector_replaced_twice.test",
         "test/sql/rewrite_data_files/rewrite_deletion_vectors.test"
+      ]
+    },
+    {
+      "reason": "Requests to the REST API that inspect what DuckLake 1.0 does not have: nested schemas, exact string statistics, row group counts, prefixed inlined columns or snapshot tags",
+      "paths": [
+        "test/sql/rest/rest_aggregates.test",
+        "test/sql/rest/rest_api_requests.test",
+        "test/sql/rest/rest_ddl.test",
+        "test/sql/rest/rest_entry_ids.test",
+        "test/sql/rest/rest_file_counts.test",
+        "test/sql/rest/rest_snapshot_tags.test",
+        "test/sql/rest/rest_struct_projection.test"
       ]
     }
   ]

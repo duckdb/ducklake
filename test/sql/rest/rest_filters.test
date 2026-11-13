@@ -1,0 +1,87 @@
+# name: test/sql/rest/rest_filters.test
+# description: Filters of scans are sent to the DuckLake REST server as SQL expressions
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, s VARCHAR, st STRUCT(a INTEGER))
+
+statement ok
+INSERT INTO dl.t SELECT range, 'a' || range, {'a': range} FROM range(0, 100)
+
+statement ok
+INSERT INTO dl.t SELECT range, 'b' || range, {'a': range} FROM range(100, 200)
+
+statement ok
+INSERT INTO dl.t SELECT NULL, 'c', NULL FROM range(10)
+
+# scans of the client prune files
+query I
+SELECT count(*) FROM dl.t WHERE i >= 150
+----
+50
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE i >= 150
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# the server prunes files with the expressions of a select
+statement ok
+CREATE MACRO select_files(filter_expressions) AS (
+	SELECT json_array_length(response->'$.files')
+	FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan',
+	     '{"filters": {"expressions": ' || to_json(filter_expressions) || '}}')
+)
+
+query I
+SELECT select_files(['i > 150'])
+----
+1
+
+query I
+SELECT select_files(['i > 50', 'i < 150'])
+----
+2
+
+query I
+SELECT select_files(['i IN (5, 7)'])
+----
+1
+
+query I
+SELECT select_files(['i IS NULL'])
+----
+1
+
+query I
+SELECT select_files(['i = 5 OR s = ''c'''])
+----
+2
+
+query I
+SELECT select_files(['st.a >= 120'])
+----
+1
+
+query I
+SELECT select_files(['500 < i'])
+----
+0
+
+# expressions that cannot prune files are ignored
+query I
+SELECT select_files(['i + 1 = 5', 'does_not_exist = 1', 'not valid sql ('])
+----
+3
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

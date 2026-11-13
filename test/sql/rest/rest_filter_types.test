@@ -1,0 +1,83 @@
+# name: test/sql/rest/rest_filter_types.test
+# description: The REST server only prunes files with the filters of a scan that it binds like DuckDB
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+# an integer literal against a DECIMAL column compares as a DECIMAL
+statement ok
+CREATE TABLE dl.d(d DECIMAL(3,1))
+
+statement ok
+INSERT INTO dl.d VALUES (1.2)
+
+query I
+SELECT count(*) FROM dl.d WHERE d > 1
+----
+1
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"filters":{"expressions":["d > 1"]}}')
+----
+200	1
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"filters":{"expressions":["d > 1.25"]}}')
+----
+200	1
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"filters":{"expressions":["d > 5"]}}')
+----
+200	0
+
+# an IN list with an element that the server cannot fold does not prune
+statement ok
+CREATE TABLE dl.b(s VARCHAR) PARTITIONED BY (bucket(4, s))
+
+statement ok
+INSERT INTO dl.b VALUES ('alice'), ('bob')
+
+query I
+SELECT count(*) FROM dl.b WHERE s IN ('alice', lower('BOB'))
+----
+2
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/2/scan', '{"filters":{"expressions":["s IN (''alice'', lower(''BOB''))"]}}')
+----
+200	2
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/2/scan', '{"filters":{"expressions":["s IN (''alice'', NULL)"]}}')
+----
+200	1
+
+# a constant that is not a value of the field does not prune
+statement ok
+CREATE TABLE dl.i(i INTEGER)
+
+statement ok
+INSERT INTO dl.i VALUES (1)
+
+query I
+SELECT count(*) FROM dl.i WHERE i < 1e30 AND i IN (1e30, 1)
+----
+1
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/4/scan', '{"filters":{"expressions":["i < 1e30"]}}')
+----
+200	1
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/4/scan', '{"filters":{"expressions":["i IN (1e30, 1)"]}}')
+----
+200	1
+
+include test/template/rest_teardown.test_template
