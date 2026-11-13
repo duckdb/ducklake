@@ -98,7 +98,8 @@
         "test/sql/tags/tags_expire_open_conflict.test",
         "test/sql/time_travel/at_timestamp_expired_in_transaction.test",
         "test/sql/time_travel/at_timestamp_expired_snapshots.test",
-        "test/sql/time_travel/snapshot_attach_maintenance.test"
+        "test/sql/time_travel/snapshot_attach_maintenance.test",
+        "test/sql/delete/partial_file_metadata_delete_expired.test"
       ]
     },
     {
@@ -221,7 +222,8 @@
         "test/sql/sorted_table/data_inlining_flush_sorted_macro_expression_transaction.test",
         "test/sql/sorted_table/data_inlining_flush_sorted_reset.test",
         "test/sql/sorted_table/data_inlining_flush_sorted_transaction_renamed.test",
-        "test/sql/data_inlining/flush_renamed_table_name.test"
+        "test/sql/data_inlining/flush_renamed_table_name.test",
+        "test/sql/delete/delete_partition_metadata_flushed_history.test"
       ]
     },
     {
@@ -552,7 +554,11 @@
         "test/sql/tags/tags_version_gate_time_travel.test",
         "test/sql/data_inlining/inlining_obstacle_log.test",
         "test/sql/compaction/user_columns_named_like_internal_columns.test",
-        "test/sql/data_inlining/data_inlining_transaction_local_field_readd_rejected.test"
+        "test/sql/data_inlining/data_inlining_transaction_local_field_readd_rejected.test",
+        "test/sql/delete/delete_partition_metadata_fallbacks.test",
+        "test/sql/delete/delete_partition_metadata_identity.test",
+        "test/sql/delete/delete_partition_metadata_missing_stats.test",
+        "test/sql/delete/delete_partition_metadata_transactions.test"
       ]
     },
     {
@@ -675,7 +681,12 @@
         "test/sql/tags/postgres_tags_read_committed.test",
         "test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test",
-        "test/sql/data_inlining/data_inlining_variant_sql_rollback.test"
+        "test/sql/data_inlining/data_inlining_variant_sql_rollback.test",
+        "test/sql/autoloading/postgres_array_types.test",
+        "test/sql/autoloading/postgres_array_types_setup.test",
+        "test/sql/delete/delete_partition_metadata_pg_arrays.test",
+        "test/sql/metadata/postgres_catalog_cache.test",
+        "test/sql/quack/partial_file_metadata_delete.test"
       ]
     },
     {
@@ -696,6 +707,13 @@
         "test/sql/list_files/list_files_encrypted.test",
         "test/sql/secrets/ducklake_secret_null_options.test",
         "test/sql/transaction/transaction_conflict_inlining.test"
+      ]
+    },
+    {
+      "reason": "Expects the identity-partition metadata DELETE plan, which needs partition values that REST file lists do not return; REST uses the row-delete fallback.",
+      "paths": [
+        "test/sql/delete/delete_metadata_entrypoint_hardening.test",
+        "test/sql/delete/delete_partition_metadata_mapping.test"
       ]
     }
   ]

@@ -1139,7 +1139,7 @@ static bool CanUseMetadataDelete(ClientContext &context, DuckLakeTableEntry &tab
 		if (file.data_type != DuckLakeDataType::DATA_FILE) {
 			if (file.data_type == DuckLakeDataType::INLINED_DATA) {
 				if (!inlined_row_count.IsValid()) {
-					inlined_row_count = table.GetNetInlinedRowCount(transaction);
+					inlined_row_count = table.GetNetInlinedRowCount(transaction, transaction.GetSnapshot());
 				}
 				if (inlined_row_count.GetIndex() == 0) {
 					continue;
