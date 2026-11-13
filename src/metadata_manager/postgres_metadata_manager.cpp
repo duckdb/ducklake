@@ -468,7 +468,7 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 			continue;
 		}
 		auto migrated_name = Identifier(table_name + "_migrated");
-		auto migrate_query = InlinedTableDdlSql(migrated_name, column_defs, col_names);
+		auto migrate_query = InlinedTableDdlSql(migrated_name, column_defs, col_names, false);
 		migrate_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s SELECT %s FROM {METADATA_CATALOG}.%s;",
 		                                    migrated_name, StringUtil::Join(select_list, ", "), table_name);
 		migrate_query += StringUtil::Format("DROP TABLE {METADATA_CATALOG}.%s;", table_name);
@@ -535,6 +535,20 @@ static string PostgresQuery(const string &remote_query, const string &select_lis
 	                          SQLString(remote_query));
 }
 
+bool PostgresMetadataManager::ProbeMetadataColumns() {
+	// the scanner lists the tables it cached, so the server is asked for the ones a commit created since
+	auto schema = SQLString::ToString(transaction.GetCatalog().MetadataSchemaName().GetIdentifierName());
+	auto remote_query = StringUtil::Format(R"(
+SELECT c.relname, a.attname
+FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
+WHERE n.nspname = %s AND c.relkind IN ('r', 'v', 'm', 'f', 'p') AND a.attnum > 0 AND NOT a.attisdropped
+ORDER BY c.relname, a.attnum)",
+	                                       schema);
+	return ProbeMetadataColumnsFromListing(PostgresQuery(remote_query));
+}
+
 //! The json extension casts the shipped aggregates back, a copy linked into the binary loads without autoloading
 static bool JsonExtensionAvailable(DatabaseInstance &db) {
 	if (db.ExtensionIsLoaded("json")) {
@@ -544,7 +558,10 @@ static bool JsonExtensionAvailable(DatabaseInstance &db) {
 	if (ExtensionHelper::LoadExtension(wrapper, "json") == ExtensionLoadResult::LOADED_EXTENSION) {
 		return true;
 	}
+	// the test binary links the json extension, so only a build without it gets this far
+	// LCOV_EXCL_START
 	return ExtensionHelper::TryAutoLoadExtension(db, "json");
+	// LCOV_EXCL_STOP
 }
 
 //! The list aggregate of the server, a json array of objects whose json values nest as they are
@@ -559,7 +576,9 @@ static string JsonAggregation(const vector<pair<string, string>> &fields, const 
 DuckLakeCatalogInfo PostgresMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot snapshot) {
 	auto &catalog = transaction.GetCatalog();
 	if (!JsonExtensionAvailable(catalog.GetDatabase())) {
+		// LCOV_EXCL_START
 		return DuckLakeMetadataManager::GetCatalogForSnapshot(snapshot);
+		// LCOV_EXCL_STOP
 	}
 	auto schema = SQLQuotedIdentifier::ToString(catalog.MetadataSchemaName());
 	CatalogLoadDialect dialect;

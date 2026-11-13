@@ -66,3 +66,9 @@ query II con2
 SELECT sum(id), sum(c) FROM lake.t
 ----
 10	7
+
+# the companion of the superseded inlined table went with it
+statement error con2
+SELECT count(*) FROM __ducklake_metadata_lake.ducklake_inlined_data_1_1_visibility
+----
+does not exist

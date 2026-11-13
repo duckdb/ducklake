@@ -22,6 +22,9 @@ DELETE FROM dl.t WHERE i = 5
 statement ok
 INSERT INTO dl.t VALUES (100)
 
+statement ok
+CALL ducklake_create_tag('dl', 'v1', version => 1)
+
 # the file tables of the older dev build carried the ranges inline and had no visibility events
 statement ok
 ALTER TABLE meta.ducklake_data_file ADD COLUMN begin_snapshot BIGINT
@@ -179,6 +182,23 @@ SELECT COUNT(*) FROM dl.t AT (VERSION => 2)
 ----
 9
 
+# the tags of the older dev build name snapshots of main alone
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl')
+----
+v1	1
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'v1')
+----
+10
+
+# a dry run of the expiry consults the tags without their snapshot times
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [1, 2], dry_run => true)
+----
+2
+
 statement ok
 DETACH dl
 
@@ -222,6 +242,11 @@ query IIII
 SELECT (SELECT COUNT(*) FROM meta.ducklake_table_visibility), (SELECT COUNT(*) FROM meta.ducklake_column_visibility), (SELECT COUNT(*) FROM meta.ducklake_macro_visibility), (SELECT COUNT(*) FROM meta.ducklake_tag_visibility)
 ----
 0	0	0	0
+
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl')
+----
+v1	1
 
 statement ok
 DETACH dl

@@ -45,6 +45,8 @@ public:
 	//! The server runs the statements of the load, the list aggregates travel as json text
 	DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot) override;
 	bool InlinedDeletionTableExists(const Identifier &table_name) override;
+	//! The scanner lists the tables it cached, the server lists the ones a commit created since
+	bool ProbeMetadataColumns() override;
 	void MigrateInlinedDataTypes() override;
 	bool IsRetryableCommitError(const string &message) const override;
 	string CommitErrorWithoutQuery(const string &message) const override;

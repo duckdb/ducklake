@@ -189,6 +189,19 @@ CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_snapsho
 statement ok
 CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_schema_versions DROP COLUMN branch_id')
 
+# the inlined rows of a dev catalog carried their end in the payload and knew no branch
+statement ok
+CALL postgres_execute('pg', 'CREATE TABLE dev1_skips_present_ddl.inlined_data_1_1 AS SELECT d._ducklake_row_id, d._ducklake_begin_snapshot, e.snapshot_id AS _ducklake_end_snapshot, d.i FROM dev1_skips_present_ddl.ducklake_inlined_data_1_1 d LEFT JOIN dev1_skips_present_ddl.ducklake_inlined_data_1_1_visibility e ON e.row_id = d._ducklake_row_id AND e.row_branch_id = d._ducklake_branch_id AND e.row_snapshot = d._ducklake_begin_snapshot')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_inlined_data_1_1')
+
+statement ok
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_inlined_data_1_1_visibility')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.inlined_data_1_1 RENAME TO ducklake_inlined_data_1_1')
+
 statement ok
 CALL postgres_execute('pg', 'UPDATE dev1_skips_present_ddl.ducklake_metadata SET value = ''1.1-dev1'' WHERE key = ''version''')
 
@@ -248,6 +261,17 @@ query III
 SELECT * FROM postgres_query('pg', 'SELECT t.value, e.row_snapshot, e.snapshot_id FROM dev1_skips_present_ddl.ducklake_tag_visibility e JOIN dev1_skips_present_ddl.ducklake_tag t ON t.object_id = e.object_id AND t.key = e.key AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot')
 ----
 first	2	3
+
+# the inlined rows carry their branch again and end in their companion
+query I
+SELECT string_agg(column_name, ', ' ORDER BY ordinal_position) FROM postgres_query('pg', 'SELECT column_name, ordinal_position FROM information_schema.columns WHERE table_schema = ''dev1_skips_present_ddl'' AND table_name = ''ducklake_inlined_data_1_1''')
+----
+_ducklake_row_id, _ducklake_begin_snapshot, i, _ducklake_branch_id
+
+query I
+SELECT count(*) FROM postgres_query('pg', 'SELECT 1 FROM information_schema.tables WHERE table_schema = ''dev1_skips_present_ddl'' AND table_name = ''ducklake_inlined_data_1_1_visibility''')
+----
+1
 
 statement ok
 CALL postgres_execute('pg', 'DROP SCHEMA dev1_skips_present_ddl CASCADE')

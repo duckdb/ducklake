@@ -1,0 +1,101 @@
+# name: test/sql/data_inlining/inlined_companion_layout.test
+# description: the companion of an inlined data table has the columns and key of the other companions and is created and dropped with its payload
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+# the branch column of the payload comes last, after the user columns
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM meta.ducklake_inlined_data_1_1)
+----
+_ducklake_row_id
+_ducklake_begin_snapshot
+i
+_ducklake_branch_id
+
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM meta.ducklake_inlined_data_1_1_visibility)
+----
+branch_id
+row_id
+row_branch_id
+row_snapshot
+snapshot_id
+
+# the key names the version by its birth, one end per version per branch
+statement ok
+INSERT INTO meta.ducklake_inlined_data_1_1_visibility VALUES (0, 0, 0, 2, 9)
+
+statement error
+INSERT INTO meta.ducklake_inlined_data_1_1_visibility VALUES (0, 0, 0, 2, 8)
+----
+
+statement ok
+INSERT INTO meta.ducklake_inlined_data_1_1_visibility VALUES (1, 0, 0, 2, 9)
+
+statement ok
+DELETE FROM meta.ducklake_inlined_data_1_1_visibility WHERE snapshot_id = 9
+
+# a new inlined table of a later schema version comes with a companion of its own
+statement ok
+ALTER TABLE dl.t ADD COLUMN j INTEGER
+
+statement ok
+INSERT INTO dl.t VALUES (2, 20)
+
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM meta.ducklake_inlined_data_1_2)
+----
+_ducklake_row_id
+_ducklake_begin_snapshot
+i
+j
+_ducklake_branch_id
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_2_visibility
+----
+0
+
+# the flush empties the superseded inlined table, which is dropped with its companion
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query I
+SELECT table_name FROM meta.ducklake_inlined_data_tables ORDER BY ALL
+----
+ducklake_inlined_data_1_2
+
+statement error
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1
+----
+does not exist
+
+statement error
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
+----
+does not exist
+
+query II
+SELECT i, j FROM dl.t ORDER BY i
+----
+1	NULL
+2	20
+
+statement ok
+DETACH dl

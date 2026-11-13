@@ -51,6 +51,12 @@ SELECT COUNT(*) FROM duckdb_tables() WHERE database_name='ducklake_meta' AND sch
 ----
 0
 
+# the companions of the inlined tables go with them
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name='ducklake_meta' AND schema_name IN ('main', 'public') AND table_name LIKE 'ducklake_inlined_data_%_visibility'
+----
+0
+
 query I
 SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_tables WHERE table_id = 1
 ----

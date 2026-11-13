@@ -1,0 +1,199 @@
+# name: test/sql/migration/v11_to_v20_dev1_inlined.test
+# description: the inlined rows of a 1.1 catalog take the layout of 2.0-dev1 when the catalog migrates, one end per ended version
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER, v VARCHAR)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 'a'), (2, 'b'), (3, 'c')
+
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+statement ok
+UPDATE dl.t SET v = 'c2' WHERE i = 3
+
+statement ok
+UPDATE dl.t SET v = 'c3' WHERE i = 3
+
+statement ok
+CREATE TABLE dl.f AS SELECT range AS i FROM range(20)
+
+statement ok
+DELETE FROM dl.f WHERE i = 7
+
+query II
+SELECT i, v FROM dl.t ORDER BY i
+----
+1	a
+3	c3
+
+query I
+SELECT count(*) FROM dl.f
+----
+19
+
+statement ok
+DETACH dl
+
+# a release catalog is attached at its own version, its rows end in place
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+1.1
+
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM meta.ducklake_inlined_data_1_1)
+----
+_ducklake_row_id
+_ducklake_begin_snapshot
+_ducklake_end_snapshot
+i
+v
+
+query II
+SELECT i, v FROM dl.t ORDER BY i
+----
+1	a
+3	c3
+
+statement ok
+DETACH dl
+
+# the migration appends the branch column, moves the ends into the companion and drops the end column
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM meta.ducklake_inlined_data_1_1)
+----
+_ducklake_row_id
+_ducklake_begin_snapshot
+i
+v
+_ducklake_branch_id
+
+query IIIII
+FROM meta.ducklake_inlined_data_1_1 ORDER BY ALL
+----
+0	2	1	a	0
+1	2	2	b	0
+2	2	3	c	0
+2	4	3	c2	0
+2	5	3	c3	0
+
+query IIIII
+FROM meta.ducklake_inlined_data_1_1_visibility ORDER BY ALL
+----
+0	1	0	2	3
+0	2	0	2	4
+0	2	0	4	5
+
+query III
+SELECT row_id, begin_snapshot, branch_id FROM meta.ducklake_inlined_delete_2
+----
+7	7	0
+
+query II
+SELECT i, v FROM dl.t ORDER BY i
+----
+1	a
+3	c3
+
+query II
+SELECT i, v FROM dl.t AT (VERSION => 2) ORDER BY i
+----
+1	a
+2	b
+3	c
+
+query II
+SELECT i, v FROM dl.t AT (VERSION => 3) ORDER BY i
+----
+1	a
+3	c
+
+query II
+SELECT i, v FROM dl.t AT (VERSION => 4) ORDER BY i
+----
+1	a
+3	c2
+
+query I
+SELECT count(*) FROM dl.f
+----
+19
+
+query I
+SELECT count(*) FROM dl.f AT (VERSION => 6)
+----
+20
+
+# the migrated catalog ends the versions it deletes in the companion and flushes them
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+query IIIII
+FROM meta.ducklake_inlined_data_1_1_visibility ORDER BY ALL
+----
+0	0	0	2	8
+0	1	0	2	3
+0	2	0	2	4
+0	2	0	4	5
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_delete_2
+----
+0
+
+query II
+SELECT i, v FROM dl.t ORDER BY i
+----
+3	c3
+
+query II
+SELECT i, v FROM dl.t AT (VERSION => 4) ORDER BY i
+----
+1	a
+3	c2
+
+query I
+SELECT count(*) FROM dl.f
+----
+19
+
+statement ok
+DETACH dl

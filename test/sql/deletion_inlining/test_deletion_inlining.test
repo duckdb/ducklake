@@ -194,14 +194,20 @@ SELECT DISTINCT branch_id FROM ducklake_meta.ducklake_inlined_delete_1
 ----
 0
 
+# the row versions carry their birth on main, the deleted one has its end in the companion
 query IIII
 FROM ducklake_meta.ducklake_inlined_data_1_1 order by ALL
 ----
-50	9	NULL	51
-51	9	NULL	52
-52	9	11	53
-53	9	NULL	54
-54	9	NULL	55
+50	9	51	0
+51	9	52	0
+52	9	53	0
+53	9	54	0
+54	9	55	0
+
+query IIIII
+FROM ducklake_meta.ducklake_inlined_data_1_1_visibility
+----
+0	52	0	9	11
 
 statement ok
 CALL ducklake_flush_inlined_data('ducklake')

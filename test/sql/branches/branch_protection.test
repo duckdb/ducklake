@@ -110,6 +110,12 @@ SELECT COUNT(*) FROM dl.t
 ----
 1
 
+# the head of the only branch is protected on the branch itself, no other branch holds tags to consult
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [3], dry_run => true)
+----
+0
+
 statement ok
 DETACH dl
 

@@ -1,0 +1,65 @@
+# name: test/sql/migration/dev1_inlined_foreign_objects.test
+# description: a view and a table named like an inlined deletion table without its columns are left alone by the probes of the metadata schema
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+# objects another tool keeps in the metadata schema
+statement ok
+CREATE VIEW meta.note AS SELECT 1 AS n
+
+statement ok
+CREATE TABLE meta.ducklake_inlined_delete_7 (note VARCHAR)
+
+statement ok
+DETACH dl
+
+# the probes of the attach skip the view and the table without the columns of a deletion table
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+
+query I
+SELECT i FROM dl.t
+----
+1
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+
+query I
+SELECT n FROM meta.note
+----
+1
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_delete_7
+----
+0
+
+statement ok
+DETACH dl

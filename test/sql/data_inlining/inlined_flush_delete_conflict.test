@@ -1,0 +1,109 @@
+# name: test/sql/data_inlining/inlined_flush_delete_conflict.test
+# description: a flush of the inlined rows and a concurrent inlined delete conflict in both orders
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+# the flush read the row that the delete ended after its snapshot
+statement ok con1
+BEGIN
+
+statement ok con1
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok con2
+DELETE FROM dl.t WHERE i = 2
+
+statement error con1
+COMMIT
+----
+but another transaction has deleted from it
+
+# the delete committed its end, the rows stayed inlined and no data file was registered
+query IIIII
+FROM meta.ducklake_inlined_data_1_1_visibility
+----
+0	1	0	2	3
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1
+----
+3
+
+query II
+SELECT table_name, file_count FROM ducklake_table_info('dl')
+----
+t	0
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+3
+
+# the delete would end a row that the flush moved to a file
+statement ok con1
+BEGIN
+
+statement ok con1
+DELETE FROM dl.t WHERE i = 3
+
+statement ok con2
+CALL ducklake_flush_inlined_data('dl')
+
+statement error con1
+COMMIT
+----
+but another transaction has flushed the inlined data
+
+# the flush emptied the payload and its companion, the live rows are in the data file
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
+----
+0
+
+query II
+SELECT table_name, file_count FROM ducklake_table_info('dl')
+----
+t	1
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+3
+
+# the delete that lost retries against the flushed rows
+statement ok con1
+DELETE FROM dl.t WHERE i = 3
+
+query I
+SELECT i FROM dl.t
+----
+1
+
+statement ok
+DETACH dl

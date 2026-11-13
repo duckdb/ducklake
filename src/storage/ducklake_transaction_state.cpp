@@ -407,7 +407,9 @@ void DuckLakeTransactionState::CheckTaggedSnapshotsExist(const DuckLakeCommitCon
 		}
 		filter = StringUtil::Join(targets, " OR ");
 	} else {
+		// LCOV_EXCL_START
 		filter = StringUtil::Format("snapshot_id IN (%s)", TaggedSnapshotIdList(new_snapshot_tags));
+		// LCOV_EXCL_STOP
 	}
 	auto result = context.conflict_query_executor(
 	    StringUtil::Format("SELECT snapshot_id, %s FROM {METADATA_CATALOG}.ducklake_snapshot WHERE %s",
@@ -1004,7 +1006,8 @@ static void CountInlinedRows(const vector<Identifier> &inlined_table_names, Duck
 	stored_rows = 0;
 	live_rows = 0;
 	for (auto &inlined_table_name : inlined_table_names) {
-		auto sql = DuckLakeMetadataManager::GetInlinedRowCountsSql(inlined_table_name, context.InlinedColNames());
+		auto sql = DuckLakeMetadataManager::GetInlinedRowCountsSql(
+		    inlined_table_name, context.InlinedColNames(), context.supports_v2_0_metadata, context.commit_chain);
 		auto result = context.query_metadata_with_snapshot(snapshot, sql);
 		result->ThrowIfError("Failed to read the inlined row counts from DuckLake: ");
 		for (auto &row : *result) {
@@ -1055,8 +1058,9 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(TableIndex table_id,
 			select_list += StringUtil::Format(", MIN(%s)::VARCHAR, MAX(%s)::VARCHAR, COUNT(%s), %s", col_expr, col_expr,
 			                                  col_expr, nan_expr);
 		}
-		auto sql = DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(inlined_table_name, select_list,
-		                                                                 context.InlinedColNames());
+		auto sql = DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(
+		    inlined_table_name, select_list, context.InlinedColNames(), context.supports_v2_0_metadata,
+		    context.commit_chain);
 		auto result = context.query_metadata_with_snapshot(snapshot, sql);
 		result->ThrowIfError("Failed to read inlined-data aggregates from DuckLake: ");
 		for (auto &row : *result) {
@@ -1642,8 +1646,8 @@ static void RemoveColumnsWithInlinedValues(TableIndex table_id, const vector<Flu
 		if (checks.empty()) {
 			continue;
 		}
-		auto values = context.conflict_query_executor(
-		    DuckLakeMetadataManager::GetInlinedValuesSql(checks, context.InlinedColNames()));
+		auto values = context.conflict_query_executor(DuckLakeMetadataManager::GetInlinedValuesSql(
+		    checks, context.InlinedColNames(), context.supports_v2_0_metadata, context.commit_chain));
 		values->ThrowIfError("Failed to commit DuckLake transaction - failed to check the inlined data of a table:");
 		for (auto &row : *values) {
 			for (idx_t check_idx = 0; check_idx < checks.size(); check_idx++) {
@@ -2599,6 +2603,10 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	if (has_table_data_changes) {
 		auto result = GetNewDataFiles(batch_queries, commit_state, stats, context, attempt_dropped_file_stats);
 		batch_queries += write_data_files_sql(result.new_files);
+		// the inlined ends run before the inserts, so an update does not end the version it re inserts
+		auto inlined_deletes = GetNewInlinedDeletes(commit_state);
+		batch_queries += DuckLakeMetadataManager::WriteNewInlinedDeletes(
+		    inlined_deletes, context.InlinedColNames(), context.supports_v2_0_metadata, context.commit_chain);
 		batch_queries += context.write_inlined_data(commit_snapshot, result.new_inlined_data, new_tables_result,
 		                                            new_inlined_data_tables_result);
 	}
@@ -2634,10 +2642,6 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::WriteNewDeleteFiles(
 		    file_list, table_relative_paths(file_list, &DuckLakeDeleteFileInfo::path), context.supports_v1_1_metadata,
 		    context.supports_v2_0_metadata, include_branch_bookkeeping, branch_root_caps);
-
-		// write new inlined deletes (for inlined data tables)
-		auto inlined_deletes = GetNewInlinedDeletes(commit_state);
-		batch_queries += DuckLakeMetadataManager::WriteNewInlinedDeletes(inlined_deletes, context.InlinedColNames());
 
 		// write new inlined file deletes (for parquet files)
 		auto inlined_file_deletes = GetNewInlinedFileDeletes(commit_state);
@@ -2934,7 +2938,7 @@ WHERE idt.schema_version < (
 		}
 		// keep the registration if the drop fails
 		auto res = context.execute_in_transaction(DuckLakeMetadataManager::DropInlinedTableSql(
-		    candidate.table_id, candidate.schema_version, candidate.table_name));
+		    candidate.table_id, candidate.schema_version, candidate.table_name, context.supports_v2_0_metadata));
 		if (res->HasError()) {
 			if (!failed_drop) {
 				failed_drop = std::move(res);

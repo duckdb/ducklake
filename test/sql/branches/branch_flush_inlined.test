@@ -45,6 +45,17 @@ SELECT COUNT(*) FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND is_de
 ----
 1
 
+# the flush of main leaves no row version or end of main behind
+query I
+SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_1 WHERE _ducklake_branch_id = 0
+----
+0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_1_visibility WHERE branch_id = 0
+----
+0
+
 statement ok
 DETACH dl
 

@@ -393,14 +393,6 @@ public:
 	//! Drops the cached listings, called when a transaction writes metadata
 	void InvalidateListingCache();
 
-	//! Clips a read snapshot to the root cap when attached at a branch, the inlined row tables carry the ids of main
-	idx_t ClipToParentView(idx_t snapshot_id) const {
-		auto root_cap = attached_chain.RootCap();
-		if (!root_cap.IsValid() || snapshot_id < root_cap.GetIndex()) {
-			return snapshot_id;
-		}
-		return root_cap.GetIndex();
-	}
 	//! Whether an expiry commits a snapshot whose changes list the expired snapshots
 	bool RecordsExpiredSnapshots() const {
 		return SupportsSnapshotTags();
@@ -592,13 +584,13 @@ private:
 	//! Table IDs where the inlined deletion table is known to exist (permanent - never invalidated)
 	unordered_set<idx_t> inlined_deletion_exists;
 	//! Table IDs where the inlined deletion table is known to NOT exist, with the snapshot_id at which we checked
-	//! Valid as long as current snapshot.snapshot_id <= cached snapshot_id
+	//! Valid as long as current snapshot.snapshot_id <= cached snapshot_id, the ids of the attached lineage
 	unordered_map<idx_t, idx_t> inlined_deletion_not_exists;
 	//! The rewrite snapshots of each table, read from the snapshot changes of committed snapshots
 	mutex rewrite_snapshots_lock;
 	optional_idx rewrite_snapshots_read_until;
 	unordered_map<idx_t, set<idx_t>> rewrite_snapshots;
-	//! The inlined deletion tables of the metadata catalog, listed per snapshot id for the latest snapshots
+	//! The inlined deletion tables of the metadata catalog, listed per snapshot id of the lineage for the latest ones
 	map<idx_t, shared_ptr<const unordered_set<string>>> inlined_deletion_tables;
 	//! Held while the inlined deletion tables are listed
 	mutex inlined_deletion_listing_lock;

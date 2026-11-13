@@ -1,0 +1,91 @@
+# name: test/sql/migration/dev1_inlined_rows_unhealable.test
+# description: an inlined data table with rows whose end column is gone and whose companion is missing cannot be healed, an empty one gets its companion back
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+statement ok
+DROP TABLE meta.ducklake_inlined_data_1_1_visibility
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+attach it writable once
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+----
+Cannot heal this DuckLake catalog: the end snapshots of the inlined rows were dropped and the visibility rows that replaced them are missing
+
+# an empty inlined table without companion gets its companion recreated
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_empty.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_empty_files', METADATA_CATALOG 'meta2', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query I
+SELECT count(*) FROM meta2.ducklake_inlined_data_1_1
+----
+0
+
+statement ok
+DROP TABLE meta2.ducklake_inlined_data_1_1_visibility
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_empty.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_empty_files', METADATA_CATALOG 'meta2', DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT count(*) FROM meta2.ducklake_inlined_data_1_1_visibility
+----
+0
+
+statement ok
+INSERT INTO dl.t VALUES (2), (3)
+
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+query I
+SELECT count(*) FROM meta2.ducklake_inlined_data_1_1_visibility
+----
+1
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+3
+
+statement ok
+DETACH dl

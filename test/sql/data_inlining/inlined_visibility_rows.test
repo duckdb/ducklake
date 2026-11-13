@@ -1,0 +1,142 @@
+# name: test/sql/data_inlining/inlined_visibility_rows.test
+# description: inlined row versions are born once and end in the companion of their table, one end per version per branch
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER, v VARCHAR)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 'a'), (2, 'b'), (3, 'c')
+
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+statement ok
+UPDATE dl.t SET v = 'c2' WHERE i = 3
+
+statement ok
+UPDATE dl.t SET v = 'c3' WHERE i = 3
+
+# every version keeps its birth, an update re inserts the row id as a version born at its snapshot
+query IIIII
+FROM meta.ducklake_inlined_data_1_1 ORDER BY ALL
+----
+0	2	1	a	0
+1	2	2	b	0
+2	2	3	c	0
+2	4	3	c2	0
+2	5	3	c3	0
+
+# one end per ended version, two of them for the row id updated twice
+query IIIII
+FROM meta.ducklake_inlined_data_1_1_visibility ORDER BY ALL
+----
+0	1	0	2	3
+0	2	0	2	4
+0	2	0	4	5
+
+query II
+SELECT i, v FROM dl.t ORDER BY i
+----
+1	a
+3	c3
+
+query II
+SELECT rowid, i FROM dl.t ORDER BY rowid
+----
+0	1
+2	3
+
+query II
+SELECT i, v FROM dl.t AT (VERSION => 2) ORDER BY i
+----
+1	a
+2	b
+3	c
+
+query II
+SELECT i, v FROM dl.t AT (VERSION => 3) ORDER BY i
+----
+1	a
+3	c
+
+query II
+SELECT i, v FROM dl.t AT (VERSION => 4) ORDER BY i
+----
+1	a
+3	c2
+
+query IIIII
+FROM dl.table_changes('t', 3, 5) ORDER BY ALL
+----
+3	1	delete	2	b
+4	2	update_postimage	3	c2
+4	2	update_preimage	3	c
+5	2	update_postimage	3	c3
+5	2	update_preimage	3	c2
+
+# a second end of the same version on the same branch fails on the key of the companion
+statement error
+INSERT INTO meta.ducklake_inlined_data_1_1_visibility VALUES (0, 1, 0, 2, 9)
+----
+
+# the flush moves every version into a file and dates the deletes of the dead ones by their ends
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
+----
+0
+
+query I
+SELECT delete_count FROM meta.ducklake_delete_file
+----
+3
+
+query II
+SELECT i, v FROM dl.t ORDER BY i
+----
+1	a
+3	c3
+
+query II
+SELECT i, v FROM dl.t AT (VERSION => 2) ORDER BY i
+----
+1	a
+2	b
+3	c
+
+query II
+SELECT i, v FROM dl.t AT (VERSION => 4) ORDER BY i
+----
+1	a
+3	c2
+
+query IIIII
+FROM dl.table_changes('t', 3, 5) ORDER BY ALL
+----
+3	1	delete	2	b
+4	2	update_postimage	3	c2
+4	2	update_preimage	3	c
+5	2	update_postimage	3	c3
+5	2	update_preimage	3	c2
+
+statement ok
+DETACH dl

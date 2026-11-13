@@ -22,11 +22,16 @@ INSERT INTO ducklake.t1 VALUES (1), (2), (3)
 statement ok
 DELETE FROM ducklake.t1 WHERE i=2
 
-# an older snapshot can still read the deleted row
+# an older snapshot can still read the deleted row, whose end is in the companion
 query I
 SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1
 ----
 3
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1_visibility
+----
+1
 
 statement ok
 CALL ducklake_expire_snapshots('ducklake', older_than => now())
@@ -34,11 +39,16 @@ CALL ducklake_expire_snapshots('ducklake', older_than => now())
 statement ok
 CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true)
 
-# no snapshot can see it anymore
+# no snapshot can see it anymore, its end went with it
 query I
 SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1
 ----
 2
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1_visibility
+----
+0
 
 query I
 SELECT * FROM ducklake.t1 ORDER BY i
@@ -59,6 +69,11 @@ INSERT INTO ducklake.t1 VALUES (5)
 statement ok
 DELETE FROM ducklake.t1 WHERE i=5
 
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1_visibility
+----
+2
+
 statement ok
 CALL ducklake_expire_snapshots('ducklake', older_than => now())
 
@@ -66,6 +81,11 @@ query I
 SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1
 ----
 2
+
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1_visibility
+----
+0
 
 query I
 SELECT * FROM ducklake.t1 ORDER BY i

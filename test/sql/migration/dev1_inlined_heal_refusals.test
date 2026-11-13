@@ -1,0 +1,199 @@
+# name: test/sql/migration/dev1_inlined_heal_refusals.test
+# description: a 1.0 catalog whose inlined tables hold user columns named like the columns of the 2.0 layout is refused with a rename hint
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DATA_PATH {TEST_DIR}
+
+# the bare branch name is reserved from 1.1 on, a 1.0 catalog could still create it
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_branch.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_branch_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.0', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (_ducklake_branch_id INTEGER, v INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 10)
+
+query II
+SELECT table_name, file_count FROM ducklake_table_info('dl')
+----
+t	0
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_branch.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_branch_files', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+----
+table "t" has a column "_ducklake_branch_id" colliding with the branch column of its inlined data. Rename the column and call ducklake_flush_inlined_data() before migrating
+
+# the refused migration leaves the catalog at its version
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_branch.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_branch_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+1.0
+
+query II
+SELECT * FROM dl.t
+----
+1	10
+
+# renaming the column and flushing the rows clears the way, the emptied inlined table reads nothing
+statement ok
+ALTER TABLE dl.t RENAME COLUMN _ducklake_branch_id TO b
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_branch.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_branch_files', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query II
+SELECT b, v FROM dl.t
+----
+1	10
+
+statement ok
+INSERT INTO dl.t VALUES (2, 20)
+
+query II
+SELECT b, v FROM dl.t ORDER BY b
+----
+1	10
+2	20
+
+statement ok
+DETACH dl
+
+# a user column named like a joined companion column of the 2.0 readers is refused as well
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_vis.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_vis_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.0', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (x INTEGER, v INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 10)
+
+# an older build reserved neither name, so the column is renamed in the metadata as that build could have created it
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1 RENAME COLUMN x TO _ducklake_vis_row_id
+
+statement ok
+UPDATE meta.ducklake_column SET column_name = '_ducklake_vis_row_id' WHERE table_id = 1 AND column_name = 'x'
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_vis.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_vis_files', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+----
+table "t" has a column "_ducklake_vis_row_id" colliding with the row visibility columns of its inlined data. Rename the column and call ducklake_flush_inlined_data() before migrating
+
+# once the rows are flushed the migration passes, the emptied inlined table reads nothing
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_vis.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_vis_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+query II
+SELECT * FROM dl.t
+----
+1	10
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_vis.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_vis_files', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query II
+SELECT * FROM dl.t
+----
+1	10
+
+statement ok
+DETACH dl
+
+# the probe matches the physical column in any case, so the catalog is asked the same way
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_upper.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_upper_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.0', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (_DUCKLAKE_BRANCH_ID INTEGER, v INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 10), (NULL, 20), (0, 30)
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_upper.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_upper_files', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+----
+table "t" has a column "_DUCKLAKE_BRANCH_ID" colliding with the branch column of its inlined data. Rename the column and call ducklake_flush_inlined_data() before migrating
+
+# flushing the rows without the rename passes the migration, the column then keeps the table out of inlining
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_upper.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_upper_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_upper.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_upper_files', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query II
+SELECT * FROM dl.t ORDER BY v
+----
+1	10
+NULL	20
+0	30
+
+statement ok
+INSERT INTO dl.t VALUES (2, 40)
+
+query II
+SELECT table_name, file_count FROM ducklake_table_info('dl')
+----
+t	2
+
+query II
+SELECT * FROM dl.t ORDER BY v
+----
+1	10
+NULL	20
+0	30
+2	40
+
+statement ok
+DETACH dl

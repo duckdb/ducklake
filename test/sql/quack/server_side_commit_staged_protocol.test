@@ -82,7 +82,7 @@ SELECT * FROM ducklake_commit(''main'', 1)')
 statement ok
 CREATE TABLE lake.u(i INTEGER)
 
-# staged inlined rows of a table without staged inlined data are ignored
+# staged inlined rows without staged inlined data and the stats of a column the table lacks are ignored
 query III
 CALL quack_query_by_name('__ducklake_metadata_lake', '
 TRUNCATE ducklake_staged_commit;
@@ -91,6 +91,8 @@ INSERT INTO ducklake_staged_commit SELECT NULL, NULL, NULL, snapshot_id, NULL, N
 FROM main.ducklake_snapshot ORDER BY snapshot_id DESC LIMIT 1;
 INSERT INTO ducklake_staged_inlined_data VALUES (1, false);
 INSERT INTO ducklake_staged_inlined_row VALUES (2, 0, NULL, ''(42)'');
+INSERT INTO ducklake_staged_inlined_column_stats
+VALUES (1, 99, 0, true, 0, true, 0, false, NULL, false, NULL, false, NULL, false, NULL, true, true);
 SELECT * FROM ducklake_commit(''main'', 2)')
 ----
 6	2	false
@@ -119,6 +121,12 @@ query II
 SELECT (SELECT list(i ORDER BY i) FROM lake.t), (SELECT list(i) FROM lake.u)
 ----
 [1, 2, 3]	[4]
+
+# the rows the server committed carry the branch of main
+query II
+SELECT list(DISTINCT _ducklake_branch_id), count(*) FROM __ducklake_metadata_lake.ducklake_inlined_data_1_1
+----
+[0]	3
 
 # a staged delete file that replaces an existing one is committed in its place, after emptying the staging tables of
 # the client's last commit

@@ -1,0 +1,96 @@
+# name: test/sql/branches/branch_inlined_table_changes.test
+# description: the change feeds of inlined rows on a branch equal those of main below the fork
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+statement ok
+UPDATE dl.t SET i = i + 10 WHERE i = 2
+
+statement ok
+DELETE FROM dl.t WHERE i = 3
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 4)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 5, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 4 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (5, NULL, NULL, NULL, NULL, 1)
+
+# main inserts after the fork
+statement ok
+INSERT INTO dl.t VALUES (4)
+
+query IIII
+FROM dl.table_changes('t', 2, 4) ORDER BY ALL
+----
+2	0	insert	1
+2	1	insert	2
+2	2	insert	3
+3	1	update_postimage	12
+3	1	update_preimage	2
+4	2	delete	3
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query IIII
+FROM dev.table_changes('t', 2, 4) ORDER BY ALL
+----
+2	0	insert	1
+2	1	insert	2
+2	2	insert	3
+3	1	update_postimage	12
+3	1	update_preimage	2
+4	2	delete	3
+
+query IIII
+FROM dev.table_changes('t', 3, 3) ORDER BY ALL
+----
+3	1	update_postimage	12
+3	1	update_preimage	2
+
+query IIII
+FROM dev.table_changes('t', 4, 4) ORDER BY ALL
+----
+4	2	delete	3
+
+query I
+SELECT i FROM dev.t ORDER BY i
+----
+1
+12
+
+# the feeds above the fork are those of main alone
+query IIII
+FROM dl.table_changes('t', 5, 5) ORDER BY ALL
+----
+5	3	insert	4
+
+statement error
+FROM dev.table_changes('t', 5, 5)
+----
+not supported yet
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH dl

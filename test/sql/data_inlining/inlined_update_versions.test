@@ -1,0 +1,99 @@
+# name: test/sql/data_inlining/inlined_update_versions.test
+# description: repeated updates of one inlined row leave one version per update and one end per replaced version
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (id INTEGER, val INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 0)
+
+loop i 1 10
+
+statement ok
+UPDATE dl.t SET val = val + 1 WHERE id = 1
+
+endloop
+
+# ten versions of the row id, nine of them ended
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1
+----
+10
+
+query I
+SELECT list(DISTINCT _ducklake_row_id) FROM meta.ducklake_inlined_data_1_1
+----
+[0]
+
+query III
+SELECT count(*), min(snapshot_id), max(snapshot_id) FROM meta.ducklake_inlined_data_1_1_visibility
+----
+9	3	11
+
+# the end of each version is the birth of the next
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility WHERE snapshot_id <> row_snapshot + 1
+----
+0
+
+query II
+SELECT id, val FROM dl.t
+----
+1	9
+
+loop i 2 12
+
+query I
+SELECT val + 2 = {i} FROM dl.t AT (VERSION => {i})
+----
+true
+
+endloop
+
+# the flush writes the live version and dates the deletes of the nine replaced ones
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
+----
+0
+
+query II
+SELECT record_count, (SELECT delete_count FROM meta.ducklake_delete_file) FROM meta.ducklake_data_file
+----
+10	9
+
+query II
+SELECT id, val FROM dl.t
+----
+1	9
+
+loop i 2 12
+
+query I
+SELECT val + 2 = {i} FROM dl.t AT (VERSION => {i})
+----
+true
+
+endloop
+
+statement ok
+DETACH dl

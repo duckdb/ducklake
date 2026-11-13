@@ -58,6 +58,12 @@ SELECT table_name FROM __ducklake_metadata_dl.ducklake_inlined_data_tables ORDER
 ducklake_inlined_data_1_1
 ducklake_inlined_data_1_2
 
+# the failed drop kept the companion with its payload
+query I
+SELECT count(*) FROM __ducklake_metadata_dl.ducklake_inlined_data_1_1_visibility
+----
+0
+
 statement ok
 DROP TABLE __ducklake_metadata_dl.drop_blocker
 
@@ -76,6 +82,11 @@ ducklake_inlined_data_1_2
 
 statement error
 SELECT count(*) FROM __ducklake_metadata_dl.ducklake_inlined_data_1_1
+----
+does not exist
+
+statement error
+SELECT count(*) FROM __ducklake_metadata_dl.ducklake_inlined_data_1_1_visibility
 ----
 does not exist
 

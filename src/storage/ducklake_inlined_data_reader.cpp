@@ -30,6 +30,11 @@ void DuckLakeInlinedDataReader::SetCommittedRows(shared_ptr<DuckLakeCommittedInl
 	committed_rows = std::move(rows);
 }
 
+//! A column of the inlined table under the alias every inlined reader gives it
+static string InlinedTableColumn(const Identifier &name) {
+	return "inlined_data." + SQLIdentifier::ToString(name);
+}
+
 void DuckLakeInlinedDataReader::GetColumnToRead(const DuckLakeFunctionInfo &read_info,
                                                 DuckLakeMetadataManager &metadata_manager,
                                                 const DuckLakeInlinedColNames &col_names,
@@ -44,22 +49,24 @@ void DuckLakeInlinedDataReader::GetColumnToRead(const DuckLakeFunctionInfo &read
 			break;
 		case MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID:
 			if (read_info.scan_type == DuckLakeScanType::SCAN_DELETIONS) {
-				// when scanning deletions end_snapshot is the snapshot marker
-				virtual_column = col_names.end_snapshot;
-			} else {
-				virtual_column = col_names.begin_snapshot;
+				// when scanning deletions the end snapshot is the marker, from 2.0 on the one the end join derives
+				column = SQLIdentifier::ToString(col_names.end_snapshot);
+				type = LogicalType::BIGINT;
+				return;
 			}
+			virtual_column = col_names.begin_snapshot;
 			break;
 		default:
 			break;
 		}
 		if (!virtual_column.empty()) {
-			column = SQLIdentifier::ToString(virtual_column);
+			column = InlinedTableColumn(virtual_column);
 			type = LogicalType::BIGINT;
 			return;
 		}
 	}
-	column = SQLIdentifier::ToString(col.name);
+	// the row alias keeps a legacy user column named like a joined companion column unambiguous
+	column = InlinedTableColumn(col.name);
 	if (read_info.scan_type != DuckLakeScanType::SCAN_FOR_FLUSH) {
 		// the flush source already casts its columns
 		column = metadata_manager.CastColumnToTarget(column, col.type);
@@ -180,13 +187,13 @@ bool DuckLakeInlinedDataReader::TryInitializeScan(ClientContext &context, Global
 				scan_column_ids.push_back(i);
 				virtual_columns.push_back(InlinedVirtualColumn::NONE);
 			}
-			columns_to_read.push_back(SQLIdentifier::ToString(col_names.row_id));
+			columns_to_read.push_back(InlinedTableColumn(col_names.row_id));
 			expected_types.push_back(LogicalType::BIGINT);
 			virtual_columns.emplace_back(InlinedVirtualColumn::COLUMN_EMPTY);
 		}
 		if (columns_to_read.empty()) {
 			// COUNT(*) - read row_id but don't emit
-			columns_to_read.push_back(SQLIdentifier::ToString(col_names.row_id));
+			columns_to_read.push_back(InlinedTableColumn(col_names.row_id));
 			expected_types.push_back(LogicalType::BIGINT);
 			virtual_columns.emplace_back(InlinedVirtualColumn::COLUMN_EMPTY);
 		}

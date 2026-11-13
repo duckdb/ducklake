@@ -61,7 +61,8 @@
         "test/sql/partitioning/epoch_version_gate.test",
         "test/sql/stats/stats_exactness_inlined.test",
         "test/sql/types/null_type_version_gate.test",
-        "test/sql/migration/v11_to_v20_dev1_inlined_deletes.test"
+        "test/sql/migration/v11_to_v20_dev1_inlined_deletes.test",
+        "test/sql/migration/v11_to_v20_dev1_inlined.test"
       ]
     },
     {
@@ -156,6 +157,7 @@
       "reason": "The _ducklake_ reserved prefix and the inlined column rename migration were added in 1.1 and are not exercised when ducklake_default_version is pinned to 1.0",
       "paths": [
         "test/sql/data_inlining/inlining_reserved_column_names.test",
+        "test/sql/data_inlining/inlined_reserved_user_columns.test",
         "test/sql/alter/issue_944.test",
         "test/sql/migration/inlined_column_rename.test",
         "test/sql/migration/inlined_column_rename_conflict.test",
@@ -232,7 +234,11 @@
         "test/sql/branches/branch_snapshot_changes_key.test",
         "test/sql/branches/branchless_skips_guards.test",
         "test/sql/cleanup/expire_restarted_commit_cleanup.test",
-        "test/sql/branches/branch_inlined_file_delete_row.test"
+        "test/sql/branches/branch_inlined_file_delete_row.test",
+        "test/sql/branches/branch_inlined_delete_after_fork.test",
+        "test/sql/branches/branch_inlined_end_row.test",
+        "test/sql/branches/branch_nested_inlined.test",
+        "test/sql/branches/branch_inlined_table_changes.test"
       ]
     },
     {
@@ -342,7 +348,20 @@
         "test/sql/transaction/transaction_conflicts_replaced_delete_file.test",
         "test/sql/deletion_inlining/inlined_file_delete_branch_column.test",
         "test/sql/deletion_inlining/inlined_file_deletes_concurrent_branch_column.test",
-        "test/sql/migration/dev1_inlined_deletes_heal.test"
+        "test/sql/migration/dev1_inlined_deletes_heal.test",
+        "test/sql/data_inlining/inlined_visibility_rows.test",
+        "test/sql/data_inlining/inlined_update_versions.test",
+        "test/sql/data_inlining/inlined_flush_keeps_own_deletes.test",
+        "test/sql/data_inlining/inlined_companion_layout.test",
+        "test/sql/data_inlining/inlined_table_changes_versions.test",
+        "test/sql/data_inlining/inlined_delete_conflict.test",
+        "test/sql/data_inlining/inlined_flush_delete_conflict.test",
+        "test/sql/data_inlining/inlined_dead_rows_expire.test",
+        "test/sql/data_inlining/inlined_superseded_drop_failure.test",
+        "test/sql/migration/dev1_inlined_rows_heal.test",
+        "test/sql/migration/dev1_inlined_rows_unhealable.test",
+        "test/sql/migration/dev1_inlined_orphan_companion.test",
+        "test/sql/migration/dev1_inlined_heal_refusals.test"
       ]
     }
   ]

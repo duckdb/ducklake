@@ -103,15 +103,17 @@ using DeletesPerFile = unordered_map<string, set<PositionWithSnapshot>>;
 using DeletedRowVersions = map<pair<int64_t, int64_t>, int64_t>;
 
 static DeletedRowVersions GetDeletedRowVersions(DuckLakeMetadataManager &metadata_manager, DuckLakeSnapshot snapshot,
-                                                const DuckLakeTableEntry &table, const Identifier &inlined_table_name) {
+                                                const DuckLakeTableEntry &table, const Identifier &inlined_table_name,
+                                                bool branch_aware) {
 	auto col_names = metadata_manager.InlinedColNames();
 	auto flush_source = metadata_manager.InlinedFlushSource(inlined_table_name, table);
+	// the source of 2.0 selects the versions of the flushing branch and carries the end of each dead one
+	auto born_filter =
+	    branch_aware ? string() : StringUtil::Format("{SNAPSHOT_ID} >= %s AND ", col_names.begin_snapshot);
 	auto result = metadata_manager.Query(
-	    snapshot,
-	    StringUtil::Format(
-	        "SELECT %s, %s, %s FROM %s inlined_data WHERE {PARENT_VIEW_SNAPSHOT_ID} >= %s AND %s IS NOT NULL;",
-	        col_names.row_id, col_names.begin_snapshot, col_names.end_snapshot, flush_source, col_names.begin_snapshot,
-	        col_names.end_snapshot));
+	    snapshot, StringUtil::Format("SELECT %s, %s, %s FROM %s inlined_data WHERE %s%s IS NOT NULL;", col_names.row_id,
+	                                 col_names.begin_snapshot, col_names.end_snapshot, flush_source, born_filter,
+	                                 col_names.end_snapshot));
 	metadata_manager.CheckInlinedDataReadError(*result, inlined_table_name);
 	DeletedRowVersions deleted_rows;
 	for (auto &row : *result) {
@@ -164,7 +166,8 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 	DuckLakeInsert::RemoveEmptyFiles(context, global_state);
 	if (!global_state.written_files.empty()) {
 		DeletesPerFile deletes_per_file;
-		auto deleted_rows = GetDeletedRowVersions(metadata_manager, snapshot, table, inlined_table.table_name);
+		auto deleted_rows = GetDeletedRowVersions(metadata_manager, snapshot, table, inlined_table.table_name,
+		                                          transaction.GetCatalog().SupportsBranching());
 		if (!deleted_rows.empty()) {
 			for (auto &file : global_state.written_files) {
 				auto deletes = GetWrittenFileDeletes(context, table, file, encryption_key, deleted_rows);

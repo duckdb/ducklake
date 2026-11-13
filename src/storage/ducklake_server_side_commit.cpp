@@ -652,7 +652,7 @@ string DuckLakeServerSideCommit::BuildInlinedDataInserts(const vector<DuckLakeIn
 		}
 		batch += DuckLakeMetadataManager::FormatInlinedDataInsert(inlined_table_name, entry.row_id_start, has_preserved,
 		                                                          has_preserved ? &row_ids_it->second : nullptr,
-		                                                          cells_per_row);
+		                                                          cells_per_row, supports_v2_0_metadata);
 	}
 	return batch;
 }
