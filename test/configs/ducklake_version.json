@@ -244,6 +244,7 @@
         "test/sql/branches/branch_nested_inlined.test",
         "test/sql/branches/branch_inlined_table_changes.test",
         "test/sql/rest/rest_serve_branch_refused.test",
+        "test/sql/rest/rest_serve_refusal_keeps_registration.test",
         "test/sql/rest/rest_snapshots_main_lineage.test",
         "test/sql/branches/branch_table_changes_across_fork.test",
         "test/sql/branches/branch_feed_inherited_dated_deletes.test",
@@ -383,8 +384,8 @@
         "test/sql/migration/dev1_inlined_rows_unhealable.test",
         "test/sql/migration/dev1_inlined_orphan_companion.test",
         "test/sql/migration/dev1_inlined_heal_refusals.test",
-        "test/sql/migration/dev1_heal_marker.test",
         "test/sql/migration/dev1_inlined_heal_null_schema_branch.test",
+        "test/sql/migration/dev1_heal_marker.test",
         "test/sql/migration/dev1_inlined_foreign_objects.test",
         "test/sql/rest/rest_initial_default.test"
       ]

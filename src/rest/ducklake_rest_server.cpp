@@ -495,6 +495,14 @@ static unique_ptr<FunctionData> DuckLakeRESTServeBind(ClientContext &context, Ta
 	bool isolated = StringUtil::StartsWith(target_str, "ducklake:");
 	const string catalog_name = isolated ? "ducklake_rest" : target_str;
 	string prefix = prefix_val.IsNull() ? catalog_name : StringValue::Get(prefix_val);
+	if (!isolated) {
+		// a refused catalog leaves the one served under the prefix in place
+		auto &catalog = Catalog::GetCatalog(context, Identifier(target_str));
+		if (catalog.GetCatalogType() != "ducklake") {
+			throw BinderException("ducklake_rest_serve: catalog \"%s\" is not a DuckLake catalog", target_str);
+		}
+		RefuseServedBranch(catalog);
+	}
 	if (server) {
 		// a catalog that is served under the prefix has to release its DuckLake first
 		server->RemoveCatalog(prefix);
@@ -503,11 +511,6 @@ static unique_ptr<FunctionData> DuckLakeRESTServeBind(ClientContext &context, Ta
 	if (isolated) {
 		db = OpenIsolatedDuckLake(context, target_str, attach_options, catalog_name);
 	} else {
-		auto &catalog = Catalog::GetCatalog(context, Identifier(target_str));
-		if (catalog.GetCatalogType() != "ducklake") {
-			throw BinderException("ducklake_rest_serve: catalog \"%s\" is not a DuckLake catalog", target_str);
-		}
-		RefuseServedBranch(catalog);
 		db = context.db;
 	}
 	if (!server) {
