@@ -1,0 +1,75 @@
+# name: test/sql/migration/v10_inlined_unresolved_version_refusal.test
+# description: a legacy branch column of an inlined table whose schema version an expiry left unresolved is refused
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+# written by DuckDB 1.5.6, t got its inlined rows after the ALTER that added b
+unzip data/old_ducklake/inlined_schema_versions.db.gz {TEST_DIR}/v10_inlined_unresolved_version_refusal.db
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_unresolved_version_refusal.db' AS lake
+    (DATA_PATH '{TEST_DIR}/v10_inlined_unresolved_version_refusal', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta')
+
+# the commit of the inlined table is unknown once the snapshot before it is expired
+statement ok
+CALL ducklake_expire_snapshots('lake', versions => [6])
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_unresolved_version_refusal.db' AS lake
+    (DATA_PATH '{TEST_DIR}/v10_inlined_unresolved_version_refusal', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta',
+    DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
+
+# the inlined table of t is registered at a schema version without a version row
+query II
+SELECT begin_snapshot, schema_version FROM meta.ducklake_schema_versions WHERE table_id = 1 ORDER BY ALL
+----
+1	1
+2	2
+
+query I
+SELECT table_name FROM meta.ducklake_inlined_data_tables WHERE table_id = 1
+----
+ducklake_inlined_data_1_6
+
+# an older build reserved no branch name, so the added column is renamed in the metadata as that build could have
+statement ok
+UPDATE meta.ducklake_column SET column_name = '_ducklake_branch_id' WHERE table_id = 1 AND column_name = 'b'
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_6 RENAME COLUMN b TO _ducklake_branch_id
+
+statement ok
+DETACH lake
+
+# the column was added after the creation of t, the snapshot an unresolved registration falls back to
+statement error
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_unresolved_version_refusal.db' AS lake
+    (DATA_PATH '{TEST_DIR}/v10_inlined_unresolved_version_refusal', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta',
+    DUCKLAKE_VERSION '2.0-dev1', AUTOMATIC_MIGRATION TRUE)
+----
+<REGEX>:.*"_ducklake_branch_id" colliding with the branch column.*ducklake_flush_inlined_data\(\) before migrating.*
+
+# the refused migration leaves the catalog at its version
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/v10_inlined_unresolved_version_refusal.db' AS lake
+    (DATA_PATH '{TEST_DIR}/v10_inlined_unresolved_version_refusal', OVERRIDE_DATA_PATH TRUE, METADATA_CATALOG 'meta')
+
+query I
+SELECT value FROM lake.options() WHERE option_name = 'version'
+----
+1.1
+
+# the payload keeps its column
+query II
+SELECT a, _ducklake_branch_id FROM meta.ducklake_inlined_data_1_6
+----
+x	B
+
+statement ok
+DETACH lake

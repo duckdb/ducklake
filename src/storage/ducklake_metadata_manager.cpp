@@ -2088,14 +2088,24 @@ void DuckLakeMetadataManager::VerifyInlinedColumnsHealable(const V2_0Dev1Additio
 		}
 		// the catalog tells a user column of that name from the column an interrupted heal added
 		// a payload holds the columns live at its schema version, so a legacy column renamed before it matches none
+		// a registration without a version row resolves no snapshot, so every column its table ever had counts
 		auto columns = GetInlinedTableColumnsSql(optional_idx(), column_rows_healed, DuckLakeBranchChain::Main());
+		auto branch_column = SQLString::ToString(col_names.branch_id.GetIdentifierName());
+		auto tables = StringUtil::Join(literals, ", ");
 		auto result = Query(StringUtil::Format(R"(
-SELECT DISTINCT cols.table_name, cols.column_name
+SELECT cols.table_name, cols.column_name
 FROM (%s) cols
 WHERE lower(cols.column_name) = lower(%s) AND cols.table_name IN (%s)
-ORDER BY cols.table_name)",
-		                                       columns, SQLString::ToString(col_names.branch_id.GetIdentifierName()),
-		                                       StringUtil::Join(literals, ", ")));
+UNION
+SELECT idt.table_name, col.column_name
+FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+JOIN {METADATA_CATALOG}.ducklake_column col ON col.table_id = idt.table_id AND col.parent_column IS NULL
+WHERE lower(col.column_name) = lower(%s) AND idt.table_name IN (%s) AND NOT EXISTS (
+	SELECT 1 FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+	WHERE sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version
+)
+ORDER BY 1, 2)",
+		                                       columns, branch_column, tables, branch_column, tables));
 		result->ThrowIfError("Failed to read the columns of the inlined data tables of DuckLake: ");
 		for (auto &row : *result) {
 			collisions.emplace_back(row.GetValue<Identifier>(0), row.GetValue<Identifier>(1));
