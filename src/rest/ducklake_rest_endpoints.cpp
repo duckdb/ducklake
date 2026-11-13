@@ -336,10 +336,7 @@ static void RemoveUnreadFields(Vector &column, idx_t count, const DuckLakeFieldI
 	}
 }
 
-//! Reads the inlined rows of a table, in the schema that the table has at the snapshot: the inlined rows of each schema
-//! version of the table are turned into rows of that schema. The rows have the row id, the begin and end snapshot and
-//! the columns of the table. Returns nothing if the table has no inlined rows. From 2.0 on only the readers of ended
-//! rows derive the end snapshot from the companion rows, the insertions feed returns NULL as the end.
+//! Reads the inlined rows of a table in the schema it has at the snapshot, nothing if the table has none
 static unique_ptr<RESTInlinedRows>
 ReadInlinedRows(DuckLakeRESTRequest &request, DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                 const std::function<unique_ptr<QueryResult>(const Identifier &, const vector<string> &)> &read_rows,
@@ -628,6 +625,8 @@ RESTListSnapshotsResponse DuckLakeRESTEndpoints::ListSnapshots(DuckLakeRESTReque
 	filter.older_than = parameters.older_than;
 	filter.has_snapshot_ids = parameters.snapshot_ids.has_value;
 	filter.snapshot_ids = parameters.snapshot_ids.value;
+	// the listing and its pages hold the lineage of the served catalog, as ducklake_snapshots does
+	filter.chain_only = true;
 	RESTListSnapshotsResponse result;
 	result.snapshots = request.GetMetadataManager().GetAllSnapshots(filter);
 	GetKeyPage(

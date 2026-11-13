@@ -314,6 +314,7 @@
         "test/sql/rest/rest_server_edge_cases.test",
         "test/sql/rest/rest_skipped_add_field.test",
         "test/sql/rest/rest_snapshot_tags.test",
+        "test/sql/rest/rest_snapshots_main_lineage.test",
         "test/sql/rest/rest_struct_projection.test",
         "test/sql/rest/rest_time_travel.test",
         "test/sql/rest/rest_timestamptz_promotion.test",
