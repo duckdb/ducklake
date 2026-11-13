@@ -558,7 +558,8 @@
         "test/sql/compaction/compaction_row_totals.test",
         "test/sql/compaction/compaction_totals_concurrent_bounds.test",
         "test/sql/delete/file_set_alter_inlined_table.test",
-        "test/sql/delete/file_set_inlined_variant_totals.test"
+        "test/sql/delete/file_set_inlined_variant_totals.test",
+        "test/sql/compaction/compaction_many_inlined_tables.test_slow"
       ]
     },
     {
