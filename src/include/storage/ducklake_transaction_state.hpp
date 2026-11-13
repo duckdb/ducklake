@@ -55,6 +55,8 @@ struct DuckLakeCommitContext {
 	std::function<string(const string &)> commit_error_without_query = [](const string &message) {
 		return message;
 	};
+	//! Whether a COMMIT that was sent and failed may have taken effect.
+	bool commit_outcome_unknown = false;
 	//! Advice for a commit error that is not retried.
 	std::function<string(const string &)> commit_error_hint = [](const string &) {
 		return string();

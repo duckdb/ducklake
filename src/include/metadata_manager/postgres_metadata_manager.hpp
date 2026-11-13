@@ -46,6 +46,10 @@ public:
 	void MigrateInlinedDataTypes() override;
 	bool IsRetryableCommitError(const string &message) const override;
 	string CommitErrorWithoutQuery(const string &message) const override;
+	//! The error cannot tell a COMMIT that the server rejected from one that took effect and lost its response
+	bool CommitOutcomeUnknown() const override {
+		return true;
+	}
 	string ConfigOptionLockSql() const override;
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
