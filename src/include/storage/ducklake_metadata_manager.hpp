@@ -903,7 +903,6 @@ public:
 	bool HasBranchRows();
 	bool HasFileVisibilityTable();
 	bool HasDeleteFileVisibilityTable();
-	bool HasMainBranchRow();
 	//! The per file ranges a branch derives from its visibility events
 	static string VisibilityEventRanges(const string &visibility_table, const string &file_id_column,
 	                                    const string &chain_predicate, const string &prefix);
@@ -932,7 +931,6 @@ public:
 	bool ProbeMetadataColumnsFromListing(string query);
 	//! Drops the memo of a probe pass
 	void ResetProbedColumns();
-	bool HasAnyFileRangeColumns();
 	bool HasAllFileRangeColumns();
 	bool HasBranchZeroFileVisibility(const string &file_table, const string &file_column, bool has_visibility_table,
 	                                 const string &visibility_table);
@@ -941,7 +939,12 @@ public:
 	bool HasBranchZeroVisibility();
 	bool HasVisibilityEventShape(const string &visibility_table);
 	bool HasVisibilityMigrationTable(const string &visibility_table);
-	bool HasV2_0Dev1Additions();
+	//! Whether the loaded metadata holds the marker of a completed heal of the current development layout
+	static bool HasHealMarker(const DuckLakeMetadata &metadata);
+	//! Reads the metadata table for the marker
+	bool HasHealMarker();
+	//! Writes the marker, the last statements of a heal
+	static string HealMarkerSql();
 	virtual void AddV2_0Dev1Additions();
 	//! The heal steps a versioned catalog table still needs, the branch column, the companion and the end column drop
 	struct RowVisibilityAdditions {

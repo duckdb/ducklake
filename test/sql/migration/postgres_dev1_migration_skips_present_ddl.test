@@ -228,6 +228,13 @@ SELECT * FROM dl.t
 statement ok
 DETACH dl
 
+# the migration wrote the marker of a completed heal last
+query I
+SELECT value FROM postgres_query('pg',
+    'SELECT value FROM dev1_skips_present_ddl.ducklake_metadata WHERE key = ''heal_complete''')
+----
+2.0-dev1.3
+
 # the migration rebuilt the snapshot tables with the branch column
 query I
 SELECT count(*) FROM postgres_query('pg', 'SELECT 1 FROM information_schema.columns WHERE table_schema = ''dev1_skips_present_ddl'' AND table_name IN (''ducklake_snapshot'', ''ducklake_snapshot_changes'', ''ducklake_schema_versions'') AND column_name = ''branch_id''')

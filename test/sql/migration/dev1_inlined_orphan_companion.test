@@ -1,5 +1,5 @@
 # name: test/sql/migration/dev1_inlined_orphan_companion.test
-# description: a companion whose inlined data table a drop interrupted between its statements left behind is dropped by the next writable attach
+# description: a companion whose inlined data table a drop interrupted between its statements left behind is dropped by the heal of the next writable attach
 # group: [migration]
 
 require ducklake
@@ -30,6 +30,10 @@ SELECT table_name FROM meta.ducklake_inlined_data_tables ORDER BY ALL
 ----
 ducklake_inlined_data_1_1
 ducklake_inlined_data_2_2
+
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 
 # the drop of the second inlined table stopped after its payload went
 statement ok

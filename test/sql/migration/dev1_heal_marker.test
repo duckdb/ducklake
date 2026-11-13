@@ -1,0 +1,164 @@
+# name: test/sql/migration/dev1_heal_marker.test
+# description: a heal that stopped after its last shape change leaves complete shapes and unfilled rows, only the
+# group: [migration]
+
+# marker of a completed heal makes the next writable attach heal again
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t AS SELECT range AS i FROM range(20)
+
+statement ok
+DELETE FROM dl.t WHERE i IN (1, 2)
+
+statement ok
+CREATE TABLE dl.u AS SELECT range AS i FROM range(20)
+
+statement ok
+DELETE FROM dl.u WHERE i = 3
+
+# a fresh catalog carries the marker of a completed heal
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.3
+
+query II
+SELECT (SELECT count(*) FROM dl.t), (SELECT count(*) FROM dl.u)
+----
+18	19
+
+# the heal of an older dev build added the branch column of its last tables and stopped before their updates, on a
+# backend that commits each statement the shapes are complete while the rows carry no branch
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
+statement ok
+ALTER TABLE meta.ducklake_table DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_table ADD COLUMN branch_id BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_schema_versions DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_schema_versions ADD COLUMN branch_id BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_delete_2 DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_delete_2 ADD COLUMN branch_id BIGINT
+
+query III
+SELECT (SELECT count(*) FILTER (WHERE branch_id IS NULL) FROM meta.ducklake_table),
+    (SELECT count(*) FILTER (WHERE branch_id IS NULL) FROM meta.ducklake_schema_versions),
+    (SELECT count(*) FILTER (WHERE branch_id IS NULL) FROM meta.ducklake_inlined_delete_2)
+----
+2	2	1
+
+statement ok
+DETACH dl
+
+# every shape is complete, only the missing marker tells that the heal never finished
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    READ_ONLY)
+----
+attach it writable once
+
+# the writable attach fills the branches of the rows and writes the marker
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
+
+query III
+SELECT (SELECT count(*) FILTER (WHERE branch_id IS NULL) FROM meta.ducklake_table),
+    (SELECT count(*) FILTER (WHERE branch_id IS NULL) FROM meta.ducklake_schema_versions),
+    (SELECT count(*) FILTER (WHERE branch_id IS NULL) FROM meta.ducklake_inlined_delete_2)
+----
+0	0	0
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.3
+
+# the tables are still there and the deleted rows stay deleted
+query I
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'dl' ORDER BY table_name
+----
+t
+u
+
+query II
+SELECT (SELECT count(*) FROM dl.t), (SELECT count(*) FROM dl.u)
+----
+18	19
+
+# the marker of an older generation of the layout heals again as well
+statement ok
+UPDATE meta.ducklake_metadata SET value = '2.0-dev1.1' WHERE key = 'heal_complete'
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    READ_ONLY)
+----
+attach it writable once
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.3
+
+query I
+SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+1
+
+statement ok
+DETACH dl
+
+# a marked catalog attaches read only without probing its shapes
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage = 'memory')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    READ_ONLY)
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+    WHERE query LIKE '%ducklake_branch%' OR query LIKE '%visibility%'
+----
+0
+
+query II
+SELECT (SELECT count(*) FROM dl.t), (SELECT count(*) FROM dl.u)
+----
+18	19
+
+statement ok
+DETACH dl

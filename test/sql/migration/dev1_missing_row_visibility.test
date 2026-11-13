@@ -19,6 +19,10 @@ CREATE VIEW dl.v AS SELECT 1 AS x
 statement ok
 DROP VIEW dl.v
 
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # the companion holds the only record of the drop
 statement ok
 DROP TABLE meta.ducklake_view_visibility

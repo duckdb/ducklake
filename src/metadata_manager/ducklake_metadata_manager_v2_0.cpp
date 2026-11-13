@@ -121,7 +121,8 @@ string DuckLakeMetadataManagerV2_0<Base>::GetDeleteFileTableStatement() {
 
 template <typename Base>
 string DuckLakeMetadataManagerV2_0<Base>::GetInitialDataStatements() {
-	return DuckLakeMetadataManager::GetMainBranchRowStatement() + "\n";
+	// a fresh catalog has the healed layout, so it carries the marker of a completed heal
+	return DuckLakeMetadataManager::GetMainBranchRowStatement() + "\n" + DuckLakeMetadataManager::HealMarkerSql();
 }
 
 template <typename Base>

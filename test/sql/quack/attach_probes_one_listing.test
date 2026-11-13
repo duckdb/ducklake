@@ -1,6 +1,8 @@
 # name: test/sql/quack/attach_probes_one_listing.test
-# description: the attach of a Quack catalog probes the columns of every metadata table in one server statement
+# description: the attach of a marked Quack catalog probes no metadata table, without the marker it probes the
 # group: [quack]
+
+# columns of every table in one server statement
 
 require ducklake
 
@@ -11,7 +13,8 @@ require-env DUCKLAKE_CONNECTION quack:localhost:19999
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/attach_probes_one_listing', DATA_INLINING_ROW_LIMIT 5)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/attach_probes_one_listing',
+    DATA_INLINING_ROW_LIMIT 5)
 
 statement ok
 CREATE TABLE dl.t(i INTEGER)
@@ -34,12 +37,43 @@ statement ok
 CALL enable_logging('QueryLog', storage = 'memory')
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/attach_probes_one_listing', DATA_INLINING_ROW_LIMIT 5)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/attach_probes_one_listing',
+    DATA_INLINING_ROW_LIMIT 5)
 
 statement ok
 CALL disable_logging()
 
-# one listing of the metadata columns serves every probe of the attach
+# the marker of a completed heal spares the attach every probe
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%duckdb_columns()%'
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%LIMIT 0%'
+----
+0
+
+# without the marker one listing of the metadata columns serves every probe of the attach
+statement ok
+CALL quack_query_by_name('__ducklake_metadata_dl', 'DELETE FROM ducklake_metadata WHERE key = ''heal_complete''')
+
+statement ok
+DETACH dl
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/attach_probes_one_listing',
+    DATA_INLINING_ROW_LIMIT 5)
+
+statement ok
+CALL disable_logging()
+
 query I
 SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%duckdb_columns()%'
 ----
@@ -50,6 +84,12 @@ query I
 SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%LIMIT 0%'
 ----
 0
+
+# the heal wrote the marker back
+query I
+SELECT value FROM __ducklake_metadata_dl.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.3
 
 query I
 SELECT count(*) FROM dl.t

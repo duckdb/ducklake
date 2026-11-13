@@ -19,6 +19,10 @@ CREATE TABLE dl.t AS SELECT i FROM range(10) t(i)
 statement ok
 DELETE FROM dl.t WHERE i = 5
 
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # simulate an older dev catalog that kept the delete ranges but lost the delete visibility
 statement ok
 ALTER TABLE meta.ducklake_delete_file ADD COLUMN begin_snapshot BIGINT
@@ -51,6 +55,10 @@ query I
 SELECT COUNT(*) FROM dl.t
 ----
 9
+
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 
 # losing the visibility rows without the ranges cannot be healed
 statement ok

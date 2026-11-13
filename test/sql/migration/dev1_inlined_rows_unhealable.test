@@ -22,6 +22,10 @@ INSERT INTO dl.t VALUES (1), (2)
 statement ok
 DELETE FROM dl.t WHERE i = 2
 
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 statement ok
 DROP TABLE meta.ducklake_inlined_data_1_1_visibility
 
@@ -55,6 +59,10 @@ query I
 SELECT count(*) FROM meta2.ducklake_inlined_data_1_1
 ----
 0
+
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta2.ducklake_metadata WHERE key = 'heal_complete'
 
 statement ok
 DROP TABLE meta2.ducklake_inlined_data_1_1_visibility

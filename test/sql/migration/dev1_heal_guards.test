@@ -13,6 +13,10 @@ test-env DATA_PATH {TEST_DIR}
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_heal_guards_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
 
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # without files there is nothing to recover, so the writable attach recreates the dropped table
 statement ok
 DROP TABLE meta.ducklake_file_visibility
@@ -38,6 +42,10 @@ query II
 SELECT (SELECT COUNT(*) FROM meta.ducklake_file_visibility), (SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility)
 ----
 1	1
+
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 
 # the preserved data ranges cannot heal a dropped delete visibility table
 statement ok

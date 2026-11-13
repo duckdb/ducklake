@@ -25,6 +25,10 @@ COMMENT ON TABLE dl.t IS 'second'
 statement ok
 CREATE VIEW dl.v AS SELECT 1 AS x
 
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # the view column tags hold no row, so an empty companion is the right one
 statement ok
 DROP TABLE meta.ducklake_view_column_tag_visibility
@@ -55,6 +59,10 @@ query I
 SELECT COUNT(*) FROM meta.ducklake_view_column_tag_visibility
 ----
 1
+
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 
 # the companion of the tags holds the only record of the replaced comment
 statement ok

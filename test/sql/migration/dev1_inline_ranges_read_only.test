@@ -25,6 +25,10 @@ INSERT INTO dl.t VALUES (100)
 statement ok
 CALL ducklake_create_tag('dl', 'v1', version => 1)
 
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # the file tables of the older dev build carried the ranges inline and had no visibility events
 statement ok
 ALTER TABLE meta.ducklake_data_file ADD COLUMN begin_snapshot BIGINT

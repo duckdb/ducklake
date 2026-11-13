@@ -383,7 +383,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	if (resolved_version != DuckLakeVersion::UNSET) {
 		SetVersionedMetadataManager(transaction, resolved_version);
 	}
-	if (resolved_version == DuckLakeVersion::V2_0_DEV1 && !transaction.GetMetadataManager().HasV2_0Dev1Additions()) {
+	if (resolved_version == DuckLakeVersion::V2_0_DEV1 && !DuckLakeMetadataManager::HasHealMarker(metadata)) {
 		if (catalog.GetAttached().IsReadOnly()) {
 			// once the inline range columns are gone the visibility events are the only readable ranges
 			auto &manager = transaction.GetMetadataManager();
@@ -416,6 +416,10 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			} else if (!manager.HasBranchZeroVisibility()) {
 				throw InvalidInputException("Cannot read this DuckLake catalog: the visibility events that "
 				                            "replaced the inline file ranges are missing");
+			} else {
+				// a heal that stopped after its last shape change left no shape to probe, only the marker tells
+				throw InvalidInputException("This DuckLake catalog has no marker of a completed heal, attach it "
+				                            "writable once to heal it");
 			}
 		} else {
 			// the additions change the metadata schema, which a kept cache would still miss
@@ -425,8 +429,8 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				// commit now so a concurrent heal surfaces inside the attach retry scope
 				transaction.ReleaseMetadataTransaction();
 			} catch (std::exception &ex) {
-				// a concurrent attach may have added them first
-				if (!transaction.GetMetadataManager().HasV2_0Dev1Additions()) {
+				// a concurrent attach may have healed it first
+				if (!transaction.GetMetadataManager().HasHealMarker()) {
 					throw;
 				}
 			}

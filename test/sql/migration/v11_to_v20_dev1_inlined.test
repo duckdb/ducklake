@@ -84,6 +84,12 @@ SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
 2.0-dev1
 
+# the migration writes the marker of a completed heal last
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.3
+
 query I
 SELECT column_name FROM (DESCRIBE SELECT * FROM meta.ducklake_inlined_data_1_1)
 ----

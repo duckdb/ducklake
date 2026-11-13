@@ -45,6 +45,10 @@ SELECT i, j2 FROM dl.t
 ----
 1	2
 
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # the older dev build ended its rows in place and knew no birth branch
 statement ok
 ALTER TABLE meta.ducklake_column ADD COLUMN end_snapshot BIGINT
@@ -112,6 +116,12 @@ SELECT column_name FROM (DESCRIBE dl.t)
 ----
 i
 j2
+
+# the heal wrote its marker last
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.3
 
 query II
 SELECT i, j2 FROM dl.t
@@ -215,6 +225,10 @@ SELECT j2 FROM dl.t ORDER BY j2
 ----
 2
 4
+
+# an interrupted heal wrote no marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 
 # a heal interrupted after some of the ends were copied resumes with the rest
 statement ok

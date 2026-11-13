@@ -2771,7 +2771,7 @@ static set<DataFileIndex> GetFilesWithInlinedDeletesAfterSnapshot(TableIndex tab
 	if (!context.inlined_file_deletion_table_exists(table_id)) {
 		return result;
 	}
-	// the ids of a branch are contiguous, so writers on different branches never conflict
+	// only later deletions on the committing branch conflict
 	auto query = StringUtil::Format("SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s WHERE %sbegin_snapshot > "
 	                                "{SNAPSHOT_ID};",
 	                                DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id),

@@ -1045,7 +1045,7 @@ void DuckLakeMetadataManager::MigrateV11() {
 	VerifyHealableV2_0Dev1(missing);
 	auto migrate_query = V2_0Dev1AdditionsSql(missing) + R"(
 UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version';
-)";
+)" + HealMarkerSql();
 	ExecuteMigration(migrate_query, false, "1.1", "2.0-dev1");
 }
 
@@ -1456,21 +1456,6 @@ bool DuckLakeMetadataManager::TableHasRows(const string &table) {
 	// LCOV_EXCL_STOP
 }
 
-bool DuckLakeMetadataManager::HasMainBranchRow() {
-	auto probe = Query("SELECT COUNT(*) FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_id = 0");
-	if (probe->HasError()) {
-		// LCOV_EXCL_START
-		return false;
-		// LCOV_EXCL_STOP
-	}
-	for (auto &row : *probe) {
-		return row.GetValue<int64_t>(0) > 0;
-	}
-	// LCOV_EXCL_START
-	return false;
-	// LCOV_EXCL_STOP
-}
-
 vector<DuckLakeBranchChain> DuckLakeMetadataManager::LoadBranchChains() {
 	// the clamp of a chain decides how far the branch reads each of its parents
 	auto branches = LoadBranches();
@@ -1857,13 +1842,6 @@ string DuckLakeMetadataManager::InlinedDeletionMigrationSql(const InlinedDeletio
 	return result;
 }
 
-bool DuckLakeMetadataManager::HasAnyFileRangeColumns() {
-	return HasMetadataColumn("ducklake_data_file", "begin_snapshot") ||
-	       HasMetadataColumn("ducklake_data_file", "end_snapshot") ||
-	       HasMetadataColumn("ducklake_delete_file", "begin_snapshot") ||
-	       HasMetadataColumn("ducklake_delete_file", "end_snapshot");
-}
-
 bool DuckLakeMetadataManager::HasAllFileRangeColumns() {
 	return HasMetadataColumn("ducklake_data_file", "begin_snapshot") &&
 	       HasMetadataColumn("ducklake_data_file", "end_snapshot") &&
@@ -1925,18 +1903,37 @@ bool DuckLakeMetadataManager::HasBranchZeroVisibility() {
 	return HasBranchZeroDataVisibility() && HasBranchZeroDeleteVisibility();
 }
 
-bool DuckLakeMetadataManager::HasV2_0Dev1Additions() {
-	ResetProbedColumns();
-	return HasRowVisibilityShapes() && HasSnapshotTagTable() && HasBranchTable() && HasBranchTableShape() &&
-	       HasSnapshotRemapTable() && HasSnapshotRemapShape() && HasSnapshotBranchColumn() &&
-	       HasSnapshotChangesBranchColumn() && HasSchemaVersionsBranchColumn() && !HasSnapshotRebuildTable() &&
-	       !HasSnapshotOldTable() && !HasSnapshotChangesRebuildTable() && !HasSnapshotChangesOldTable() &&
-	       HasFileVisibilityTable() && HasDeleteFileVisibilityTable() &&
-	       HasVisibilityEventShape("ducklake_file_visibility") &&
-	       HasVisibilityEventShape("ducklake_delete_file_visibility") &&
-	       !HasVisibilityMigrationTable("ducklake_file_visibility") &&
-	       !HasVisibilityMigrationTable("ducklake_delete_file_visibility") && HasMainBranchRow() &&
-	       HasBranchZeroVisibility() && !HasAnyFileRangeColumns() && HasInlinedRowShapes();
+bool DuckLakeMetadataManager::HasHealMarker(const DuckLakeMetadata &metadata) {
+	for (auto &tag : metadata.tags) {
+		if (tag.key == DUCKLAKE_HEAL_MARKER_KEY && tag.value == DUCKLAKE_HEAL_GENERATION) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool DuckLakeMetadataManager::HasHealMarker() {
+	// read after a failed heal, an error leaves the failure of the heal to be reported
+	auto result = Query(
+	    StringUtil::Format("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND scope IS NULL",
+	                       SQLString(DUCKLAKE_HEAL_MARKER_KEY)));
+	if (result->HasError()) {
+		return false;
+	}
+	for (auto &row : *result) {
+		if (row.GetValue<string>(0) == DUCKLAKE_HEAL_GENERATION) {
+			return true;
+		}
+	}
+	return false;
+}
+
+string DuckLakeMetadataManager::HealMarkerSql() {
+	// the marker comes last, so a heal interrupted anywhere before it runs again on the next writable attach
+	return StringUtil::Format("DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s;\n"
+	                          "INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES (%s, %s);\n",
+	                          SQLString(DUCKLAKE_HEAL_MARKER_KEY), SQLString(DUCKLAKE_HEAL_MARKER_KEY),
+	                          SQLString(DUCKLAKE_HEAL_GENERATION));
 }
 
 DuckLakeMetadataManager::V2_0Dev1Additions DuckLakeMetadataManager::ProbeV2_0Dev1Additions() {
@@ -2086,7 +2083,7 @@ ORDER BY idt.table_name)",
 void DuckLakeMetadataManager::AddV2_0Dev1Additions() {
 	auto missing = ProbeV2_0Dev1Additions();
 	VerifyHealableV2_0Dev1(missing);
-	ExecuteMigration(V2_0Dev1AdditionsSql(missing), false, "2.0-dev1", "2.0-dev1");
+	ExecuteMigration(V2_0Dev1AdditionsSql(missing) + HealMarkerSql(), false, "2.0-dev1", "2.0-dev1");
 }
 
 void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {

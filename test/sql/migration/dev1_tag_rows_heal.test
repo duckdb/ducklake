@@ -46,6 +46,10 @@ COMMENT ON COLUMN dl.v.x IS 'second x'
 statement ok
 CALL ducklake_replace_tag('dl', 'release', version => 8)
 
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # the older dev build ended its rows in place and knew no branch
 statement ok
 ALTER TABLE meta.ducklake_tag ADD COLUMN end_snapshot BIGINT
@@ -115,6 +119,12 @@ query I
 SELECT comment FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 't'
 ----
 second
+
+# the heal wrote its marker last
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.3
 
 query II
 SELECT column_name, comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 't'
@@ -219,6 +229,10 @@ SELECT t.snapshot_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_snapshot_
 ----
 6	7	11
 8	11	13
+
+# an interrupted heal wrote no marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 
 # a heal interrupted after some of the ends were copied resumes with the rest
 statement ok

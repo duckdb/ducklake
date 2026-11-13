@@ -18,6 +18,12 @@ SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
 2.0-dev1
 
+# a fresh catalog carries the marker of a completed heal of the development layout
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.3
+
 # SQLite reports the timestamp column as text
 query II
 SELECT column_name, CASE WHEN column_name = 'expires_at' AND data_type = 'VARCHAR' THEN 'TIMESTAMP WITH TIME ZONE' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_snapshot_tag') ORDER BY column_index

@@ -29,6 +29,10 @@ INSERT INTO dl.t VALUES (100)
 statement ok
 DELETE FROM dl.t WHERE i < 100
 
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # rewrite the visibility tables into the range layout of an older dev build
 statement ok
 CREATE TABLE meta.fv_backup(branch_id BIGINT, table_id BIGINT, data_file_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT)
@@ -123,6 +127,10 @@ SELECT * FROM dl.t
 ----
 100
 
+# an interrupted heal wrote no marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # a rewrite interrupted after creating the empty event table resumes from the backup
 statement ok
 CREATE TABLE meta.ducklake_file_visibility_migration(branch_id BIGINT, table_id BIGINT, data_file_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT)
@@ -169,6 +177,10 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_visib
 
 statement ok
 DELETE FROM meta.ducklake_file_visibility
+
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 
 statement ok
 DETACH dl

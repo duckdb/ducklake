@@ -30,6 +30,10 @@ SELECT (SELECT count(*) FROM dl.t), (SELECT count(*) FROM dl.u)
 ----
 18	19
 
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # the older dev build knew no branch of a deletion
 statement ok
 ALTER TABLE meta.ducklake_inlined_delete_1 DROP COLUMN branch_id
@@ -84,6 +88,10 @@ SELECT file_id, row_id, begin_snapshot, branch_id FROM meta.ducklake_inlined_del
 0	1	2	0
 0	2	2	0
 0	4	5	0
+
+# an interrupted heal wrote no marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 
 # a heal interrupted after the column of the first table was added, before its branches were filled and before the
 # second table, resumes with the rest

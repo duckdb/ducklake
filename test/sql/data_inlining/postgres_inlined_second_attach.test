@@ -29,6 +29,10 @@ SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
 ----
 0
 
+# without the marker the second attach probes the tables of the server, not those the scanner cached
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # a writable attach heals nothing, the companion has its payload
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl2 (METADATA_CATALOG 'meta')
@@ -44,6 +48,12 @@ query I
 SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
 ----
 0
+
+# the heal wrote the marker back
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.3
 
 statement ok
 DETACH dl2

@@ -38,6 +38,10 @@ SELECT e.partition_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_partitio
 ----
 2	3	3
 
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # the older dev build ended its rows in place and knew no birth branch
 statement ok
 ALTER TABLE meta.ducklake_column ADD COLUMN end_snapshot BIGINT
@@ -168,6 +172,10 @@ SELECT c.column_name, e.row_snapshot, e.snapshot_id FROM meta.ducklake_column_vi
 ----
 k	5	5
 
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # a heal of that layout keeps the row, no live row shares its birth
 statement ok
 ALTER TABLE meta.ducklake_column ADD COLUMN end_snapshot BIGINT
@@ -210,6 +218,10 @@ SELECT column_id, column_name FROM meta.ducklake_column ORDER BY column_id
 2	j
 3	k
 4	m
+
+# an interrupted heal wrote no marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 
 # an older build backfilled the companion from the ends in place and stopped before it dropped the end column
 statement ok

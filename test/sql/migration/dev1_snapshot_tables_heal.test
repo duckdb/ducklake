@@ -16,6 +16,10 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
 
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # the branch and remap tables of the older dev build
 statement ok
 DROP TABLE meta.ducklake_branch
@@ -167,6 +171,10 @@ SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snaps
 1	0
 2	0
 
+# an interrupted heal wrote no marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # a rebuild interrupted after copying the first row resumes without duplicating it
 statement ok
 CREATE TABLE meta.ducklake_snapshot_rebuild(snapshot_id BIGINT, snapshot_time TIMESTAMPTZ, schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT, branch_id BIGINT, PRIMARY KEY(branch_id, snapshot_id))
@@ -197,6 +205,10 @@ SELECT i FROM dl.t ORDER BY i
 ----
 42
 43
+
+# an interrupted heal wrote no marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 
 # a rebuild interrupted after renaming the old table resumes from the rebuilt table
 statement ok
@@ -236,6 +248,10 @@ SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
 ----
 [0, 1, 2]
 
+# an interrupted heal wrote no marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # a heal interrupted before dropping the old table drops it
 statement ok
 CREATE TABLE meta.ducklake_snapshot_old(snapshot_id BIGINT, snapshot_time TIMESTAMPTZ, schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT, branch_id BIGINT)
@@ -264,6 +280,10 @@ SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
 1	0
 2	0
 3	0
+
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 
 # only the changes table has the shape of 1.1, the snapshot table keeps its key
 statement ok

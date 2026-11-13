@@ -361,7 +361,8 @@
         "test/sql/migration/dev1_inlined_rows_heal.test",
         "test/sql/migration/dev1_inlined_rows_unhealable.test",
         "test/sql/migration/dev1_inlined_orphan_companion.test",
-        "test/sql/migration/dev1_inlined_heal_refusals.test"
+        "test/sql/migration/dev1_inlined_heal_refusals.test",
+        "test/sql/migration/dev1_heal_marker.test"
       ]
     }
   ]

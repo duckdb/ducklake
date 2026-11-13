@@ -90,6 +90,12 @@ SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
 1.1
 
+# a release catalog has no heal marker
+query I
+SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+0
+
 statement ok
 DETACH dl
 
@@ -101,6 +107,12 @@ query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
 2.0-dev1
+
+# the migration writes the marker of a completed heal last
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.3
 
 query IIII
 SELECT branch_id, branch_name, parent_id, parent_branch_snapshot FROM meta.ducklake_branch

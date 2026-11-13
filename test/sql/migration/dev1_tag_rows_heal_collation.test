@@ -54,6 +54,10 @@ SELECT COUNT(*) FROM ducklake_tags('dl')
 ----
 0
 
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # the older dev build ended its rows in place and knew no branch
 statement ok
 ALTER TABLE meta.ducklake_snapshot_tag ADD COLUMN end_snapshot BIGINT

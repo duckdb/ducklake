@@ -42,6 +42,10 @@ SELECT count(*) FROM dl.f
 ----
 19
 
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # the older dev build ended its row versions in place, knew no birth branch and no branch of a deletion
 statement ok
 ALTER TABLE meta.ducklake_inlined_data_1_1 ADD COLUMN _ducklake_end_snapshot BIGINT
@@ -126,6 +130,12 @@ SELECT count(*) FROM dl.f
 ----
 19
 
+# the heal wrote its marker last
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.3
+
 # the healed catalog ends the versions it deletes in the companion
 statement ok
 DELETE FROM dl.t WHERE i = 1
@@ -136,6 +146,10 @@ FROM meta.ducklake_inlined_data_1_1_visibility ORDER BY ALL
 0	0	0	2	7
 0	1	0	2	3
 0	2	0	2	4
+
+# an interrupted heal wrote no marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 
 # a heal interrupted after the branch column was added resumes with the rest and fills the branches
 statement ok
@@ -198,6 +212,10 @@ SELECT i, v FROM dl.t AT (VERSION => 4) ORDER BY i
 1	a
 3	c2
 
+# an interrupted heal wrote no marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # a heal interrupted after the companion was created resumes with the backfill
 statement ok
 ALTER TABLE meta.ducklake_inlined_data_1_1 ADD COLUMN _ducklake_end_snapshot BIGINT
@@ -235,6 +253,10 @@ _ducklake_begin_snapshot
 i
 v
 _ducklake_branch_id
+
+# an interrupted heal wrote no marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 
 # a heal interrupted after the backfill drops the end column without duplicating the ends
 statement ok

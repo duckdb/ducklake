@@ -16,6 +16,10 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev1_branc
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
 
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # simulate a catalog created by a dev build without the branch tables and columns and with inline ranges
 statement ok
 DROP TABLE meta.ducklake_branch
@@ -153,6 +157,10 @@ SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
 1	0
 2	0
 
+# an interrupted heal wrote no marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # a missing main row alone is restored on the next attach
 statement ok
 DELETE FROM meta.ducklake_branch
@@ -167,6 +175,10 @@ query II
 SELECT branch_id, branch_name FROM meta.ducklake_branch
 ----
 0	main
+
+# an interrupted heal wrote no marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 
 # a partially healed catalog is completed on the next attach
 statement ok

@@ -26,6 +26,10 @@ INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, 
 statement ok
 INSERT INTO meta.ducklake_snapshot_changes VALUES (2, NULL, NULL, NULL, NULL, 1)
 
+# an interrupted heal wrote no marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # the old table of a heal that stopped before dropping it
 statement ok
 CREATE TABLE meta.ducklake_snapshot_old(snapshot_id BIGINT, snapshot_time TIMESTAMPTZ, schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT, branch_id BIGINT)
@@ -50,6 +54,10 @@ SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY branch_id, sn
 0	0
 1	0
 2	1
+
+# an interrupted heal wrote no marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 
 # the rebuild table of a heal that stopped before the renames is completed with the rows of every branch
 statement ok

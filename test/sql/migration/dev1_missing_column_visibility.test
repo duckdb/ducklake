@@ -34,6 +34,10 @@ SELECT (SELECT COUNT(*) FROM meta.ducklake_partition_visibility), (SELECT COUNT(
 ----
 1	1
 
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
 # the companion holds the only record of the drop, the column rows are keyed by table and column
 statement ok
 DROP TABLE meta.ducklake_column_visibility
