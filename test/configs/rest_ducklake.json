@@ -98,7 +98,8 @@
         "test/sql/tags/tags_expire_open_conflict.test",
         "test/sql/time_travel/at_timestamp_expired_in_transaction.test",
         "test/sql/time_travel/at_timestamp_expired_snapshots.test",
-        "test/sql/time_travel/snapshot_attach_maintenance.test"
+        "test/sql/time_travel/snapshot_attach_maintenance.test",
+        "test/sql/table_changes/table_changes_rewrite_memo_expiry.test"
       ]
     },
     {
@@ -552,7 +553,9 @@
         "test/sql/tags/tags_version_gate_time_travel.test",
         "test/sql/data_inlining/inlining_obstacle_log.test",
         "test/sql/compaction/user_columns_named_like_internal_columns.test",
-        "test/sql/data_inlining/data_inlining_transaction_local_field_readd_rejected.test"
+        "test/sql/data_inlining/data_inlining_transaction_local_field_readd_rejected.test",
+        "test/sql/table_changes/table_changes_expired_rewrite_snapshots.test",
+        "test/sql/table_changes/table_changes_retained_rewrite_files.test"
       ]
     },
     {
