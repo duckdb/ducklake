@@ -338,11 +338,12 @@ static void RemoveUnreadFields(Vector &column, idx_t count, const DuckLakeFieldI
 
 //! Reads the inlined rows of a table, in the schema that the table has at the snapshot: the inlined rows of each schema
 //! version of the table are turned into rows of that schema. The rows have the row id, the begin and end snapshot and
-//! the columns of the table. Returns nothing if the table has no inlined rows.
+//! the columns of the table. Returns nothing if the table has no inlined rows. From 2.0 on only the readers of ended
+//! rows derive the end snapshot from the companion rows, the insertions feed returns NULL as the end.
 static unique_ptr<RESTInlinedRows>
 ReadInlinedRows(DuckLakeRESTRequest &request, DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                 const std::function<unique_ptr<QueryResult>(const Identifier &, const vector<string> &)> &read_rows,
-                const RESTOptional<vector<RESTColumnIdentifier>> &projection) {
+                const RESTOptional<vector<RESTColumnIdentifier>> &projection, bool ended_rows) {
 	auto inlined_tables = table.GetInlinedDataTables(*request.transaction, snapshot);
 	if (inlined_tables.empty()) {
 		return nullptr;
@@ -388,7 +389,9 @@ ReadInlinedRows(DuckLakeRESTRequest &request, DuckLakeTableEntry &table, DuckLak
 		}
 		vector<string> columns;
 		for (idx_t i = 0; i < DuckLakeInlinedColNames::COLUMN_COUNT; i++) {
-			columns.push_back(SQLIdentifier::ToString(names[i]));
+			bool end_column = names[i] == col_names.end_snapshot.GetIdentifierName();
+			bool end_derived = ended_rows || !request.catalog->SupportsBranching();
+			columns.push_back(end_column && !end_derived ? "CAST(NULL AS BIGINT)" : SQLIdentifier::ToString(names[i]));
 		}
 		for (auto &field : fields) {
 			auto written = table_at_version->GetFieldData().GetByFieldIndex(field.get().GetFieldIndex());
@@ -614,7 +617,7 @@ RESTSelectResponse DuckLakeRESTEndpoints::Select(DuckLakeRESTRequest &request, c
 	    [&](const Identifier &inlined_table_name, const vector<string> &columns) {
 		    return metadata_manager.ReadInlinedData(snapshot, inlined_table_name, columns);
 	    },
-	    parameters.columns);
+	    parameters.columns, true);
 	return result;
 }
 
@@ -681,7 +684,7 @@ RESTTableChangesResponse DuckLakeRESTEndpoints::TableChanges(DuckLakeRESTRequest
 		    }
 		    return metadata_manager.ReadInlinedDataInsertions(start_snapshot, snapshot, inlined_table_name, columns);
 	    },
-	    parameters.columns);
+	    parameters.columns, deletions);
 	return result;
 }
 

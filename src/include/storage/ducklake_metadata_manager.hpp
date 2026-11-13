@@ -951,6 +951,8 @@ public:
 	                           bool include_inherited = true);
 	//! The chain predicate of the attached branch with bare column names, preceded by AND, empty before 2.0
 	string BranchLineageFilter() const;
+	//! The WHERE conditions of a snapshot filter, the latest snapshot is the head of the attached branch from 2.0 on
+	string SnapshotFilterSql(const DuckLakeSnapshotFilter &filter) const;
 	//! The chain predicate over the begin snapshots of schema version rows, preceded by AND, empty before 2.0
 	string SchemaVersionsLineageFilter(const string &prefix) const;
 	//! Selects the rows of main, preceded by AND, empty before 2.0

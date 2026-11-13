@@ -527,11 +527,15 @@ unique_ptr<QueryResult> RESTMetadataManager::ReadCachedInlinedRows(RESTInlinedRo
 			cast_type = TransformStringToLogicalType(cast.TargetType().ToString(), *context);
 			column_ref = cast.Child();
 		}
-		if (column_ref->GetExpressionClass() != ExpressionClass::COLUMN_REF ||
-		    column_ref->Cast<ColumnRefExpression>().IsQualified()) {
+		if (column_ref->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
 			throw InvalidInputException("DuckLake REST: \"%s\" is not a column of the inlined rows", column);
 		}
-		auto &name = column_ref->Cast<ColumnRefExpression>().GetColumnName();
+		auto &colref = column_ref->Cast<ColumnRefExpression>();
+		// the inlined readers qualify their columns with the row alias of the inlined table
+		if (colref.IsQualified() && (colref.ColumnNames().size() != 2 || colref.ColumnNames()[0] != "inlined_data")) {
+			throw InvalidInputException("DuckLake REST: \"%s\" is not a column of the inlined rows", column);
+		}
+		auto &name = colref.GetColumnName();
 		optional_idx column_index;
 		for (idx_t i = 0; i < rows.columns.size(); i++) {
 			if (Identifier(rows.columns[i].name) == name) {
@@ -643,6 +647,7 @@ vector<DuckLakeInlinedTableInfo> RESTMetadataManager::GetInlinedDataTables(const
 }
 
 vector<DuckLakeSnapshotInfo> RESTMetadataManager::GetAllSnapshots(const DuckLakeSnapshotFilter &filter) {
+	// the branch and chain restrictions of the filter stay unsent, the server applies the lineage of its catalog
 	RESTListSnapshotsRequest request;
 	request.exclude_latest = filter.exclude_latest;
 	request.older_than = filter.older_than;

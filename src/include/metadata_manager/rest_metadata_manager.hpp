@@ -19,7 +19,8 @@ class DuckLakeSchemaEntry;
 struct CreateTableInfo;
 struct CreateSchemaInfo;
 
-//! Communicates with a DuckLake REST server instead of a metadata database
+//! Communicates with a DuckLake REST server instead of a metadata database, the lineage it reads is the one of the
+//! catalog the server serves
 class RESTMetadataManager : public DuckLakeMetadataManager {
 public:
 	explicit RESTMetadataManager(DuckLakeTransaction &transaction);

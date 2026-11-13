@@ -320,6 +320,10 @@ struct DuckLakeSnapshotFilter {
 	//! Only these snapshots, if set
 	bool has_snapshot_ids = false;
 	vector<idx_t> snapshot_ids;
+	//! Only the snapshots of this branch, if set
+	optional_idx branch_id;
+	//! Only the snapshots in the view of the attached chain
+	bool chain_only = false;
 };
 
 struct DuckLakeSnapshotInfo {

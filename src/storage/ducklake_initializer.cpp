@@ -73,6 +73,9 @@ string DuckLakeInitializer::GetAttachOptions() {
 void DuckLakeInitializer::Initialize() {
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	if (transaction.GetMetadataManager().IsRemote()) {
+		if (!options.branch_name.empty() && !StringUtil::CIEquals(options.branch_name, "main")) {
+			throw NotImplementedException("BRANCH attaches through a REST catalog are not supported yet");
+		}
 		catalog.ConnectREST();
 		// a remote metadata server has no metadata database to attach or migrate
 		LoadExistingDuckLake(transaction);
@@ -405,8 +408,9 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	if (resolved_version != DuckLakeVersion::UNSET) {
 		SetVersionedMetadataManager(transaction, resolved_version);
 	}
+	// the server heals the catalog it serves, a client never probes its shapes
 	if (resolved_version == DuckLakeVersion::V2_0_DEV1 && !healed_by_migration &&
-	    !DuckLakeMetadataManager::HasHealMarker(metadata)) {
+	    !transaction.GetMetadataManager().IsRemote() && !DuckLakeMetadataManager::HasHealMarker(metadata)) {
 		if (catalog.GetAttached().IsReadOnly()) {
 			// once the inline range columns are gone the visibility events are the only readable ranges
 			auto &manager = transaction.GetMetadataManager();

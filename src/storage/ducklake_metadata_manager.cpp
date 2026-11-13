@@ -2698,7 +2698,7 @@ vector<DuckLakeInlinedTableInfo> DuckLakeMetadataManager::GetInlinedDataTables(c
 	bool may_be_dropped = inlined_data_tables.size() > 1;
 	if (inlined_data_tables.size() == 1) {
 		// the only inlined table can be superseded after an older or pinned snapshot
-		may_be_dropped = transaction.GetCatalog().CatalogSnapshot() ||
+		may_be_dropped = transaction.GetCatalog().CatalogSnapshot() || transaction.GetCatalog().OnBranch() ||
 		                 snapshot.schema_version < transaction.GetSnapshot().schema_version;
 	}
 	if (!may_be_dropped) {
@@ -6338,13 +6338,13 @@ map<idx_t, DuckLakeOverwrittenDeleteFile> DuckLakeMetadataManager::GetDeleteFile
 	for (auto id : data_file_ids) {
 		ids.push_back(to_string(id));
 	}
-	auto query =
-	    StringUtil::Format(R"(
+	auto query = StringUtil::Format(R"(
 SELECT del.data_file_id, del.delete_file_id, %s
-FROM {METADATA_CATALOG}.ducklake_delete_file del
+FROM %s del
 WHERE del.table_id=%d AND del.data_file_id IN (%s) AND {SNAPSHOT_ID} >= del.begin_snapshot
   AND ({SNAPSHOT_ID} < del.end_snapshot OR del.end_snapshot IS NULL))",
-	                       GetDeleteFileSelectList("del"), table.GetTableId().index, StringUtil::Join(ids, ", "));
+	                                GetDeleteFileSelectList("del"), DeleteFiles(table.GetTableId()),
+	                                table.GetTableId().index, StringUtil::Join(ids, ", "));
 	auto query_result = Query(snapshot, query);
 	query_result->ThrowIfError("Failed to get the delete files of the data files from DuckLake: ");
 	for (auto &row : *query_result) {
@@ -6368,13 +6368,13 @@ void DuckLakeMetadataManager::ReadFilePartitions(TableIndex table_id, DuckLakeSn
 	}
 	auto query = StringUtil::Format(R"(
 SELECT data.data_file_id, data.partition_id, value.partition_key_index, value.partition_value
-FROM {METADATA_CATALOG}.ducklake_data_file data
+FROM %s data
 JOIN {METADATA_CATALOG}.ducklake_file_partition_value value
   ON value.data_file_id = data.data_file_id AND value.table_id = data.table_id
 WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot
   AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
 ORDER BY data.data_file_id, value.partition_key_index)",
-	                                table_id.index);
+	                                DataFiles(table_id), table_id.index);
 	auto result = Query(snapshot, query);
 	result->ThrowIfError("Failed to read the partition values of the files from DuckLake: ");
 	for (auto &row : *result) {
@@ -6650,11 +6650,13 @@ DuckLakeDeletedRowVersions DuckLakeMetadataManager::GetDeletedInlinedRowVersions
                                                                                  DuckLakeSnapshot snapshot) {
 	auto col_names = InlinedColNames();
 	auto flush_source = InlinedFlushSource(inlined_table_name, table);
-	auto result =
-	    Query(snapshot,
-	          StringUtil::Format("SELECT %s, %s, %s FROM %s inlined_data WHERE {SNAPSHOT_ID} >= %s AND %s IS NOT NULL;",
-	                             col_names.row_id, col_names.begin_snapshot, col_names.end_snapshot, flush_source,
-	                             col_names.begin_snapshot, col_names.end_snapshot));
+	// the source of 2.0 selects the versions of the flushing branch and carries the end of each dead one
+	auto born_filter = transaction.GetCatalog().SupportsBranching()
+	                       ? string()
+	                       : StringUtil::Format("{SNAPSHOT_ID} >= %s AND ", col_names.begin_snapshot);
+	auto result = Query(snapshot, StringUtil::Format("SELECT %s, %s, %s FROM %s inlined_data WHERE %s%s IS NOT NULL;",
+	                                                 col_names.row_id, col_names.begin_snapshot, col_names.end_snapshot,
+	                                                 flush_source, born_filter, col_names.end_snapshot));
 	CheckInlinedDataReadError(*result, inlined_table_name);
 	DuckLakeDeletedRowVersions deleted_rows;
 	for (auto &row : *result) {
@@ -6678,15 +6680,16 @@ SELECT del.file_id, data.path, data.path_is_relative, del.row_id, del.begin_snap
        existing_del.begin_snapshot as del_begin_snapshot, existing_del.encryption_key as del_encryption_key,
        existing_del.format as del_format
 FROM {METADATA_CATALOG}.%s del
-JOIN {METADATA_CATALOG}.ducklake_data_file data ON del.file_id = data.data_file_id
-LEFT JOIN {METADATA_CATALOG}.ducklake_delete_file existing_del
+JOIN %s data ON del.file_id = data.data_file_id
+LEFT JOIN %s existing_del
     ON del.file_id = existing_del.data_file_id AND existing_del.table_id = %d
        AND {SNAPSHOT_ID} >= existing_del.begin_snapshot
        AND (existing_del.end_snapshot IS NULL
             OR existing_del.end_snapshot >= COALESCE(data.end_snapshot, {SNAPSHOT_ID} + 1))
-WHERE del.begin_snapshot <= {SNAPSHOT_ID}
+WHERE %s
 	)",
-	                                                 inlined_table_name, table_id.index));
+	                                                 inlined_table_name, DataFiles(), DeleteFiles(), table_id.index,
+	                                                 InlinedDeletionView("del", "{SNAPSHOT_ID}")));
 	result->ThrowIfError("Failed to query inlined file deletions for flush: ");
 	auto &separator = transaction.GetCatalog().Separator();
 	for (auto &row : *result) {
@@ -8439,10 +8442,16 @@ UPDATE {METADATA_CATALOG}.ducklake_table_stats SET file_size_bytes = (
 	return batch_query;
 }
 
-static string SnapshotFilterSQL(const DuckLakeSnapshotFilter &filter) {
+string DuckLakeMetadataManager::SnapshotFilterSql(const DuckLakeSnapshotFilter &filter) const {
+	auto &catalog = transaction.GetCatalog();
 	vector<string> conditions;
 	if (filter.exclude_latest) {
-		conditions.push_back("snapshot_id != (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot)");
+		string head_filter;
+		if (catalog.SupportsBranching()) {
+			head_filter = StringUtil::Format(" WHERE branch_id = %llu", catalog.AttachedBranchId());
+		}
+		conditions.push_back(StringUtil::Format(
+		    "snapshot_id != (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot%s)", head_filter));
 	}
 	if (!filter.older_than.empty()) {
 		conditions.push_back(
@@ -8452,6 +8461,12 @@ static string SnapshotFilterSQL(const DuckLakeSnapshotFilter &filter) {
 		auto ids = StringUtil::Join(filter.snapshot_ids, filter.snapshot_ids.size(), ", ",
 		                            [](idx_t id) { return to_string(id); });
 		conditions.push_back(ids.empty() ? "FALSE" : StringUtil::Format("snapshot_id IN (%s)", ids));
+	}
+	if (filter.branch_id.IsValid()) {
+		conditions.push_back(StringUtil::Format("branch_id = %llu", filter.branch_id.GetIndex()));
+	}
+	if (filter.chain_only && catalog.SupportsBranching()) {
+		conditions.push_back("(" + catalog.AttachedChain().Predicate("") + ")");
 	}
 	return StringUtil::Join(conditions, " AND ");
 }
@@ -8474,7 +8489,7 @@ ORDER BY snapshot_id ASC
 }
 
 vector<DuckLakeSnapshotInfo> DuckLakeMetadataManager::GetAllSnapshots(const DuckLakeSnapshotFilter &filter) {
-	auto res = ReadSnapshots(SnapshotFilterSQL(filter));
+	auto res = ReadSnapshots(SnapshotFilterSql(filter));
 	auto context = transaction.context.lock();
 	vector<DuckLakeSnapshotInfo> snapshots;
 
