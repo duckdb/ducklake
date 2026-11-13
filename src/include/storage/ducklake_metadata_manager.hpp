@@ -652,13 +652,13 @@ public:
 	//! The end events of the version rows the filter selects under the alias t that the commit chain sees
 	static string EndRows(const DuckLakeBranchChain &chain, const RowVisibilityKind &kind, const string &filter);
 	static string EndRows(const DuckLakeBranchChain &chain, const string &kind, const string &filter);
+	//! The delete events at the snapshot on the files the filter selects that the commit chain reads without an end
+	static string FileEndEvents(const string &visibility_table, const string &file_id_column,
+	                            const string &filter_column, const string &id_list, const string &snapshot,
+	                            const DuckLakeBranchChain &chain);
 	static string DropSchemas(const set<SchemaIndex> &ids, bool branch_aware, const DuckLakeBranchChain &chain);
 	static string DropTables(const set<TableIndex> &ids, bool renamed, bool branch_aware,
 	                         const DuckLakeBranchChain &chain);
-	//! The delete events of the commit on the files the filter selects that its chain reads without an end
-	static string VisibilityFlushDrop(const string &visibility_table, const string &file_id_column,
-	                                  const string &filter_column, const string &id_list,
-	                                  const DuckLakeBranchChain &chain);
 	static string DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags, bool branch_aware,
 	                        const DuckLakeBranchChain &chain);
 	static string DropMacros(const set<MacroIndex> &ids, bool branch_aware, const DuckLakeBranchChain &chain);

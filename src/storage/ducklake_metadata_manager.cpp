@@ -5285,10 +5285,10 @@ string DuckLakeMetadataManager::DropTables(const set<TableIndex> &ids, bool rena
 			batch_query += FlushDrop("ducklake_sort_info", "table_id", ids);
 		}
 		if (branch_aware) {
-			batch_query +=
-			    VisibilityFlushDrop("ducklake_file_visibility", "data_file_id", "table_id", GenerateIDList(ids), chain);
-			batch_query += VisibilityFlushDrop("ducklake_delete_file_visibility", "delete_file_id", "table_id",
-			                                   GenerateIDList(ids), chain);
+			batch_query += FileEndEvents("ducklake_file_visibility", "data_file_id", "table_id", GenerateIDList(ids),
+			                             "{SNAPSHOT_ID}", chain);
+			batch_query += FileEndEvents("ducklake_delete_file_visibility", "delete_file_id", "table_id",
+			                             GenerateIDList(ids), "{SNAPSHOT_ID}", chain);
 		} else {
 			batch_query += FlushDrop("ducklake_data_file", "table_id", ids);
 			batch_query += FlushDrop("ducklake_delete_file", "table_id", ids);
@@ -5297,18 +5297,18 @@ string DuckLakeMetadataManager::DropTables(const set<TableIndex> &ids, bool rena
 	return batch_query;
 }
 
-string DuckLakeMetadataManager::VisibilityFlushDrop(const string &visibility_table, const string &file_id_column,
-                                                    const string &filter_column, const string &id_list,
-                                                    const DuckLakeBranchChain &chain) {
+string DuckLakeMetadataManager::FileEndEvents(const string &visibility_table, const string &file_id_column,
+                                              const string &filter_column, const string &id_list,
+                                              const string &snapshot, const DuckLakeBranchChain &chain) {
 	// ending a file is a delete event of the commit next to its add event, DISTINCT folds the copies a branch reads
 	return StringUtil::Format(R"(INSERT INTO {METADATA_CATALOG}.%s
-SELECT %s{BRANCH_ID}, v.table_id, v.%s, {SNAPSHOT_ID}, TRUE
+SELECT %s{BRANCH_ID}, v.table_id, v.%s, %s, TRUE
 FROM {METADATA_CATALOG}.%s v
 WHERE %s AND v.is_delete = FALSE AND v.%s IN (%s) AND NOT EXISTS (
     SELECT 1 FROM {METADATA_CATALOG}.%s d
     WHERE %s AND d.is_delete = TRUE AND d.%s = v.%s);)",
-	                          visibility_table, chain.OnBranch() ? "DISTINCT " : "", file_id_column, visibility_table,
-	                          FileEventFilter(chain, "v"), filter_column, id_list, visibility_table,
+	                          visibility_table, chain.OnBranch() ? "DISTINCT " : "", file_id_column, snapshot,
+	                          visibility_table, FileEventFilter(chain, "v"), filter_column, id_list, visibility_table,
 	                          FileEventFilter(chain, "d"), file_id_column, file_id_column) +
 	       "\n";
 }
@@ -7464,8 +7464,8 @@ string DuckLakeMetadataManager::DropDataFiles(const set<DataFileIndex> &dropped_
 		// LCOV_EXCL_STOP
 	}
 	if (write_visibility) {
-		return VisibilityFlushDrop("ducklake_file_visibility", "data_file_id", "data_file_id",
-		                           GenerateIDList(dropped_files), chain);
+		return FileEndEvents("ducklake_file_visibility", "data_file_id", "data_file_id", GenerateIDList(dropped_files),
+		                     "{SNAPSHOT_ID}", chain);
 	}
 	return FlushDrop("ducklake_data_file", "data_file_id", dropped_files);
 }
@@ -8811,15 +8811,11 @@ static string CompactionSnapshotUpdates(const string &file_table, const string &
 		                          visibility_table, snapshot_id, id_column, id_list);
 	}
 	// ending a file moves the delete event of the commit branch, or writes one when its chain reads none
-	return StringUtil::Format(
-	    "UPDATE {METADATA_CATALOG}.%s SET snapshot_id = %llu WHERE branch_id = {BRANCH_ID} AND is_delete = TRUE AND %s "
-	    "IN (%s);\n"
-	    "INSERT INTO {METADATA_CATALOG}.%s SELECT {BRANCH_ID}, v.table_id, v.%s, %llu, TRUE FROM {METADATA_CATALOG}.%s "
-	    "v WHERE %s AND v.is_delete = FALSE AND v.%s IN (%s) AND NOT EXISTS (SELECT 1 FROM "
-	    "{METADATA_CATALOG}.%s d WHERE %s AND d.is_delete = TRUE AND d.%s = v.%s);\n",
-	    visibility_table, snapshot_id, id_column, id_list, visibility_table, id_column, snapshot_id, visibility_table,
-	    DuckLakeMetadataManager::FileEventFilter(chain, "v"), id_column, id_list, visibility_table,
-	    DuckLakeMetadataManager::FileEventFilter(chain, "d"), id_column, id_column);
+	return StringUtil::Format("UPDATE {METADATA_CATALOG}.%s SET snapshot_id = %llu WHERE branch_id = {BRANCH_ID} "
+	                          "AND is_delete = TRUE AND %s IN (%s);\n",
+	                          visibility_table, snapshot_id, id_column, id_list) +
+	       DuckLakeMetadataManager::FileEndEvents(visibility_table, id_column, id_column, id_list,
+	                                              to_string(snapshot_id), chain);
 }
 
 string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompactedFileInfo> &compactions,
