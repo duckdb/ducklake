@@ -12,8 +12,8 @@ load
 @attach ${lake}_pristine AS lake (DATA_PATH '${BENCHMARK_DIR}/${lake}_files')
 CALL lake.set_option('data_inlining_row_limit', 10);
 CREATE TABLE lake.t (id BIGINT, v VARCHAR);
-INSERT INTO __ducklake_metadata_lake.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id)
-SELECT i, to_timestamp(i), schema_version, next_catalog_id, next_file_id
+INSERT INTO __ducklake_metadata_lake.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id)
+SELECT i, to_timestamp(i), schema_version, next_catalog_id, next_file_id, 0
 FROM range(2, 20001) r(i), __ducklake_metadata_lake.ducklake_snapshot
 WHERE snapshot_id = 1;
 INSERT INTO __ducklake_metadata_lake.ducklake_snapshot_changes
@@ -24,7 +24,7 @@ WHEN 1 THEN 'inserted_into_table:' || ((i % 7) + 2) || ',deleted_from_table:' ||
 WHEN 2 THEN 'merge_adjacent:' || ((i % 7) + 2)
 ELSE 'rewrite_delete:' || ((i % 7) + 2)
 END,
-NULL, NULL, NULL
+NULL, NULL, NULL, 0
 FROM range(2, 20001) r(i);
 SELECT CASE WHEN (SELECT count(*) <> 20001 FROM lake.snapshots())
 THEN error('snap20k: expected 20001 snapshots') END;
