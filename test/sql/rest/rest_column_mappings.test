@@ -1,0 +1,85 @@
+# name: test/sql/rest/rest_column_mappings.test
+# description: The column mappings of files that were added to a table come with the scans of the table
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+statement ok
+CREATE TABLE dl.t(a INTEGER, b VARCHAR)
+
+# files without field ids: their columns are matched by name
+statement ok
+COPY (SELECT 1 AS a, 'one' AS b) TO '{TEST_DIR}/{BASE_TEST_NAME}_1.parquet'
+
+statement ok
+COPY (SELECT 'two' AS b, 2 AS a) TO '{TEST_DIR}/{BASE_TEST_NAME}_2.parquet'
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{TEST_DIR}/{BASE_TEST_NAME}_1.parquet')
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{TEST_DIR}/{BASE_TEST_NAME}_2.parquet')
+
+query II
+SELECT a, b FROM dl.t ORDER BY a
+----
+1	one
+2	two
+
+# the scan has the mappings of its files
+query II
+SELECT status, json_array_length(response->'$.column_mappings') >= 1
+FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{}')
+----
+200	true
+
+statement ok
+SET VARIABLE mapping_id = (SELECT response->>'$.column_mappings[0].mapping_id' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{}'))
+
+# the mappings that the client has are not repeated
+query II
+SELECT status, coalesce(json_array_length(response->'$.column_mappings'), 0) = 0
+FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"known_column_mappings": [' || getvariable('mapping_id') || ']}')
+----
+200	true
+
+# the mappings of the pages of a scan come with the pages
+statement ok rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('rest_lake', port := regexp_extract(getvariable('rest_listen_uri'), ':([0-9]+)/', 1)::UBIGINT, files_per_page := 1)
+
+query II
+SELECT a, b FROM dl.t ORDER BY a
+----
+1	one
+2	two
+
+query II
+SELECT json_array_length(response->'$.files'), json_array_length(response->'$.page_tokens')
+FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{}')
+----
+1	1
+
+statement ok
+SET VARIABLE task = (SELECT response->>'$.page_tokens[0]' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{}'))
+
+query II
+SELECT status, json_array_length(response->'$.column_mappings')
+FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"page_token": "' || getvariable('task') || '"}')
+----
+200	1
+
+# the endpoint of the column mappings does not exist anymore
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/column-mappings', '')
+----
+404
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

@@ -21,10 +21,18 @@ void DuckLakeTransactionManager::Checkpoint(ClientContext &context, bool force) 
 	// 2. We expire snapshots since these can create more compaction opportunities.
 	// 3. We call the compaction functions, merge_adjacent and rewrite, unclear what is the best order here.
 	// 4. We call the functions that delete files last, since these mostly result from compaction or expired snapshots.
-	const vector<string> checkpoint_queries {
-	    "CALL ducklake_flush_inlined_data({CATALOG})",   "CALL ducklake_expire_snapshots({CATALOG})",
-	    "CALL ducklake_merge_adjacent_files({CATALOG})", "CALL ducklake_rewrite_data_files({CATALOG})",
-	    "CALL ducklake_cleanup_old_files({CATALOG})",    "CALL ducklake_delete_orphaned_files({CATALOG})"};
+	vector<string> checkpoint_queries {"CALL ducklake_flush_inlined_data({CATALOG})"};
+	// the server of a REST catalog performs the maintenance that expires snapshots and deletes files
+	bool expire_and_cleanup = !ducklake_catalog.IsREST();
+	if (expire_and_cleanup) {
+		checkpoint_queries.push_back("CALL ducklake_expire_snapshots({CATALOG})");
+	}
+	checkpoint_queries.push_back("CALL ducklake_merge_adjacent_files({CATALOG})");
+	checkpoint_queries.push_back("CALL ducklake_rewrite_data_files({CATALOG})");
+	if (expire_and_cleanup) {
+		checkpoint_queries.push_back("CALL ducklake_cleanup_old_files({CATALOG})");
+		checkpoint_queries.push_back("CALL ducklake_delete_orphaned_files({CATALOG})");
+	}
 
 	for (const auto &query : checkpoint_queries) {
 		auto checkpoint_query = StringUtil::Replace(

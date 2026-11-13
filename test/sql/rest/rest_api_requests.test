@@ -1,0 +1,392 @@
+# name: test/sql/rest/rest_api_requests.test
+# description: Send requests to the DuckLake REST API directly
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+# a commit request can be sent on its own
+query I
+SELECT response->>'$.entry_ids[0].id' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"create_table": {"placeholder_id": -1, "schema_id": 0, "table_name": "t", "columns": [{"column_name": "i", "column_type": {"id": "int32"}}, {"column_name": "s", "column_type": {"id": "varchar"}}]}}]}')
+----
+1
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 10)
+
+# the rows to insert are Arrow tables in parts of the request: the client sends them
+statement ok
+INSERT INTO dl.t VALUES (1, 'one'), (2, NULL)
+
+# several requests in one transaction, the created table is referred to with a placeholder
+query II
+SELECT response->>'$.snapshot.snapshot_id', response->>'$.entry_ids[0].placeholder_id' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [
+  {"create_table": {"placeholder_id": -1, "schema_id": 0, "table_name": "t2", "columns": [{"column_name": "j", "column_type": {"id": "int64"}, "default": "42"}]}},
+  {"alter": {"entry_id": -1, "alter": {"set_comment": {"entry_type": "TABLE_ENTRY", "comment": "created and altered"}}}}
+]}')
+----
+3	-1
+
+statement ok
+INSERT INTO dl.t2 VALUES (100)
+
+query II
+FROM dl.t ORDER BY i
+----
+1	one
+2	NULL
+
+query I
+FROM dl.t2
+----
+100
+
+# insert_rows requests need their rows in a part of the request
+query II
+SELECT status, response->>'$.error.message' LIKE '%has no part "rows.0"%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"insert_rows": {"table_id": 1, "column_stats": []}}]}')
+----
+400	true
+
+# the scan plan returns the inlined rows of the table
+query II
+SELECT count(*), list(i ORDER BY i) FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan', '{}')
+----
+2	[1, 2]
+
+query I
+SELECT response->>'$.snapshot.snapshot_id' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', '')
+----
+4
+
+# the snapshot of an AT clause
+query II
+SELECT status, response->>'$.snapshot.snapshot_id' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/at?unit=version&value=1', '')
+----
+200	1
+
+query II
+SELECT status, (response->'$.catalog') IS NOT NULL FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/at?unit=version&value=1&include_catalog=true', '')
+----
+200	true
+
+statement ok
+SET VARIABLE first_time = (SELECT response->>'$.snapshots[0].snapshot_time' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots?page_size=1', ''))
+
+query II
+SELECT status, response->>'$.snapshot.snapshot_id' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/at?unit=timestamp&bound=lower&value=' || replace(getvariable('first_time'), '+', '%2B'), '')
+----
+200	0
+
+query II
+SELECT status, response->>'$.error.type' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/at?unit=version&value=100000', '')
+----
+400	Invalid Input
+
+query II
+SELECT status, response->>'$.error.type' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/at?unit=version&value=x', '')
+----
+400	Invalid Input
+
+query II
+SELECT status, response->>'$.error.type' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/at?unit=other&value=1', '')
+----
+400	Invalid Input
+
+# the catalog and statistics of the latest snapshot are only returned when they changed
+query II
+SELECT status, (response->'$.catalog') IS NOT NULL FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest?cached_metadata_version=1000000', '')
+----
+200	true
+
+statement ok
+SET VARIABLE schema_version = (SELECT response->>'$.snapshot.schema_version' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', ''))
+
+query II
+SELECT status, (response->'$.catalog') IS NOT NULL FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest?cached_metadata_version=' || getvariable('schema_version'), '')
+----
+200	false
+
+# a created entry is returned with its id under the placeholder id of its request
+query II
+SELECT response->>'$.entry_ids[0].placeholder_id', response->>'$.entry_ids[0].type'
+FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"create_schema": {"placeholder_id": -7, "schema_name": "s"}}]}')
+----
+-7	SCHEMA_ENTRY
+
+# every kind of entry is returned
+query I
+SELECT string_agg(response_entry->>'$.placeholder_id' || ':' || (response_entry->>'$.type'), ',' ORDER BY response_entry->>'$.placeholder_id')
+FROM (SELECT unnest(from_json(response->'$.entry_ids', '["JSON"]')) AS response_entry
+  FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [
+    {"create_schema": {"placeholder_id": -1, "schema_name": "kinds"}},
+    {"create_table": {"placeholder_id": -2, "schema_id": -1, "table_name": "t", "columns": [{"column_name": "i", "column_type": {"id": "int32"}}]}},
+    {"create_view": {"placeholder_id": -3, "schema_id": -1, "view_name": "v", "sql": "SELECT 1"}}]}'))
+----
+-1:SCHEMA_ENTRY,-2:TABLE_ENTRY,-3:VIEW_ENTRY
+
+# a placeholder id is required
+query II
+SELECT status, response->>'$.error.message' LIKE '%missing required field "placeholder_id"%'
+FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"create_schema": {"schema_name": "s9"}}]}')
+----
+400	true
+
+# errors
+query III
+SELECT status, response->>'$.error.type', response->>'$.error.code' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/unknown_endpoint', '')
+----
+404	Invalid Input	404
+
+query II
+SELECT status, response->>'$.error.type' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1000/scan', '{}')
+----
+404	Catalog
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"create_table": {"placeholder_id": -1, "schema_id": 0, "table_name": "t", "columns": [{"column_name": "i", "column_type": {"id": "int32"}}]}}]}')
+----
+404
+
+# the client can ask for the columns it reads, by field id
+query I
+SELECT count(*) FROM (DESCRIBE SELECT * FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan', '{}'))
+----
+5
+
+query II
+SELECT count(*), max(column_name) FILTER (WHERE column_name = 'i') FROM (DESCRIBE SELECT * FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan', '{"columns": [{"field_id": 1}]}'))
+----
+4	i
+
+query II
+SELECT (SELECT count(*) FROM (DESCRIBE SELECT * FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan', '{"columns": [{"field_id": 2}, {"field_id": 1000}]}'))),
+       (SELECT count(*) FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan', '{"columns": [{"field_id": 2}, {"field_id": 1000}]}'))
+----
+4	2
+
+# no columns: only the row id and the snapshots
+query II
+SELECT (SELECT count(*) FROM (DESCRIBE SELECT * FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan', '{"columns": []}'))),
+       (SELECT count(*) FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan', '{"columns": []}'))
+----
+3	2
+
+# the inlined rows that changed come with the change feed
+query II
+SELECT count(*), min(column_name) FROM (DESCRIBE SELECT * FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/changes', '{"start_snapshot_id": 0, "changes": "insertions"}')) WHERE column_name LIKE '%row_id'
+----
+1	_ducklake_row_id
+
+query I
+SELECT count(*) FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/changes', '{"start_snapshot_id": 0, "changes": "insertions"}')
+----
+2
+
+query I
+SELECT count(*) FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/changes', '{"start_snapshot_id": 0, "changes": "deletions"}')
+----
+0
+
+query II
+SELECT status, response->>'$.aggregate_results[0].value' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan',
+'{"aggregates": [{"function": "count_star"}]}')
+----
+200	2
+
+# requests are validated against the specification of the API
+query II
+SELECT status, response->>'$.error.message' LIKE '%not a valid TableChangeType%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/changes',
+'{"start_snapshot_id": 0, "changes": "everything"}')
+----
+400	true
+
+# parameters of the URL are checked
+query II
+SELECT status, response->>'$.error.message' LIKE '%"one" is not a valid value for the parameter "table_id"%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/one/scan', '{}')
+----
+400	true
+
+query II
+SELECT status, response->>'$.error.message' LIKE '%the body of a request has to be a JSON object%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '[1]')
+----
+400	true
+
+query II
+SELECT status, response->>'$.error.message' LIKE '%"x" is not a valid value for the parameter "exclude_latest"%' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots?exclude_latest=x', '')
+----
+400	true
+
+# reads without a body are GET requests, the members of their requests are in the URL
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/metadata', '')
+----
+200
+
+# the config tells the client the prefix of the catalog and the requests of the server
+query IIII
+SELECT status, response->>'$.overrides.prefix', response->'$.defaults', json_contains(response->'$.endpoints', '"POST /v1/transactions/commit"')
+FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/config', '')
+----
+200	rest_lake	{}	true
+
+query II
+SELECT status, response->>'$.overrides.prefix' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/config?catalog=rest_lake', '')
+----
+200	rest_lake
+
+query II
+SELECT status, response->>'$.error.type' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/config?catalog=missing', '')
+----
+404	Catalog
+
+# the config is never prefixed
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/rest_lake/config', '')
+----
+404
+
+query I
+SELECT json_array_length(response->'$.snapshots') >= 1 FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots', '')
+----
+true
+
+query I
+SELECT json_array_length(response->'$.snapshots') FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots?snapshot_id=0&snapshot_id=1', '')
+----
+2
+
+query I
+SELECT (SELECT json_array_length(response->'$.snapshots') FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots', ''))
+     - (SELECT json_array_length(response->'$.snapshots') FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots?exclude_latest=true', ''))
+----
+1
+
+query I
+SELECT response->>'$.catalog.tables[0].next_column_id' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest?include_catalog=true', '')
+----
+3
+
+# the method has to match the route
+query II
+SELECT status, response->>'$.error.code' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/config', '{}')
+----
+404	404
+
+query II
+SELECT status, response->>'$.error.code' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/transactions/commit', '')
+----
+404	404
+
+query II
+SELECT status, response->>'$.error.message' LIKE '%Unsupported request "create_everything"%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"create_everything": {}}]}')
+----
+400	true
+
+query II
+SELECT status, response->>'$.error.message' LIKE '%exactly one member%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"create_schema": {"placeholder_id": -1, "schema_name": "s2"}, "drop_schema": {"entry_id": 1}}]}')
+----
+400	true
+
+# entries are dropped by their type
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"create_schema": {"placeholder_id": -1, "schema_name": "s3"}}, {"drop": {"entry_type": "schema", "entry_id": -1}}]}')
+----
+200
+
+query II
+SELECT status, response->>'$.error.message' LIKE '%Placeholder id -5 does not refer to a schema%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"drop": {"entry_type": "schema", "entry_id": -5}}]}')
+----
+400	true
+
+query II
+SELECT status, response->>'$.error.message' LIKE '%missing required field "entry_id"%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"drop": {"entry_type": "table"}}]}')
+----
+400	true
+
+query II
+SELECT status, response->>'$.error.message' LIKE '%"function" is not a valid DropEntryType%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"drop": {"entry_type": "function", "entry_id": 1}}]}')
+----
+400	true
+
+# alterations are unions: an object with exactly one member, the name of the change
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"alter": {"entry_id": 1, "alter": {"rename_column": {"old_name": "s", "new_name": "str"}}}}]}')
+----
+200
+
+query I
+SELECT string_agg(column_name, ',' ORDER BY column_name) FROM (DESCRIBE dl.t)
+----
+i,str
+
+query II
+SELECT status, response->>'$.error.message' LIKE '%"bogus" is not a valid Alteration%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"alter": {"entry_id": 1, "alter": {"bogus": {}}}}]}')
+----
+400	true
+
+query II
+SELECT status, response->>'$.error.message' LIKE '%exactly one%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"alter": {"entry_id": 1, "alter": {"type": "rename_column", "old_name": "i", "new_name": "j"}}}]}')
+----
+400	true
+
+query II
+SELECT status, response->>'$.error.message' LIKE '%missing required field "new_name"%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"alter": {"entry_id": 1, "alter": {"rename_table": {}}}}]}')
+----
+400	true
+
+query II
+SELECT status, response->>'$.error.message' LIKE '%not a valid CatalogEntryType%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"alter": {"entry_id": 1, "alter": {"set_comment": {"entry_type": "SCHEMA_ENTRY", "comment": "c"}}}}]}')
+----
+400	true
+
+# the changes of a table are returned by their type
+query II
+SELECT status, json_array_length(response->'$.insertions') > 0 FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/changes',
+'{"start_snapshot_id": 0, "changes": "insertions"}')
+----
+200	false
+
+# the server writes the inlined data to files
+query III
+SELECT status, response->>'$.results[0].table_name', response->>'$.results[0].rows_flushed' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/compactions',
+'{"type": "flush_inlined_data", "table_name": "t"}')
+----
+200	t	2
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/compactions', '{"type": "flush_inlined_data"}')
+----
+200
+
+query II
+SELECT status, response->>'$.error.type' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/compactions', '{"type": "flush_inlined_data", "table_name": "missing"}')
+----
+404	Catalog
+
+statement ok
+DETACH dl
+
+# a value of an object type has to be a JSON object
+query II
+SELECT status, response->>'$.error.message' LIKE '%expected a JSON object for CreateSchemaRequest%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"create_schema": 42}]}')
+----
+400	true
+
+include test/template/rest_teardown.test_template

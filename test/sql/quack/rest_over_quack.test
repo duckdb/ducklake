@@ -1,0 +1,38 @@
+# name: test/sql/quack/rest_over_quack.test
+# description: A REST server in front of a Quack-backed lake accepts the inlined rows of a REST client
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require json
+
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
+
+require quack
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS direct (DATA_PATH '{TEST_DIR}/rest_over_quack_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+SET VARIABLE rest_uri = (SELECT listen_uri FROM ducklake_rest_serve('direct'))
+
+statement ok
+ATTACH 'ducklake:rest:' || getvariable('rest_uri') AS dl
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+query I
+SELECT list(i ORDER BY i) FROM dl.t
+----
+[1, 2, 3]
+
+query I
+SELECT list(i ORDER BY i) FROM direct.t
+----
+[1, 2, 3]

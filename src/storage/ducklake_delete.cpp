@@ -1086,6 +1086,10 @@ static MetadataDeleteFileMatch GetMetadataDeleteFileMatch(ClientContext &context
 
 static bool CanUseMetadataDelete(ClientContext &context, DuckLakeTableEntry &table, PhysicalOperator &child_plan,
                                  unique_ptr<vector<DuckLakeFileListExtendedEntry>> &files) {
+	// REST file lists do not include the partition statistics needed to prove whole-file matches.
+	if (table.catalog.Cast<DuckLakeCatalog>().IsREST()) {
+		return false;
+	}
 	vector<const Expression *> filter_expressions;
 	auto scan = FindMetadataDeleteSource(child_plan, filter_expressions);
 	if (!scan || !table.GetPartitionData()) {

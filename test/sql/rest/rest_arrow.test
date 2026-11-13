@@ -1,0 +1,92 @@
+# name: test/sql/rest/rest_arrow.test
+# description: The DuckLake REST API sends lists of files and rows as Arrow IPC streams to clients that accept them
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 100)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 'one'), (2, NULL)
+
+statement ok
+CREATE TABLE dl.f(i INTEGER, s VARCHAR)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0, table_name => 'f')
+
+statement ok
+INSERT INTO dl.f SELECT i, 'v' || i FROM range(1000) t(i)
+
+statement ok
+INSERT INTO dl.f SELECT i, 'w' || i FROM range(10) t(i)
+
+# the request function asks for JSON, unless the request says otherwise
+query II
+SELECT status, content_type FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{}')
+----
+200	application/json
+
+query II
+SELECT status, content_type LIKE 'multipart/mixed; boundary=%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{}', accept := 'multipart/mixed')
+----
+200	true
+
+query II
+SELECT status, content_type FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{}', accept := 'application/json')
+----
+200	application/json
+
+# the client reads the rows and the files from the response
+query II
+SELECT i, s FROM dl.t ORDER BY i
+----
+1	one
+2	NULL
+
+query II
+SELECT count(*), sum(i) FROM dl.f
+----
+1010	499545
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 'f')
+----
+2
+
+# responses without lists are JSON
+query I
+SELECT content_type FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1000/scan', '{}', accept := 'multipart/mixed')
+----
+application/json
+
+query II
+SELECT status, content_type FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', '', accept := 'multipart/mixed')
+----
+200	application/json
+
+# types that Arrow does not have are extension types
+statement ok
+CREATE TABLE dl.x(b BOOLEAN, u UUID, h HUGEINT, uh UHUGEINT, tz TIMETZ, j JSON, l INTEGER[], v VARIANT)
+
+statement ok
+INSERT INTO dl.x VALUES
+  (true, '5c8b7b8e-9a2f-4f1a-8b0e-3f5a7e1d2c4b', 170141183460469231731687303715884105727, 340282366920938463463374607431768211455, TIMETZ '12:34:56+02', '{"a": [1, 2]}', [1, 2], 42::VARIANT),
+  (NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
+
+query IIIIIIII
+SELECT b, u, h, uh, tz, j, l, v::VARCHAR FROM dl.x ORDER BY b NULLS LAST
+----
+true	5c8b7b8e-9a2f-4f1a-8b0e-3f5a7e1d2c4b	170141183460469231731687303715884105727	340282366920938463463374607431768211455	12:34:56+02	{"a": [1, 2]}	[1, 2]	42
+NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

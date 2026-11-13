@@ -1,0 +1,46 @@
+# name: test/sql/rest/rest_transaction_snapshot.test
+# description: A transaction of a REST client counts the rows of the snapshot it started at
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+# the transaction loads its snapshot when it begins
+statement ok
+SET immediate_transaction_mode = true
+
+statement ok con1
+BEGIN TRANSACTION
+
+# inlined rows and a data file that another connection commits
+statement ok con2
+INSERT INTO dl.t SELECT * FROM range(5)
+
+statement ok con2
+INSERT INTO dl.t SELECT * FROM range(100)
+
+# the server counts the rows from the statistics of the snapshot of the transaction
+query I con1
+SELECT count(*) FROM dl.t
+----
+0
+
+query I con1
+SELECT list(i) FROM dl.t
+----
+NULL
+
+statement ok con1
+COMMIT
+
+query I con1
+SELECT count(*) FROM dl.t
+----
+105
+
+include test/template/rest_teardown.test_template

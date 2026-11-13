@@ -1,0 +1,81 @@
+# name: test/sql/rest/rest_file_order.test
+# description: The files of a scan are ordered by an order_by list of min/max terms with a sort_order
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO dl.t SELECT i, 'a' FROM range(0, 10) t(i)
+
+statement ok
+INSERT INTO dl.t SELECT i, 'b' FROM range(100, 110) t(i)
+
+statement ok
+INSERT INTO dl.t SELECT i, 'c' FROM range(50, 60) t(i)
+
+# the files are ordered by the maximum, highest first
+query I
+SELECT column_min_max[1].max
+FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan',
+'{"filters": {"order_by": [{"function": "max", "column_id": 1, "sort_order": "DESC"}], "runtime_filter_columns": [1]}}', part := 'files')
+----
+109
+59
+9
+
+# or by the minimum, lowest first
+query I
+SELECT column_min_max[1].min
+FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan',
+'{"filters": {"order_by": [{"function": "min", "column_id": 1}], "runtime_filter_columns": [1]}}', part := 'files')
+----
+0
+50
+100
+
+# or by the minimum, highest first
+query I
+SELECT column_min_max[1].min
+FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan',
+'{"filters": {"order_by": [{"function": "min", "column_id": 1, "sort_order": "DESC"}], "runtime_filter_columns": [1]}}', part := 'files')
+----
+100
+50
+0
+
+# the first term takes precedence
+query I
+SELECT column_min_max[1].max
+FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan',
+'{"filters": {"order_by": [{"function": "max", "column_id": 1, "sort_order": "DESC"}, {"function": "min", "column_id": 1}], "runtime_filter_columns": [1]}}', part := 'files')
+----
+109
+59
+9
+
+# terms that are not the minimum or maximum of a column are ignored, and so are columns that do not exist
+query I
+SELECT count(*)
+FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan',
+'{"filters": {"order_by": [{"function": "max", "column_id": 99}, {"function": "count", "column_id": 1}]}}', part := 'files')
+----
+3
+
+# a client with a top-N reads the same rows as without
+query I
+SELECT i FROM dl.t ORDER BY i DESC LIMIT 3
+----
+109
+108
+107
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

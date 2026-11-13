@@ -735,7 +735,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.set_catalog_version = [&committed_schema_version](idx_t v) {
 		committed_schema_version = v;
 	};
-	ctx.set_committed_snapshot_id = [&committed_snapshot_id](idx_t v) {
+	ctx.set_committed_snapshot_id = [&committed_snapshot_id](idx_t v, idx_t, idx_t) {
 		committed_snapshot_id = v;
 	};
 	return ctx;

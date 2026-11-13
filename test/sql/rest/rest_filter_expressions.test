@@ -1,0 +1,157 @@
+# name: test/sql/rest/rest_filter_expressions.test
+# description: The REST server prunes files with the filter expressions that it can bind, and ignores the others
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, j INTEGER, s VARCHAR, b BOOLEAN, st STRUCT(x INTEGER))
+
+statement ok
+INSERT INTO dl.t VALUES (1, 10, 'a', true, {'x': 1})
+
+statement ok
+INSERT INTO dl.t VALUES (5, 50, 'z', false, {'x': 5})
+
+statement ok
+CREATE MACRO scan_files(expr) AS TABLE
+SELECT status, json_array_length(response->'$.files') AS files
+FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"filters": {"expressions": ' || to_json([expr]) || '}}')
+
+# a field of a struct prunes
+query II
+FROM scan_files('st.x = 1')
+----
+200	1
+
+# a field of a column that is not a struct is not a field
+query II
+FROM scan_files('i.x = 1')
+----
+200	2
+
+# a NULL constant does not prune
+query II
+FROM scan_files('i = CAST(NULL AS INTEGER)')
+----
+200	2
+
+# the column can be on the right of a comparison
+query II
+FROM scan_files('5 <= i')
+----
+200	1
+
+# comparisons that are not ordering comparisons do not prune
+query II
+FROM scan_files('i IS DISTINCT FROM 1')
+----
+200	2
+
+# an operator on an expression of the column does not prune
+query II
+FROM scan_files('(i + 1) IS NULL')
+----
+200	2
+
+query II
+FROM scan_files('NOT b')
+----
+200	2
+
+query II
+FROM scan_files('i NOT IN (1, 2)')
+----
+200	2
+
+# a function of a column does not prune
+query II
+FROM scan_files('starts_with(s, ''a'')')
+----
+200	2
+
+# an OR prunes only if all of its parts do
+query II
+FROM scan_files('i = 1 OR i IS DISTINCT FROM 2')
+----
+200	2
+
+query II
+FROM scan_files('(i = 1 AND i IS DISTINCT FROM 2) OR i = 1')
+----
+200	1
+
+query II
+FROM scan_files('(i IS DISTINCT FROM 1 AND i IS DISTINCT FROM 2) OR i = 1')
+----
+200	2
+
+# ORs of several columns
+query II
+FROM scan_files('i = 1 OR j = 50')
+----
+200	2
+
+query II
+FROM scan_files('i = 1 OR j = 10')
+----
+200	1
+
+query II
+FROM scan_files('i = 1 OR j IS DISTINCT FROM 2')
+----
+200	2
+
+query II
+FROM scan_files('(i = 1 AND j IS DISTINCT FROM 3) OR j = 10')
+----
+200	1
+
+query II
+FROM scan_files('(i IS DISTINCT FROM 1 AND j IS DISTINCT FROM 3) OR j = 10')
+----
+200	2
+
+# constants other than false do not prune
+query II
+FROM scan_files('true')
+----
+200	2
+
+query II
+FROM scan_files('42')
+----
+200	2
+
+query II
+FROM scan_files('false')
+----
+200	0
+
+# the queries of a client
+query I
+SELECT count(*) FROM dl.t WHERE st.x = 1 OR j = 50
+----
+2
+
+query I
+SELECT count(*) FROM dl.t WHERE i NOT IN (1, 2)
+----
+1
+
+query I
+SELECT count(*) FROM dl.t WHERE NOT b
+----
+1
+
+query II
+FROM scan_files('i IN ()')
+----
+200	2
+
+include test/template/rest_teardown.test_template

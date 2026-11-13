@@ -1,0 +1,38 @@
+# name: test/sql/rest/rest_skipped_add_field.test
+# description: ADD COLUMN IF NOT EXISTS of an existing field of a struct changes nothing over REST
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+statement ok
+CREATE TABLE dl.t(s STRUCT(a INTEGER, v VARIANT))
+
+# a field that exists, also one of a type that a path lookup does not enter
+statement ok
+ALTER TABLE dl.t ADD COLUMN IF NOT EXISTS s.a INTEGER DEFAULT 7
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN IF NOT EXISTS s.v INTEGER DEFAULT 7
+
+# a field that does not exist is added
+statement ok
+ALTER TABLE dl.t ADD COLUMN IF NOT EXISTS s.b INTEGER DEFAULT 7
+
+query I
+SELECT column_type FROM (DESCRIBE dl.t)
+----
+STRUCT(a INTEGER, v VARIANT, b INTEGER)
+
+# the request of a raw client is a no-op as well
+statement ok
+SET VARIABLE t_id = (SELECT table_id FROM ducklake_table_info('dl') WHERE table_name = 't')
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": ' || getvariable('t_id') || ', "alter": {"add_field": {"column_path": ["s"], "field": {"column_name": "v", "column_type": {"id": "int32"}, "default": "7"}, "if_not_exists": true}}}}]}')
+----
+200
