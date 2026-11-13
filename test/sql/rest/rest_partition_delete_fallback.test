@@ -19,6 +19,11 @@ ALTER TABLE dl.t SET PARTITIONED BY (p)
 statement ok
 INSERT INTO dl.t VALUES (1, 10), (1, 11), (2, 20), (2, 21)
 
+query II
+EXPLAIN DELETE FROM dl.t WHERE p = 2
+----
+physical_plan	<!REGEX>:.*Ducklake Metadata Delete.*
+
 query I
 DELETE FROM dl.t WHERE p = 1 AND i = 10
 ----
