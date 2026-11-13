@@ -17,6 +17,7 @@ namespace duckdb {
 class BoundAtClause;
 class DuckLakeCatalog;
 class DuckLakeTableEntry;
+class DuckLakeTransaction;
 struct DuckLakeSnapshotInfo;
 
 class DuckLakeTableFunctionUtil {
@@ -40,6 +41,10 @@ public:
 	static BoundAtClause AtClauseFromValue(const Value &input);
 	//! A string is the name of a snapshot tag, any other value a snapshot id
 	static BoundAtClause VersionAtClauseFromValue(const Value &input);
+	//! The AT clause of the snapshot_version or snapshot_time option, nullptr if neither is set
+	static unique_ptr<BoundAtClause> GetSnapshotAtClause(const TableFunctionBindInput &input);
+	//! The version that a change feed is bound at: the newest snapshot at or before its end
+	static BoundAtClause ChangesEndAtClause(DuckLakeTransaction &transaction, optional_ptr<BoundAtClause> end);
 };
 
 struct MetadataBindData : public TableFunctionData {
@@ -183,6 +188,12 @@ public:
 class DuckLakeListFilesFunction : public DuckLakeBaseMetadataFunction {
 public:
 	DuckLakeListFilesFunction();
+};
+
+//! Lists the metadata an external reader gets for a scan and each of its files, for diagnostics and tests
+class DuckLakeScanMetadataFunction : public DuckLakeBaseMetadataFunction {
+public:
+	DuckLakeScanMetadataFunction();
 };
 
 class DuckLakeCurrentSnapshotFunction : public DuckLakeBaseMetadataFunction {

@@ -12,6 +12,7 @@
 
 #include "duckdb/catalog/catalog_entry/table_function_catalog_entry.hpp"
 #include "duckdb/common/multi_file/multi_file_data.hpp"
+#include "duckdb/common/multi_file/multi_file_function.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/common/serializer/serializer.hpp"
 #include "duckdb/common/serializer/deserializer.hpp"
@@ -235,6 +236,39 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 	return result;
 }
 
+static string ScanTypeToString(DuckLakeScanType scan_type) {
+	switch (scan_type) {
+	case DuckLakeScanType::SCAN_TABLE:
+		return "table";
+	case DuckLakeScanType::SCAN_INSERTIONS:
+		return "insertions";
+	case DuckLakeScanType::SCAN_DELETIONS:
+		return "deletions";
+	case DuckLakeScanType::SCAN_FOR_FLUSH:
+		return "flush"; // LCOV_EXCL_LINE
+	default:
+		throw InternalException("Unknown DuckLake scan type"); // LCOV_EXCL_LINE
+	}
+}
+
+//! Describes the scan to a reader outside of DuckLake, without reading the file list
+static BindInfo DuckLakeGetBindInfo(TableFunctionGetBindInfoInput &input) {
+	auto &bind_data = input.bind_data->Cast<MultiFileBindData>();
+	auto &read_info = bind_data.multi_file_reader->Cast<DuckLakeMultiFileReader>().read_info;
+
+	BindInfo bind_info(ScanType::EXTERNAL);
+	bind_data.interface->GetBindInfo(*bind_data.bind_data, bind_info);
+	bind_data.file_options.AddBatchInfo(bind_info);
+	bind_info.InsertOption("scan_metadata_version", Value::UBIGINT(DuckLakeFunctionInfo::SCAN_METADATA_VERSION));
+	bind_info.InsertOption("scan_type", Value(ScanTypeToString(read_info.scan_type)));
+	bind_info.InsertOption("snapshot_id", Value::UBIGINT(read_info.snapshot.snapshot_id));
+	bind_info.InsertOption("schema_version", Value::UBIGINT(read_info.snapshot.schema_version));
+	bind_info.InsertOption("include_local_changes", Value::BOOLEAN(read_info.include_local_changes));
+	bind_info.InsertOption("table_id", Value::UBIGINT(read_info.table_id.index));
+	bind_info.InsertOption("table_uuid", Value(read_info.table.GetTableUUID()));
+	return bind_info;
+}
+
 TableFunction DuckLakeFunctions::GetDuckLakeScanFunction(DatabaseInstance &instance) {
 	// The ducklake_scan function is constructed by grabbing the parquet scan from the Catalog, then injecting the
 	// DuckLakeMultiFileReader into it to create a DuckLake-based multi file read
@@ -255,6 +289,7 @@ TableFunction DuckLakeFunctions::GetDuckLakeScanFunction(DatabaseInstance &insta
 	function.get_virtual_columns = DuckLakeVirtualColumns;
 	function.get_row_id_columns = DuckLakeGetRowIdColumn;
 	function.get_partition_stats = DuckLakeGetPartitionStats;
+	function.get_bind_info = DuckLakeGetBindInfo;
 
 	function.serialize = DuckLakeScanSerialize;
 	function.deserialize = DuckLakeScanDeserialize;

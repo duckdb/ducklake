@@ -1,0 +1,92 @@
+# name: test/sql/scan_metadata/scan_metadata_scan_options.test
+# description: The bind info of a scan describes the scan to a reader outside of DuckLake
+# group: [scan_metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/scan_metadata_scan_options', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t AS SELECT range a FROM range(10)
+
+statement ok
+SET VARIABLE first_insert = (SELECT id FROM lake.current_snapshot())
+
+statement ok
+ALTER TABLE lake.t ADD COLUMN b INTEGER
+
+statement ok
+INSERT INTO lake.t VALUES (10, 10)
+
+query IIIIIII
+SELECT o['scan_metadata_version'].type, o['scan_type'].type, o['snapshot_id'].type, o['schema_version'].type,
+       o['include_local_changes'].type, o['table_id'].type, o['table_uuid'].type
+FROM (SELECT DISTINCT scan_options o FROM ducklake_scan_metadata('lake', 't'))
+----
+UBIGINT	VARCHAR	UBIGINT	UBIGINT	BOOLEAN	UBIGINT	VARCHAR
+
+query IIIIIII
+SELECT o['scan_metadata_version'].value, o['scan_type'].value, o['include_local_changes'].value,
+       o['snapshot_id'].value::UBIGINT = s.snapshot_id, o['schema_version'].value::UBIGINT = s.schema_version,
+       o['table_id'].value::BIGINT = i.table_id, o['table_uuid'].value = i.table_uuid::VARCHAR
+FROM (SELECT DISTINCT scan_options o FROM ducklake_scan_metadata('lake', 't')),
+     (SELECT snapshot_id, schema_version FROM lake.snapshots() ORDER BY snapshot_id DESC LIMIT 1) s,
+     ducklake_table_info('lake') i
+----
+1	table	true	true	true	true	true
+
+# the file list is not part of the bind info
+query I
+SELECT DISTINCT scan_options['file_path'] FROM ducklake_scan_metadata('lake', 't')
+----
+NULL
+
+# a time travel scan is bound to its snapshot, and does not see the changes of the transaction
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM lake.t WHERE a = 0
+
+query III
+SELECT DISTINCT scan_options['include_local_changes'].value,
+       scan_options['snapshot_id'].value::UBIGINT = (SELECT max(snapshot_id) FROM lake.snapshots()),
+       count(*) FILTER (file_options['has_deletes'] IS NOT NULL) OVER ()
+FROM ducklake_scan_metadata('lake', 't')
+----
+true	true	1
+
+query IIII
+SELECT DISTINCT o['include_local_changes'].value, o['snapshot_id'].value::UBIGINT = s.snapshot_id,
+       o['schema_version'].value::UBIGINT = s.schema_version, has_deletes
+FROM (SELECT scan_options o, file_options['has_deletes'] has_deletes
+      FROM ducklake_scan_metadata('lake', 't', snapshot_version => getvariable('first_insert'))),
+     (SELECT snapshot_id, schema_version FROM lake.snapshots() WHERE snapshot_id = getvariable('first_insert')) s
+----
+false	true	true	NULL
+
+statement ok
+ROLLBACK
+
+# scans of table changes
+statement ok
+DELETE FROM lake.t WHERE a = 1
+
+query II
+SELECT DISTINCT scan_options['scan_type'].value, scan_options['include_local_changes'].value
+FROM ducklake_scan_metadata('lake', 't', scan_type => 'insertions', start_snapshot => 0)
+----
+insertions	false
+
+query II
+SELECT DISTINCT scan_options['scan_type'].value, scan_options['include_local_changes'].value
+FROM ducklake_scan_metadata('lake', 't', scan_type => 'deletions', start_snapshot => 0)
+----
+deletions	false

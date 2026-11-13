@@ -1,0 +1,101 @@
+# name: test/sql/scan_metadata/scan_metadata_added_file.test
+# description: The scan metadata of an added file has the name map that maps its columns
+# group: [scan_metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/scan_metadata_added_file', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(x INTEGER, y VARCHAR)
+
+statement ok
+COPY (SELECT 42 AS x, 'hello' AS y) TO '{DATA_PATH}/scan_metadata_added_file.parquet'
+
+statement ok
+CALL ducklake_add_data_files('lake', 't', '{DATA_PATH}/scan_metadata_added_file.parquet')
+
+query III
+SELECT path LIKE '%scan_metadata_added_file.parquet', file_options['required_options'].value,
+       file_options['mapping_id'].type
+FROM ducklake_scan_metadata('lake', 't')
+----
+true	[mapping_id]	UBIGINT
+
+# the name map of the file comes with it
+query II
+SELECT file_options['name_map'].type, file_options['name_map'].value
+FROM ducklake_scan_metadata('lake', 't')
+----
+STRUCT(column_id UBIGINT, source_name VARCHAR, target_field_id UBIGINT, parent_column UBIGINT, is_partition BOOLEAN)[]	[{'column_id': 0, 'source_name': x, 'target_field_id': 1, 'parent_column': NULL, 'is_partition': false}, {'column_id': 1, 'source_name': y, 'target_field_id': 2, 'parent_column': NULL, 'is_partition': false}]
+
+# a file written by DuckLake has no name map
+statement ok
+INSERT INTO lake.t VALUES (1, 'world')
+
+query III
+SELECT file_options['required_options'].value, file_options['mapping_id'], file_options['name_map']
+FROM ducklake_scan_metadata('lake', 't') WHERE path NOT LIKE '%scan_metadata_added_file.parquet'
+----
+[]	NULL	NULL
+
+# nested columns keep their parent
+statement ok
+CREATE TABLE lake.nested(id INTEGER, s STRUCT(a INTEGER, b VARCHAR))
+
+statement ok
+COPY (SELECT 1 AS id, {'a': 2, 'b': 'c'} AS s) TO '{DATA_PATH}/scan_metadata_added_nested.parquet'
+
+# the name map of a file added by the transaction
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_add_data_files('lake', 'nested', '{DATA_PATH}/scan_metadata_added_nested.parquet')
+
+query II
+SELECT file_options['required_options'].value, file_options['name_map'].value
+FROM ducklake_scan_metadata('lake', 'nested')
+----
+[mapping_id]	[{'column_id': 0, 'source_name': id, 'target_field_id': 1, 'parent_column': NULL, 'is_partition': false}, {'column_id': 1, 'source_name': s, 'target_field_id': 2, 'parent_column': NULL, 'is_partition': false}, {'column_id': 2, 'source_name': a, 'target_field_id': 3, 'parent_column': 1, 'is_partition': false}, {'column_id': 3, 'source_name': b, 'target_field_id': 4, 'parent_column': 1, 'is_partition': false}]
+
+statement ok
+COMMIT
+
+query II
+SELECT file_options['required_options'].value, file_options['name_map'].value
+FROM ducklake_scan_metadata('lake', 'nested')
+----
+[mapping_id]	[{'column_id': 0, 'source_name': id, 'target_field_id': 1, 'parent_column': NULL, 'is_partition': false}, {'column_id': 1, 'source_name': s, 'target_field_id': 2, 'parent_column': NULL, 'is_partition': false}, {'column_id': 2, 'source_name': a, 'target_field_id': 3, 'parent_column': 1, 'is_partition': false}, {'column_id': 3, 'source_name': b, 'target_field_id': 4, 'parent_column': 1, 'is_partition': false}]
+
+# a column that is read from the hive partition of the path
+statement ok
+CREATE TABLE lake.hive(part_key INTEGER, val VARCHAR)
+
+statement ok
+COPY (SELECT 1 AS part_key, 'hello' AS val) TO '{DATA_PATH}/scan_metadata_added_hive' (FORMAT PARQUET, PARTITION_BY (part_key))
+
+statement ok
+CALL ducklake_add_data_files('lake', 'hive', '{DATA_PATH}/scan_metadata_added_hive/**/*.parquet', hive_partitioning => true)
+
+query I
+SELECT file_options['name_map'].value FROM ducklake_scan_metadata('lake', 'hive')
+----
+[{'column_id': 0, 'source_name': val, 'target_field_id': 2, 'parent_column': NULL, 'is_partition': false}, {'column_id': 1, 'source_name': part_key, 'target_field_id': 1, 'parent_column': NULL, 'is_partition': true}]
+
+# the files of a scan of deletions are mapped by name as well
+statement ok
+DELETE FROM lake.hive WHERE val = 'hello'
+
+query II
+SELECT file_options['required_options'].value, file_options['name_map'].value
+FROM ducklake_scan_metadata('lake', 'hive', scan_type => 'deletions', start_snapshot => 0)
+----
+[mapping_id]	[{'column_id': 0, 'source_name': val, 'target_field_id': 2, 'parent_column': NULL, 'is_partition': false}, {'column_id': 1, 'source_name': part_key, 'target_field_id': 1, 'parent_column': NULL, 'is_partition': true}]
