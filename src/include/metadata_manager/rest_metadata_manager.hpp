@@ -60,7 +60,7 @@ public:
 	unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound,
 	                                         idx_t newest_snapshot_id) override;
 	DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot) override;
-	vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot,
+	vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot, idx_t &latest_snapshot_id,
 	                                                    const vector<TableIndex> &table_ids = {}) override;
 	map<TableIndex, idx_t> GetTableRecordCounts(DuckLakeSnapshot snapshot) override;
 	vector<DuckLakeFileListEntry>

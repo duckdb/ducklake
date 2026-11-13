@@ -184,7 +184,12 @@ static void AddSnapshotData(DuckLakeRESTRequest &request, const RESTSnapshotIncl
 		}
 	}
 	if (include_stats) {
-		result.stats = metadata_manager.GetGlobalTableStats(snapshot);
+		idx_t stats_snapshot_id = DConstants::INVALID_INDEX;
+		auto stats = metadata_manager.GetGlobalTableStats(snapshot, stats_snapshot_id);
+		if (stats_snapshot_id != snapshot.snapshot_id) {
+			stats.clear();
+		}
+		result.stats = std::move(stats);
 	}
 }
 

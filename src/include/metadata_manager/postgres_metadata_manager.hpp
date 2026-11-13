@@ -59,6 +59,7 @@ public:
 
 protected:
 	string GetLatestSnapshotQuery() const override;
+	string GetGlobalTableStatsQuery(const vector<TableIndex> &table_ids) const override;
 	string SnapshotTimeSql() const override {
 		// the server's clock, as NOW() is the start of the metadata transaction
 		return "clock_timestamp()";

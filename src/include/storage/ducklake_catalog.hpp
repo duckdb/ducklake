@@ -48,7 +48,7 @@ struct BoundCreateTableInfo;
 class ColumnList;
 class LogicalGet;
 
-//! Per-table stats cache entry, keyed by <next_file_id, table_id>.
+//! Per-table stats cache entry, keyed by <snapshot_id, table_id>.
 struct DuckLakeTableStatsCacheEntry : public ObjectCacheEntry {
 	static constexpr idx_t ESTIMATED_BYTES_PER_COLUMN_STATS = 256;
 
@@ -301,6 +301,9 @@ public:
 	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                             TableIndex table_id,
 	                                             optional_ptr<const vector<TableIndex>> load_tables = nullptr);
+	shared_ptr<DuckLakeTableStats> GetTableStatsForCommit(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
+	                                                      TableIndex table_id,
+	                                                      optional_ptr<const vector<TableIndex>> load_tables = nullptr);
 	//! Returns an invalid index when a file is only partially visible to the snapshot
 	optional_idx GetTableNetRowCount(DuckLakeTransaction &transaction, DuckLakeTableEntry &table);
 	//! Returns zero when the table has no stats
@@ -488,10 +491,8 @@ public:
 	void AdvanceColumnsWithValues(idx_t snapshot_id);
 	void ForgetColumnsWithValues(const set<TableIndex> &table_ids);
 
-	//! Invalidate the cached table stats entry for a given stats cache key.
-	void InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id);
-	//! Invalidate the cached table stats entries of this DuckLake for the given next file ids.
-	void InvalidateTableStatsCaches(const unordered_set<idx_t> &next_file_ids);
+	//! Invalidate the cached table stats entries of this DuckLake for the given snapshots.
+	void InvalidateTableStatsCaches(const unordered_set<idx_t> &snapshot_ids);
 	//! Invalidate the cached schema entry for a given schema_version.
 	void InvalidateSchemaCache(idx_t schema_version);
 	//! Invalidate a cached name map for a deleted mapping ID.
@@ -504,20 +505,23 @@ private:
 	shared_ptr<DuckLakeSchemaCacheEntry> GetSchemaCacheEntry(DuckLakeTransaction &transaction,
 	                                                         DuckLakeSnapshot snapshot);
 	void LoadNameMaps(DuckLakeTransaction &transaction);
-	string StatsCacheKey(idx_t next_file_id, TableIndex table_id) const;
+	shared_ptr<DuckLakeTableStats> GetTableStatsInternal(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
+	                                                     TableIndex table_id, bool retry_on_snapshot_mismatch,
+	                                                     optional_ptr<const vector<TableIndex>> load_tables);
+	string StatsCacheKey(idx_t snapshot_id, TableIndex table_id) const;
 	string RecordCountCacheKey(idx_t snapshot_id) const;
 	string NetRowCountCacheKey(TableIndex table_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
 	ObjectCache &GetObjectCacheInstance();
 	//! A table stats entry this DuckLake put in the object cache, kept without its key as there is one per table
 	struct TrackedStatsEntry {
-		idx_t next_file_id;
+		idx_t snapshot_id;
 		TableIndex table_id;
 		weak_ptr<ObjectCacheEntry> entry;
 	};
 	//! Puts entries in the object cache and remembers them, under one lock so the entry kept is the one remembered
 	void PutCacheEntry(string key, shared_ptr<ObjectCacheEntry> entry);
-	void PutStatsCacheEntries(idx_t next_file_id, vector<pair<TableIndex, shared_ptr<ObjectCacheEntry>>> entries);
+	void PutStatsCacheEntries(idx_t snapshot_id, vector<pair<TableIndex, shared_ptr<ObjectCacheEntry>>> entries);
 	//! Requires cache_entries_lock
 	void TrackCacheEntry(const string &key, const shared_ptr<ObjectCacheEntry> &entry);
 	//! Removes the entries of this DuckLake from the object cache, as their keys belong to this instance only

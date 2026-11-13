@@ -2527,7 +2527,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		bool recomputed_stats = false;
 		batch_queries += UpdateStatsForDroppedFiles(stats, context, attempt_dropped_file_stats, recomputed_stats);
 		if (recomputed_stats && commit_snapshot.next_file_id == initial_next_file_id) {
-			// cached stats are keyed by the next file id, which a commit without new files keeps
+			// Older clients key cached stats by the next file id, which a commit without new files keeps.
 			commit_snapshot.next_file_id++;
 		}
 	}
@@ -2585,7 +2585,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 				}
 			}
 			if (compaction_rewrite_delete_changes.new_files.empty()) {
-				// cached stats are keyed by the next file id, which a rewrite without new files keeps
+				// Keep older clients' next-file-id stats caches from reusing bounds after a zero-output rewrite.
 				commit_snapshot.next_file_id++;
 			}
 		}
@@ -2927,12 +2927,13 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			} else {
 				commit_stats_snapshot.snapshot = context.get_snapshot();
 			}
+			can_retry = true;
+			context.set_attempt_snapshot(commit_snapshot);
 			commit_snapshot.snapshot_id++;
 			if (SchemaChangesMade()) {
 				// we changed the schema - need to get a new schema version
 				commit_snapshot.schema_version++;
 			}
-			can_retry = true;
 			if (i > 0) {
 				// the rollback of the failed attempt also undid what the transaction wrote before its commit
 				context.rewrite_before_retry();
@@ -3048,13 +3049,6 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	context.set_committed_snapshot_id(commit_snapshot.snapshot_id, commit_snapshot.next_catalog_id,
 	                                  commit_snapshot.next_file_id);
 	context.set_table_options(committed_table_options);
-	for (auto &entry : dropped_file_stats) {
-		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, entry.first);
-	}
-	// a compaction without new files keeps the next file id of the cached stats
-	for (auto &table_id : local_changes.GetCompactedTables()) {
-		context.invalidate_table_stats_cache(commit_snapshot.next_file_id, table_id);
-	}
 	if (flushed_inlined && !context.skip_drop_empty_inlined) {
 		try {
 			DropEmptySupersededInlinedTables(context);

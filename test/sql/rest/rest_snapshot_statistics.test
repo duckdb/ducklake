@@ -1,0 +1,89 @@
+# name: test/sql/rest/rest_snapshot_statistics.test
+# description: REST snapshot responses never attach newer narrowed statistics to older data
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+require json
+
+statement ok rest_db:rest_server_con
+CALL rest_lake.set_option('data_inlining_row_limit', 0)
+
+statement ok rest_db:rest_server_con
+CREATE TABLE rest_lake.t AS SELECT range AS i FROM range(100)
+
+statement ok rest_db:rest_server_con
+INSERT INTO rest_lake.t SELECT range FROM range(100, 200)
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+# Load the current statistics, then advance the snapshot without changing next_file_id.
+query I
+SELECT count(*) FROM dl.t
+----
+200
+
+statement ok rest_db:rest_server_con
+CREATE TABLE rest_lake.marker(i INTEGER)
+
+statement ok rest_db:rest_server_con
+SET VARIABLE old_snapshot = (SELECT max(snapshot_id) FROM rest_lake.snapshots())
+
+set variable old_snapshot <variable:rest_server_con:old_snapshot>
+
+statement ok stale_reader
+BEGIN
+
+# A catalog-only lookup pins the new snapshot without requesting table statistics.
+query I stale_reader
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 't'
+----
+1
+
+statement ok rest_db:rest_server_con
+DELETE FROM rest_lake.t WHERE i < 100
+
+query III stale_reader
+SELECT count(*), min(i), max(i) FROM dl.t WHERE i < 100
+----
+100	0	99
+
+statement ok stale_reader
+ROLLBACK
+
+statement ok
+DETACH dl
+
+# A new client has never cached the old bounds.
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+query III
+SELECT count(*), min(i), max(i) FROM dl.t AT (VERSION => {old_snapshot}) WHERE i < 100
+----
+100	0	99
+
+query I
+SELECT json_array_length(response::JSON, '$.stats')
+FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/at?unit=version&value={old_snapshot}&include_stats=true', '')
+----
+0
+
+query III
+SELECT count(*), min(i), max(i) FROM dl.t
+----
+100	100	199
+
+statement ok
+INSERT INTO dl.t VALUES (200)
+
+query III
+SELECT count(*), min(i), max(i) FROM dl.t AT (VERSION => {old_snapshot}) WHERE i < 100
+----
+100	0	99
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

@@ -169,6 +169,7 @@ void DuckLakeServerSideCommit::ReadCommitHeader() {
 	} else {
 		transaction_snapshot.schema_version = static_cast<idx_t>(schema_version);
 	}
+	attempt_snapshot = transaction_snapshot;
 }
 
 void DuckLakeServerSideCommit::ReadStagedDroppedFileEntries() {
@@ -589,7 +590,7 @@ unique_ptr<DuckLakeStats> DuckLakeServerSideCommit::BuildStatsMap(vector<DuckLak
 
 vector<Identifier> DuckLakeServerSideCommit::LookupInlinedTableNames(TableIndex table_id) {
 	vector<Identifier> names;
-	auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), transaction_snapshot);
+	auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), attempt_snapshot);
 	auto result = RunQuery(sql, "lookup inlined table names");
 	for (auto &row : *result) {
 		names.push_back(row.GetValue<Identifier>(0));
@@ -656,7 +657,15 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		return fresh_conn.Query(sql);
 	};
 	ctx.get_snapshot = [this]() {
-		return transaction_snapshot;
+		return attempt_snapshot;
+	};
+	ctx.set_attempt_snapshot = [this](DuckLakeSnapshot snapshot) {
+		attempt_snapshot = snapshot;
+		auto latest_snapshot = ReadLatestSnapshot();
+		if (latest_snapshot.snapshot_id != attempt_snapshot.snapshot_id) {
+			throw TransactionException("Transaction conflict - concurrent DuckLake commit changed table statistics");
+		}
+		existing_table_stats.clear();
 	};
 	ctx.execute_commit_batch = [this](DuckLakeSnapshot snapshot, string &query) -> unique_ptr<QueryResult> {
 		query = SubstitutePlaceholders(query, snapshot);
@@ -699,8 +708,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	};
 	ctx.get_table_column_schema = [this](TableIndex table_id) {
 		vector<DuckLakeColumnSchemaEntry> schema;
-		auto sql =
-		    SubstitutePlaceholders(DuckLakeMetadataManager::GetTableColumnSchemaSql(table_id), transaction_snapshot);
+		auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetTableColumnSchemaSql(table_id), attempt_snapshot);
 		auto result = RunQuery(sql, "read table column schema");
 		for (auto &row : *result) {
 			// parent_column IS NULL => top-level root; otherwise a nested leaf carrying its own leaf type.
@@ -723,7 +731,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		}
 		auto sql = SubstitutePlaceholders(
 		    DuckLakeMetadataManager::GetNetDataFileRowCountSql(table_id, inlined_deletion_table, false, true),
-		    transaction_snapshot);
+		    attempt_snapshot);
 		auto result = RunQuery(sql, "read net data file row count");
 		for (auto &row : *result) {
 			return row.GetValue<idx_t>(0);

@@ -233,6 +233,12 @@ public:
 	                             SnapshotBound bound = SnapshotBound::TIME_TRAVEL);
 	//! The newest snapshot that the transaction sees, also when the catalog is opened at a fixed snapshot
 	idx_t GetNewestVisibleSnapshotId();
+	bool StatsSnapshotIsStale(idx_t snapshot_id) const {
+		return stale_stats_snapshot == snapshot_id;
+	}
+	void MarkStatsSnapshotStale(idx_t snapshot_id) {
+		stale_stats_snapshot = snapshot_id;
+	}
 
 	static DuckLakeTransaction &Get(ClientContext &context, Catalog &catalog);
 
@@ -390,8 +396,8 @@ protected:
 public:
 	void RunCommitLoop(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &transaction_changes,
 	                   const DuckLakeRetryConfig &retry_config);
-	//! Applies a commit that the server made, the next file id of the committed snapshot is the key of its stats
-	void ApplyServerSideCommit(idx_t schema_version, optional_idx committed_next_file_id = optional_idx());
+	// Table statistics are keyed by snapshot id.
+	void ApplyServerSideCommit(idx_t schema_version);
 	//! Removes the files that this transaction wrote
 	void CleanupFiles();
 	//! Post-commit cleanup of empty inlined-data tables superseded by later schema versions.
@@ -498,6 +504,8 @@ private:
 	//! catalog is opened at a fixed snapshot
 	mutex snapshot_lock;
 	unique_ptr<DuckLakeSnapshot> snapshot;
+	//! Reader-only memo: mutable global stats have already advanced past this snapshot.
+	atomic<idx_t> stale_stats_snapshot {DConstants::INVALID_INDEX};
 	//! The snapshot written by the commit of this transaction
 	DuckLakeSnapshot committed_snapshot;
 	idx_t local_catalog_id;

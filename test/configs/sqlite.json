@@ -108,6 +108,7 @@
     {
       "reason": "Test only for Postgres as catalog",
       "paths": [
+        "test/sql/delete/full_file_delete_stats_read_committed.test",
         "test/sql/metadata/ducklake_settings_postgres.test",
         "test/sql/metadata/postgres_long_metadata_schema.test",
         "test/sql/retry/postgres_rollback_connection_loss.test",

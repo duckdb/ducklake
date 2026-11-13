@@ -46,7 +46,8 @@
         "test/sql/stats/count_star_optimization_cache.test",
         "test/sql/general/ducklake_metadata_logging.test",
         "test/sql/transaction/commit_skips_catalog_load.test",
-        "test/sql/transaction/commit_retry_skips_catalog_load.test"
+        "test/sql/transaction/commit_retry_skips_catalog_load.test",
+        "test/sql/stats/stale_snapshot_query_budget.test"
       ]
     },
     {
@@ -552,7 +553,16 @@
         "test/sql/tags/tags_version_gate_time_travel.test",
         "test/sql/data_inlining/inlining_obstacle_log.test",
         "test/sql/compaction/user_columns_named_like_internal_columns.test",
-        "test/sql/data_inlining/data_inlining_transaction_local_field_readd_rejected.test"
+        "test/sql/data_inlining/data_inlining_transaction_local_field_readd_rejected.test",
+        "test/sql/compaction/rewrite_narrow_next_file_id.test",
+        "test/sql/delete/full_file_delete_stats_cache_key.test",
+        "test/sql/delete/full_file_delete_stats_concurrent.test",
+        "test/sql/delete/full_file_delete_stats_exactness.test",
+        "test/sql/delete/full_file_delete_stats_inlined_types.test",
+        "test/sql/delete/full_file_delete_stats_missing_columns.test",
+        "test/sql/delete/full_file_delete_stats_mixed.test",
+        "test/sql/delete/full_file_delete_stats_retry.test",
+        "test/sql/delete/full_file_delete_stats_skipped_columns.test"
       ]
     },
     {
@@ -675,7 +685,8 @@
         "test/sql/tags/postgres_tags_read_committed.test",
         "test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test",
-        "test/sql/data_inlining/data_inlining_variant_sql_rollback.test"
+        "test/sql/data_inlining/data_inlining_variant_sql_rollback.test",
+        "test/sql/delete/full_file_delete_stats_read_committed.test"
       ]
     },
     {
