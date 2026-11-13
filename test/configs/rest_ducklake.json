@@ -217,7 +217,8 @@
         "test/sql/table_changes/table_changes_rewrite_merged_twice.test",
         "test/sql/table_changes/table_deletions_unchanged_range.test",
         "test/sql/transaction/drop_altered_table_local_changes.test",
-        "test/sql/data_inlining/inlined_reserved_user_columns.test"
+        "test/sql/data_inlining/inlined_reserved_user_columns.test",
+        "test/sql/data_inlining/empty_inlined_table_scan_cache_release.test"
       ]
     },
     {

@@ -1033,6 +1033,8 @@ void DuckLakeTransaction::ReleaseMetadataTransaction() {
 	if (connection && connection->HasActiveTransaction()) {
 		connection->Commit();
 		metadata_transaction_released = true;
+		// the heads belong to the released view, a reopened connection reads a newer one and shares no cache
+		metadata_manager->ClearLineageHeads();
 	}
 }
 

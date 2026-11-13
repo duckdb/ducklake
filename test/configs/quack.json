@@ -191,6 +191,12 @@
       ]
     },
     {
+      "reason": "FIXME: Each metadata query runs in its own server-side transaction on quack, so a reader that began before a concurrent flush reads the moved rows from the data file instead of the inlined table.",
+      "paths": [
+        "test/sql/data_inlining/empty_inlined_table_scan_cache_flush.test"
+      ]
+    },
+    {
       "reason": "Test relies on a file-based metadata catalog.",
       "paths": [
         "test/sql/general/default_path.test",

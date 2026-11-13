@@ -485,6 +485,10 @@ public:
 	const vector<idx_t> &GetLineageHeads() const {
 		return lineage_heads;
 	}
+	//! Drops the heads when the transaction releases the metadata view that read them
+	void ClearLineageHeads() {
+		lineage_heads.clear();
+	}
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
 	//! Take the table sizes that stats rows lack from the live data files
 	static void FillMissingTableSizes(vector<DuckLakeGlobalStatsInfo> &stats,
