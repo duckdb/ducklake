@@ -2086,6 +2086,12 @@ void DuckLakeMetadataManager::VerifyInlinedColumnsHealable(const V2_0Dev1Additio
 	}
 	vector<pair<Identifier, Identifier>> collisions;
 	if (!ambiguous.empty()) {
+		if (!missing.schema_versions_branch_column) {
+			// the collision check reads the versions through main, which an interrupted heal left without a branch
+			auto backfill = Execute("UPDATE {METADATA_CATALOG}.ducklake_schema_versions SET branch_id = 0 "
+			                        "WHERE branch_id IS NULL;");
+			backfill->ThrowIfError("Failed to backfill the schema version branches of DuckLake: ");
+		}
 		vector<string> literals;
 		for (auto &table : ambiguous) {
 			literals.push_back(SQLString::ToString(table.GetIdentifierName()));
