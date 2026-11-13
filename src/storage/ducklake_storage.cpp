@@ -73,6 +73,19 @@ static void HandleDuckLakeOption(ClientContext &context, DuckLakeOptions &option
 	}
 }
 
+//! ducklake:rest: connects to a DuckLake REST server, it does not start one (see ducklake_rest_serve)
+static void CheckRESTPath(const DuckLakeOptions &options) {
+	if (!StringUtil::StartsWith(options.metadata_path, "rest:")) {
+		return;
+	}
+	auto url = options.metadata_path.substr(5);
+	if (!StringUtil::StartsWith(url, "http://") && !StringUtil::StartsWith(url, "https://")) {
+		throw InvalidInputException("ducklake:rest: requires the URL of a DuckLake REST server (http:// or https://), "
+		                            "but got \"%s\". Use ducklake_rest_serve to start a server.",
+		                            url);
+	}
+}
+
 static unique_ptr<Catalog> DuckLakeAttach(optional_ptr<StorageExtensionInfo> storage_info, ClientContext &context,
                                           AttachedDatabase &db, const string &name, AttachInfo &info,
                                           AttachOptions &attach_options) {
@@ -133,6 +146,7 @@ static unique_ptr<Catalog> DuckLakeAttach(optional_ptr<StorageExtensionInfo> sto
 		attach_options.access_mode = AccessMode::READ_ONLY;
 		db.SetReadOnlyDatabase();
 	}
+	CheckRESTPath(options);
 	attach_options.options["busy_timeout"] = Value::INTEGER(options.busy_timeout);
 	return make_uniq<DuckLakeCatalog>(db, std::move(options));
 }

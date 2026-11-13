@@ -1,0 +1,54 @@
+# name: test/sql/rest/rest_types.test
+# description: Types in the DuckLake REST API use the names of the DuckLake specification
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+# the catalog describes the types with the names of the DuckLake specification
+statement ok
+CREATE TABLE dl.t(a DECIMAL(18, 3), b INTEGER[], c MAP(VARCHAR, BIGINT), d STRUCT(x TIMESTAMPTZ, y JSON), f HUGEINT)
+
+query I
+SELECT response->>'$.catalog.tables[0].columns[0].column_type' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest?include_catalog=true', '')
+----
+decimal(18,3)
+
+# types of requests are structured, with the same names
+query I
+SELECT response->>'$.entry_ids[0].id' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"create_table": {"placeholder_id": -1, "schema_id": 0, "table_name": "u", "columns": [
+  {"column_name": "a", "column_type": {"id": "decimal", "width": 18, "scale": 3}},
+  {"column_name": "b", "column_type": {"id": "list", "child": {"id": "int32"}}},
+  {"column_name": "c", "column_type": {"id": "map", "key": {"id": "varchar"}, "value": {"id": "int64"}}},
+  {"column_name": "d", "column_type": {"id": "struct", "children": [{"name": "x", "type": {"id": "timestamptz"}}, {"name": "y", "type": {"id": "json"}}]}},
+  {"column_name": "f", "column_type": {"id": "int128"}}]}}]}')
+----
+2
+
+statement ok
+INSERT INTO dl.u VALUES (1.5, [1, 2], MAP {'k': 1}, {'x': '2025-01-01 00:00:00+00', 'y': '{"a": 1}'}, 5)
+
+query I
+SELECT column_type FROM (DESCRIBE dl.u) ORDER BY column_name
+----
+DECIMAL(18,3)
+INTEGER[]
+MAP(VARCHAR, BIGINT)
+STRUCT(x TIMESTAMP WITH TIME ZONE, y JSON)
+HUGEINT
+
+query I
+SELECT response->>'$.error.type' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"create_table": {"placeholder_id": -1, "schema_id": 0, "table_name": "v", "columns": [{"column_name": "a", "column_type": {"id": "INTEGER"}}]}}]}')
+----
+Invalid Input
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

@@ -1,0 +1,49 @@
+# name: test/sql/rest/rest_value_types.test
+# description: Inlined rows and data files of many types go through the DuckLake REST API
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(b BOOLEAN, bl BLOB, l INTEGER[], m MAP(VARCHAR, INTEGER), d DECIMAL(38, 4), s STRUCT(x BOOLEAN, y VARCHAR[]), u UUID, ts TIMESTAMPTZ, dt DATE, tm TIME, iv INTERVAL, f FLOAT, db DOUBLE, ti TINYINT, si SMALLINT, ui UINTEGER, ub UBIGINT, hi HUGEINT)
+
+# inlined rows
+statement ok
+INSERT INTO dl.t VALUES
+  (true, '\x00\xFF'::BLOB, [1, NULL, 3], MAP {'k': 1}, 1234.5678, {'x': false, 'y': ['a', NULL]}, '00000000-0000-0000-0000-000000000001', '2024-01-01 10:00:00+00', '2024-01-01', '10:00:00', INTERVAL 3 DAYS, 1.5, 2.5, -1, -2, 3, 4, 170141183460469231731687303715884105727),
+  (NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)
+
+query IIIIIIIIIIIIIIIIII
+FROM dl.t ORDER BY b NULLS LAST
+----
+true	\x00\xFF	[1, NULL, 3]	{k=1}	1234.5678	{'x': false, 'y': [a, NULL]}	00000000-0000-0000-0000-000000000001	2024-01-01 10:00:00+00	2024-01-01	10:00:00	3 days	1.5	2.5	-1	-2	3	4	170141183460469231731687303715884105727
+NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
+
+# the change feed of the inlined rows
+query II
+SELECT count(*), count(b) FROM ducklake_table_insertions('dl', 'main', 't', 0, 2)
+----
+2	1
+
+# data files with the same rows
+statement ok
+INSERT INTO dl.t SELECT t.* FROM dl.t t, range(10)
+
+query III
+SELECT count(*), count(b), sum(len(l)) FROM dl.t
+----
+22	11	33
+
+# deleting the inlined rows and rows of data files
+statement ok
+DELETE FROM dl.t WHERE b IS NULL
+
+query II
+SELECT count(*), bool_and(b) FROM dl.t
+----
+11	true
+
+include test/template/rest_teardown.test_template

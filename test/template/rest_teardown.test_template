@@ -1,0 +1,4 @@
+# Stops the DuckLake REST server started by rest_setup.test_template
+
+statement ok rest_db:rest_server_con
+SELECT * FROM ducklake_rest_stop(regexp_extract(getvariable('rest_listen_uri'), '^(.*://[^/]+)', 1))

@@ -113,6 +113,8 @@ struct DuckLakeTableInfo {
 	vector<DuckLakeColumnInfo> columns;
 	vector<DuckLakeTag> tags;
 	vector<DuckLakeInlinedTableInfo> inlined_data_tables;
+	//! The next free column id, if known
+	optional_idx next_column_id;
 };
 
 //! Stores the information on macro parameters
@@ -307,6 +309,17 @@ struct SnapshotDeletedFromFiles {
 	set<DataFileIndex> deleted_from_files;
 };
 
+//! Selects snapshots, an empty filter selects all snapshots
+struct DuckLakeSnapshotFilter {
+	//! Exclude the latest snapshot, which can never be expired
+	bool exclude_latest = false;
+	//! Only snapshots older than this ISO 8601 timestamp, if set
+	string older_than;
+	//! Only these snapshots, if set
+	bool has_snapshot_ids = false;
+	vector<idx_t> snapshot_ids;
+};
+
 struct DuckLakeSnapshotInfo {
 	idx_t id;
 	timestamp_tz_t time;
@@ -400,6 +413,9 @@ struct DuckLakeFileData {
 	idx_t file_size_bytes = 0;
 	optional_idx footer_size;
 	DeleteFileFormat format = DeleteFileFormat::PARQUET;
+	//! The number of rows (for delete files: the deleted rows) and of row groups, if the metadata has them
+	optional_idx row_count;
+	optional_idx row_group_count;
 };
 
 enum class DuckLakeDataType {
@@ -431,6 +447,10 @@ struct DuckLakeFileListEntry {
 	vector<idx_t> snapshot_filter_excluded;
 	MappingIndex mapping_id;
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
+	//! The partitioning the file was written with and the values of its partition keys, only set by
+	//! DuckLakeMetadataManager::ReadFilePartitions
+	optional_idx partition_id;
+	vector<DuckLakeFilePartition> partition_values;
 	//! The data file id
 	DataFileIndex file_id;
 	//! Inlined file deletions (row positions that have been deleted and stored in the metadata database)
@@ -484,6 +504,21 @@ struct DuckLakeCompactionBaseFileData {
 	idx_t begin_snapshot = 0;
 	optional_idx end_snapshot;
 };
+
+//! An inlined deletion of a row of a data file, with the delete file the data file had when it was last visible
+struct DuckLakeInlinedFileDeletionEntry {
+	DataFileIndex file_id;
+	string data_file_path;
+	idx_t row_id = 0;
+	idx_t begin_snapshot = 0;
+	//! Invalid if the data file has no delete file
+	DataFileIndex delete_file_id;
+	DuckLakeFileData delete_file;
+	idx_t delete_file_begin_snapshot = 0;
+};
+
+//! End snapshots of deleted inlined row versions, keyed by row id and begin snapshot
+using DuckLakeDeletedRowVersions = map<pair<int64_t, int64_t>, int64_t>;
 
 struct DuckLakeFileForCleanup {
 	DataFileIndex id;

@@ -1,0 +1,21 @@
+# name: test/sql/rest/rest_null_type_column.test
+# description: Inlined rows of a column of the NULL type of a DuckLake served by a REST server
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.n AS SELECT NULL AS x
+
+query I
+SELECT x FROM dl.n
+----
+NULL
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template
