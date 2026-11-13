@@ -87,8 +87,10 @@ struct DuckLakeCommitContext {
 		return false;
 	};
 	// LCOV_EXCL_STOP
-	//! Runs a metadata-DB query during post-commit cleanup.
+	//! Runs a metadata-DB query during commit or post-commit cleanup.
 	std::function<unique_ptr<QueryResult>(string)> query_metadata;
+	//! Protects inlined tables referenced by the commit from concurrent cleanup when the catalog requires it.
+	std::function<unique_ptr<QueryResult>(const set<TableIndex> &)> get_inlined_tables_for_commit;
 	//! Runs cleanup statements that drop metadata tables atomically.
 	std::function<unique_ptr<QueryResult>(string)> execute_in_transaction;
 	//! Runs a snapshot-templated metadata-DB query (handles {SNAPSHOT_ID} substitution).
@@ -100,12 +102,13 @@ struct DuckLakeCommitContext {
 	                               const vector<DuckLakeTableInfo> &, vector<DuckLakeSchemaInfo> &) {
 		    return false;
 	    };
-	//! Emits the SQL that registers new inlined data tables (CREATE TABLE + ducklake_inlined_data_tables INSERT).
+	//! Emits the SQL that registers new inlined data tables and records empty tables that it drops.
 	// LCOV_EXCL_START
-	std::function<string(DuckLakeSnapshot, const vector<DuckLakeTableInfo> &, const set<TableIndex> &)>
-	    write_inlined_tables = [](DuckLakeSnapshot, const vector<DuckLakeTableInfo> &, const set<TableIndex> &) {
-		    return string();
-	    };
+	std::function<string(DuckLakeSnapshot, const vector<DuckLakeTableInfo> &, const set<TableIndex> &, set<string> &)>
+	    write_inlined_tables =
+	        [](DuckLakeSnapshot, const vector<DuckLakeTableInfo> &, const set<TableIndex> &, set<string> &) {
+		        return string();
+	        };
 	//! Emits the SQL that appends inlined data for the given table changes (handles new inlined-table creation,
 	//! per-tx cache, and the per-row INSERT VALUES).
 	std::function<string(DuckLakeSnapshot &, const vector<DuckLakeInlinedDataInfo> &, const vector<DuckLakeTableInfo> &,
@@ -180,6 +183,8 @@ struct DuckLakeCommitContext {
 	bool skip_drop_empty_inlined = false;
 	//! Whether the metadata schema has the >= 1.1 additions.
 	bool supports_v1_1_metadata = false;
+	//! Combines column-bound invalidation and row-total refresh in one statement snapshot.
+	bool supports_data_modifying_cte = false;
 	//! Column names of the inlined data tables under this catalog version.
 	DuckLakeInlinedColNames InlinedColNames() const {
 		return DuckLakeInlinedColNames(supports_v1_1_metadata);
@@ -267,13 +272,13 @@ public:
 	bool RecomputeGlobalStatsAfterRewrite(string &batch_query, TableIndex table_id, DuckLakeSnapshot snapshot,
 	                                      const CompactionInformation &rewrite_changes,
 	                                      const set<DataFileIndex> &removed_source_ids,
-	                                      const DuckLakeCommitContext &context, bool &deleted_rows_remain);
+	                                      const DuckLakeCommitContext &context);
 	//! The recompute of RecomputeGlobalStatsAfterRewrite into `new_stats`, without writing it. `dropped_row_count`
 	//! live rows of files dropped by this commit are still part of the net row count of the table.
 	bool TryRecomputeGlobalStats(TableIndex table_id, DuckLakeSnapshot snapshot,
 	                             const CompactionInformation &rewrite_changes,
 	                             const set<DataFileIndex> &removed_source_ids, const DuckLakeCommitContext &context,
-	                             bool &deleted_rows_remain, idx_t dropped_row_count, DuckLakeTableStats &new_stats);
+	                             idx_t dropped_row_count, DuckLakeTableStats &new_stats);
 	//! After dropping whole data files, recompute the EXACT global stats of `table_id` from the files that remain
 	//! instead of discarding its column stats. Returns false, leaving the stats to the caller, when the remaining
 	//! files are not delete-free.

@@ -1089,9 +1089,8 @@ static set<FieldIndex> ReadSkippedStatsFields(TableIndex table_id, const DuckLak
 bool DuckLakeTransactionState::TryRecomputeGlobalStats(TableIndex table_id, DuckLakeSnapshot snapshot,
                                                        const CompactionInformation &rewrite_changes,
                                                        const set<DataFileIndex> &removed_source_ids,
-                                                       const DuckLakeCommitContext &context, bool &deleted_rows_remain,
-                                                       idx_t dropped_row_count, DuckLakeTableStats &new_stats) {
-	deleted_rows_remain = false;
+                                                       const DuckLakeCommitContext &context, idx_t dropped_row_count,
+                                                       DuckLakeTableStats &new_stats) {
 	if (tables_changed_by_others.find(table_id) != tables_changed_by_others.end()) {
 		return false; // the stats below are read at the transaction snapshot, which misses the other commits
 	}
@@ -1202,7 +1201,6 @@ bool DuckLakeTransactionState::TryRecomputeGlobalStats(TableIndex table_id, Duck
 	//    (Covers partial rewrites with delete_threshold > 0, leftover delete files, and inlined file deletions.)
 	//    The net count still includes the rows of the files dropped by this commit.
 	if (parquet_gross_rows + dropped_row_count != context.get_net_data_file_row_count(table_id)) {
-		deleted_rows_remain = true;
 		return false;
 	}
 	// deleted inlined rows stay stored, and flushing them later does not count them again
@@ -1211,7 +1209,6 @@ bool DuckLakeTransactionState::TryRecomputeGlobalStats(TableIndex table_id, Duck
 	idx_t net_inlined;
 	CountInlinedRows(inlined_table_names, snapshot, context, stored_inlined, net_inlined);
 	if (stored_inlined != net_inlined) {
-		deleted_rows_remain = true;
 		return false;
 	}
 
@@ -1270,12 +1267,13 @@ static string RecomputedGlobalStatsSql(TableIndex table_id, DuckLakeTableStats s
 	    DuckLakeTransaction::ConvertNewGlobalStats(table_id, new_globals), context.supports_v1_1_metadata);
 }
 
-bool DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(
-    string &batch_query, TableIndex table_id, DuckLakeSnapshot snapshot, const CompactionInformation &rewrite_changes,
-    const set<DataFileIndex> &removed_source_ids, const DuckLakeCommitContext &context, bool &deleted_rows_remain) {
+bool DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite(string &batch_query, TableIndex table_id,
+                                                                DuckLakeSnapshot snapshot,
+                                                                const CompactionInformation &rewrite_changes,
+                                                                const set<DataFileIndex> &removed_source_ids,
+                                                                const DuckLakeCommitContext &context) {
 	DuckLakeTableStats new_stats;
-	if (!TryRecomputeGlobalStats(table_id, snapshot, rewrite_changes, removed_source_ids, context, deleted_rows_remain,
-	                             0, new_stats)) {
+	if (!TryRecomputeGlobalStats(table_id, snapshot, rewrite_changes, removed_source_ids, context, 0, new_stats)) {
 		return false;
 	}
 	batch_query += RecomputedGlobalStatsSql(table_id, std::move(new_stats), context);
@@ -1476,8 +1474,7 @@ bool DuckLakeTransactionState::TryRecomputeGlobalStatsAfterDrop(TableIndex table
 		// LCOV_EXCL_STOP
 	}
 	CompactionInformation no_rewrite;
-	bool deleted_rows_remain;
-	return TryRecomputeGlobalStats(table_id, snapshot, no_rewrite, dropped_ids, context, deleted_rows_remain,
+	return TryRecomputeGlobalStats(table_id, snapshot, no_rewrite, dropped_ids, context,
 	                               dropped_row_count - dropped_delete_count, result);
 }
 
@@ -2333,13 +2330,13 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	committed_table_options.clear();
 	added_field_stats.clear();
 	refreshed_table_sizes.clear();
-	set<TableIndex> refreshed_record_counts;
 	auto &commit_snapshot = commit_state.commit_snapshot;
 	auto initial_next_file_id = commit_snapshot.next_file_id;
 
 	EnsureCommitInfoProvided(commit_info);
 
 	string batch_queries;
+	set<string> dropped_inlined_tables;
 	// drop entries
 	if (!dropped_tables.empty()) {
 		batch_queries += DuckLakeMetadataManager::DropTables(dropped_tables, false);
@@ -2478,7 +2475,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		batch_queries += DuckLakeMetadataManager::WriteDroppedNewColumns(result.dropped_new_columns);
 		batch_queries += WriteAddedFieldStats(result.added_fields, stats, context);
 		batch_queries += context.write_inlined_tables(commit_snapshot, result.new_inlined_data_tables,
-		                                              commit_state.replaced_inlined_tables);
+		                                              commit_state.replaced_inlined_tables, dropped_inlined_tables);
 		batch_queries += DuckLakeMetadataManager::WriteNewSortKeys(existing_catalog.sorts, result.new_sort_keys);
 		new_tables_result = result.new_tables;
 		new_inlined_data_tables_result = result.new_inlined_data_tables;
@@ -2509,11 +2506,16 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	};
 
 	// write new data / data files
+	auto refreshed_row_counts = local_changes.GetCompactedTables();
+	for (auto &entry : dropped_file_stats) {
+		refreshed_row_counts.insert(entry.first);
+	}
 	bool has_table_data_changes = local_changes.HasChanges();
+	NewDataInfo new_data;
 	if (has_table_data_changes) {
-		auto result = GetNewDataFiles(batch_queries, commit_state, stats, context, attempt_dropped_file_stats);
-		batch_queries += write_data_files_sql(result.new_files);
-		batch_queries += context.write_inlined_data(commit_snapshot, result.new_inlined_data, new_tables_result,
+		new_data = GetNewDataFiles(batch_queries, commit_state, stats, context, attempt_dropped_file_stats);
+		batch_queries += write_data_files_sql(new_data.new_files);
+		batch_queries += context.write_inlined_data(commit_snapshot, new_data.new_inlined_data, new_tables_result,
 		                                            new_inlined_data_tables_result);
 	}
 
@@ -2573,15 +2575,10 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			}
 			auto recompute_snapshot = context.get_snapshot();
 			for (auto &table_entry : removed_source_ids_by_table) {
-				bool deleted_rows_remain;
 				if (RecomputeGlobalStatsAfterRewrite(batch_queries, table_entry.first, recompute_snapshot,
-				                                     compaction_rewrite_delete_changes, table_entry.second, context,
-				                                     deleted_rows_remain)) {
-					continue;
-				}
-				// keep the overcount while deleted rows remain, so the bounds stay inexact
-				if (deleted_rows_remain) {
-					refreshed_record_counts.insert(table_entry.first);
+				                                     compaction_rewrite_delete_changes, table_entry.second, context)) {
+					// The exact recompute already refreshed the stored row count.
+					refreshed_row_counts.erase(table_entry.first);
 				}
 			}
 			if (compaction_rewrite_delete_changes.new_files.empty()) {
@@ -2602,12 +2599,45 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(
 	    flushed_inlined_tables, flushed_inlined_file_deletions, context.InlinedColNames());
 	// the live files and inlined rows decide the stats that this commit cannot update from memory
-	batch_queries += DuckLakeMetadataManager::RefreshTableSizesSql(refreshed_table_sizes, refreshed_record_counts);
-	for (auto &table_id : refreshed_record_counts) {
-		// no other transaction changed the table, so the inlined tables of the snapshot are the registered ones
-		batch_queries +=
-		    DuckLakeMetadataManager::AddInlinedRowCountsSql(table_id, context.get_inlined_table_names(table_id));
+
+	map<TableIndex, set<string>> inlined_tables;
+	if (!refreshed_row_counts.empty()) {
+		auto names = context.get_inlined_tables_for_commit
+		                 ? context.get_inlined_tables_for_commit(refreshed_row_counts)
+		                 : context.query_metadata(
+		                       DuckLakeMetadataManager::GetInlinedTableNamesForTablesSql(refreshed_row_counts));
+		names->ThrowIfError("Failed to read inlined tables for the table row count: ");
+		for (auto &row : *names) {
+			if (row.IsNull(0)) {
+				throw TransactionException("Conflict while locking DuckLake inlined table registrations");
+			}
+			auto table_name = row.GetValue<string>(1);
+			if (!dropped_inlined_tables.count(table_name)) {
+				inlined_tables[TableIndex(row.GetValue<idx_t>(0))].insert(std::move(table_name));
+			}
+		}
 	}
+	map<TableIndex, idx_t> pending_inlined_rows;
+	for (auto &entry : new_data.new_inlined_data) {
+		pending_inlined_rows[entry.table_id] += entry.data->Count();
+	}
+	set<TableIndex> file_totals;
+	for (auto &table_id : refreshed_row_counts) {
+		auto has_inlined_file_deletions = context.inlined_file_deletion_table_exists(table_id);
+		auto refresh_file_size = refreshed_table_sizes.erase(table_id) > 0;
+		if (inlined_tables[table_id].empty() && pending_inlined_rows[table_id] == 0 && !has_inlined_file_deletions &&
+		    refresh_file_size) {
+			file_totals.insert(table_id);
+			continue;
+		}
+		batch_queries += DuckLakeMetadataManager::RefreshTableRowCountSql(
+		    table_id, inlined_tables[table_id], pending_inlined_rows[table_id], context.InlinedColNames(),
+		    context.supports_v1_1_metadata, has_inlined_file_deletions, refresh_file_size,
+		    context.supports_data_modifying_cte);
+	}
+	batch_queries += DuckLakeMetadataManager::RefreshTableFileTotalsSql(file_totals, context.supports_v1_1_metadata,
+	                                                                    context.supports_data_modifying_cte);
+	batch_queries += DuckLakeMetadataManager::RefreshTableSizesSql(refreshed_table_sizes);
 
 	// Tracking for tables that had schema changes
 	set<TableIndex> tables_with_schema_changes;

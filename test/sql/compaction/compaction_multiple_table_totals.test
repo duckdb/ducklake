@@ -1,0 +1,82 @@
+# name: test/sql/compaction/compaction_multiple_table_totals.test
+# description: A multi-table partial rewrite preserves each table's counts, sizes and conservative bounds
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/compaction_multiple_table_totals.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/compaction_multiple_table_totals', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+loop k 0 2
+
+statement ok
+CREATE TABLE lake.t${k}(i INTEGER)
+
+statement ok
+INSERT INTO lake.t${k} VALUES (${k} * 10), (${k} * 10 + 1)
+
+statement ok
+INSERT INTO lake.t${k} SELECT ${k} * 10 + range FROM range(2, 6)
+
+statement ok
+DELETE FROM lake.t${k} WHERE i IN (${k} * 10, ${k} * 10 + 2)
+
+endloop
+
+# Missing totals on one table must not affect the other table in the batch.
+statement ok
+UPDATE meta.ducklake_table_stats SET record_count = NULL, file_size_bytes = NULL
+WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't1')
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/compaction_multiple_table_totals', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CALL ducklake_rewrite_data_files('lake', delete_threshold => 0.4)
+
+# Each unrewritten file still stores one deleted row.
+query TIII
+SELECT t.table_name, s.record_count, s.next_row_id,
+       s.file_size_bytes = (SELECT sum(d.file_size_bytes) FROM meta.ducklake_data_file d
+                            WHERE d.table_id = s.table_id AND d.end_snapshot IS NULL)
+FROM meta.ducklake_table_stats s JOIN meta.ducklake_table t USING (table_id)
+ORDER BY t.table_name
+----
+t0	5	6	true
+t1	5	6	true
+
+query III
+SELECT count(*), min(i), max(i) FROM lake.t0
+UNION ALL
+SELECT count(*), min(i), max(i) FROM lake.t1
+----
+4	1	5
+4	11	15
+
+statement ok
+CALL ducklake_rewrite_data_files('lake', delete_threshold => 0)
+
+query TII
+SELECT t.table_name, s.record_count, s.next_row_id
+FROM meta.ducklake_table_stats s JOIN meta.ducklake_table t USING (table_id)
+ORDER BY t.table_name
+----
+t0	4	6
+t1	4	6
+
+query III
+SELECT count(*), min(i), max(i) FROM lake.t0
+UNION ALL
+SELECT count(*), min(i), max(i) FROM lake.t1
+----
+4	1	5
+4	11	15

@@ -25,6 +25,9 @@ public:
 	bool SupportsAppender() const override {
 		return false;
 	}
+	bool SupportsDataModifyingCTE() const override {
+		return true;
+	}
 	bool DroppedTablesStayReadable() const override {
 		return false;
 	}
@@ -43,8 +46,11 @@ public:
 	string GetColumnTypeInternal(const LogicalType &type) override;
 	string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const override;
 	bool InlinedDeletionTableExists(const Identifier &table_name) override;
+	identifier_set_t GetInlinedTableNames(TableIndex table_id) override;
+	unique_ptr<QueryResult> GetInlinedTablesForCommit(const set<TableIndex> &table_ids) override;
 	void MigrateInlinedDataTypes() override;
-	bool IsRetryableCommitError(const string &message) const override;
+	void ResetCommitAttempt() override;
+	bool IsRetryableCommitError(const string &message) override;
 	string CommitErrorWithoutQuery(const string &message) const override;
 	string ConfigOptionLockSql() const override;
 
@@ -56,6 +62,11 @@ public:
 	bool NewTablesRequireCacheClear() const override {
 		return false;
 	}
+
+private:
+	set<string> read_inlined_tables;
+	set<string> failed_inlined_table_locks;
+	bool RemovedInlinedTableAfterRollback(const string &message);
 
 protected:
 	string GetLatestSnapshotQuery() const override;

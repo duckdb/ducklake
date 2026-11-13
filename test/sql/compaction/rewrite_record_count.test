@@ -123,11 +123,17 @@ SELECT files_processed, files_created FROM ducklake_rewrite_data_files('lake', '
 ----
 1	1
 
-# no deleted row remains, so the count stays above the live rows and the stale maximum of 199 is not exact
+# no deleted row remains, so refreshing the count also clears the stale bounds
 query I
 SELECT record_count FROM meta.ducklake_table_stats WHERE table_id = getvariable('o_id')
 ----
-200
+150
+
+query II
+SELECT min_value, max_value FROM meta.ducklake_table_column_stats
+WHERE table_id = getvariable('o_id') AND column_id = 1
+----
+NULL	NULL
 
 query III
 SELECT min(id), max(id), count(*) FROM lake.o

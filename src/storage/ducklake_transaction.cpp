@@ -1647,6 +1647,7 @@ void DuckLakeTransaction::ReportPostCommitError(const string &message) {
 void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
                                         const TransactionChangeInformation &transaction_changes,
                                         const DuckLakeRetryConfig &retry_config) {
+	metadata_manager->ResetCommitAttempt();
 	vector<unique_ptr<SQLStatement>> inlined_inserts;
 	DuckLakeCommitContext context;
 	context.conflict_query_executor = [&](string q) -> unique_ptr<QueryResult> {
@@ -1756,6 +1757,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		option_lock_failed = false;
 		inlined_inserts.clear();
 		metadata_manager->ClearInlinedTableCaches();
+		metadata_manager->ResetCommitAttempt();
 		connection->BeginTransaction();
 		snapshot.reset();
 	};
@@ -1775,6 +1777,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.query_metadata = [&](string q) {
 		return metadata_manager->Query(q);
 	};
+	context.get_inlined_tables_for_commit = [&](const set<TableIndex> &table_ids) {
+		return metadata_manager->GetInlinedTablesForCommit(table_ids);
+	};
 	context.execute_in_transaction = [&](string q) {
 		return metadata_manager->ExecuteDropInTransaction(q);
 	};
@@ -1787,8 +1792,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		return metadata_manager->TryAppendDataFiles(snapshot, files, new_tables, new_schemas);
 	};
 	context.write_inlined_tables = [&](DuckLakeSnapshot snapshot, const vector<DuckLakeTableInfo> &tables,
-	                                   const set<TableIndex> &replaced_tables) {
-		return metadata_manager->WriteNewInlinedTables(snapshot, tables, replaced_tables);
+	                                   const set<TableIndex> &replaced_tables, set<string> &dropped_inlined_tables) {
+		return metadata_manager->WriteNewInlinedTables(snapshot, tables, replaced_tables, dropped_inlined_tables);
 	};
 	context.write_inlined_file_deletes = [&](const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) {
 		return metadata_manager->WriteNewInlinedFileDeletesSqlBatch(new_deletes);
@@ -1905,6 +1910,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.check_conflicts_first = files_owned_by_client;
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
+	context.supports_data_modifying_cte = metadata_manager->SupportsDataModifyingCTE();
 	context.snapshot_and_stats_query =
 	    metadata_manager->GetSnapshotAndStatsAndChangesQuery(transaction_snapshot, context.supports_v1_1_metadata);
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);

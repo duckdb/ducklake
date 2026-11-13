@@ -230,6 +230,9 @@ public:
 	virtual bool SupportsAppender() const {
 		return true;
 	}
+	virtual bool SupportsDataModifyingCTE() const {
+		return false;
+	}
 
 	//! Whether the metadata catalog commits each statement on its own, so a rollback cannot undo them
 	virtual bool CommitsEachStatement() const {
@@ -284,7 +287,9 @@ public:
 	bool ExecuteRetrialsServerSide() const;
 	//! Whether the client can skip the snapshot fetch and let the server read it.
 	virtual bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const;
-	virtual bool IsRetryableCommitError(const string &message) const;
+	virtual void ResetCommitAttempt() {
+	}
+	virtual bool IsRetryableCommitError(const string &message);
 	//! The error of a failed commit without the text of the failed query that it repeats
 	virtual string CommitErrorWithoutQuery(const string &message) const {
 		return message;
@@ -461,6 +466,8 @@ public:
 	                                     const DuckLakeInlinedColNames &col_names);
 	static string GetTableColumnSchemaSql(TableIndex table_id);
 	static string GetInlinedTableNamesSql(TableIndex table_id);
+	virtual unique_ptr<QueryResult> GetInlinedTablesForCommit(const set<TableIndex> &table_ids);
+	static string GetInlinedTableNamesForTablesSql(const set<TableIndex> &table_ids);
 	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id);
 	//! The top-level columns of each inlined data table at the schema version of that table
 	static string GetInlinedTableColumnsSql(optional_idx table_id = optional_idx());
@@ -565,9 +572,10 @@ public:
 	virtual bool InlinedDeletionTableExists(const Identifier &table_name);
 	//! Also drops the empty inlined data tables of the replaced tables
 	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables,
-	                                     const set<TableIndex> &replaced_tables);
+	                                     const set<TableIndex> &replaced_tables, set<string> &dropped_inlined_tables);
 	//! Drop the current inlined data table of a table if it holds no rows
-	string DropInlinedTableIfEmpty(TableIndex table_id, const DuckLakeTableEntry &table);
+	string DropInlinedTableIfEmpty(TableIndex table_id, const DuckLakeTableEntry &table,
+	                               set<string> &dropped_inlined_tables);
 	//! A query that returns a row if the inlined data table holds any row
 	static string InlinedTableHasRowsQuery(const Identifier &table_name);
 	static string DropInlinedTableSql(idx_t table_id, idx_t schema_version, const Identifier &table_name);
@@ -626,11 +634,15 @@ public:
 	                                      const DuckLakeSnapshotCommit &commit_info);
 	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
 	static string InsertTableColumnStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
-	//! Set the stored table sizes to the size of the live data files, and the known record counts of the given tables
-	//! to the rows of the live data files
-	static string RefreshTableSizesSql(const set<TableIndex> &table_ids, const set<TableIndex> &record_count_tables);
-	//! Add the rows stored in the inlined data tables to a known record count
-	static string AddInlinedRowCountsSql(TableIndex table_id, const vector<Identifier> &inlined_table_names);
+	//! Set the stored table sizes to the size of the live data files
+	static string RefreshTableSizesSql(const set<TableIndex> &table_ids);
+	//! Refresh tables without inlined rows or inlined file deletions together.
+	static string RefreshTableFileTotalsSql(const set<TableIndex> &table_ids, bool include_exactness,
+	                                        bool supports_data_modifying_cte);
+	static string RefreshTableRowCountSql(TableIndex table_id, const set<string> &inlined_tables,
+	                                      idx_t pending_inlined_rows, const DuckLakeInlinedColNames &col_names,
+	                                      bool include_exactness, bool has_inlined_file_deletions,
+	                                      bool refresh_file_size, bool supports_data_modifying_cte);
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor, const string &query);

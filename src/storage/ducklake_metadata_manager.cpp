@@ -108,7 +108,7 @@ vector<string> DuckLakeMetadataManager::SystemColumnNames() const {
 	return GetMetadataProfile().system_column_names;
 }
 
-bool DuckLakeMetadataManager::IsRetryableCommitError(const string &message) const {
+bool DuckLakeMetadataManager::IsRetryableCommitError(const string &message) {
 	auto rule = GetMetadataProfile().FindCommitErrorRule(message);
 	return rule && rule->retryable;
 }
@@ -1143,6 +1143,16 @@ SELECT DISTINCT table_name
 FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
 WHERE table_id = %d)",
 	                          table_id.index);
+}
+
+string DuckLakeMetadataManager::GetInlinedTableNamesForTablesSql(const set<TableIndex> &table_ids) {
+	return StringUtil::Format(
+	    "SELECT table_id, table_name FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_id IN (%s)",
+	    StringUtil::Join(table_ids, ",", [](const TableIndex &id) { return to_string(id.index); }));
+}
+
+unique_ptr<QueryResult> DuckLakeMetadataManager::GetInlinedTablesForCommit(const set<TableIndex> &table_ids) {
+	return Query(GetInlinedTableNamesForTablesSql(table_ids));
 }
 
 string DuckLakeMetadataManager::GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id) {
@@ -3676,7 +3686,8 @@ Identifier DuckLakeMetadataManager::GetInlinedTableQueries(DuckLakeSnapshot comm
 
 string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot,
                                                       const vector<DuckLakeTableInfo> &new_tables,
-                                                      const set<TableIndex> &replaced_tables) {
+                                                      const set<TableIndex> &replaced_tables,
+                                                      set<string> &dropped_inlined_tables) {
 	auto &catalog = transaction.GetCatalog();
 	auto context_ref = transaction.context.lock();
 	auto &context = *context_ref;
@@ -3711,7 +3722,8 @@ string DuckLakeMetadataManager::WriteNewInlinedTables(DuckLakeSnapshot commit_sn
 		if (replaced_tables.count(table.id) && DroppedTablesStayReadable()) {
 			auto replaced_entry = catalog.GetEntryById(transaction, transaction.GetSnapshot(), table.id);
 			if (replaced_entry) {
-				drop_queries += DropInlinedTableIfEmpty(table.id, replaced_entry->Cast<DuckLakeTableEntry>());
+				drop_queries += DropInlinedTableIfEmpty(table.id, replaced_entry->Cast<DuckLakeTableEntry>(),
+				                                        dropped_inlined_tables);
 			}
 		}
 	}
@@ -3730,7 +3742,8 @@ string DuckLakeMetadataManager::DropInlinedTableSql(idx_t table_id, idx_t schema
 	    table_id, schema_version, table_name);
 }
 
-string DuckLakeMetadataManager::DropInlinedTableIfEmpty(TableIndex table_id, const DuckLakeTableEntry &table) {
+string DuckLakeMetadataManager::DropInlinedTableIfEmpty(TableIndex table_id, const DuckLakeTableEntry &table,
+                                                        set<string> &dropped_inlined_tables) {
 	auto &inlined_tables = table.GetInlinedDataTables();
 	if (inlined_tables.empty()) {
 		return string();
@@ -3750,6 +3763,7 @@ string DuckLakeMetadataManager::DropInlinedTableIfEmpty(TableIndex table_id, con
 		return string();
 	}
 	// readers of older schema versions skip dropped inlined tables, so the cached versions stay valid
+	dropped_inlined_tables.insert(current.table_name.GetIdentifierName());
 	return DropInlinedTableSql(table_id.index, current.schema_version, current.table_name);
 }
 
@@ -5827,41 +5841,143 @@ string DuckLakeMetadataManager::UpdateGlobalTableStatsSql(const DuckLakeGlobalSt
 	return batch_query;
 }
 
-string DuckLakeMetadataManager::AddInlinedRowCountsSql(TableIndex table_id,
-                                                       const vector<Identifier> &inlined_table_names) {
-	string batch_query;
-	// deleted inlined rows stay stored until a flush writes them to a file, one statement per table bounds the depth
-	for (auto &inlined_table_name : inlined_table_names) {
-		batch_query += StringUtil::Format(R"(
-UPDATE {METADATA_CATALOG}.ducklake_table_stats
-SET record_count = record_count + (SELECT COUNT(*) FROM {METADATA_CATALOG}.%s)
-WHERE table_id = %d AND record_count IS NOT NULL;)",
-		                                  inlined_table_name, table_id.index);
+static string SumRowCountsSql(vector<string> counts) {
+	// Keep generated queries shallow even with many schema versions.
+	static constexpr idx_t MAX_TERMS = 100;
+	while (counts.size() > 1) {
+		vector<string> grouped;
+		for (idx_t i = 0; i < counts.size(); i += MAX_TERMS) {
+			auto end = MinValue<idx_t>(i + MAX_TERMS, counts.size());
+			vector<string> group(counts.begin() + i, counts.begin() + end);
+			grouped.push_back(StringUtil::Format(
+			    "SELECT CASE WHEN COUNT(n) = COUNT(*) THEN SUM(n) ELSE NULL END AS n FROM (%s) counts",
+			    StringUtil::Join(group, " UNION ALL ")));
+		}
+		counts = std::move(grouped);
 	}
-	return batch_query;
+	return counts[0];
 }
 
-string DuckLakeMetadataManager::RefreshTableSizesSql(const set<TableIndex> &table_ids,
-                                                     const set<TableIndex> &record_count_tables) {
+string DuckLakeMetadataManager::RefreshTableRowCountSql(TableIndex table_id, const set<string> &inlined_tables,
+                                                        idx_t pending_inlined_rows,
+                                                        const DuckLakeInlinedColNames &col_names,
+                                                        bool include_exactness, bool has_inlined_file_deletions,
+                                                        bool refresh_file_size, bool supports_data_modifying_cte) {
+	vector<string> counts;
+	vector<string> deleted_counts;
+	counts.push_back(StringUtil::Format(R"(SELECT
+CASE WHEN COUNT(record_count) = COUNT(*) THEN COALESCE(SUM(record_count), 0) ELSE NULL END AS n
+FROM {METADATA_CATALOG}.ducklake_data_file
+WHERE table_id = %d AND end_snapshot IS NULL)",
+	                                    table_id.index));
+	deleted_counts.push_back(StringUtil::Format(R"(SELECT COALESCE(SUM(del.delete_count), 0) AS n
+FROM {METADATA_CATALOG}.ducklake_delete_file del
+JOIN {METADATA_CATALOG}.ducklake_data_file data ON del.data_file_id = data.data_file_id
+WHERE data.table_id = %d AND data.end_snapshot IS NULL AND del.end_snapshot IS NULL)",
+	                                            table_id.index));
+	if (has_inlined_file_deletions) {
+		deleted_counts.push_back(
+		    StringUtil::Format(R"(SELECT COUNT(*) AS n
+FROM {METADATA_CATALOG}.%s del
+JOIN {METADATA_CATALOG}.ducklake_data_file data ON del.file_id = data.data_file_id
+WHERE data.table_id = %d AND data.end_snapshot IS NULL AND del.begin_snapshot <= {SNAPSHOT_ID})",
+		                       SQLQuotedIdentifier::ToString(InlinedFileDeletionTableName(table_id)), table_id.index));
+	}
+	for (auto &table_name : inlined_tables) {
+		// Deleted inlined rows remain stored until a flush preserves them in a data file.
+		counts.push_back(StringUtil::Format("SELECT COUNT(*) AS n FROM {METADATA_CATALOG}.%s WHERE %s < {SNAPSHOT_ID}",
+		                                    SQLQuotedIdentifier::ToString(table_name), col_names.begin_snapshot));
+		deleted_counts.push_back(StringUtil::Format(
+		    "SELECT COUNT(*) AS n FROM {METADATA_CATALOG}.%s WHERE %s < {SNAPSHOT_ID} AND %s <= {SNAPSHOT_ID}",
+		    SQLQuotedIdentifier::ToString(table_name), col_names.begin_snapshot, col_names.end_snapshot));
+	}
+	// Encoded inlined inserts run after the SQL batch, so count all pending inserts explicitly.
+	if (pending_inlined_rows) {
+		counts.push_back(StringUtil::Format("SELECT %d AS n", pending_inlined_rows));
+	}
+	// Retain conservative bounds while stored deletions prevent exact MIN/MAX answers, including on older readers.
+	auto exactness = include_exactness ? ", min_is_exact=NULL, max_is_exact=NULL" : "";
+	auto row_count = SumRowCountsSql(std::move(counts));
+	string file_size;
+	if (refresh_file_size) {
+		file_size = StringUtil::Format(R"(, file_size_bytes = (
+    SELECT COALESCE(SUM(data.file_size_bytes), 0)
+    FROM {METADATA_CATALOG}.ducklake_data_file data
+    WHERE data.table_id = %d AND data.end_snapshot IS NULL
+))",
+		                               table_id.index);
+	}
+	auto invalidate_bounds = StringUtil::Format(R"(
+UPDATE {METADATA_CATALOG}.ducklake_table_column_stats
+SET min_value=NULL, max_value=NULL%s WHERE table_id = %d AND (%s) = 0 AND EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.ducklake_table_stats
+    WHERE table_id = %d AND (record_count IS NULL OR record_count <> (%s))
+))",
+	                                            exactness, table_id.index, SumRowCountsSql(std::move(deleted_counts)),
+	                                            table_id.index, row_count);
+	auto refresh_totals = StringUtil::Format(
+	    "UPDATE {METADATA_CATALOG}.ducklake_table_stats SET record_count = (%s)%s WHERE table_id = %d;", row_count,
+	    file_size, table_id.index);
+	if (supports_data_modifying_cte) {
+		// Both updates read one snapshot so a cleanup in between cannot make stale bounds exact.
+		return "WITH invalidated_bounds AS (" + invalidate_bounds + " RETURNING table_id) " + refresh_totals;
+	}
+	return invalidate_bounds + ";\n" + refresh_totals;
+}
+
+string DuckLakeMetadataManager::RefreshTableFileTotalsSql(const set<TableIndex> &table_ids, bool include_exactness,
+                                                          bool supports_data_modifying_cte) {
+	if (table_ids.empty()) {
+		return string();
+	}
+	auto totals = StringUtil::Format(R"(WITH file_totals AS (
+SELECT stats.table_id,
+    CASE WHEN COUNT(data.record_count) = COUNT(data.data_file_id)
+         THEN COALESCE(SUM(data.record_count), 0) ELSE NULL END AS record_count,
+    COALESCE(SUM(data.file_size_bytes), 0) AS file_size_bytes
+FROM {METADATA_CATALOG}.ducklake_table_stats stats
+LEFT JOIN {METADATA_CATALOG}.ducklake_data_file data
+    ON data.table_id = stats.table_id AND data.end_snapshot IS NULL
+WHERE stats.table_id IN (%s)
+GROUP BY stats.table_id
+))",
+	                                 GenerateIDList(table_ids));
+	auto exactness = include_exactness ? ", min_is_exact=NULL, max_is_exact=NULL" : "";
+	auto invalidate_bounds = StringUtil::Format(R"(
+UPDATE {METADATA_CATALOG}.ducklake_table_column_stats AS column_stats
+SET min_value=NULL, max_value=NULL%s
+FROM file_totals totals
+JOIN {METADATA_CATALOG}.ducklake_table_stats stats ON stats.table_id = totals.table_id
+WHERE column_stats.table_id = totals.table_id
+  AND (stats.record_count IS NULL OR stats.record_count <> totals.record_count)
+  AND (SELECT COALESCE(SUM(del.delete_count), 0)
+       FROM {METADATA_CATALOG}.ducklake_delete_file del
+       JOIN {METADATA_CATALOG}.ducklake_data_file data ON data.data_file_id = del.data_file_id
+       WHERE data.table_id = totals.table_id AND data.end_snapshot IS NULL AND del.end_snapshot IS NULL) = 0
+)",
+	                                            exactness);
+	auto refresh_totals = R"(
+UPDATE {METADATA_CATALOG}.ducklake_table_stats AS stats
+SET record_count = totals.record_count, file_size_bytes = totals.file_size_bytes
+FROM file_totals totals WHERE stats.table_id = totals.table_id;
+)";
+	if (supports_data_modifying_cte) {
+		return totals + ", invalidated_bounds AS (" + invalidate_bounds + " RETURNING column_stats.table_id) " +
+		       refresh_totals;
+	}
+	return totals + invalidate_bounds + ";\n" + totals + refresh_totals;
+}
+
+string DuckLakeMetadataManager::RefreshTableSizesSql(const set<TableIndex> &table_ids) {
 	string batch_query;
 	for (auto &table_id : table_ids) {
-		string record_count;
-		if (record_count_tables.find(table_id) != record_count_tables.end()) {
-			// an unknown count stays unknown
-			record_count = StringUtil::Format(R"(, record_count = CASE WHEN record_count IS NULL THEN NULL ELSE (
-	SELECT COALESCE(SUM(data.record_count), 0)
-	FROM {METADATA_CATALOG}.ducklake_data_file data
-	WHERE data.table_id = %d AND data.end_snapshot IS NULL
-) END)",
-			                                  table_id.index);
-		}
 		batch_query += StringUtil::Format(R"(
 UPDATE {METADATA_CATALOG}.ducklake_table_stats SET file_size_bytes = (
 	SELECT COALESCE(SUM(data.file_size_bytes), 0)
 	FROM {METADATA_CATALOG}.ducklake_data_file data
 	WHERE data.table_id = %d AND data.end_snapshot IS NULL
-)%s WHERE table_id = %d;)",
-		                                  table_id.index, record_count, table_id.index);
+) WHERE table_id = %d;)",
+		                                  table_id.index, table_id.index);
 	}
 	return batch_query;
 }
