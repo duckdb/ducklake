@@ -1,0 +1,99 @@
+# name: test/sql/transaction/lost_commit_reply_keeps_files.test
+# description: A commit whose COMMIT reply the metadata catalog lost keeps the files it wrote and reads the outcome from the catalog
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/lost_commit_reply', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (0)
+
+# the catalog carries the COMMIT out, only its reply is lost
+statement ok
+SET ducklake_debug_lose_commit_reply = 'after'
+
+# the commit finds its data file in the catalog, so it succeeds and keeps the file
+statement ok
+INSERT INTO ducklake.t VALUES (1), (2), (3)
+
+# the same for a delete file
+statement ok
+DELETE FROM ducklake.t WHERE i = 2
+
+# a commit without files cannot be recognized in the catalog, so its outcome stays unknown
+statement error
+CREATE TABLE ducklake.t2(i INTEGER)
+----
+whether it carried the commit out is unknown
+
+statement ok
+RESET ducklake_debug_lose_commit_reply
+
+query I
+SELECT i FROM ducklake.t ORDER BY i
+----
+0
+1
+3
+
+query I
+SELECT count(*) FROM ducklake.t2
+----
+0
+
+# the kept files are referenced, not orphans
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('ducklake', dry_run => true, cleanup_all => true)
+----
+0
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/lost_commit_reply/main/t/*')
+----
+3
+
+# the connection is lost before the catalog carries the COMMIT out, so the catalog never shows the file
+statement ok
+SET ducklake_debug_lose_commit_reply = 'before'
+
+statement error
+INSERT INTO ducklake.t VALUES (4)
+----
+whether it carried the commit out is unknown
+
+statement ok
+RESET ducklake_debug_lose_commit_reply
+
+query I
+SELECT i FROM ducklake.t ORDER BY i
+----
+0
+1
+3
+
+# the kept file of the lost commit is an orphan now
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/lost_commit_reply/main/t/*')
+----
+4
+
+query I
+SELECT count(*) FROM ducklake_delete_orphaned_files('ducklake', cleanup_all => true)
+----
+1
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/lost_commit_reply/main/t/*')
+----
+3

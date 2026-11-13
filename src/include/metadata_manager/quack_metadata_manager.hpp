@@ -43,6 +43,10 @@ public:
 
 	bool MetadataExists() override;
 	bool InlinedDeletionTableExists(const Identifier &table_name) override;
+	void BeginMigration() override;
+	void CommitMigration() override;
+	void RollbackMigration() override;
+	bool HasV1_1Additions() override;
 
 protected:
 	string MetadataExistsQuery() const override;
@@ -50,6 +54,10 @@ protected:
 		// the server's clock, the commit batch runs in a new server transaction
 		return "NOW()";
 	}
+
+private:
+	//! Whether a migration holds a server transaction open across its statements
+	bool migration_transaction = false;
 };
 
 } // namespace duckdb

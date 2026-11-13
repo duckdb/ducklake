@@ -114,6 +114,12 @@
       "paths": [
         "test/sql/quack/partial_file_count.test"
       ]
+    },
+    {
+      "reason": "A connection with an open option write cannot reload the Postgres catalog after the lost COMMIT of another connection cleared the scanner's cache: another command is already in progress",
+      "paths": [
+        "test/sql/transaction/lost_commit_reply_unreadable_catalog_order.test"
+      ]
     }
   ]
 }

@@ -103,6 +103,13 @@ struct DuckLakeNewGlobalStats {
 	bool initialized = false;
 };
 
+//! A file the transaction created itself and the begin snapshot its commit gives it
+struct DuckLakeCreatedFile {
+	TableIndex table_id;
+	string path;
+	idx_t begin_snapshot = 0;
+};
+
 struct LocalTableChanges {
 public:
 	void Clear();
@@ -110,6 +117,8 @@ public:
 	LocalTableChangeIterationHelper Changes() const;
 	void CleanupFiles(DatabaseInstance &db);
 	void CleanupFiles(ClientContext &context, TableIndex table_id);
+	//! The files the transaction created itself, without the files it registered
+	void GetCreatedFiles(idx_t commit_snapshot, vector<DuckLakeCreatedFile> &result) const;
 	//! Forgets the changes of a table, the files stay
 	void Forget(TableIndex table_id);
 	void GetWrittenFiles(vector<string> &result) const;
@@ -182,6 +191,9 @@ struct DuckLakeRetryConfig {
 	//! The wait of an attempt, never longer than the milliseconds left
 	idx_t WaitMs(idx_t attempt, idx_t remaining_ms, double multiplier = 1.0) const;
 };
+
+//! What became of a commit whose COMMIT statement failed
+enum class DuckLakeCommitOutcome : uint8_t { NOT_COMMITTED, COMMITTED, UNKNOWN };
 
 class DuckLakeTransaction : public Transaction, public enable_shared_from_this<DuckLakeTransaction> {
 	friend class DuckLakeTransactionState;
@@ -394,6 +406,8 @@ public:
 	void ApplyServerSideCommit(idx_t schema_version, optional_idx committed_next_file_id = optional_idx());
 	//! Removes the files that this transaction wrote
 	void CleanupFiles();
+	//! What became of a commit whose COMMIT failed, read from the catalog through the files the transaction wrote
+	DuckLakeCommitOutcome CommitOutcome(const DuckLakeCommitState &commit_state);
 	//! Post-commit cleanup of empty inlined-data tables superseded by later schema versions.
 	void DropEmptySupersededInlinedTablesClientSide();
 	void ReportPostCommitError(const string &message);
@@ -414,6 +428,15 @@ private:
 	void FlushNameMapCacheInvalidations();
 	//! Puts back the config options this transaction replaced in the catalog
 	void UndoConfigOptions();
+	//! Takes the options the commit changed from the catalog, for a commit whose outcome is unknown
+	void ReloadConfigOptions(bool catalog_unreadable);
+	//! Takes the option changes of a commit from the catalog into the cache, false when the catalog cannot be read
+	bool TryReloadConfigOptions(const DuckLakeConfigOptionReload &reload, bool catalog_unreadable,
+	                            vector<DuckLakeConfigOption> &unresolved);
+	//! Reloads the option changes of earlier commits whose outcome could not be read
+	void ReloadPendingConfigOptions(ClientContext &context);
+	//! Numbers the options a commit publishes, unless the catalog commits each statement and their writes did
+	void NumberCommitAttempt();
 	//! The SQL that the commit runs for the options this transaction changed
 	string ConfigOptionLockSql() const;
 	//! The last change of the option before the change at the index
@@ -519,8 +542,8 @@ private:
 	vector<MappingIndex> pending_name_map_cache_invalidations;
 	//! Previous values of config options set by this transaction, for rollback
 	vector<DuckLakeConfigOptionUndo> config_option_undo;
-	//! Whether a retried commit attempt wrote the options again
-	bool rewrote_config_options = false;
+	//! The number of the attempt that publishes the options of the tables the commit creates
+	idx_t commit_attempt = 0;
 	//! Expiries and cleanups of the transaction can run in parallel statements
 	mutex maintenance_lock;
 	//! Whether the metadata transaction expired snapshots

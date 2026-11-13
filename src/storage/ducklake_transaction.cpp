@@ -39,6 +39,8 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/settings.hpp"
 
+#include <chrono>
+
 namespace duckdb {
 
 bool LocalTableDataChanges::IsEmpty() const {
@@ -100,6 +102,36 @@ void LocalTableChanges::Clear() {
 bool LocalTableChanges::HasChanges() const {
 	lock_guard<mutex> guard(lock);
 	return !changes.empty();
+}
+
+void LocalTableChanges::GetCreatedFiles(idx_t commit_snapshot, vector<DuckLakeCreatedFile> &result) const {
+	lock_guard<mutex> guard(lock);
+	for (auto &entry : changes) {
+		auto &table_changes = entry.second;
+		auto add_file = [&](const string &path, idx_t begin_snapshot) {
+			DuckLakeCreatedFile file;
+			file.table_id = entry.first;
+			file.path = path;
+			file.begin_snapshot = begin_snapshot;
+			result.push_back(std::move(file));
+		};
+		// a file without a begin snapshot of its own gets the commit snapshot
+		for (auto &file : table_changes.new_data_files) {
+			if (file.created_by_ducklake) {
+				add_file(file.file_name,
+				         file.begin_snapshot.IsValid() ? file.begin_snapshot.GetIndex() : commit_snapshot);
+			}
+		}
+		ForEachDeleteFile(table_changes, [&](const DuckLakeDeleteFile &file) {
+			add_file(file.file_name, file.begin_snapshot.IsValid() ? file.begin_snapshot.GetIndex() : commit_snapshot);
+		});
+		for (auto &compaction : table_changes.compactions) {
+			for (auto &file : compaction.written_files) {
+				add_file(file.file_name,
+				         DuckLakeTransactionState::CompactionOutputBeginSnapshot(compaction, commit_snapshot));
+			}
+		}
+	}
 }
 
 void LocalTableChanges::CleanupFiles(DatabaseInstance &db) {
@@ -858,6 +890,11 @@ DuckLakeTransaction::DuckLakeTransaction(DuckLakeCatalog &ducklake_catalog, Tran
       local_catalog_id(DuckLakeConstants::TRANSACTION_LOCAL_ID_START), catalog_version(0) {
 	metadata_manager = DuckLakeMetadataManager::Create(*this);
 	schema_pins = make_uniq<DuckLakeSchemaPinState>();
+	// the options of a commit whose outcome could not be read come from the catalog before their first use
+	if (!context.registered_state->Get<DuckLakeInternalConnectionState>(DuckLakeInternalConnectionState::KEY)) {
+		// a transaction of the metadata connection itself would start another one through the reload
+		ReloadPendingConfigOptions(context);
+	}
 	state = make_uniq<DuckLakeTransactionState>(db, ducklake_catalog.IsCommitInfoRequired(), new_name_maps,
 	                                            ducklake_catalog.DataPath(), ducklake_catalog.Separator());
 	start_time = timestamp_tz_t(MetaTransaction::Get(context).start_timestamp);
@@ -893,6 +930,127 @@ void DuckLakeTransaction::UndoConfigOptions() {
 	config_option_undo.clear();
 }
 
+void DuckLakeTransaction::ReloadConfigOptions(bool catalog_unreadable) {
+	DuckLakeConfigOptionReload reload;
+	reload.changes = std::move(config_option_undo);
+	reload.table_options = state->committed_table_options;
+	config_option_undo.clear();
+	// the changes of an option stay until the cache holds the catalog's value, which a later transaction brings
+	auto commit_number = ducklake_catalog.AddPendingOptionReload(reload);
+	vector<DuckLakeConfigOption> unresolved;
+	if (TryReloadConfigOptions(reload, catalog_unreadable, unresolved)) {
+		ducklake_catalog.ResolvePendingOptionReloads({commit_number}, unresolved);
+	}
+}
+
+static bool ConfigOptionChangedEarlier(const vector<DuckLakeConfigOptionUndo> &changes, idx_t index) {
+	for (idx_t earlier = 0; earlier < index; earlier++) {
+		if (changes[earlier].option.IsSame(changes[index].option)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool ConfigOptionListed(const vector<DuckLakeConfigOption> &options, const DuckLakeConfigOption &option) {
+	for (auto &listed : options) {
+		if (listed.IsSame(option)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static bool ConfigOptionReset(const vector<DuckLakeConfigOptionUndo> &changes, const DuckLakeConfigOption &option) {
+	for (auto &change : changes) {
+		if (change.reset && change.option.IsSame(option)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+static idx_t ConfigOptionAttempt(const vector<DuckLakeConfigOptionUndo> &changes, const DuckLakeConfigOption &option) {
+	idx_t attempt = 0;
+	for (auto &change : changes) {
+		if (change.option.IsSame(option)) {
+			attempt = MaxValue<idx_t>(attempt, change.attempt);
+		}
+	}
+	return attempt;
+}
+
+bool DuckLakeTransaction::TryReloadConfigOptions(const DuckLakeConfigOptionReload &reload, bool catalog_unreadable,
+                                                 vector<DuckLakeConfigOption> &unresolved) {
+	// one read per option, whose value is the row's, or stays committed without a row unless a change removed it
+	vector<DuckLakeConfigOption> options;
+	for (idx_t i = 0; i < reload.changes.size(); i++) {
+		if (!ConfigOptionChangedEarlier(reload.changes, i)) {
+			options.push_back(reload.changes[i].option);
+		}
+	}
+	// the table options of the commit reach the cache on success alone
+	idx_t change_count = options.size();
+	for (auto &table_option : reload.table_options) {
+		if (!ConfigOptionListed(options, table_option)) {
+			options.push_back(table_option);
+		}
+	}
+	// the publications are counted before the reads, which may share a snapshot
+	vector<idx_t> publications;
+	for (auto &option : options) {
+		publications.push_back(ducklake_catalog.ConfigOptionPublications(option));
+	}
+	vector<bool> has_row;
+	try {
+		if (catalog_unreadable) {
+			throw IOException("The connection to the metadata catalog is lost (ducklake_debug_lose_commit_reply)");
+		}
+		for (auto &option : options) {
+			has_row.push_back(metadata_manager->TryGetConfigOption(option));
+		}
+	} catch (std::exception &) { // NOLINT
+		return false;
+	}
+	for (idx_t i = 0; i < options.size(); i++) {
+		if (i >= change_count && !has_row[i]) {
+			continue;
+		}
+		bool reset = ConfigOptionReset(reload.changes, options[i]);
+		auto attempt = ConfigOptionAttempt(reload.changes, options[i]);
+		if (!ducklake_catalog.ReloadConfigOption(options[i], has_row[i], reset, publications[i], attempt)) {
+			unresolved.push_back(options[i]);
+		}
+	}
+	return true;
+}
+
+void DuckLakeTransaction::ReloadPendingConfigOptions(ClientContext &context) {
+	// a record stays until its reload is applied, so a transaction that starts meanwhile applies it as well
+	auto pending = ducklake_catalog.PendingOptionReloads();
+	if (pending.empty()) {
+		return;
+	}
+	DuckLakeConfigOptionReload merged;
+	for (auto &entry : pending) {
+		auto &record = entry.second;
+		merged.changes.insert(merged.changes.end(), record.changes.begin(), record.changes.end());
+		merged.table_options.insert(merged.table_options.end(), record.table_options.begin(),
+		                            record.table_options.end());
+	}
+	string lose_reply;
+	context.TryGetCurrentSetting("ducklake_debug_lose_commit_reply", lose_reply);
+	vector<DuckLakeConfigOption> unresolved;
+	if (!TryReloadConfigOptions(merged, lose_reply == "before_unreadable", unresolved)) {
+		return;
+	}
+	vector<idx_t> commit_numbers;
+	for (auto &entry : pending) {
+		commit_numbers.push_back(entry.first);
+	}
+	ducklake_catalog.ResolvePendingOptionReloads(commit_numbers, unresolved);
+}
+
 void DuckLakeTransaction::Commit() {
 	if (connection) {
 		GetConnection();
@@ -917,6 +1075,7 @@ void DuckLakeTransaction::Commit() {
 			GetConnection().Commit();
 			DropEmptySupersededInlinedTablesClientSide();
 		} else if (connection) {
+			NumberCommitAttempt();
 			try {
 				connection->Commit();
 			} catch (std::exception &ex) {
@@ -931,21 +1090,13 @@ void DuckLakeTransaction::Commit() {
 		throw;
 	}
 	ClearMaintenanceChanges();
-	if (rewrote_config_options) {
-		// the retried commit wrote its options last, also where another transaction set them meanwhile
-		for (auto &change : config_option_undo) {
-			if (change.reset) {
-				ducklake_catalog.ResetConfigOption(change.option);
-			} else {
-				ducklake_catalog.SetConfigOption(change.option);
-			}
-		}
-		rewrote_config_options = false;
+	if (!config_option_undo.empty()) {
+		ducklake_catalog.CommitConfigOptions(config_option_undo);
+		config_option_undo.clear();
 	}
 	FlushNameMapCacheInvalidations();
 	connection.reset();
 	state->local_changes.Clear();
-	config_option_undo.clear();
 	SetRequiresNewInlinedTable(false);
 	ClearSchemaCachePins();
 }
@@ -1604,6 +1755,53 @@ void DuckLakeTransaction::CleanupFiles() {
 	state->CleanupFiles();
 }
 
+DuckLakeCommitOutcome DuckLakeTransaction::CommitOutcome(const DuckLakeCommitState &commit_state) {
+	vector<DuckLakeCreatedFile> created_files;
+	state->local_changes.GetCreatedFiles(commit_state.commit_snapshot.snapshot_id, created_files);
+	if (created_files.empty()) {
+		// without a file of its own the commit cannot be recognized, and there is no file to keep or to remove
+		return DuckLakeCommitOutcome::UNKNOWN;
+	}
+	// another table can register the same path, so a file counts for the table and snapshot of this commit alone
+	static constexpr idx_t MAX_FILES_CHECKED = 8;
+	vector<string> conditions;
+	for (idx_t i = 0; i < created_files.size() && i < MAX_FILES_CHECKED; i++) {
+		auto &file = created_files[i];
+		auto name_start = file.path.find_last_of("/\\");
+		auto name = name_start == string::npos ? file.path : file.path.substr(name_start + 1);
+		conditions.push_back(StringUtil::Format("(table_id = %d AND path LIKE %s AND begin_snapshot = %d)",
+		                                        commit_state.GetTableId(file.table_id).index,
+		                                        SQLString::ToString("%" + name), file.begin_snapshot));
+	}
+	auto condition = StringUtil::Join(conditions, " OR ");
+	auto query =
+	    StringUtil::Format("SELECT count(*) FROM (SELECT path FROM {METADATA_CATALOG}.ducklake_data_file WHERE %s "
+	                       "UNION ALL SELECT path FROM {METADATA_CATALOG}.ducklake_delete_file WHERE %s)",
+	                       condition, condition);
+	// the catalog finishes a COMMIT whose reply was lost on its own, so the files show up within moments
+	static constexpr int64_t WAIT_MS = 3000;
+	static constexpr int64_t STEP_MS = 100;
+	auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(WAIT_MS);
+	// the deadline bounds the start of a probe, a probe that blocks runs to its end
+	while (std::chrono::steady_clock::now() < deadline) {
+		try {
+			auto result = metadata_manager->Query(query);
+			if (!result->HasError()) {
+				auto chunk = result->Fetch();
+				if (chunk && chunk->size() > 0 && chunk->GetValue(0, 0).GetValue<int64_t>() > 0) {
+					return DuckLakeCommitOutcome::COMMITTED;
+				}
+			}
+		} catch (std::exception &) { // NOLINT
+		}
+#ifndef DUCKDB_NO_THREADS
+		std::this_thread::sleep_for(std::chrono::milliseconds(STEP_MS));
+#endif
+	}
+	// an absent file does not prove a rollback, the server can still be committing
+	return DuckLakeCommitOutcome::UNKNOWN;
+}
+
 void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version, optional_idx committed_next_file_id) {
 	if (snapshot) {
 		// as a local commit does, the stats of the committed snapshot are invalidated, older snapshots keep theirs
@@ -1742,8 +1940,34 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 			metadata_manager->ClearCache();
 		}
 	};
+	string lost_reply_debug;
 	context.commit_connection = [&]() {
-		connection->Commit();
+		NumberCommitAttempt();
+		string lose_reply;
+		auto client_context = this->context.lock();
+		if (client_context) {
+			client_context->TryGetCurrentSetting("ducklake_debug_lose_commit_reply", lose_reply);
+		}
+		bool lose_before = lose_reply == "before" || lose_reply == "before_unreadable";
+		if (!lose_before) {
+			connection->Commit();
+		}
+		if (lose_before || lose_reply == "after") {
+			lost_reply_debug = lose_reply;
+			throw IOException("The connection to the metadata catalog was lost at its COMMIT "
+			                  "(ducklake_debug_lose_commit_reply)");
+		}
+	};
+	context.commit_outcome = [&](const ErrorData &error, const DuckLakeCommitState &commit_state) {
+		// a COMMIT the catalog refused was rolled back, only a lost connection leaves the outcome open
+		if (lost_reply_debug.empty() && !metadata_manager->IsCommitOutcomeUnknown(error.RawMessage())) {
+			return DuckLakeCommitOutcome::NOT_COMMITTED;
+		}
+		auto outcome = CommitOutcome(commit_state);
+		if (outcome == DuckLakeCommitOutcome::UNKNOWN) {
+			ReloadConfigOptions(lost_reply_debug == "before_unreadable");
+		}
+		return outcome;
 	};
 	context.try_rollback = [&]() {
 		if (connection->context->transaction.HasActiveTransaction()) {
@@ -1891,7 +2115,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.set_table_options = [&](const vector<DuckLakeConfigOption> &options) {
 		for (auto &option : options) {
-			ducklake_catalog.SetConfigOption(option);
+			ducklake_catalog.SetCommittedConfigOption(option, commit_attempt);
 		}
 	};
 	context.invalidate_table_stats_cache = [&](idx_t next_file_id, TableIndex table_id) {
@@ -1931,6 +2155,19 @@ void DuckLakeTransaction::ResetConfigOption(const DuckLakeConfigOption &option) 
 	}
 }
 
+void DuckLakeTransaction::NumberCommitAttempt() {
+	if (metadata_manager->CommitsEachStatement()) {
+		return;
+	}
+	if (config_option_undo.empty() && state->committed_table_options.empty()) {
+		return;
+	}
+	commit_attempt = ducklake_catalog.NextCommitAttempt();
+	for (auto &change : config_option_undo) {
+		change.attempt = commit_attempt;
+	}
+}
+
 void DuckLakeTransaction::ClearMaintenanceChanges() {
 	lock_guard<mutex> guard(maintenance_lock);
 	expired_in_metadata_transaction = false;
@@ -1945,14 +2182,10 @@ string DuckLakeTransaction::ConfigOptionLockSql() const {
 	return metadata_manager->ConfigOptionLockSql();
 }
 
-static bool IsSameConfigOption(const DuckLakeConfigOption &a, const DuckLakeConfigOption &b) {
-	return a.option.key == b.option.key && a.schema_id == b.schema_id && a.table_id == b.table_id;
-}
-
 optional_idx DuckLakeTransaction::EarlierConfigOptionChange(const DuckLakeConfigOption &option,
                                                             idx_t change_index) const {
 	for (idx_t earlier = change_index; earlier > 0; earlier--) {
-		if (IsSameConfigOption(config_option_undo[earlier - 1].option, option)) {
+		if (config_option_undo[earlier - 1].option.IsSame(option)) {
 			return earlier - 1;
 		}
 	}
@@ -1974,7 +2207,7 @@ bool DuckLakeTransaction::ConfigOptionsWrittenByOthers() {
 		// the last change of an option decides the rows it has
 		bool changed_again = false;
 		for (idx_t later = i + 1; later < config_option_undo.size(); later++) {
-			changed_again = changed_again || IsSameConfigOption(config_option_undo[later].option, change.option);
+			changed_again = changed_again || config_option_undo[later].option.IsSame(change.option);
 		}
 		if (changed_again) {
 			continue;
@@ -2004,7 +2237,6 @@ void DuckLakeTransaction::RewriteConfigOptions() {
 		} else {
 			change.metadata_rows = ConfigOptionRows(i, metadata_manager->SetConfigOption(change.option));
 		}
-		rewrote_config_options = true;
 	}
 }
 

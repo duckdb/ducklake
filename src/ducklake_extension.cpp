@@ -28,6 +28,12 @@ static void LoadInternal(ExtensionLoader &loader) {
 	auto &config = DBConfig::GetConfig(instance);
 	StorageExtension::Register(config, "ducklake", make_shared_ptr<DuckLakeStorageExtension>());
 
+	config.AddExtensionOption(
+	    "ducklake_debug_lose_commit_reply",
+	    "Debug setting, loses the connection to the metadata catalog at its COMMIT: 'after' fails "
+	    "the COMMIT after it was carried out, 'before' fails it instead of carrying it out, "
+	    "'before_unreadable' also leaves the catalog unreadable for the reload of the options while it is set",
+	    LogicalType::VARCHAR, Value(""), nullptr, SetScope::GLOBAL);
 	config.AddExtensionOption("ducklake_max_retry_count",
 	                          "The maximum amount of retry attempts for a ducklake transaction", LogicalType::UBIGINT,
 	                          Value::UBIGINT(10), nullptr, SetScope::GLOBAL);

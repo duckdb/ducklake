@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "duckdb/common/error_data.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "storage/ducklake_transaction.hpp"
 
@@ -73,6 +74,11 @@ struct DuckLakeCommitContext {
 	//! Rolls back the metadata connection if a transaction is active.
 	std::function<void()> try_rollback = []() {
 	};
+	//! What became of the commit whose COMMIT failed with the error, a catalog can have carried it out anyway
+	std::function<DuckLakeCommitOutcome(const ErrorData &, const DuckLakeCommitState &)> commit_outcome =
+	    [](const ErrorData &, const DuckLakeCommitState &) {
+		    return DuckLakeCommitOutcome::NOT_COMMITTED;
+	    };
 	//! Resets per-attempt state before a retry.
 	std::function<void()> prepare_retry = []() {
 	};
@@ -260,6 +266,8 @@ public:
 	                            optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats,
 	                            const DuckLakeCommitContext &context);
 	CompactionInformation GetCompactionChanges(DuckLakeCommitState &commit_state, CompactionType type);
+	//! The begin snapshot of the output files of a compaction, the commit snapshot for a rewrite of deletes
+	static idx_t CompactionOutputBeginSnapshot(const DuckLakeCompactionEntry &compaction, idx_t commit_snapshot);
 	//! After a REWRITE_DELETES compaction, recompute EXACT global stats for `table_id` from the post-rewrite file set
 	//! (+ committed inlined data) and append the UpdateGlobalTableStats SQL to `batch_query`. No-op (leaving the
 	//! existing stale stats, and the scan fallback) if the table is not fully delete-free post-rewrite or the

@@ -59,9 +59,57 @@ unique_ptr<QueryResult> QuackMetadataManager::Execute(DuckLakeSnapshot snapshot,
 	return ExecuteInTransaction(query);
 }
 
+void QuackMetadataManager::BeginMigration() {
+	auto result = Query("BEGIN TRANSACTION;");
+	result->ThrowIfError("Failed to begin the migration transaction in DuckLake: ");
+	migration_transaction = true;
+}
+
+void QuackMetadataManager::CommitMigration() {
+	if (!migration_transaction) {
+		return;
+	}
+	auto result = Query("COMMIT;");
+	result->ThrowIfError("Failed to commit the migration in DuckLake: ");
+	migration_transaction = false;
+}
+
+void QuackMetadataManager::RollbackMigration() {
+	if (!migration_transaction) {
+		return;
+	}
+	migration_transaction = false;
+	Query("ROLLBACK;");
+}
+
+bool QuackMetadataManager::HasV1_1Additions() {
+	// a failed probe aborts the migration transaction, so the additions are listed instead
+	auto &added_columns = V1_1AddedColumns();
+	string columns;
+	for (auto &added : added_columns) {
+		columns += StringUtil::Format("%s(table_name = '%s' AND column_name = '%s')", columns.empty() ? "" : " OR ",
+		                              added.table, added.column);
+	}
+	auto result = Query(StringUtil::Format(
+	    "SELECT (SELECT COUNT(*) FROM information_schema.columns WHERE table_catalog = current_database() AND "
+	    "table_schema = {METADATA_SCHEMA_NAME_LITERAL} AND (%s)) = %d AND EXISTS (SELECT 1 FROM "
+	    "information_schema.tables WHERE table_catalog = current_database() AND table_schema = "
+	    "{METADATA_SCHEMA_NAME_LITERAL} AND table_name = 'ducklake_view_column_tag')",
+	    columns, added_columns.size()));
+	result->ThrowIfError("Failed to probe the v1.1 metadata additions in DuckLake: ");
+	for (auto &row : *result) {
+		return row.GetValue<bool>(0);
+	}
+	return false;
+}
+
 unique_ptr<QueryResult> QuackMetadataManager::ExecuteInTransaction(string &query) {
 	// hold the lock through the rollback
 	lock_guard<std::recursive_mutex> guard(transaction.GetCatalog().GetMetadataQueryLock());
+	if (migration_transaction) {
+		// the statements join the server transaction of the migration
+		return Query(query);
+	}
 	return DuckLakeMetadataManager::ExecuteInTransaction(query);
 }
 

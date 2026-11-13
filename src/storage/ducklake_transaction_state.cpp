@@ -804,6 +804,21 @@ DuckLakeTransactionState::GetNewInlinedFileDeletes(DuckLakeCommitState &commit_s
 	return result;
 }
 
+idx_t DuckLakeTransactionState::CompactionOutputBeginSnapshot(const DuckLakeCompactionEntry &compaction,
+                                                              idx_t commit_snapshot) {
+	switch (compaction.type) {
+	case CompactionType::REWRITE_DELETES:
+		return commit_snapshot;
+	case CompactionType::MERGE_ADJACENT_TABLES:
+		// use the first source file's begin_snapshot for proper time travel support
+		return compaction.source_files[0].file.begin_snapshot;
+	default:
+		// LCOV_EXCL_START
+		throw InternalException("DuckLakeTransactionState::CompactionOutputBeginSnapshot Compaction type is invalid");
+		// LCOV_EXCL_STOP
+	}
+}
+
 CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCommitState &commit_state,
                                                                      CompactionType type) {
 	auto &commit_snapshot = commit_state.commit_snapshot;
@@ -821,14 +836,10 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 			idx_t output_begin_snapshot = 0;
 			optional_idx output_max_partial_snapshot;
 			if (has_new_files) {
-				switch (type) {
-				case CompactionType::REWRITE_DELETES:
-					output_begin_snapshot = commit_snapshot.snapshot_id;
-					break;
-				case CompactionType::MERGE_ADJACENT_TABLES: {
+				output_begin_snapshot = CompactionOutputBeginSnapshot(compaction, commit_snapshot.snapshot_id);
+				if (type == CompactionType::MERGE_ADJACENT_TABLES && compaction.source_files.size() > 1) {
 					// track the max partial snapshot across all source files
 					optional_idx merged_max_partial_snapshot;
-					idx_t first_begin_snapshot = compaction.source_files[0].file.begin_snapshot;
 					for (auto &compacted_file : compaction.source_files) {
 						idx_t file_max_snapshot = compacted_file.max_partial_file_snapshot.IsValid()
 						                              ? compacted_file.max_partial_file_snapshot.GetIndex()
@@ -838,18 +849,7 @@ CompactionInformation DuckLakeTransactionState::GetCompactionChanges(DuckLakeCom
 							merged_max_partial_snapshot = file_max_snapshot;
 						}
 					}
-					// use the first source file's begin_snapshot for proper time travel support
-					output_begin_snapshot = first_begin_snapshot;
-					if (compaction.source_files.size() > 1) {
-						output_max_partial_snapshot = merged_max_partial_snapshot;
-					}
-					break;
-				}
-				default:
-					// LCOV_EXCL_START
-					throw InternalException(
-					    "DuckLakeTransactionState::GetCompactionChanges Compaction type is invalid");
-					// LCOV_EXCL_STOP
+					output_max_partial_snapshot = merged_max_partial_snapshot;
 				}
 			}
 
@@ -2918,6 +2918,9 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		bool retryable_metadata_error = false;
 		auto attempt_changes = transaction_changes;
 		auto attempt_dropped_file_stats = dropped_file_stats;
+		ducklake_entry_oids_t attempt_entry_oids;
+		bool committing = false;
+		DuckLakeCommitState commit_state(commit_snapshot);
 		try {
 			can_retry = false;
 			if (i > 0 || context.check_conflicts_first || attempt_changes.HasRefChanges()) {
@@ -2944,6 +2947,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			wrote_snapshot = context.write_snapshot &&
 			                 (!expired_snapshots.empty() || !expiry.tags.empty() || !context.only_expires_snapshots);
 			if (!wrote_snapshot && !context.locks_config_options) {
+				committing = true;
 				context.commit_connection();
 				break;
 			}
@@ -2954,7 +2958,6 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				attempt_changes.dropped_snapshot_tags.insert(tag.name);
 			}
 			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
-			DuckLakeCommitState commit_state(commit_snapshot);
 			string batch_queries;
 			if (wrote_snapshot) {
 				// write the new snapshot
@@ -2980,13 +2983,30 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			}
 			flushed_inlined = !flushed_inlined_tables.empty();
 			context.flush_cache_if_pending();
+			attempt_entry_oids = std::move(commit_state.new_entry_oids);
+			committing = true;
 			context.commit_connection();
 			committed_tables = commit_state.committed_tables;
-			committed_entry_oids = std::move(commit_state.new_entry_oids);
+			committed_entry_oids = std::move(attempt_entry_oids);
 			break;
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
 			RollbackKeepingError(context);
+			if (committing) {
+				// the COMMIT itself failed, which the catalog can have carried out anyway
+				auto outcome = context.commit_outcome(error, commit_state);
+				if (outcome == DuckLakeCommitOutcome::COMMITTED) {
+					committed_tables = commit_state.committed_tables;
+					committed_entry_oids = std::move(attempt_entry_oids);
+					break;
+				}
+				if (outcome == DuckLakeCommitOutcome::UNKNOWN) {
+					error.Throw(
+					    "Failed to commit DuckLake transaction: the metadata catalog did not answer the COMMIT, "
+					    "and whether it carried the commit out is unknown. The files the transaction wrote are "
+					    "kept for ducklake_delete_orphaned_files.\n");
+				}
+			}
 			retryable_metadata_error =
 			    retryable_metadata_error || context.is_retryable_metadata_error(error.RawMessage());
 			auto error_without_query = context.commit_error_without_query(error.RawMessage());

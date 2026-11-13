@@ -327,21 +327,29 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				resolved_version = catalog_version;
 				continue;
 			}
-			if (catalog_version == DuckLakeVersion::V1_0 || catalog_version == DuckLakeVersion::V1_1_DEV_1) {
-				metadata_manager.MigrateV10(catalog_version == DuckLakeVersion::V1_1_DEV_1);
-				catalog_version = DuckLakeVersion::V1_1;
-			}
-			if (catalog_version == DuckLakeVersion::V1_1 && catalog_version < target_version) {
-				metadata_manager.MigrateV11();
-				catalog_version = DuckLakeVersion::V2_0_DEV1;
+			// one metadata transaction, also where each statement commits on its own
+			metadata_manager.BeginMigration();
+			try {
+				if (catalog_version == DuckLakeVersion::V1_0 || catalog_version == DuckLakeVersion::V1_1_DEV_1) {
+					metadata_manager.MigrateV10(catalog_version == DuckLakeVersion::V1_1_DEV_1);
+					catalog_version = DuckLakeVersion::V1_1;
+				}
+				if (catalog_version == DuckLakeVersion::V1_1 && catalog_version < target_version) {
+					metadata_manager.MigrateV11();
+					catalog_version = DuckLakeVersion::V2_0_DEV1;
+				}
+				if (catalog_version != target_version) {
+					// LCOV_EXCL_START
+					throw NotImplementedException("Unsupported DuckLake version '%s'",
+					                              DuckLakeVersionToString(catalog_version));
+					// LCOV_EXCL_STOP
+				}
+				metadata_manager.CommitMigration();
+			} catch (...) {
+				metadata_manager.RollbackMigration();
+				throw;
 			}
 			migrating = false;
-			if (catalog_version != target_version) {
-				// LCOV_EXCL_START
-				throw NotImplementedException("Unsupported DuckLake version '%s'",
-				                              DuckLakeVersionToString(catalog_version));
-				// LCOV_EXCL_STOP
-			}
 			resolved_version = catalog_version;
 		}
 		if (tag.key == "data_path") {
