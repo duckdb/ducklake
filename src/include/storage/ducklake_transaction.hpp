@@ -396,7 +396,7 @@ protected:
 public:
 	void RunCommitLoop(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &transaction_changes,
 	                   const DuckLakeRetryConfig &retry_config);
-	//! Applies a commit that the server made, the next file id of the committed snapshot is the key of its stats
+	// Table statistics are keyed by snapshot id.
 	void ApplyServerSideCommit(idx_t schema_version);
 	//! Removes the files that this transaction wrote
 	void CleanupFiles();
