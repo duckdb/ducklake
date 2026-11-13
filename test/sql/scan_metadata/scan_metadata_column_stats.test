@@ -1,0 +1,63 @@
+# name: test/sql/scan_metadata/scan_metadata_column_stats.test
+# description: The scan metadata of a data file has the stats of the columns that a dynamic filter is pushed on
+# group: [scan_metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/scan_metadata_column_stats', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(a INTEGER, d DOUBLE, s VARCHAR)
+
+statement ok
+INSERT INTO lake.t SELECT range, range / 2, 'v' || range FROM range(10)
+
+statement ok
+INSERT INTO lake.t SELECT range, 'nan', NULL FROM range(100, 110)
+
+# a scan without dynamic filters has no column stats
+query I
+SELECT DISTINCT file_options['column_stats'] FROM ducklake_scan_metadata('lake', 't')
+----
+NULL
+
+# the files of a Top-N are ordered by the stats of its column, which a reader may use to skip files
+query III
+SELECT file_options['column_stats'].type, file_options['column_stats'].value, file_options['required_options'].value
+FROM ducklake_scan_metadata('lake', 't', top_n_column => 'a')
+----
+STRUCT(field_id UBIGINT, min VARCHAR, max VARCHAR, contains_nan BOOLEAN)[]	[{'field_id': 1, 'min': 100, 'max': 109, 'contains_nan': NULL}]	[]
+STRUCT(field_id UBIGINT, min VARCHAR, max VARCHAR, contains_nan BOOLEAN)[]	[{'field_id': 1, 'min': 0, 'max': 9, 'contains_nan': NULL}]	[]
+
+# the maximum of a floating point column leaves out NaN
+query I
+SELECT file_options['column_stats'].value FROM ducklake_scan_metadata('lake', 't', top_n_column => 'd') ORDER BY ALL
+----
+[{'field_id': 2, 'min': 0.0, 'max': 4.5, 'contains_nan': false}]
+[{'field_id': 2, 'min': NULL, 'max': NULL, 'contains_nan': true}]
+
+# unknown bounds are NULL
+query I
+SELECT file_options['column_stats'].value FROM ducklake_scan_metadata('lake', 't', top_n_column => 'S') ORDER BY ALL
+----
+[{'field_id': 3, 'min': NULL, 'max': NULL, 'contains_nan': NULL}]
+[{'field_id': 3, 'min': v0, 'max': v9, 'contains_nan': NULL}]
+
+# a scan of table changes takes no filters
+query I
+SELECT DISTINCT file_options['column_stats']
+FROM ducklake_scan_metadata('lake', 't', top_n_column => 'a', scan_type => 'insertions', start_snapshot => 0)
+----
+NULL
+
+statement error
+SELECT * FROM ducklake_scan_metadata('lake', 't', top_n_column => 'x')
+----
+The top_n_column option 'x' is not a column of the table

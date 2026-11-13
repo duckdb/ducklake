@@ -59,6 +59,8 @@ public:
 	bool SupportsFilterPushdown() const;
 	bool IsDeleteScan() const;
 	const DuckLakeDeleteScanEntry &GetDeleteScanEntry(idx_t file_idx);
+	//! The newest snapshot whose deletes of a file apply to the scan, invalid if all of them apply
+	optional_idx GetDeleteSnapshotFilter(const DuckLakeFileListEntry &file_entry) const;
 	static DuckLakeFileData GetDeleteData(const DuckLakeDataFile &file);
 	static DuckLakeFileData GetDeleteData(const DuckLakeDeleteFile &delete_file);
 
@@ -67,6 +69,10 @@ protected:
 	OpenFileInfo GetFile(idx_t i) const override;
 
 private:
+	//! Set the options an external reader needs to read a data file
+	void AddScanMetadata(const DuckLakeFileListEntry &file_entry, ExtendedOpenFileInfo &extended_info) const;
+	//! The columns of a name map, as the list of structs that the files mapped by it share
+	Value GetNameMap(MappingIndex mapping_id) const;
 	void ApplyLocalChanges(DuckLakeTransaction &transaction) const;
 	void GetFilesForTable() const;
 	//! Read the committed files, and the committed inlined rows before them when each metadata query commits
@@ -136,6 +142,9 @@ private:
 	mutable vector<DuckLakeDeleteScanEntry> delete_scans;
 	//! Filter pushdown information
 	unique_ptr<FilterPushdownInfo> filter_info;
+	//! The name maps of the files, by mapping id
+	mutable mutex name_map_lock;
+	mutable unordered_map<idx_t, Value> name_maps;
 };
 
 } // namespace duckdb

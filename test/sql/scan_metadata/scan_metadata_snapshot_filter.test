@@ -1,0 +1,91 @@
+# name: test/sql/scan_metadata/scan_metadata_snapshot_filter.test
+# description: The scan metadata of a data file has the snapshot filters of the rows that the scan sees
+# group: [scan_metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/scan_metadata_snapshot_filter', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(a INTEGER)
+
+statement ok
+INSERT INTO lake.t SELECT range FROM range(10)
+
+statement ok
+SET VARIABLE first_insert = (SELECT id FROM lake.current_snapshot())
+
+statement ok
+INSERT INTO lake.t SELECT range FROM range(10, 20)
+
+statement ok
+INSERT INTO lake.t SELECT range FROM range(20, 30)
+
+statement ok
+CALL ducklake_merge_adjacent_files('lake')
+
+# every row of the merged file is visible to the latest snapshot
+query III
+SELECT file_options['required_options'].value, file_options['snapshot_filter_max'],
+       file_options['snapshot_id'].value::UBIGINT = getvariable('first_insert')
+FROM ducklake_scan_metadata('lake', 't')
+----
+[]	NULL	true
+
+# an older snapshot only sees the rows inserted up to it
+query III
+SELECT file_options['required_options'].value, file_options['snapshot_filter_max'].type,
+       file_options['snapshot_filter_max'].value::UBIGINT = getvariable('first_insert') + 1
+FROM ducklake_scan_metadata('lake', 't', snapshot_version => getvariable('first_insert') + 1)
+----
+[snapshot_filter_max]	UBIGINT	true
+
+# the insertions of the second insert
+query IIII
+SELECT file_options['required_options'].value, file_options['snapshot_filter_min'].type,
+       file_options['snapshot_filter_min'].value::UBIGINT = getvariable('first_insert') + 1,
+       file_options['snapshot_filter_max'].value::UBIGINT = getvariable('first_insert') + 1
+FROM ducklake_scan_metadata('lake', 't', scan_type => 'insertions',
+                            start_snapshot => getvariable('first_insert') + 1,
+                            snapshot_version => getvariable('first_insert') + 1)
+----
+[snapshot_filter_max, snapshot_filter_min]	UBIGINT	true	true
+
+# a rewrite writes rows that are not insertions
+statement ok
+DELETE FROM lake.t WHERE a = 0
+
+statement ok
+CALL ducklake_rewrite_data_files('lake', 't', delete_threshold => 0)
+
+statement ok
+SET VARIABLE rewrite = (SELECT id FROM lake.current_snapshot())
+
+statement ok
+INSERT INTO lake.t SELECT range FROM range(30, 40)
+
+statement ok
+CALL ducklake_merge_adjacent_files('lake')
+
+query III
+SELECT file_options['required_options'].value, file_options['snapshot_filter_excluded'].type,
+       file_options['snapshot_filter_excluded'].value = [getvariable('rewrite')]::VARCHAR
+FROM ducklake_scan_metadata('lake', 't', scan_type => 'insertions', start_snapshot => 0)
+WHERE file_options['snapshot_id'].value::UBIGINT = getvariable('rewrite')
+----
+[snapshot_filter_excluded]	UBIGINT[]	true
+
+# the files of a scan of deletions look like files without deletes, only the scan type tells them apart
+query IIII
+SELECT DISTINCT scan_options['scan_type'].value, file_options['required_options'].value, file_options['has_deletes'],
+       [key FOR key IN map_keys(file_options) IF key LIKE 'delete%']
+FROM ducklake_scan_metadata('lake', 't', scan_type => 'deletions', start_snapshot => 0)
+----
+deletions	[]	NULL	[]

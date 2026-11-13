@@ -70,6 +70,9 @@ static void LoadInternal(ExtensionLoader &loader) {
 	DuckLakeTableInfoFunction table_info;
 	loader.RegisterFunction(table_info);
 
+	DuckLakeScanMetadataFunction scan_metadata;
+	loader.RegisterFunction(scan_metadata);
+
 	auto table_insertions = DuckLakeTableInsertionsFunction::GetFunctions();
 	loader.RegisterFunction(table_insertions);
 
