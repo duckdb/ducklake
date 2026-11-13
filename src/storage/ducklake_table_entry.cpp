@@ -535,12 +535,12 @@ idx_t DuckLakeTableEntry::GetNetInlinedRowCount(DuckLakeTransaction &transaction
 	auto &catalog = transaction.GetCatalog();
 	idx_t total = 0;
 	for (auto &inlined_table : GetInlinedDataTables(transaction, snapshot)) {
-		if (catalog.InlinedTableIsEmpty(inlined_table.table_name, snapshot.snapshot_id)) {
+		if (catalog.InlinedTableIsEmpty(transaction, inlined_table.table_name, snapshot.snapshot_id)) {
 			continue;
 		}
 		auto count = metadata_manager.GetNetInlinedRowCount(inlined_table.table_name, snapshot);
 		if (count == 0) {
-			catalog.SetInlinedTableEmpty(inlined_table.table_name, snapshot.snapshot_id);
+			catalog.SetInlinedTableEmpty(transaction, inlined_table.table_name, snapshot.snapshot_id);
 		}
 		total += count;
 	}

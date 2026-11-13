@@ -55,8 +55,8 @@ SELECT rowid, snapshot_id, * FROM ducklake.test
 query III
 SELECT filename, file_row_number, file_index FROM ducklake.test
 ----
-__ducklake_inlined_transaction_local_data	0	1
-__ducklake_inlined_transaction_local_data	1	1
+__ducklake_inlined_transaction_local_data	0	0
+__ducklake_inlined_transaction_local_data	1	0
 
 statement ok
 COMMIT

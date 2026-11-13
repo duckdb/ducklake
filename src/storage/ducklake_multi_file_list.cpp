@@ -761,7 +761,7 @@ void DuckLakeMultiFileList::GetFilesForTable() const {
 	auto &catalog = transaction.GetCatalog();
 	inlined_data_tables.erase(std::remove_if(inlined_data_tables.begin(), inlined_data_tables.end(),
 	                                         [&](const DuckLakeInlinedTableInfo &table) {
-		                                         return catalog.InlinedTableIsEmpty(table.table_name,
+		                                         return catalog.InlinedTableIsEmpty(transaction, table.table_name,
 		                                                                            read_info.snapshot.snapshot_id);
 	                                         }),
 	                          inlined_data_tables.end());

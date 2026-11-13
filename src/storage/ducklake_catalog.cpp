@@ -1656,21 +1656,50 @@ void DuckLakeCatalog::ForgetColumnsWithValues(const set<TableIndex> &table_ids) 
 	}
 }
 
-bool DuckLakeCatalog::InlinedTableIsEmpty(const Identifier &table_name, idx_t snapshot_id) {
+//! Whether every head of the chain is at or after the observed one, so the view holds the observed commits
+static bool HeadsAtOrAfter(const vector<idx_t> &heads, const vector<idx_t> &observed) {
+	if (heads.empty() || heads.size() != observed.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < heads.size(); i++) {
+		if (heads[i] < observed[i]) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool DuckLakeCatalog::InlinedTableIsEmpty(DuckLakeTransaction &transaction, const Identifier &table_name,
+                                          idx_t snapshot_id) {
+	auto &heads = transaction.GetMetadataManager().GetLineageHeads();
 	lock_guard<mutex> guard(empty_inlined_tables_lock);
 	if (!empty_inlined_tables_snapshot.IsValid() || empty_inlined_tables_snapshot.GetIndex() != snapshot_id) {
 		return false;
 	}
-	return empty_inlined_tables.count(table_name) > 0;
+	// a flush moves the rows into a file dated at their snapshot, a transaction that loaded its snapshot before
+	// the one that found the table empty may not see the file yet
+	auto entry = empty_inlined_tables.find(table_name);
+	return entry != empty_inlined_tables.end() && HeadsAtOrAfter(heads, entry->second);
 }
 
-void DuckLakeCatalog::SetInlinedTableEmpty(const Identifier &table_name, idx_t snapshot_id) {
+void DuckLakeCatalog::SetInlinedTableEmpty(DuckLakeTransaction &transaction, const Identifier &table_name,
+                                           idx_t snapshot_id) {
+	auto &heads = transaction.GetMetadataManager().GetLineageHeads();
+	if (heads.empty()) {
+		return;
+	}
 	lock_guard<mutex> guard(empty_inlined_tables_lock);
 	if (!empty_inlined_tables_snapshot.IsValid() || empty_inlined_tables_snapshot.GetIndex() != snapshot_id) {
 		empty_inlined_tables.clear();
 		empty_inlined_tables_snapshot = snapshot_id;
 	}
-	empty_inlined_tables.insert(table_name);
+	auto entry = empty_inlined_tables.find(table_name);
+	if (entry == empty_inlined_tables.end()) {
+		empty_inlined_tables.emplace(table_name, heads);
+	} else if (HeadsAtOrAfter(entry->second, heads)) {
+		// the earliest view that found the table empty lets the most transactions skip it
+		entry->second = heads;
+	}
 }
 
 string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) const {
