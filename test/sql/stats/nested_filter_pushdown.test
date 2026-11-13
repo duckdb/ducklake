@@ -59,7 +59,7 @@ EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE st.A = 50;
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 1.*
 
-# a struct added after the files were written has no stats, so nothing may be pruned
+# a field added after the files were written is NULL in them, so they are skipped when they are opened
 statement ok
 ALTER TABLE ducklake.t ADD COLUMN st.c INTEGER;
 
@@ -70,5 +70,19 @@ SELECT COUNT(*) FROM ducklake.t WHERE st.c IS NULL;
 
 query II
 EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE st.c = 5;
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 0.*
+
+# with a default, the field has no stats in those files, so nothing may be pruned
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN st.d INTEGER DEFAULT 5;
+
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE st.d = 5;
+----
+300
+
+query II
+EXPLAIN ANALYZE SELECT COUNT(*) FROM ducklake.t WHERE st.d = 5;
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 3.*
