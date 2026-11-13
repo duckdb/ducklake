@@ -1037,7 +1037,7 @@ public:
 	V2_0Dev1Additions ProbeV2_0Dev1Additions();
 	void VerifyHealableV2_0Dev1(const V2_0Dev1Additions &missing);
 	//! Refuses a legacy user column of an inlined data table named like a column the 2.0 layout adds
-	void VerifyInlinedColumnsHealable(const vector<RowVisibilityAdditions> &inlined_additions);
+	void VerifyInlinedColumnsHealable(const V2_0Dev1Additions &missing);
 	static string V2_0Dev1AdditionsSql(const V2_0Dev1Additions &add);
 	static string VisibilityEventBackfillSql(const string &visibility_table, const string &file_table,
 	                                         const string &file_id_column);

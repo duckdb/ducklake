@@ -2025,15 +2025,15 @@ void DuckLakeMetadataManager::VerifyHealableV2_0Dev1(const V2_0Dev1Additions &mi
 			                            "dropped and the visibility rows that replaced them are missing");
 		}
 	}
-	VerifyInlinedColumnsHealable(missing.inlined_additions);
+	VerifyInlinedColumnsHealable(missing);
 }
 
-void DuckLakeMetadataManager::VerifyInlinedColumnsHealable(const vector<RowVisibilityAdditions> &inlined_additions) {
+void DuckLakeMetadataManager::VerifyInlinedColumnsHealable(const V2_0Dev1Additions &missing) {
 	// a 1.0 catalog reserved the three bare names alone, so its user columns can be named like the columns of 2.0
 	DuckLakeInlinedColNames col_names(true);
 	vector<Identifier> ambiguous;
 	vector<pair<Identifier, Identifier>> derived_collisions;
-	for (auto &rows : inlined_additions) {
+	for (auto &rows : missing.inlined_additions) {
 		Identifier table(RowTableName(rows.kind.kind));
 		if (rows.drop_end && !rows.branch_column) {
 			// both columns, an interrupted heal or a user column named like the branch column
@@ -2051,14 +2051,22 @@ void DuckLakeMetadataManager::VerifyInlinedColumnsHealable(const vector<RowVisib
 		for (auto &table : ambiguous) {
 			literals.push_back(SQLString::ToString(table.GetIdentifierName()));
 		}
+		// the column rows end in place until their heal moved the ends to the companion and dropped the end column
+		bool column_rows_healed = false;
+		for (auto &rows : missing.row_additions) {
+			if (rows.kind.kind == "column") {
+				column_rows_healed = !rows.drop_end;
+			}
+		}
 		// the catalog tells a user column of that name from the column an interrupted heal added
+		// a payload holds the columns live at its schema version, so a legacy column renamed before it matches none
+		auto columns = GetInlinedTableColumnsSql(optional_idx(), column_rows_healed, DuckLakeBranchChain::Main());
 		auto result = Query(StringUtil::Format(R"(
-SELECT DISTINCT idt.table_name, c.column_name
-FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
-JOIN {METADATA_CATALOG}.ducklake_column c ON c.table_id = idt.table_id
-WHERE c.parent_column IS NULL AND lower(c.column_name) = lower(%s) AND idt.table_name IN (%s)
-ORDER BY idt.table_name)",
-		                                       SQLString::ToString(col_names.branch_id.GetIdentifierName()),
+SELECT DISTINCT cols.table_name, cols.column_name
+FROM (%s) cols
+WHERE lower(cols.column_name) = lower(%s) AND cols.table_name IN (%s)
+ORDER BY cols.table_name)",
+		                                       columns, SQLString::ToString(col_names.branch_id.GetIdentifierName()),
 		                                       StringUtil::Join(literals, ", ")));
 		result->ThrowIfError("Failed to read the columns of the inlined data tables of DuckLake: ");
 		for (auto &row : *result) {

@@ -1,5 +1,5 @@
 # name: test/sql/migration/dev1_inlined_heal_refusals.test
-# description: a 1.0 catalog whose inlined tables hold user columns named like the columns of the 2.0 layout is refused with a rename hint
+# description: a 1.0 catalog with inlined user columns named like the 2.0 columns is refused until renamed and flushed
 # group: [migration]
 
 require ducklake
@@ -194,6 +194,91 @@ SELECT * FROM dl.t ORDER BY v
 NULL	20
 0	30
 2	40
+
+statement ok
+DETACH dl
+
+# the rename hint is followed on 1.0, the rows written after it fill a newer inlined table
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_resume.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_resume_files',
+    METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.0', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (_ducklake_branch_id INTEGER, v INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 10)
+
+statement ok
+ALTER TABLE dl.t RENAME COLUMN _ducklake_branch_id TO b
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+INSERT INTO dl.t VALUES (2, 20)
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_2
+----
+1
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_resume.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_resume_files',
+    METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+# a heal interrupted after the branch column of the newer payload was added left it with both columns
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_2 ADD COLUMN _ducklake_end_snapshot BIGINT
+
+statement ok
+DROP TABLE meta.ducklake_inlined_data_1_2_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_2 DROP COLUMN _ducklake_branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_2 ADD COLUMN _ducklake_branch_id BIGINT
+
+statement ok
+DETACH dl
+
+# the renamed column is no column of the newer payload, so the resumed heal fills its branch column and passes
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_resume.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_resume_files',
+    METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT list(DISTINCT _ducklake_branch_id) FROM meta.ducklake_inlined_data_1_2
+----
+[0]
+
+query II
+SELECT b, v FROM dl.t ORDER BY b
+----
+1	10
+2	20
+
+statement ok
+INSERT INTO dl.t VALUES (3, 30)
+
+query II
+SELECT b, v FROM dl.t ORDER BY b
+----
+1	10
+2	20
+3	30
 
 statement ok
 DETACH dl
