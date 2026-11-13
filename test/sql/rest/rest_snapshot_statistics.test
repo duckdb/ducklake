@@ -15,13 +15,45 @@ CREATE TABLE rest_lake.t AS SELECT range AS i FROM range(100)
 statement ok rest_db:rest_server_con
 INSERT INTO rest_lake.t SELECT range FROM range(100, 200)
 
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+# Load the current statistics, then advance the snapshot without changing next_file_id.
+query I
+SELECT count(*) FROM dl.t
+----
+200
+
+statement ok rest_db:rest_server_con
+CREATE TABLE rest_lake.marker(i INTEGER)
+
 statement ok rest_db:rest_server_con
 SET VARIABLE old_snapshot = (SELECT max(snapshot_id) FROM rest_lake.snapshots())
 
 set variable old_snapshot <variable:rest_server_con:old_snapshot>
 
+statement ok stale_reader
+BEGIN
+
+# A catalog-only lookup pins the new snapshot without requesting table statistics.
+query I stale_reader
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 't'
+----
+1
+
 statement ok rest_db:rest_server_con
 DELETE FROM rest_lake.t WHERE i < 100
+
+query III stale_reader
+SELECT count(*), min(i), max(i) FROM dl.t WHERE i < 100
+----
+100	0	99
+
+statement ok stale_reader
+ROLLBACK
+
+statement ok
+DETACH dl
 
 # A new client has never cached the old bounds.
 statement ok
