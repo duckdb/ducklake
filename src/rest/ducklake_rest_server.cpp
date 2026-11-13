@@ -21,6 +21,13 @@
 
 namespace duckdb {
 
+//! The protocol carries no branch bounds, so a served DuckLake has to be on main
+static void RefuseServedBranch(Catalog &catalog) {
+	if (catalog.Cast<DuckLakeCatalog>().OnBranch()) {
+		throw NotImplementedException("Serving a branch of a DuckLake through REST is not supported yet");
+	}
+}
+
 //===--------------------------------------------------------------------===//
 // Request
 //===--------------------------------------------------------------------===//
@@ -31,6 +38,7 @@ DuckLakeRESTRequest::DuckLakeRESTRequest(DatabaseInstance &db, const string &cat
 	if (entry.GetCatalogType() != "ducklake") {
 		throw InvalidInputException("Catalog \"%s\" is not a DuckLake catalog", catalog_name);
 	}
+	RefuseServedBranch(entry);
 	catalog = &entry.Cast<DuckLakeCatalog>();
 	transaction = &DuckLakeTransaction::Get(context, *catalog);
 	GetMetadataManager();
@@ -352,6 +360,7 @@ static shared_ptr<DatabaseInstance> OpenIsolatedDuckLake(ClientContext &context,
 	}
 	auto result = con.Query(query);
 	result->ThrowIfError("Failed to attach the DuckLake served over REST: ");
+	RefuseServedBranch(DatabaseManager::Get(*db.instance).GetDatabase(Identifier(catalog_name))->GetCatalog());
 	return db.instance;
 }
 
@@ -498,6 +507,7 @@ static unique_ptr<FunctionData> DuckLakeRESTServeBind(ClientContext &context, Ta
 		if (catalog.GetCatalogType() != "ducklake") {
 			throw BinderException("ducklake_rest_serve: catalog \"%s\" is not a DuckLake catalog", target_str);
 		}
+		RefuseServedBranch(catalog);
 		db = context.db;
 	}
 	if (!server) {

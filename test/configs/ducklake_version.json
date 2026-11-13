@@ -242,7 +242,8 @@
         "test/sql/branches/branch_inlined_delete_after_fork.test",
         "test/sql/branches/branch_inlined_end_row.test",
         "test/sql/branches/branch_nested_inlined.test",
-        "test/sql/branches/branch_inlined_table_changes.test"
+        "test/sql/branches/branch_inlined_table_changes.test",
+        "test/sql/rest/rest_serve_branch_refused.test"
       ]
     },
     {

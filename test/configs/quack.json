@@ -310,6 +310,7 @@
         "test/sql/rest/rest_projection.test",
         "test/sql/rest/rest_review_probes.test",
         "test/sql/rest/rest_rewrite_change_feed.test",
+        "test/sql/rest/rest_serve_branch_refused.test",
         "test/sql/rest/rest_server_edge_cases.test",
         "test/sql/rest/rest_skipped_add_field.test",
         "test/sql/rest/rest_snapshot_tags.test",
