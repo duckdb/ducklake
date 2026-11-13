@@ -46,7 +46,10 @@
         "test/sql/stats/count_star_optimization_cache.test",
         "test/sql/general/ducklake_metadata_logging.test",
         "test/sql/transaction/commit_skips_catalog_load.test",
-        "test/sql/transaction/commit_retry_skips_catalog_load.test"
+        "test/sql/transaction/commit_retry_skips_catalog_load.test",
+        "test/sql/branches/branchless_skips_guards.test",
+        "test/sql/deletion_inlining/inlined_file_deletes_concurrent_branch_column.test",
+        "test/sql/metadata/file_listing_reused_in_transaction.test"
       ]
     },
     {
@@ -98,7 +101,11 @@
         "test/sql/tags/tags_expire_open_conflict.test",
         "test/sql/time_travel/at_timestamp_expired_in_transaction.test",
         "test/sql/time_travel/at_timestamp_expired_snapshots.test",
-        "test/sql/time_travel/snapshot_attach_maintenance.test"
+        "test/sql/time_travel/snapshot_attach_maintenance.test",
+        "test/sql/cleanup/expire_restarted_commit_cleanup.test",
+        "test/sql/compaction/expire_snapshots_catalog_rows.test",
+        "test/sql/compaction/expire_snapshots_entity_rows.test",
+        "test/sql/compaction/expire_snapshots_tag_rows.test"
       ]
     },
     {
@@ -205,7 +212,8 @@
         "test/sql/table_changes/table_changes_rewrite_data_files.test",
         "test/sql/table_changes/table_changes_rewrite_merged_twice.test",
         "test/sql/table_changes/table_deletions_unchanged_range.test",
-        "test/sql/transaction/drop_altered_table_local_changes.test"
+        "test/sql/transaction/drop_altered_table_local_changes.test",
+        "test/sql/data_inlining/inlined_reserved_user_columns.test"
       ]
     },
     {
@@ -221,7 +229,9 @@
         "test/sql/sorted_table/data_inlining_flush_sorted_macro_expression_transaction.test",
         "test/sql/sorted_table/data_inlining_flush_sorted_reset.test",
         "test/sql/sorted_table/data_inlining_flush_sorted_transaction_renamed.test",
-        "test/sql/data_inlining/flush_renamed_table_name.test"
+        "test/sql/data_inlining/flush_renamed_table_name.test",
+        "test/sql/data_inlining/inlined_flush_delete_conflict.test",
+        "test/sql/data_inlining/inlined_flush_keeps_own_deletes.test"
       ]
     },
     {
@@ -552,7 +562,43 @@
         "test/sql/tags/tags_version_gate_time_travel.test",
         "test/sql/data_inlining/inlining_obstacle_log.test",
         "test/sql/compaction/user_columns_named_like_internal_columns.test",
-        "test/sql/data_inlining/data_inlining_transaction_local_field_readd_rejected.test"
+        "test/sql/data_inlining/data_inlining_transaction_local_field_readd_rejected.test",
+        "test/sql/alter/create_table_drop_column_same_transaction.test",
+        "test/sql/branches/branch_allocators.test",
+        "test/sql/branches/schema_versions_branch_column.test",
+        "test/sql/catalog/catalog_load_grouped_aggregates.test",
+        "test/sql/data_inlining/inlined_companion_layout.test",
+        "test/sql/data_inlining/inlined_delete_conflict.test",
+        "test/sql/data_inlining/inlined_table_changes_versions.test",
+        "test/sql/data_inlining/inlined_update_versions.test",
+        "test/sql/data_inlining/inlined_visibility_rows.test",
+        "test/sql/deletion_inlining/inlined_file_delete_branch_column.test",
+        "test/sql/migration/dev1_catalog_rows_heal.test",
+        "test/sql/migration/dev1_entity_rows_heal.test",
+        "test/sql/migration/dev1_heal_guards.test",
+        "test/sql/migration/dev1_heal_marker.test",
+        "test/sql/migration/dev1_heal_refuses_old_branches.test",
+        "test/sql/migration/dev1_inlined_deletes_heal.test",
+        "test/sql/migration/dev1_inlined_orphan_companion.test",
+        "test/sql/migration/dev1_inlined_rows_heal.test",
+        "test/sql/migration/dev1_inlined_rows_unhealable.test",
+        "test/sql/migration/dev1_missing_changes_table.test",
+        "test/sql/migration/dev1_missing_column_visibility.test",
+        "test/sql/migration/dev1_missing_partition_visibility.test",
+        "test/sql/migration/dev1_missing_row_visibility.test",
+        "test/sql/migration/dev1_missing_tag_visibility.test",
+        "test/sql/migration/dev1_old_layout_read_only.test",
+        "test/sql/migration/dev1_partial_heal.test",
+        "test/sql/migration/dev1_snapshot_tables_heal.test",
+        "test/sql/migration/dev1_superseded_rows_heal.test",
+        "test/sql/migration/dev1_tag_rows_heal.test",
+        "test/sql/migration/dev1_tag_rows_heal_collation.test",
+        "test/sql/migration/dev1_visibility_events_rewrite.test",
+        "test/sql/migration/v11_to_v20_dev1_inlined.test",
+        "test/sql/migration/v11_to_v20_dev1_inlined_deletes.test",
+        "test/sql/migration/v11_to_v20_dev1_missing_macro_table.test",
+        "test/sql/migration/v11_to_v20_dev1_resume_rebuilt.test",
+        "test/sql/migration/v11_to_v20_dev1_resume_tag_table.test"
       ]
     },
     {
@@ -588,7 +634,8 @@
         "test/sql/tags/tags_replace_conflict.test",
         "test/sql/tags/tags_time_travel.test",
         "test/sql/tags/tags_transaction.test",
-        "test/sql/tags/tags_version_gate.test"
+        "test/sql/tags/tags_version_gate.test",
+        "test/sql/branches/branch_gap_tag_commit.test"
       ]
     },
     {
@@ -675,7 +722,12 @@
         "test/sql/tags/postgres_tags_read_committed.test",
         "test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test",
-        "test/sql/data_inlining/data_inlining_variant_sql_rollback.test"
+        "test/sql/data_inlining/data_inlining_variant_sql_rollback.test",
+        "test/sql/catalog/postgres_native_catalog_load.test",
+        "test/sql/data_inlining/postgres_inlined_second_attach.test",
+        "test/sql/data_inlining/postgres_inlined_visibility_rows.test",
+        "test/sql/metadata/postgres_read_committed_branch_memo.test",
+        "test/sql/metadata/postgres_read_committed_listing_cache.test"
       ]
     },
     {
@@ -696,6 +748,54 @@
         "test/sql/list_files/list_files_encrypted.test",
         "test/sql/secrets/ducklake_secret_null_options.test",
         "test/sql/transaction/transaction_conflict_inlining.test"
+      ]
+    },
+    {
+      "reason": "Attaches a BRANCH of the DuckLake, which a REST client cannot",
+      "paths": [
+        "test/sql/branches/branch_attach_compacted.test",
+        "test/sql/branches/branch_attach_inlined.test",
+        "test/sql/branches/branch_attach_read.test",
+        "test/sql/branches/branch_catalog_rows.test",
+        "test/sql/branches/branch_chain_corrupt.test",
+        "test/sql/branches/branch_column_rows.test",
+        "test/sql/branches/branch_compacted_fork_rows.test",
+        "test/sql/branches/branch_delete_replacement.test",
+        "test/sql/branches/branch_expire_dry_run.test",
+        "test/sql/branches/branch_flush_inlined.test",
+        "test/sql/branches/branch_flush_inlined_deletes.test",
+        "test/sql/branches/branch_heal_inheritance.test",
+        "test/sql/branches/branch_inlined_after_rename.test",
+        "test/sql/branches/branch_inlined_delete_after_fork.test",
+        "test/sql/branches/branch_inlined_end_row.test",
+        "test/sql/branches/branch_inlined_file_delete_row.test",
+        "test/sql/branches/branch_inlined_table_changes.test",
+        "test/sql/branches/branch_listing_after_main_flush.test",
+        "test/sql/branches/branch_listing_overlapping_flush.test",
+        "test/sql/branches/branch_macro_rows.test",
+        "test/sql/branches/branch_nested_chain.test",
+        "test/sql/branches/branch_nested_delete_replacement.test",
+        "test/sql/branches/branch_nested_fork_below_parent.test",
+        "test/sql/branches/branch_nested_inlined.test",
+        "test/sql/branches/branch_nested_retro_delete.test",
+        "test/sql/branches/branch_nested_retro_delete_history.test",
+        "test/sql/branches/branch_nested_segment_cap.test",
+        "test/sql/branches/branch_only_file_attach.test",
+        "test/sql/branches/branch_protection.test",
+        "test/sql/branches/branch_refork_historical.test",
+        "test/sql/branches/branch_remove_data_files.test",
+        "test/sql/branches/branch_replacement_segment_cap.test",
+        "test/sql/branches/branch_root_without_parent.test",
+        "test/sql/branches/branch_same_snapshot_id.test",
+        "test/sql/branches/branch_snapshot_changes_key.test",
+        "test/sql/branches/branch_snapshot_tag_rows.test",
+        "test/sql/branches/branch_spec_rows.test",
+        "test/sql/branches/branch_tag_above_fork.test",
+        "test/sql/branches/branch_tag_rows.test",
+        "test/sql/branches/branch_version_gate.test",
+        "test/sql/migration/dev1_branch_additions.test",
+        "test/sql/migration/dev1_heal_keeps_current_branches.test",
+        "test/sql/migration/dev1_inline_ranges_read_only.test"
       ]
     }
   ]
