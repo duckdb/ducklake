@@ -273,6 +273,7 @@
         "test/sql/rest/rest_alter.test",
         "test/sql/rest/rest_api_requests.test",
         "test/sql/rest/rest_arrow.test",
+        "test/sql/rest/rest_branch_attach.test",
         "test/sql/rest/rest_client_transaction_paths.test",
         "test/sql/rest/rest_column_mappings.test",
         "test/sql/rest/rest_commit_edge_cases.test",
