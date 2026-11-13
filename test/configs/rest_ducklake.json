@@ -206,7 +206,8 @@
         "test/sql/table_changes/table_changes_rewrite_data_files.test",
         "test/sql/table_changes/table_changes_rewrite_merged_twice.test",
         "test/sql/table_changes/table_deletions_unchanged_range.test",
-        "test/sql/transaction/drop_altered_table_local_changes.test"
+        "test/sql/transaction/drop_altered_table_local_changes.test",
+        "test/sql/delete/delete_partition_metadata_imported.test"
       ]
     },
     {
