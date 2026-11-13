@@ -84,7 +84,10 @@ statement ok
 COPY (SELECT ''::VARCHAR AS file_path, p::BIGINT AS pos, s::BIGINT AS _ducklake_internal_snapshot_id FROM (VALUES (0, 3), (1, 9)) v(p, s)) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet' (FORMAT PARQUET)
 
 statement ok
-INSERT INTO meta.ducklake_delete_file (delete_file_id, table_id, data_file_id, path, path_is_relative, format, delete_count, file_size_bytes, partial_max) SELECT 1099511627776, getvariable('t_id'), (SELECT data_file_id FROM meta.ducklake_data_file WHERE table_id = getvariable('t_id')), '{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet', false, 'parquet', 2, file_size_bytes, 9 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet')
+SET VARIABLE t_file = (SELECT data_file_id FROM meta.ducklake_data_file WHERE table_id = getvariable('t_id'))
+
+statement ok
+INSERT INTO meta.ducklake_delete_file (delete_file_id, table_id, data_file_id, path, path_is_relative, format, delete_count, file_size_bytes, partial_max) SELECT 1099511627776, getvariable('t_id'), getvariable('t_file'), '{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet', false, 'parquet', 2, file_size_bytes, 9 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet')
 
 # the add event of the replacement is back dated to the begin of the replaced file, which dev ends at 9
 statement ok
