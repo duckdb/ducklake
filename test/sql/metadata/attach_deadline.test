@@ -1,0 +1,74 @@
+# name: test/sql/metadata/attach_deadline.test
+# description: An interrupted metadata load neither falls back to an old schema nor retries ATTACH
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+statement ok
+SET threads = 1
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_attach_deadline.db' AS lake (DATA_PATH '{TEST_DIR}/metadata_attach_deadline_files')
+
+statement ok
+CREATE TABLE lake.items AS SELECT 42 AS i
+
+statement ok
+ALTER TABLE __ducklake_metadata_lake.ducklake_metadata RENAME TO original_metadata
+
+# The existence probe finds the first row quickly; loading all metadata must finish the slow scan.
+statement ok
+CREATE VIEW __ducklake_metadata_lake.ducklake_metadata AS
+SELECT key, value, scope, scope_id
+FROM __ducklake_metadata_lake.original_metadata, range(1000000000) t(i)
+WHERE i = 0 OR sin(i) = 2
+
+statement ok
+DETACH lake
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+SET ducklake_retry_wait_ms = 10000
+
+statement ok
+SET max_execution_time = 500
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/metadata_attach_deadline.db' AS deadline_lake
+----
+Query exceeded maximum execution time
+
+statement ok
+RESET max_execution_time
+
+# Cancellation reaches the metadata load without a legacy-schema fallback or another attach.
+query II
+SELECT count(*) FILTER (WHERE query LIKE '%SELECT key, value%'),
+       count(*) FILTER (WHERE query LIKE 'ATTACH OR REPLACE %')
+FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE catalog = 'deadline_lake'
+----
+1	1
+
+statement ok
+ATTACH '{TEST_DIR}/metadata_attach_deadline.db' AS metadata
+
+statement ok
+DROP VIEW metadata.ducklake_metadata
+
+statement ok
+ALTER TABLE metadata.original_metadata RENAME TO ducklake_metadata
+
+statement ok
+DETACH metadata
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_attach_deadline.db' AS deadline_lake
+
+query I
+SELECT * FROM deadline_lake.items
+----
+42

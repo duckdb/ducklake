@@ -1,0 +1,60 @@
+# name: test/sql/metadata/initialize_deadline.test
+# description: Interrupted initialization does not retry ATTACH and can be retried by the caller
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+statement ok
+SET threads = 1
+
+statement ok
+ATTACH '{TEST_DIR}/metadata_initialize_deadline.db' AS metadata
+
+# Initializing the first snapshot evaluates NOW() in the metadata catalog's search path.
+statement ok
+CREATE MACRO metadata.now() AS
+CASE WHEN (SELECT sum(sin(i)) FROM range(1000000000) t(i)) IS NOT NULL
+     THEN error('metadata initialization ignored caller deadline')
+     ELSE TIMESTAMPTZ '2026-01-01 00:00:00+00' END
+
+statement ok
+DETACH metadata
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+SET max_execution_time = 500
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/metadata_initialize_deadline.db' AS deadline_lake (DATA_PATH '{TEST_DIR}/metadata_initialize_deadline_files')
+----
+Query exceeded maximum execution time
+
+statement ok
+RESET max_execution_time
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE catalog = 'deadline_lake' AND query LIKE 'ATTACH OR REPLACE %'
+----
+1
+
+statement ok
+ATTACH '{TEST_DIR}/metadata_initialize_deadline.db' AS metadata
+
+statement ok
+DROP MACRO metadata.now
+
+statement ok
+DETACH metadata
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_initialize_deadline.db' AS deadline_lake (DATA_PATH '{TEST_DIR}/metadata_initialize_deadline_files')
+
+query I
+SELECT count(*) FROM __ducklake_metadata_deadline_lake.ducklake_snapshot
+----
+1
