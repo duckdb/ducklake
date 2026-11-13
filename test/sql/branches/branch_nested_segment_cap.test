@@ -1,0 +1,133 @@
+# name: test/sql/branches/branch_nested_segment_cap.test
+# description: an inherited partial file is capped at the segment of the branch that wrote its add event, not at the segment that owns its begin snapshot
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1)
+
+statement ok
+INSERT INTO lake.t VALUES (2)
+
+query I
+SELECT id FROM lake.current_snapshot()
+----
+3
+
+# dev forks main at 3 and holds the snapshots 4, 5 and 6
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 3)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT r.range, NOW(), schema_version, 1099511627776, 1099511627777, 1 FROM meta.ducklake_snapshot, range(4, 7) r WHERE branch_id = 0 AND snapshot_id = 3
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes SELECT r.range, NULL, NULL, NULL, NULL, 1 FROM range(4, 7) r
+
+# dev flushed a row born at 2 and rows born at its own 4 and 5 into one file, its add event is back dated to 2
+statement ok
+COPY (SELECT i::INTEGER AS i, s::BIGINT AS _ducklake_internal_snapshot_id FROM (VALUES (100, 2), (400, 4), (500, 5)) v(i, s)) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_flush.parquet' (FORMAT PARQUET, FIELD_IDS {i: 1, _ducklake_internal_snapshot_id: 2147483539})
+
+statement ok
+INSERT INTO meta.ducklake_data_file (data_file_id, table_id, path, path_is_relative, file_format, record_count, file_size_bytes, row_id_start, partial_max) SELECT 1099511627776, 1, '{TEST_DIR}/{BASE_TEST_NAME}_dev_flush.parquet', false, 'parquet', 3, file_size_bytes, 100, 5 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_flush.parquet')
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility VALUES (1, 1, 1099511627776, 2, false)
+
+# feature forks dev at 6 and early forks dev at 4, each with a snapshot of its own
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (2, 'feature', 1, 6), (3, 'early', 1, 4)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 7, NOW(), schema_version, 2199023255552, 2199023255552, 2 FROM meta.ducklake_snapshot WHERE branch_id = 1 AND snapshot_id = 6
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 5, NOW(), schema_version, 3298534883328, 3298534883328, 3 FROM meta.ducklake_snapshot WHERE branch_id = 1 AND snapshot_id = 4
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (7, NULL, NULL, NULL, NULL, 2), (5, NULL, NULL, NULL, NULL, 3)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS feature (METADATA_CATALOG 'meta', BRANCH 'feature')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS early (METADATA_CATALOG 'meta', BRANCH 'early')
+
+# dev wrote the file, so it reads every row although main owns the id of the add event
+query I
+SELECT i FROM dev.t ORDER BY i
+----
+1
+2
+100
+400
+500
+
+# feature reads dev up to 6, which holds every row of the file
+query I
+SELECT i FROM feature.t ORDER BY i
+----
+1
+2
+100
+400
+500
+
+# early reads dev up to 4, the row dev wrote at 5 stays invisible
+query I
+SELECT i FROM early.t ORDER BY i
+----
+1
+2
+100
+400
+
+# a read below the cap bounds the rows at the read snapshot
+query I
+SELECT i FROM feature.t AT (VERSION => 4) ORDER BY i
+----
+1
+2
+100
+400
+
+query I
+SELECT i FROM dev.t AT (VERSION => 2) ORDER BY i
+----
+1
+100
+
+# main never sees the file of dev
+query I
+SELECT i FROM lake.t ORDER BY i
+----
+1
+2
+
+statement ok
+DETACH early
+
+statement ok
+DETACH feature
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH lake

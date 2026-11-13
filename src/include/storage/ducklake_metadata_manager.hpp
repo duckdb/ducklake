@@ -906,6 +906,11 @@ public:
 	//! The per file ranges a branch derives from its visibility events
 	static string VisibilityEventRanges(const string &visibility_table, const string &file_id_column,
 	                                    const string &chain_predicate, const string &prefix);
+	//! The ranges with begin_segment, the chain position of the earliest add event, the segment that wrote the file
+	//! A file holds one add event in every lineage view that counts it as its own, so the earliest one is the writer
+	//! No read snapshot caps the aggregate, the compaction and conflict readers run the sources without one
+	static string VisibilityEventRanges(const string &visibility_table, const string &file_id_column,
+	                                    const DuckLakeBranchChain &chain, const string &prefix);
 	//! The chain predicate the file sources filter the visibility events with, under the alias v, empty on main
 	static string FileSourceChain(const DuckLakeBranchChain &chain);
 	//! A valid table id is pushed into the file scan and the visibility aggregate

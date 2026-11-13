@@ -36,8 +36,10 @@ public:
 	bool OnBranch() const;
 	//! The segments from the root to the attached branch
 	const vector<DuckLakeBranchSegment> &Segments() const;
-	//! The cap of the root segment, unset on main
-	optional_idx RootCap() const;
+	//! The cap of the segment at the position, unset for the attached branch
+	optional_idx SegmentCap(idx_t position) const;
+	//! The read snapshot clamped to the cap of the segment at the position, unclamped without a position or a cap
+	idx_t SnapshotBound(optional_idx position, idx_t read_snapshot) const;
 	//! The predicate selecting the rows of the chain view, each segment capped by its cap
 	//! Prefix "" gives bare column names, "v" gives v.branch_id and v.snapshot_id, both columns can be renamed
 	string Predicate(const string &prefix, const string &snapshot_column = "snapshot_id",
@@ -45,12 +47,12 @@ public:
 	//! The chain predicate with every segment also capped by read_snapshot, an SQL expression such as a placeholder
 	string ViewPredicate(const string &prefix, const string &snapshot_column, const string &read_snapshot,
 	                     const string &branch_column = "branch_id") const;
+	//! The CASE mapping the branch column of a row to the position of its segment, root first
+	string SegmentPosition(const string &prefix, const string &branch_column = "branch_id") const;
 	//! Whether the view of the chain holds the snapshot of the branch
 	bool Contains(idx_t branch_id, idx_t snapshot_id) const;
 	//! The branch whose segment holds the snapshot id
 	idx_t OwnerOf(idx_t snapshot_id) const;
-	//! The cap of the segment that holds the snapshot id, unset when the attached branch holds it
-	optional_idx CapOf(idx_t snapshot_id) const;
 	//! The first catalog and file id a branch allocates, so the ids of branches never collide
 	static idx_t AllocatorBase(idx_t branch_id);
 	//! The branch ids the allocator base keeps apart

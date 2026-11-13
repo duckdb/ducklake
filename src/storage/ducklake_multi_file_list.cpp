@@ -722,15 +722,14 @@ vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
 		auto result = metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter_info.get(),
 		                                                read_info.include_local_changes);
 		// without inlined rows a flush cannot move any of them, a file written since the read reaches the allocator
-		// of the branch that owns its add event
-		auto &chain = transaction.GetCatalog().AttachedChain();
+		// of the branch that wrote its add event
 		bool written_since = std::any_of(result.begin(), result.end(), [&](const DuckLakeFileListEntry &entry) {
-			if (!entry.file_id.IsValid() || !entry.snapshot_id.IsValid()) {
+			if (!entry.file_id.IsValid()) {
 				// LCOV_EXCL_START
 				return false;
 				// LCOV_EXCL_STOP
 			}
-			auto allocator = next_file_ids.find(chain.OwnerOf(entry.snapshot_id.GetIndex()));
+			auto allocator = next_file_ids.find(entry.snapshot_branch_id);
 			return allocator != next_file_ids.end() && entry.file_id.index >= allocator->second;
 		});
 		if (!written_since) {

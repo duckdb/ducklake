@@ -69,8 +69,23 @@ const vector<DuckLakeBranchSegment> &DuckLakeBranchChain::Segments() const {
 	return segments;
 }
 
-optional_idx DuckLakeBranchChain::RootCap() const {
-	return segments.front().last_snapshot;
+optional_idx DuckLakeBranchChain::SegmentCap(idx_t position) const {
+	if (position >= segments.size()) {
+		throw InternalException("Branch chain position %llu is out of range", position);
+	}
+	return segments[position].last_snapshot;
+}
+
+idx_t DuckLakeBranchChain::SnapshotBound(optional_idx position, idx_t read_snapshot) const {
+	// an embedded snapshot id of a file applies up to the cap of the segment whose add event the lineage reads
+	if (!position.IsValid()) {
+		return read_snapshot;
+	}
+	auto cap = SegmentCap(position.GetIndex());
+	if (!cap.IsValid()) {
+		return read_snapshot;
+	}
+	return MinValue(read_snapshot, cap.GetIndex());
 }
 
 static string ColumnPrefix(const string &prefix) {
@@ -100,6 +115,14 @@ string DuckLakeBranchChain::ViewPredicate(const string &prefix, const string &sn
 	                          ColumnPrefix(prefix), snapshot_column, read_snapshot);
 }
 
+string DuckLakeBranchChain::SegmentPosition(const string &prefix, const string &branch_column) const {
+	string arms;
+	for (idx_t position = 0; position < segments.size(); position++) {
+		arms += StringUtil::Format(" WHEN %llu THEN %llu", segments[position].branch_id, position);
+	}
+	return StringUtil::Format("CASE %s%s%s END", ColumnPrefix(prefix), branch_column, arms);
+}
+
 const DuckLakeBranchSegment &DuckLakeBranchChain::SegmentOf(idx_t snapshot_id) const {
 	// the ids of a chain are contiguous, so the first segment whose cap reaches the id holds it
 	for (auto &segment : segments) {
@@ -124,10 +147,6 @@ bool DuckLakeBranchChain::Contains(idx_t branch_id, idx_t snapshot_id) const {
 
 idx_t DuckLakeBranchChain::OwnerOf(idx_t snapshot_id) const {
 	return SegmentOf(snapshot_id).branch_id;
-}
-
-optional_idx DuckLakeBranchChain::CapOf(idx_t snapshot_id) const {
-	return SegmentOf(snapshot_id).last_snapshot;
 }
 
 idx_t DuckLakeBranchChain::AllocatorBase(idx_t branch_id) {

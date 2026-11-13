@@ -208,6 +208,8 @@
       "reason": "Inserts branch rows into the 2.0 branch table, which a 1.0 catalog does not have",
       "paths": [
         "test/sql/branches/branch_allocators.test",
+        "test/sql/branches/branch_nested_segment_cap.test",
+        "test/sql/branches/branch_replacement_segment_cap.test",
         "test/sql/branches/branch_catalog_rows.test",
         "test/sql/branches/branch_chain_corrupt.test",
         "test/sql/branches/branch_column_rows.test",

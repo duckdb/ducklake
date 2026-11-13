@@ -438,6 +438,8 @@ struct DuckLakeFileListEntry {
 	DuckLakeFileData delete_file;
 	optional_idx row_id_start;
 	optional_idx snapshot_id;
+	//! The branch of the add event the lineage reads the file through
+	idx_t snapshot_branch_id = 0;
 	//! Upper bound filter, we only include rows where _ducklake_internal_snapshot_id <= snapshot_filter
 	optional_idx snapshot_filter_max;
 	//! Lower bound filter, we only include rows where _ducklake_internal_snapshot_id >= snapshot_filter_min
