@@ -67,13 +67,9 @@ SELECT count(*) FROM __ducklake_metadata_dl.ducklake_inlined_data_1_1_visibility
 statement ok
 DROP TABLE __ducklake_metadata_dl.drop_blocker
 
+# a flush with nothing to flush drops the superseded table with its companion
 statement ok
-INSERT INTO dl.t VALUES (4, 4)
-
-query I
-SELECT rows_flushed FROM ducklake_flush_inlined_data('dl')
-----
-1
+CALL ducklake_flush_inlined_data('dl')
 
 query I
 SELECT table_name FROM __ducklake_metadata_dl.ducklake_inlined_data_tables ORDER BY ALL
@@ -89,6 +85,14 @@ statement error
 SELECT count(*) FROM __ducklake_metadata_dl.ducklake_inlined_data_1_1_visibility
 ----
 does not exist
+
+statement ok
+INSERT INTO dl.t VALUES (4, 4)
+
+query I
+SELECT rows_flushed FROM ducklake_flush_inlined_data('dl')
+----
+1
 
 query II
 SELECT * FROM dl.t ORDER BY x
