@@ -359,6 +359,15 @@ static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &c
                                       DuckLakeTransaction &transaction, DuckLakeTableEntry &table) {
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto table_id = table.GetTableId();
+
+	// Flush operators for the same table can run concurrently (e.g. two flush calls in one query).
+	// Hold the table's lock across the check, the write, the registration and the marker update,
+	// so that a second flush sees the marker and does not register the same deletions again.
+	auto flush_lock = transaction.GetInlinedFileDeletionsFlushLock(table_id);
+	lock_guard<mutex> flush_guard(*flush_lock);
+	if (transaction.InlinedFileDeletionsFlushed(table_id)) {
+		return;
+	}
 	auto snapshot = transaction.GetSnapshot();
 
 	// Check if this table has an inlined deletion table

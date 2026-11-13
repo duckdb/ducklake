@@ -1,0 +1,31 @@
+# name: test/sql/deletion_inlining/flush_inlined_deletes_concurrent.test
+# description: Concurrent flush calls must not register duplicate deletes for a data file
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/flush_inlined_deletes_concurrent', DATA_INLINING_ROW_LIMIT 500, METADATA_CATALOG 'meta')
+
+statement ok
+SET threads=4
+
+statement ok
+CREATE TABLE lake.t AS SELECT i FROM range(1000) t(i)
+
+statement ok
+DELETE FROM lake.t WHERE i < 400
+
+statement ok
+SELECT * FROM ducklake_flush_inlined_data('lake') UNION ALL SELECT * FROM ducklake_flush_inlined_data('lake')
+
+query IIII
+SELECT (SELECT count(*) FROM meta.ducklake_delete_file WHERE end_snapshot IS NULL), (SELECT count(*) FROM lake.t), count(*), count(DISTINCT i) FROM lake.t
+----
+1	600	600	600

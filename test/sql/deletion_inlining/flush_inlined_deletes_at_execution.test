@@ -33,10 +33,12 @@ EXPLAIN CALL ducklake_flush_inlined_data('ducklake')
 ----
 physical_plan	<REGEX>:.*Ducklake Flush Deletions.*
 
-statement ok
-SET explain_output = 'physical_only'
-
 # explaining does not flush
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/flush_inlined_deletes_at_execution/**/*-delete.*')
+----
+0
+
 query II
 SELECT (SELECT count(*) FROM ducklake_meta.ducklake_inlined_delete_1), (SELECT count(*) FROM ducklake_meta.ducklake_delete_file)
 ----

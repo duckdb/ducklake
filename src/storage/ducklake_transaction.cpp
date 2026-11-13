@@ -2361,6 +2361,15 @@ bool DuckLakeTransaction::InlinedFileDeletionsFlushed(TableIndex table_id) {
 	return state->flushed_inlined_file_deletions.count(table_id) > 0;
 }
 
+shared_ptr<mutex> DuckLakeTransaction::GetInlinedFileDeletionsFlushLock(TableIndex table_id) {
+	lock_guard<mutex> guard(flush_deletions_locks_lock);
+	auto &entry = flush_deletions_locks[table_id];
+	if (!entry) {
+		entry = make_shared_ptr<mutex>();
+	}
+	return entry;
+}
+
 unique_ptr<QueryResult> DuckLakeTransaction::ExecuteRaw(string query) {
 	auto &connection = GetConnection();
 	auto start = std::chrono::steady_clock::now();
