@@ -280,6 +280,8 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto metadata = metadata_manager.LoadDuckLake();
 	DuckLakeVersion resolved_version = DuckLakeVersion::UNSET;
+	// the migration to the dev version heals the catalog and writes the marker, which the loaded metadata predates
+	bool healed_by_migration = false;
 	for (auto &tag : metadata.tags) {
 		if (tag.key == "version") {
 			auto catalog_version = DuckLakeVersionFromString(tag.value);
@@ -338,6 +340,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			if (catalog_version == DuckLakeVersion::V1_1 && catalog_version < target_version) {
 				metadata_manager.MigrateV11();
 				catalog_version = DuckLakeVersion::V2_0_DEV1;
+				healed_by_migration = true;
 			}
 			migrating = false;
 			if (catalog_version != target_version) {
@@ -383,7 +386,8 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	if (resolved_version != DuckLakeVersion::UNSET) {
 		SetVersionedMetadataManager(transaction, resolved_version);
 	}
-	if (resolved_version == DuckLakeVersion::V2_0_DEV1 && !DuckLakeMetadataManager::HasHealMarker(metadata)) {
+	if (resolved_version == DuckLakeVersion::V2_0_DEV1 && !healed_by_migration &&
+	    !DuckLakeMetadataManager::HasHealMarker(metadata)) {
 		if (catalog.GetAttached().IsReadOnly()) {
 			// once the inline range columns are gone the visibility events are the only readable ranges
 			auto &manager = transaction.GetMetadataManager();

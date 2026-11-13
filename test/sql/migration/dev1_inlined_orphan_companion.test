@@ -1,5 +1,5 @@
 # name: test/sql/migration/dev1_inlined_orphan_companion.test
-# description: a companion whose inlined data table a drop interrupted between its statements left behind is dropped by the heal of the next writable attach
+# description: the heal of a writable attach drops a companion whose payload table an interrupted drop left behind
 # group: [migration]
 
 require ducklake

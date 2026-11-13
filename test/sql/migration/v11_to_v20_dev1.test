@@ -101,7 +101,13 @@ DETACH dl
 
 # the migration creates the tag and branch tables and backfills the main branch
 statement ok
+CALL enable_logging('DuckLakeMetadata', storage = 'memory')
+
+statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_to_v20_dev1_files', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+CALL disable_logging()
 
 query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
@@ -113,6 +119,19 @@ query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 ----
 2.0-dev1.3
+
+# once, the attach that migrated runs no second heal
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%heal_complete%'
+----
+1
+
+# and probes no shape after the migration
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+    WHERE query LIKE '%ducklake_data_file f WHERE NOT EXISTS%'
+----
+0
 
 query IIII
 SELECT branch_id, branch_name, parent_id, parent_branch_snapshot FROM meta.ducklake_branch
