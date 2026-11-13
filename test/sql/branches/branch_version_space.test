@@ -1,0 +1,158 @@
+# name: test/sql/branches/branch_version_space.test
+# description: the versions of a nested branch are the contiguous ids of its lineage view, main's ids above the root cap are no versions of it
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1)
+
+statement ok
+INSERT INTO lake.t VALUES (2)
+
+query I
+SELECT id FROM lake.current_snapshot()
+----
+3
+
+# dev forks main at 2 and adds a file at each of its snapshots 3 and 4, feature forks dev at 4 and adds one at its 5
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2), (2, 'feature', 1, 4)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 3, NOW(), schema_version, 1099511627776, 1099511627777, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 2
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 4, NOW(), schema_version, 1099511627776, 1099511627778, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 2
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 5, NOW(), schema_version, 2199023255552, 2199023255553, 2 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 2
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1), (4, NULL, NULL, NULL, NULL, 1), (5, NULL, NULL, NULL, NULL, 2)
+
+statement ok
+COPY (SELECT 10::INTEGER AS i) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_3.parquet' (FORMAT PARQUET, FIELD_IDS {i: 1})
+
+statement ok
+COPY (SELECT 20::INTEGER AS i) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_4.parquet' (FORMAT PARQUET, FIELD_IDS {i: 1})
+
+statement ok
+COPY (SELECT 30::INTEGER AS i) TO '{TEST_DIR}/{BASE_TEST_NAME}_feature_5.parquet' (FORMAT PARQUET, FIELD_IDS {i: 1})
+
+statement ok
+INSERT INTO meta.ducklake_data_file (data_file_id, table_id, path, path_is_relative, file_format, record_count, file_size_bytes, row_id_start) SELECT 1099511627776, 1, '{TEST_DIR}/{BASE_TEST_NAME}_dev_3.parquet', false, 'parquet', 1, file_size_bytes, 100 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_3.parquet')
+
+statement ok
+INSERT INTO meta.ducklake_data_file (data_file_id, table_id, path, path_is_relative, file_format, record_count, file_size_bytes, row_id_start) SELECT 1099511627777, 1, '{TEST_DIR}/{BASE_TEST_NAME}_dev_4.parquet', false, 'parquet', 1, file_size_bytes, 200 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_4.parquet')
+
+statement ok
+INSERT INTO meta.ducklake_data_file (data_file_id, table_id, path, path_is_relative, file_format, record_count, file_size_bytes, row_id_start) SELECT 2199023255552, 1, '{TEST_DIR}/{BASE_TEST_NAME}_feature_5.parquet', false, 'parquet', 1, file_size_bytes, 300 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_feature_5.parquet')
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility VALUES (1, 1, 1099511627776, 3, false), (1, 1, 1099511627777, 4, false), (2, 1, 2199023255552, 5, false)
+
+# main continues to its 7 after the fork
+statement ok
+INSERT INTO lake.t VALUES (3)
+
+statement ok
+INSERT INTO lake.t VALUES (4)
+
+statement ok
+INSERT INTO lake.t VALUES (5)
+
+statement ok
+INSERT INTO lake.t VALUES (6)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS feature (METADATA_CATALOG 'meta', BRANCH 'feature')
+
+query I
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM feature.snapshots()
+----
+[0, 1, 2, 3, 4, 5]
+
+# every id of the view names one snapshot of the lineage of feature, which holds one more row per id
+loop n 1 6
+
+query I
+SELECT count(*) = {n} - 1 FROM feature.t AT (VERSION => {n})
+----
+true
+
+endloop
+
+query I
+SELECT i FROM feature.t AT (VERSION => 3) ORDER BY i
+----
+1
+10
+
+query I
+SELECT i FROM feature.t AT (VERSION => 5) ORDER BY i
+----
+1
+10
+20
+30
+
+# the id after the head and the ids main holds above the root cap are no versions of feature
+statement error
+SELECT i FROM feature.t AT (VERSION => 6)
+----
+No snapshot found at version 6
+
+statement error
+SELECT i FROM feature.t AT (VERSION => 7)
+----
+No snapshot found at version 7
+
+query I
+SELECT i FROM lake.t AT (VERSION => 7) ORDER BY i
+----
+1
+2
+3
+4
+5
+6
+
+# the time of main's 3 resolves to main's 2 on dev, the feed from that time starts at dev's 3
+statement ok
+SET VARIABLE t3 = (SELECT snapshot_time FROM lake.snapshots() WHERE snapshot_id = 3)
+
+query I
+SELECT i FROM dev.t AT (TIMESTAMP => getvariable('t3'))
+----
+1
+
+query IIII
+FROM dev.table_changes('t', getvariable('t3'), NOW()) ORDER BY ALL
+----
+3	100	insert	10
+4	200	insert	20
+
+statement ok
+DETACH feature
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH lake

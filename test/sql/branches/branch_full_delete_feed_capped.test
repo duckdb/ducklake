@@ -1,0 +1,85 @@
+# name: test/sql/branches/branch_full_delete_feed_capped.test
+# description: a file delete on a branch reports the rows of an inherited compacted file up to the fork alone
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (10)
+
+statement ok
+INSERT INTO lake.t VALUES (20)
+
+statement ok
+CALL ducklake_merge_adjacent_files('lake')
+
+query I
+SELECT id FROM lake.current_snapshot()
+----
+4
+
+# the compacted file dates its rows at the inserts and its add event at the first of them
+query III
+SELECT data_file_id, record_count, partial_max FROM meta.ducklake_data_file
+----
+2	2	3
+
+query I
+SELECT snapshot_id FROM meta.ducklake_file_visibility WHERE data_file_id = 2 AND is_delete = false
+----
+2
+
+# dev forks main at 2 and deletes the compacted file at its 5
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT r.range, NOW(), schema_version, 1099511627776, 1099511627776, 1 FROM meta.ducklake_snapshot, range(3, 6) r WHERE branch_id = 0 AND snapshot_id = 2
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes SELECT r.range, NULL, NULL, NULL, NULL, 1 FROM range(3, 6) r
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility VALUES (1, 1, 2, 5, true)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT i FROM dev.t AT (VERSION => 4)
+----
+10
+
+query I
+SELECT i FROM dev.t
+----
+
+# the row main compacted in after the fork was never visible on dev and is no deletion of dev
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('dev', 'main', 't', 5, 5)
+----
+0	5	10
+
+query IIII
+FROM dev.table_changes('t', 2, 5) ORDER BY ALL
+----
+2	0	insert	10
+5	0	delete	10
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH lake

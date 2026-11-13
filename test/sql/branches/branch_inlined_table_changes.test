@@ -1,5 +1,5 @@
 # name: test/sql/branches/branch_inlined_table_changes.test
-# description: the change feeds of inlined rows on a branch equal those of main below the fork
+# description: the change feeds of inlined rows on a branch equal those of main below the fork and continue with the branch above it
 # group: [branches]
 
 require ducklake
@@ -78,16 +78,26 @@ SELECT i FROM dev.t ORDER BY i
 1
 12
 
-# the feeds above the fork are those of main alone
+# the snapshot 5 of main is another lineage, the 5 of dev holds no events
 query IIII
 FROM dl.table_changes('t', 5, 5) ORDER BY ALL
 ----
 5	3	insert	4
 
-statement error
-FROM dev.table_changes('t', 5, 5)
+query IIII
+FROM dev.table_changes('t', 5, 5) ORDER BY ALL
 ----
-not supported yet
+
+# across the fork the feed of dev continues with the snapshots of dev alone
+query IIII
+FROM dev.table_changes('t', 2, 5) ORDER BY ALL
+----
+2	0	insert	1
+2	1	insert	2
+2	2	insert	3
+3	1	update_postimage	12
+3	1	update_preimage	2
+4	2	delete	3
 
 statement ok
 DETACH dev

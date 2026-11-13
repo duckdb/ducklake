@@ -1,0 +1,117 @@
+# name: test/sql/branches/branch_feed_previous_delete_tie.test
+# description: on an equal back dated begin the previous delete file of a file delete is the one of the later segment
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1), (2), (3), (4)
+
+statement ok
+DELETE FROM lake.t WHERE i = 1
+
+statement ok
+INSERT INTO lake.t VALUES (10)
+
+statement ok
+INSERT INTO lake.t VALUES (20)
+
+statement ok
+DELETE FROM lake.t WHERE i = 2
+
+query I
+SELECT id FROM lake.current_snapshot()
+----
+6
+
+# one cumulative delete file of main holds the dates 3 and 6, its add event is back dated to 3
+query II
+SELECT COUNT(*), MAX(partial_max) FROM meta.ducklake_delete_file
+----
+1	6
+
+query I
+SELECT snapshot_id FROM meta.ducklake_delete_file_visibility WHERE branch_id = 0 AND NOT is_delete
+----
+3
+
+# dev forks main at 6, at its 7 it replaces the delete file with a cumulative one dated 3, 6 and 7, at its 8 it deletes the file
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 6)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 7, NOW(), schema_version, 1099511627776, 1099511627777, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 6
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 8, NOW(), schema_version, 1099511627776, 1099511627777, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 6
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (7, NULL, NULL, NULL, NULL, 1), (8, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+COPY (SELECT ''::VARCHAR AS file_path, p::BIGINT AS pos, s::BIGINT AS _ducklake_internal_snapshot_id FROM (VALUES (0, 3), (1, 6), (2, 7)) v(p, s)) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet' (FORMAT PARQUET)
+
+statement ok
+INSERT INTO meta.ducklake_delete_file (delete_file_id, table_id, data_file_id, path, path_is_relative, format, delete_count, file_size_bytes, partial_max) SELECT 1099511627776, 1, 0, '{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet', false, 'parquet', 3, file_size_bytes, 7 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet')
+
+# the add event of the replacement is back dated to the begin of the replaced file, which dev ends at 7
+statement ok
+INSERT INTO meta.ducklake_delete_file_visibility VALUES (1, 1, 1099511627776, 3, false)
+
+statement ok
+INSERT INTO meta.ducklake_delete_file_visibility SELECT 1, 1, delete_file_id, 7, true FROM meta.ducklake_delete_file WHERE delete_file_id <> 1099511627776
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility VALUES (1, 1, 0, 8, true)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT i FROM dev.t ORDER BY i
+----
+10
+20
+
+query I
+SELECT i FROM dev.t AT (VERSION => 7) ORDER BY i
+----
+4
+10
+20
+
+# the previous delete file of the file delete at 8 is the one of dev, it names the delete of 7 that the file of main does not
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('dev', 'main', 't', 8, 8) ORDER BY rowid
+----
+3	8	4
+
+query IIII
+FROM dev.table_changes('t', 7, 8) ORDER BY ALL
+----
+7	2	delete	3
+8	3	delete	4
+
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('lake', 'main', 't', 3, 6) ORDER BY rowid
+----
+0	3	1
+1	6	2
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH lake

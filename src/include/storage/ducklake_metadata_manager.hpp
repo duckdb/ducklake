@@ -957,7 +957,6 @@ public:
 	string SchemaVersionsLineageFilter(const string &prefix) const;
 	//! Selects the rows of main, preceded by AND, empty before 2.0
 	string MainSnapshotFilter() const;
-	void ThrowIfPastBranchFork(DuckLakeSnapshot snapshot) const;
 	bool HasBranchTable();
 	//! Whether the branch table has parent columns rather than the fork columns of an older dev build
 	bool HasBranchTableShape();
@@ -1129,6 +1128,8 @@ public:
 	static string GetFileVisibilityTableStatement();
 	static string GetDeleteFileVisibilityTableStatement();
 	static string GetBranchTableStatement();
+	//! A row (b, m, w, s, n) maps the snapshot (w, s) to (b, n) for every reader whose view holds (b, m), n <= m
+	//! The merge commit alone writes rows, the readers of a merged file map its embedded ids, AT (VERSION) never does
 	static string GetSnapshotRemapTableStatement();
 	static string GetMainBranchRowStatement();
 	//! Whether the catalog already has every metadata table and column of v1.1

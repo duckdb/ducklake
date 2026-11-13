@@ -348,10 +348,9 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 	}
 
 	if (!delete_scan.previous_delete_file.path.empty() && !has_embedded_snapshots) {
-		// if we have a previous delete file - scan that set of deletes
-		// This only matters if we do not have a partial deletion file, since thes have all deletes
-		auto previous_deletes =
-		    ScanDeleteFile(context, delete_scan.previous_delete_file, optional_idx(), optional_idx());
+		// the previous file names rows deleted before the range, its dates past its writer's cap never applied here
+		auto previous_deletes = ScanDeleteFile(context, delete_scan.previous_delete_file, optional_idx(),
+		                                       delete_scan.previous_delete_snapshot_max);
 		// these deletes are not new - we should not scan them
 		for (auto delete_idx : previous_deletes.deleted_rows) {
 			if (delete_idx >= delete_scan.row_count) {

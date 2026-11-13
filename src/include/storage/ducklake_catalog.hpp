@@ -618,7 +618,7 @@ private:
 	//! Table IDs where the inlined deletion table is known to NOT exist, with the snapshot_id at which we checked
 	//! Valid as long as current snapshot.snapshot_id <= cached snapshot_id, the ids of the attached lineage
 	unordered_map<idx_t, idx_t> inlined_deletion_not_exists;
-	//! The rewrite snapshots of each table, read from the snapshot changes of committed snapshots
+	//! The rewrite snapshots of each table, ids of the attached lineage view read from its snapshot changes
 	mutex rewrite_snapshots_lock;
 	optional_idx rewrite_snapshots_read_until;
 	unordered_map<idx_t, set<idx_t>> rewrite_snapshots;

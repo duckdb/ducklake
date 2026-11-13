@@ -500,6 +500,10 @@ struct DuckLakeDeleteScanEntry {
 	optional_idx start_snapshot;
 	//! The end of the snapshot range for filtering
 	optional_idx end_snapshot;
+	//! The cap of the previous delete file's segment, unset on main and for a file of the attached branch
+	optional_idx previous_delete_snapshot_max;
+	//! The bound of the rows of an inherited partial data file, its rows past it were never visible
+	optional_idx row_snapshot_max;
 	//! Data file ID for matching inlined deletions
 	DataFileIndex file_id;
 	//! Inlined file deletions {row_id -> snapshot_id}

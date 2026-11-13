@@ -821,6 +821,8 @@ void DuckLakeMultiFileList::GetTableDeletions() const {
 		file_entry.row_id_start = file.row_id_start;
 		file_entry.snapshot_id = file.snapshot_id;
 		file_entry.mapping_id = file.mapping_id;
+		// the rows of an inherited partial file past the cap of its writer's segment were never visible
+		file_entry.snapshot_filter_max = file.row_snapshot_max;
 		files.emplace_back(std::move(file_entry));
 	}
 	AddInlinedDataTables(transaction);

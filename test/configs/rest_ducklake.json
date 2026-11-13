@@ -795,7 +795,18 @@
         "test/sql/branches/branch_version_gate.test",
         "test/sql/migration/dev1_branch_additions.test",
         "test/sql/migration/dev1_heal_keeps_current_branches.test",
-        "test/sql/migration/dev1_inline_ranges_read_only.test"
+        "test/sql/migration/dev1_inline_ranges_read_only.test",
+        "test/sql/branches/branch_table_changes_across_fork.test",
+        "test/sql/branches/branch_feed_inherited_dated_deletes.test",
+        "test/sql/branches/branch_feed_inherited_partial_file.test",
+        "test/sql/branches/branch_feed_full_delete_previous_file.test",
+        "test/sql/branches/branch_full_delete_feed_capped.test",
+        "test/sql/branches/branch_nested_feed_segments.test",
+        "test/sql/branches/branch_feed_prefix_property.test",
+        "test/sql/branches/branch_rewrite_snapshots_view.test",
+        "test/sql/branches/branch_version_space.test",
+        "test/sql/branches/branch_schema_versions_lineage.test",
+        "test/sql/branches/branch_feed_previous_delete_tie.test"
       ]
     }
   ]
