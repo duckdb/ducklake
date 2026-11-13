@@ -1,0 +1,153 @@
+# name: test/sql/rest/rest_filter_settings.test
+# description: Scan filters of the REST server compare constants as the settings of the server do
+# group: [rest]
+
+require json
+
+require icu
+
+include test/template/rest_setup.test_template
+
+statement ok rest_db:rest_server_con
+CALL rest_lake.set_option('data_inlining_row_limit', 0)
+
+# a TIMESTAMP constant is a time in the time zone of the server
+statement ok rest_db:rest_server_con
+SET GLOBAL TimeZone='America/New_York'
+
+statement ok rest_db:rest_server_con
+CREATE TABLE rest_lake.t(tz TIMESTAMPTZ, ts TIMESTAMP)
+
+statement ok rest_db:rest_server_con
+INSERT INTO rest_lake.t VALUES (TIMESTAMPTZ '2024-01-01 05:00:00+00', TIMESTAMP '2024-01-01 00:00:00')
+
+query II rest_db:rest_server_con
+SELECT tz = TIMESTAMP '2024-01-01 00:00:00', ts = TIMESTAMPTZ '2024-01-01 05:00:00+00' FROM rest_lake.t
+----
+true	true
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"filters":{"expressions":["ts = TIMESTAMPTZ ''2024-01-01 05:00:00+00''"]}}')
+----
+200	1
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"filters":{"expressions":["tz = TIMESTAMP ''2024-01-01 00:00:00''"]}}')
+----
+200	1
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"filters":{"expressions":["tz IN (TIMESTAMP ''2024-01-01 00:00:00'', TIMESTAMP ''2020-01-01 00:00:00'')"]}}')
+----
+200	1
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"filters":{"expressions":["tz > TIMESTAMP ''2024-01-01 00:00:00''"]}}')
+----
+200	0
+
+# with old_implicit_casting a VARCHAR column is compared to a number as a number
+statement ok rest_db:rest_server_con
+CREATE TABLE rest_lake.v(v VARCHAR)
+
+statement ok rest_db:rest_server_con
+INSERT INTO rest_lake.v VALUES ('01')
+
+statement ok rest_db:rest_server_con
+SET GLOBAL old_implicit_casting=true
+
+query I rest_db:rest_server_con
+SELECT count(*) FROM rest_lake.v WHERE v = 1
+----
+1
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/2/scan', '{"filters": {"expressions": ["v = 1"]}}')
+----
+200	1
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/2/scan', '{"filters": {"expressions": ["v IN (1, 2)"]}}')
+----
+200	1
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/2/scan', '{"filters": {"expressions": ["v = ''02''"]}}')
+----
+200	0
+
+# the binder resolves types of equal priority by the order of the operands
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/2/scan', '{"filters": {"expressions": ["1 = v"]}}')
+----
+200	1
+
+statement ok rest_db:rest_server_con
+SET GLOBAL TimeZone='Etc/GMT+5'
+
+statement ok rest_db:rest_server_con
+CREATE TABLE rest_lake.tt(tt TIMETZ)
+
+statement ok rest_db:rest_server_con
+INSERT INTO rest_lake.tt VALUES (TIMETZ '15:00:00+00')
+
+query I rest_db:rest_server_con
+SELECT TIME '15:00:00' = tt FROM rest_lake.tt
+----
+true
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/3/scan', '{"filters":{"expressions":["TIME ''15:00:00'' = tt"]}}')
+----
+200	1
+
+# a DATE converts to a TIMESTAMPTZ in the time zone, where a day can be skipped
+statement ok rest_db:rest_server_con
+SET GLOBAL TimeZone='Pacific/Apia'
+
+statement ok rest_db:rest_server_con
+CREATE TABLE rest_lake.d(d DATE)
+
+statement ok rest_db:rest_server_con
+INSERT INTO rest_lake.d VALUES (DATE '2011-12-30')
+
+query I rest_db:rest_server_con
+SELECT d = TIMESTAMPTZ '2011-12-30 10:00:00+00' FROM rest_lake.d
+----
+true
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/4/scan', '{"filters":{"expressions":["d = TIMESTAMPTZ ''2011-12-30 10:00:00+00''"]}}')
+----
+200	1
+
+# a DATE constant still prunes a DATE field
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/4/scan', '{"filters":{"expressions":["d > DATE ''2012-01-01''"]}}')
+----
+200	0
+
+# an IN list compares in the common type of all its elements, here DOUBLE
+statement ok rest_db:rest_server_con
+CREATE TABLE rest_lake.u(x UBIGINT)
+
+statement ok rest_db:rest_server_con
+INSERT INTO rest_lake.u VALUES (9007199254740993)
+
+query I rest_db:rest_server_con
+SELECT count(*) FROM rest_lake.u WHERE x IN (9007199254740992::HUGEINT, 0::UHUGEINT)
+----
+1
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/5/scan', '{"filters":{"expressions":["x IN (9007199254740992::HUGEINT, 0::UHUGEINT)"]}}')
+----
+200	1
+
+# an IN list of values of the field still prunes
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/5/scan', '{"filters":{"expressions":["x IN (1::UBIGINT, 2::UBIGINT)"]}}')
+----
+200	0
+
+include test/template/rest_teardown.test_template

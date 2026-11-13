@@ -175,12 +175,12 @@ DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableIn
 
 // ALTER TABLE ADD COLUMN
 DuckLakeTableEntry::DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change,
-                                       ClientContext &context)
+                                       ClientContext &context, const Value &initial_default)
     : DuckLakeTableEntry(parent, info, local_change) {
 	LogicalIndex new_col_idx(columns.LogicalColumnCount() - 1);
 	auto &new_col = GetColumn(new_col_idx);
 	idx_t next_col = next_column_id.GetIndex();
-	field_data = DuckLakeFieldData::AddColumn(*field_data, new_col, next_col, context);
+	field_data = DuckLakeFieldData::AddColumn(*field_data, new_col, next_col, context, initial_default);
 	next_column_id = next_col;
 }
 
@@ -520,33 +520,18 @@ idx_t DuckLakeTableEntry::GetNetDataFileRowCount(DuckLakeTransaction &transactio
 vector<DuckLakeInlinedTableInfo> DuckLakeTableEntry::GetInlinedDataTables(DuckLakeTransaction &transaction,
                                                                           DuckLakeSnapshot snapshot,
                                                                           bool include_local_changes) const {
-	// another attach can drop superseded inlined tables without bumping the schema version
-	bool may_be_dropped = inlined_data_tables.size() > 1;
-	if (inlined_data_tables.size() == 1) {
-		// the only inlined table can be superseded after an older or pinned snapshot
-		may_be_dropped = transaction.GetCatalog().CatalogSnapshot() || transaction.GetCatalog().OnBranch() ||
-		                 snapshot.schema_version < transaction.GetSnapshot().schema_version;
-	}
-	identifier_set_t registered_tables;
-	if (may_be_dropped) {
-		registered_tables = transaction.GetMetadataManager().GetInlinedTableNames(GetTableId());
-	}
 	vector<DuckLakeInlinedTableInfo> result;
-	for (auto &inlined_table : inlined_data_tables) {
+	for (auto &inlined_table : transaction.GetMetadataManager().GetInlinedDataTables(*this, snapshot)) {
 		if (include_local_changes && transaction.InlinedTableFlushed(inlined_table.table_name)) {
 			continue;
 		}
-		if (may_be_dropped && registered_tables.find(inlined_table.table_name) == registered_tables.end()) {
-			continue;
-		}
-		result.push_back(inlined_table);
+		result.push_back(std::move(inlined_table));
 	}
 	return result;
 }
 
-idx_t DuckLakeTableEntry::GetNetInlinedRowCount(DuckLakeTransaction &transaction) {
+idx_t DuckLakeTableEntry::GetNetInlinedRowCount(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
 	auto &metadata_manager = transaction.GetMetadataManager();
-	auto snapshot = transaction.GetSnapshot();
 	idx_t total = 0;
 	for (auto &inlined_table : GetInlinedDataTables(transaction, snapshot)) {
 		total += metadata_manager.GetNetInlinedRowCount(inlined_table.table_name, snapshot);
@@ -889,7 +874,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 	CheckSupportedType(info.new_column.Type());
 
 	RequireNextColumnId(transaction);
-	auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::ADD_COLUMN, context);
+	auto new_entry = make_uniq<DuckLakeTableEntry>(*this, table_info, LocalChangeType::ADD_COLUMN, context,
+	                                               transaction.TakeInitialDefault());
 
 	if (transaction.HasTransactionInlinedData(GetTableId())) {
 		auto &new_table = new_entry->Cast<DuckLakeTableEntry>();
@@ -1265,7 +1251,8 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(DuckLakeTransaction &tra
 
 	// generate a new field id for the column
 	auto next_field_id = next_column_id.GetIndex();
-	auto child_field_id = DuckLakeFieldId::FieldIdFromColumn(info.new_field, next_field_id, context.get());
+	auto child_field_id = DuckLakeFieldId::FieldIdFromColumn(info.new_field, next_field_id, context.get(), false,
+	                                                         transaction.TakeInitialDefault());
 	next_column_id = next_field_id;
 
 	ValidateAddedFieldsCanSkipStats(parent_id, *child_field_id);

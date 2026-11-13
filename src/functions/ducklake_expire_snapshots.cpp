@@ -10,8 +10,8 @@ struct ExpireSnapshotsBindData : public MetadataBindData {
 	}
 
 	DuckLakeCatalog &catalog;
-	//! The criterion of the expiry, empty when nothing is expired
-	string filter;
+	//! The criterion of the expiry
+	DuckLakeSnapshotFilter filter;
 	bool dry_run = false;
 };
 
@@ -30,6 +30,10 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
                                                             vector<LogicalType> &return_types,
                                                             vector<Identifier> &names) {
 	auto &ducklake_catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
+	if (DuckLakeTransaction::Get(context, ducklake_catalog).GetMetadataManager().IsRemote()) {
+		throw NotImplementedException("DuckLake REST catalogs do not support expiring snapshots: run the maintenance "
+		                              "functions on the DuckLake that the server serves");
+	}
 	auto result = make_uniq<ExpireSnapshotsBindData>(ducklake_catalog);
 	DuckLakeSnapshotsFunction::GetSnapshotTypes(return_types, names);
 
@@ -42,7 +46,7 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 	if (!result->dry_run) {
 		ducklake_catalog.VerifyWritable();
 	}
-	vector<string> snapshot_ids;
+	auto &filter = result->filter;
 	auto versions_entry = input.named_parameters.find("versions");
 	bool has_versions = versions_entry != input.named_parameters.end();
 	if (has_versions && !versions_entry->second.IsNull()) {
@@ -53,7 +57,7 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 			if (BigIntValue::Get(snapshot_id) < 0) {
 				throw BinderException("The versions option must only contain non-negative snapshot ids.");
 			}
-			snapshot_ids.push_back(snapshot_id.ToString());
+			filter.snapshot_ids.push_back(NumericCast<idx_t>(BigIntValue::Get(snapshot_id)));
 		}
 	}
 	Value older_than;
@@ -64,32 +68,25 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 		    "same time. Please use only one criterion.");
 	}
 	// an empty version set, or no criterion and no global default, expires no snapshots
-	if ((has_versions && snapshot_ids.empty()) || (!has_versions && !has_timestamp && older_than_default.empty())) {
-		// the expiry still drops the tags whose expiry time has passed
-		result->filter = "FALSE";
+	if ((has_versions && filter.snapshot_ids.empty()) ||
+	    (!has_versions && !has_timestamp && older_than_default.empty())) {
+		// the expiry still drops the tags whose expiry time has passed, an empty id list selects no snapshots
+		filter.snapshot_ids.clear();
+		filter.has_snapshot_ids = true;
 		return std::move(result);
 	}
 
-	string filter;
-	// we can never delete the most recent snapshot, which is the newest one of the attached branch from 2.0 on
-	string head_filter;
-	if (ducklake_catalog.SupportsBranching()) {
-		head_filter = StringUtil::Format(" WHERE branch_id = %llu", ducklake_catalog.AttachedBranchId());
-	}
-	filter = StringUtil::Format(
-	    "snapshot_id != (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot%s) AND ", head_filter);
+	// we can never delete the most recent snapshot
+	filter.exclude_latest = true;
 	if (has_timestamp) {
 		auto from_timestamp = older_than.GetValue<timestamp_tz_t>();
-		auto timestamp_filter = DuckLakeTableFunctionUtil::FormatTimestampISO8601(timestamp_t(from_timestamp.value));
-		filter += StringUtil::Format("snapshot_time::TIMESTAMPTZ < '%s'", timestamp_filter);
+		filter.older_than = DuckLakeTableFunctionUtil::FormatTimestampISO8601(timestamp_t(from_timestamp.value));
 	} else if (!has_versions) {
-		auto timestamp_filter =
+		filter.older_than =
 		    DuckLakeTableFunctionUtil::FormatTimestampOlderThan("expire_older_than", older_than_default);
-		filter += StringUtil::Format("snapshot_time::TIMESTAMPTZ < '%s'", timestamp_filter);
 	} else {
-		filter += StringUtil::Format("snapshot_id IN (%s)", StringUtil::Join(snapshot_ids, ", "));
+		filter.has_snapshot_ids = true;
 	}
-	result->filter = filter;
 	if (result->dry_run) {
 		auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
 		for (auto &snapshot : transaction.ExpirableSnapshots(filter)) {

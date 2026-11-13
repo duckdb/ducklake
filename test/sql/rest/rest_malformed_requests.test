@@ -1,0 +1,300 @@
+# name: test/sql/rest/rest_malformed_requests.test
+# description: The REST server reads optional members of requests and rejects malformed request bodies
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range(100)
+
+# the deletions of rows of a file are inlined, and the change feed lists them with the file
+statement ok
+DELETE FROM dl.t WHERE i < 3
+
+query I
+SELECT count(*) FROM dl.t
+----
+97
+
+query III
+SELECT status, json_array_length(response->'$.deletions'), json_array_length(response->'$.deletions[0].inlined_file_deletions')
+FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/changes', '{"start_snapshot_id": 2, "changes": "deletions"}')
+----
+200	1	3
+
+# the snapshots before a timestamp
+query II
+SELECT status, json_array_length(response->'$.snapshots') FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots?older_than=2000-01-01%2000:00:00%2B00', '')
+----
+200	0
+
+query II
+SELECT status, json_array_length(response->'$.snapshots') FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots?older_than=2100-01-01%2000:00:00%2B00', '')
+----
+200	4
+
+# timestamps that are not valid
+query II
+SELECT status, response->>'$.error.message' LIKE '%invalid timestamp%' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots?older_than=bogus', '')
+----
+400	true
+
+query II
+SELECT status, response->>'$.error.message' LIKE '%invalid timestamp%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/compactions', '{"type": "merge_adjacent", "newer_than": "2000-01-01 00:00:00+00", "older_than": "bogus"}')
+----
+400	true
+
+# merge_adjacent_files sends the bounds of the timestamps of the files
+statement ok
+SELECT * FROM ducklake_merge_adjacent_files('dl', newer_than => TIMESTAMPTZ '2000-01-01', older_than => now())
+
+# a body that is not valid JSON
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"extended": tru')
+----
+400	Failed to parse DuckLake REST JSON: unexpected end of data at position 16
+
+# a body that is not an object
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '[1]')
+----
+400	DuckLake REST: the body of a request has to be a JSON object
+
+# members of the wrong type
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"extended": 1}')
+----
+400	DuckLake REST: expected a JSON boolean
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"snapshot_id": -1}')
+----
+400	DuckLake REST: expected a non-negative JSON integer
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"snapshot_id": "x"}')
+----
+400	DuckLake REST: expected a JSON integer
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/compactions', '{"type": "merge_adjacent", "delete_threshold": "x"}')
+----
+400	DuckLake REST: expected a JSON number
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"insert_rows": {"table_id": "x"}}]}')
+----
+400	DuckLake REST: expected a JSON integer
+
+# missing or malformed members of nested objects of a scan
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"snapshot": {"snapshot_id": 1}}')
+----
+400	DuckLake REST: missing required field "schema_version"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"aggregates": [{}]}')
+----
+400	DuckLake REST: missing required field "function"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"columns": [{"field_id": 1, "children": [{}]}]}')
+----
+400	DuckLake REST: missing required field "field_id"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"filters": {"expressions": 1}}')
+----
+400	DuckLake REST: expected a JSON array
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"filters": {"order_by": [{"function": "min"}]}}')
+----
+400	DuckLake REST: missing required field "column_id"
+
+# missing or malformed members of commit requests
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"create_view": {"placeholder_id": -1}}]}')
+----
+400	DuckLake REST: missing required field "schema_id"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"create_macro": {"placeholder_id": -1, "schema_id": 0, "macro": {"macro_name": "m", "implementations": [{"type": "scalar"}]}}}]}')
+----
+400	DuckLake REST: missing required field "sql"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"create_macro": {"placeholder_id": -1, "schema_id": 0, "macro": {"macro_name": "m", "implementations": [{"sql": "1", "type": "scalar", "parameters": [{}]}]}}}]}')
+----
+400	DuckLake REST: missing required field "parameter_name"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"set_option": {"option": {}}}]}')
+----
+400	DuckLake REST: missing required field "key"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"insert_rows": {"table_id": 1, "column_stats": [{}]}}]}')
+----
+400	DuckLake REST: missing required field "column_id"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"insert_files": {"table_id": 1, "files": [{"path": "f.parquet"}]}}]}')
+----
+400	DuckLake REST: missing required field "record_count"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"insert_files": {"table_id": 1, "files": [{"path": "f.parquet", "record_count": 1, "file_size_bytes": 1, "column_stats": [{}]}]}}]}')
+----
+400	DuckLake REST: missing required field "column_id"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"delete_data": {"table_id": 1, "delete_files": [{"path": "d.parquet"}]}}]}')
+----
+400	DuckLake REST: missing required field "delete_count"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"delete_data": {"table_id": 1, "file_row_deletes": [{"data_file_id": 0}]}}]}')
+----
+400	DuckLake REST: missing required field "row_ids"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"delete_data": {"table_id": 1, "dropped_files": [{"data_file_id": 0}]}}]}')
+----
+400	DuckLake REST: missing required field "path"
+
+# missing or malformed members of alterations
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": 1, "alter": {"add_column": {"column": {"column_name": "x"}}}}}]}')
+----
+400	DuckLake REST: missing required field "column_type"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": 1, "alter": {"add_field": {"column_path": ["i"], "field": {}}}}}]}')
+----
+400	DuckLake REST: missing required field "column_name"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": 1, "alter": {"change_column_type": {"column_path": ["i"]}}}}]}')
+----
+400	DuckLake REST: missing required field "column_type"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": 1, "alter": {"drop_not_null": {}}}}]}')
+----
+400	DuckLake REST: missing required field "column_path"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": 1, "alter": {"remove_column": {}}}}]}')
+----
+400	DuckLake REST: missing required field "column_name"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": 1, "alter": {"remove_field": {}}}}]}')
+----
+400	DuckLake REST: missing required field "column_path"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": 1, "alter": {"rename_column": {}}}}]}')
+----
+400	DuckLake REST: missing required field "old_name"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": 1, "alter": {"rename_field": {}}}}]}')
+----
+400	DuckLake REST: missing required field "column_path"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": 1, "alter": {"rename_view": {}}}}]}')
+----
+400	DuckLake REST: missing required field "new_name"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": 1, "alter": {"reset_options": {"options": 1}}}}]}')
+----
+400	DuckLake REST: expected a JSON array
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": 1, "alter": {"set_column_comment": {}}}}]}')
+----
+400	DuckLake REST: missing required field "entry_type"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": 1, "alter": {"set_default": {}}}}]}')
+----
+400	DuckLake REST: missing required field "column_path"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": 1, "alter": {"set_not_null": {}}}}]}')
+----
+400	DuckLake REST: missing required field "column_path"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": 1, "alter": {"set_options": {"options": 1}}}}]}')
+----
+400	DuckLake REST: expected a JSON object
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": 1, "alter": {"set_partitioned_by": {"partitioned_by": 1}}}}]}')
+----
+400	DuckLake REST: expected a JSON array
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": 1, "alter": {"set_sorted_by": {"sorted_by": 1}}}}]}')
+----
+400	DuckLake REST: expected a JSON array
+
+# an id that is not valid
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"snapshot_id": 18446744073709551615}')
+----
+400	DuckLake REST: 18446744073709551615 is not a valid id
+
+# malformed types
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"create_table": {"placeholder_id": -1, "schema_id": 0, "table_name": "x", "columns": [{"column_name": "c", "column_type": "int32"}]}}]}')
+----
+400	DuckLake REST: expected a JSON object when reading "id"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"create_table": {"placeholder_id": -1, "schema_id": 0, "table_name": "x", "columns": [{"column_name": "c", "column_type": {"id": 5}}]}}]}')
+----
+400	DuckLake REST: expected a JSON string
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"create_table": {"placeholder_id": -1, "schema_id": 0, "table_name": "x", "columns": [{"column_name": "c", "column_type": {"id": "struct", "children": [{"name": "a"}]}}]}}]}')
+----
+400	DuckLake REST: missing required field "type"
+
+# an object that is null
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"create_macro": {"placeholder_id": -1, "schema_id": 0, "macro": null}}]}')
+----
+400	DuckLake REST: expected a JSON object when reading "macro_name"
+
+# malformed column statistics
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"insert_rows": {"table_id": 1, "column_stats": [{"column_id": 0, "type": {"id": "int32"}, "null_count": "x"}]}}]}')
+----
+400	DuckLake REST: expected a JSON integer
+
+# malformed partition values and name maps of added files
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"insert_files": {"table_id": 1, "files": [{"path": "f.parquet", "record_count": 1, "file_size_bytes": 1, "partition_values": [{}]}]}}]}')
+----
+400	DuckLake REST: missing required field "partition_key_index"
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"insert_files": {"table_id": 1, "files": [{"path": "f.parquet", "record_count": 1, "file_size_bytes": 1}], "name_maps": [{"columns": [{"column_id": 1}]}]}}]}')
+----
+400	DuckLake REST: missing required field "source_name"
+
+include test/template/rest_teardown.test_template

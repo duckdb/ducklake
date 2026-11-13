@@ -186,6 +186,44 @@ struct DuckLakeSnapshotsState : public GlobalTableFunctionState {
 	DataChunk scan_chunk;
 };
 
+//! The snapshots of a remote metadata manager, in the column order of ReadSnapshots
+static unique_ptr<ColumnDataCollection> RemoteSnapshotsToCollection(ClientContext &context,
+                                                                    const vector<DuckLakeSnapshotInfo> &snapshots,
+                                                                    idx_t newest_snapshot_id) {
+	vector<LogicalType> types {LogicalType::BIGINT,  LogicalType::TIMESTAMP_TZ, LogicalType::BIGINT,
+	                           LogicalType::VARCHAR, LogicalType::VARCHAR,      LogicalType::VARCHAR,
+	                           LogicalType::VARCHAR, LogicalType::BIGINT};
+	auto collection = make_uniq<ColumnDataCollection>(context, types);
+	ColumnDataAppendState append_state;
+	collection->InitializeAppend(append_state);
+	vector<reference<const DuckLakeSnapshotInfo>> visible;
+	for (auto &snapshot : snapshots) {
+		if (snapshot.id <= newest_snapshot_id) {
+			visible.push_back(snapshot);
+		}
+	}
+	DataChunk chunk;
+	chunk.Initialize(context, types);
+	for (idx_t start = 0; start < visible.size(); start += STANDARD_VECTOR_SIZE) {
+		auto count = MinValue<idx_t>(STANDARD_VECTOR_SIZE, visible.size() - start);
+		chunk.Reset();
+		for (idx_t row = 0; row < count; row++) {
+			auto &snapshot = visible[start + row].get();
+			chunk.data[0].Append(Value::BIGINT(NumericCast<int64_t>(snapshot.id)));
+			chunk.data[1].Append(Value::TIMESTAMPTZ(snapshot.time));
+			chunk.data[2].Append(Value::BIGINT(NumericCast<int64_t>(snapshot.schema_version)));
+			chunk.data[3].Append(Value(snapshot.change_info.changes_made));
+			chunk.data[4].Append(snapshot.author.DefaultCastAs(LogicalType::VARCHAR));
+			chunk.data[5].Append(snapshot.commit_message.DefaultCastAs(LogicalType::VARCHAR));
+			chunk.data[6].Append(snapshot.commit_extra_info.DefaultCastAs(LogicalType::VARCHAR));
+			chunk.data[7].Append(Value::BIGINT(NumericCast<int64_t>(snapshot.next_file_id)));
+		}
+		chunk.CheckCardinality(count);
+		collection->Append(append_state, chunk);
+	}
+	return collection;
+}
+
 static unique_ptr<FunctionData> DuckLakeSnapshotsBind(ClientContext &context, TableFunctionBindInput &input,
                                                       vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
@@ -193,9 +231,15 @@ static unique_ptr<FunctionData> DuckLakeSnapshotsBind(ClientContext &context, Ta
 
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto result = make_uniq<DuckLakeSnapshotsBindData>();
-	auto query_result = metadata_manager.ReadSnapshots(StringUtil::Format(
-	    "snapshot_id <= %llu%s", transaction.GetNewestVisibleSnapshotId(), metadata_manager.BranchLineageFilter()));
-	result->snapshots = query_result->TakeCollection();
+	auto newest_snapshot_id = transaction.GetNewestVisibleSnapshotId();
+	if (metadata_manager.IsRemote()) {
+		result->snapshots =
+		    RemoteSnapshotsToCollection(context, metadata_manager.GetAllSnapshots(), newest_snapshot_id);
+	} else {
+		auto query_result = metadata_manager.ReadSnapshots(
+		    StringUtil::Format("snapshot_id <= %llu%s", newest_snapshot_id, metadata_manager.BranchLineageFilter()));
+		result->snapshots = query_result->TakeCollection();
+	}
 	DuckLakeSnapshotsFunction::GetSnapshotTypes(return_types, names);
 	return std::move(result);
 }

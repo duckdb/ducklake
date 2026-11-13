@@ -1,5 +1,5 @@
 # name: benchmark/micro/read/snapshots_listing_limit.benchmark
-# description: Read the first 10 rows of ducklake_snapshots over 100001 snapshots
+# description: Read the first 10 rows of ducklake_snapshots over 100001 snapshots, five times
 # group: [read]
 
 name Snapshots Listing Limit
@@ -11,13 +11,14 @@ require ducklake
 include benchmark/micro/fixtures/snap100k.benchmark.in
 
 run
-SELECT * FROM ducklake_snapshots('lake') LIMIT 10;
-SELECT * FROM ducklake_snapshots('lake') LIMIT 10;
-SELECT * FROM ducklake_snapshots('lake') LIMIT 10;
-SELECT * FROM ducklake_snapshots('lake') LIMIT 10;
-SELECT * FROM ducklake_snapshots('lake') LIMIT 10;
+SELECT * FROM (
+(SELECT * FROM ducklake_snapshots('lake') LIMIT 10)
+@for k in range(4)
+UNION ALL (SELECT * FROM ducklake_snapshots('lake') LIMIT 10)
+@end
+);
 
 result_query I
 SELECT count(*) FROM __answer
 ----
-10
+50

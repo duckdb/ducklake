@@ -1,5 +1,5 @@
 # name: benchmark/micro/write/alter_float_to_double.benchmark
-# description: Retype a FLOAT column stored in ~1024 files to DOUBLE, including the commit
+# description: Retype a FLOAT column to DOUBLE and a BIGINT column to HUGEINT in ~1024 files, including the commits
 # group: [write]
 
 name Alter Float To Double
@@ -25,9 +25,11 @@ FLOAT	2097152	2
 
 run
 ALTER TABLE lake.events ALTER COLUMN v TYPE DOUBLE;
+ALTER TABLE lake.events ALTER COLUMN id TYPE HUGEINT;
 
-result_query III
+result_query IIII
 SELECT (SELECT data_type FROM duckdb_columns() WHERE database_name = 'lake' AND column_name = 'v'),
+(SELECT data_type FROM duckdb_columns() WHERE database_name = 'lake' AND column_name = 'id'),
 (SELECT count(*) FROM lake.events), (SELECT max(snapshot_id) FROM lake.snapshots())
 ----
-DOUBLE	2097152	3
+DOUBLE	HUGEINT	2097152	4

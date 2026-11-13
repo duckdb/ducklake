@@ -28,6 +28,7 @@
 #include "duckdb/catalog/catalog_entry/copy_function_catalog_entry.hpp"
 #include "duckdb/parser/parsed_data/copy_info.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/execution/operator/helper/physical_set.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/common/types/interval.hpp"
 #include "duckdb/common/unordered_map.hpp"
@@ -85,6 +86,15 @@ ParsedCatalogEntry DuckLakeUtil::ParseCatalogEntry(const string &input) {
 	parts.pop_back();
 	result_data.schema_path = std::move(parts);
 	return result_data;
+}
+
+string DuckLakeUtil::UnquoteSQLString(const string &str) {
+	idx_t pos = 0;
+	string result;
+	if (StringUtil::TryParseQuotedString(str, pos, result, '\'') && pos == str.size()) {
+		return result;
+	}
+	return str;
 }
 
 string DuckLakeUtil::StatsToString(const string &text) {
@@ -646,6 +656,17 @@ void DuckLakeUtil::ResetExtensionSettings(ClientContext &context, const vector<s
 	}
 }
 
+void DuckLakeUtil::SetExtensionSetting(ClientContext &context, const string &name, const Value &value) {
+	ExtensionOption option;
+	if (!DBConfig::GetConfig(context).TryGetExtensionOption(Identifier(name), option)) {
+		// LCOV_EXCL_START
+		// the settings are registered by the extension itself
+		return;
+		// LCOV_EXCL_STOP
+	}
+	PhysicalSet::SetExtensionVariable(context, option, SetScope::SESSION, value);
+}
+
 using config_option_parser_t = string (*)(ClientContext &context, const string &option, const Value &val);
 
 static string ParseParquetCompression(ClientContext &, const string &, const Value &val) {
@@ -792,8 +813,7 @@ void DuckLakeUtil::ValidateConfigOptionScope(const string &option, bool has_sche
 	}
 }
 
-//! Whether a cast to or from the type reads an instant in the time zone of the session, also in a nested type
-static bool DependsOnTimeZone(const LogicalType &type) {
+bool DuckLakeUtil::DependsOnTimeZone(const LogicalType &type) {
 	return TypeVisitor::Contains(type, [](const LogicalType &child) {
 		switch (child.id()) {
 		case LogicalTypeId::TIMESTAMP_TZ:
@@ -827,7 +847,7 @@ bool DuckLakeUtil::TryGetLiteralValue(const ParsedExpression &expr, Value &resul
 	optional<Value> value;
 	if (context) {
 		value = literal.TryCastAs(*context, target_type);
-	} else if (DependsOnTimeZone(target_type) || DependsOnTimeZone(literal.type())) {
+	} else if (DuckLakeUtil::DependsOnTimeZone(target_type) || DuckLakeUtil::DependsOnTimeZone(literal.type())) {
 		// the session decides what the cast gives, so it stays an expression
 		return false;
 	} else {

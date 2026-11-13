@@ -1,5 +1,5 @@
 # name: benchmark/micro/read/catalog_load_schema_history.benchmark
-# description: Load the catalog of 10 tables of 40 columns, one dropped and recreated 300 times, one altered 200 times
+# description: Five cold loads of a catalog of 10 tables of 40 columns, with 300 recreations and 200 alters of history
 # group: [read]
 
 name Catalog Load Schema History
@@ -47,8 +47,13 @@ COPY (SELECT 1) TO '${BENCHMARK_DIR}/catalog_load_schema_history_ready.marker' (
 reload
 @attach catalog_load_schema_history AS lake (READ_ONLY)
 
+# Reattaching before each query clears the catalog cache, so all five queries load the catalog cold
 run
+@for k in range(5)
+DETACH lake;
+@attach catalog_load_schema_history AS lake (READ_ONLY)
 SELECT count(*) FROM duckdb_columns() WHERE database_name = 'lake';
+@end
 
 # Reattaching clears the catalog cache
 cleanup

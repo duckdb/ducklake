@@ -493,8 +493,10 @@ OpenFileInfo DuckLakeMultiFileList::GetFile(idx_t i) const {
 		auto &inlined_data_table = inlined_data_tables[inlined_data_index];
 		extended_info->options["table_name"] = inlined_data_table.table_name;
 		extended_info->options["inlined_data"] = Value::BOOLEAN(true);
-		extended_info->options["schema_version"] =
-		    Value::BIGINT(NumericCast<int64_t>(inlined_data_table.schema_version));
+		if (inlined_data_table.schema_version != DConstants::INVALID_INDEX) {
+			extended_info->options["schema_version"] =
+			    Value::BIGINT(NumericCast<int64_t>(inlined_data_table.schema_version));
+		}
 	} else {
 		extended_info->options["file_size"] = Value::UBIGINT(file.file_size_bytes);
 		if (file.footer_size.IsValid()) {
@@ -538,6 +540,8 @@ unique_ptr<MultiFileList> DuckLakeMultiFileList::Copy() const {
 	auto result = make_uniq<DuckLakeMultiFileList>(read_info, transaction_local_files, transaction_local_data,
 	                                               std::move(filter_copy));
 	result->files = GetFiles();
+	result->has_projection = has_projection;
+	result->projection = projection;
 	result->read_file_list = read_file_list;
 	result->delete_scans = delete_scans;
 	result->inlined_data_tables = inlined_data_tables;
@@ -617,7 +621,9 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 	if (!IsTransactionLocal(read_info.table_id)) {
 		// not a transaction local table - read the file list from the metadata store
 		auto &metadata_manager = transaction.GetMetadataManager();
-		result = metadata_manager.GetExtendedFilesForTable(read_info.table, read_info.snapshot, filter_info.get());
+		result = metadata_manager.GetExtendedFilesForTable(
+		    read_info.table, read_info.snapshot, filter_info.get(),
+		    has_projection ? optional_ptr<const vector<DuckLakeProjectedColumn>>(projection) : nullptr);
 	}
 	ApplyLocalFileChanges(transaction, read_info.table_id, result);
 	idx_t transaction_row_start = DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START;
@@ -689,9 +695,11 @@ vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
     DuckLakeTransaction &transaction, identifier_map_t<shared_ptr<DuckLakeCommittedInlinedRows>> &inlined_rows) const {
 	static constexpr idx_t MAX_ATTEMPTS = 10;
 	auto &metadata_manager = transaction.GetMetadataManager();
-	if (!metadata_manager.CommitsEachStatement() || inlined_data_tables.empty()) {
+	auto scan_projection = has_projection ? optional_ptr<const vector<DuckLakeProjectedColumn>>(projection) : nullptr;
+	// a remote metadata manager reads the files and the inlined rows of the same snapshot
+	if (!metadata_manager.CommitsEachStatement() || metadata_manager.IsRemote() || inlined_data_tables.empty()) {
 		return metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter_info.get(),
-		                                         read_info.include_local_changes);
+		                                         read_info.include_local_changes, scan_projection);
 	}
 	// every query sees the latest commits, so the inlined rows are read first and again if a file was written since
 	for (idx_t attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -704,7 +712,10 @@ vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
 		}
 		for (auto &table : inlined_data_tables) {
 			vector<MultiFileColumnDefinition> columns;
-			if (!DuckLakeMultiFileReader::GetInlinedTableColumns(read_info, table.schema_version, columns)) {
+			// an invalid schema version reads the inlined data in the schema of the table at the snapshot
+			auto schema_version =
+			    table.schema_version == DConstants::INVALID_INDEX ? optional_idx() : optional_idx(table.schema_version);
+			if (!DuckLakeMultiFileReader::GetInlinedTableColumns(read_info, schema_version, columns)) {
 				continue;
 			}
 			if (scan_field_ids) {
@@ -720,7 +731,7 @@ vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
 			    DuckLakeInlinedDataReader::ReadCommittedRows(read_info, table.table_name, columns, next_file_ids);
 		}
 		auto result = metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter_info.get(),
-		                                                read_info.include_local_changes);
+		                                                read_info.include_local_changes, scan_projection);
 		// without inlined rows a flush cannot move any of them, a file written since the read reaches the allocator
 		// of the branch that wrote its add event
 		bool written_since = std::any_of(result.begin(), result.end(), [&](const DuckLakeFileListEntry &entry) {
@@ -788,7 +799,9 @@ void DuckLakeMultiFileList::GetTableInsertions() const {
 	auto transaction_ref = read_info.GetTransaction();
 	auto &transaction = *transaction_ref;
 	auto &metadata_manager = transaction.GetMetadataManager();
-	files = metadata_manager.GetTableInsertions(read_info.table, *read_info.start_snapshot, read_info.snapshot);
+	files = metadata_manager.GetTableInsertions(
+	    read_info.table, *read_info.start_snapshot, read_info.snapshot,
+	    has_projection ? optional_ptr<const vector<DuckLakeProjectedColumn>>(projection) : nullptr);
 	AddInlinedDataTables(transaction);
 }
 
@@ -799,8 +812,9 @@ void DuckLakeMultiFileList::GetTableDeletions() const {
 	auto transaction_ref = read_info.GetTransaction();
 	auto &transaction = *transaction_ref;
 	auto &metadata_manager = transaction.GetMetadataManager();
-	delete_scans = metadata_manager.GetTableDeletions(read_info.table, *read_info.start_snapshot, read_info.snapshot,
-	                                                  read_info.include_local_changes);
+	delete_scans = metadata_manager.GetTableDeletions(
+	    read_info.table, *read_info.start_snapshot, read_info.snapshot, read_info.include_local_changes,
+	    has_projection ? optional_ptr<const vector<DuckLakeProjectedColumn>>(projection) : nullptr);
 	for (auto &file : delete_scans) {
 		DuckLakeFileListEntry file_entry;
 		file_entry.file = file.file;
@@ -827,6 +841,16 @@ bool DuckLakeMultiFileList::IsDeleteScan() const {
 
 const DuckLakeDeleteScanEntry &DuckLakeMultiFileList::GetDeleteScanEntry(idx_t file_idx) {
 	return delete_scans[file_idx];
+}
+
+void DuckLakeMultiFileList::SetProjection(vector<DuckLakeProjectedColumn> columns) const {
+	lock_guard<mutex> l(file_lock);
+	if (read_file_list) {
+		// the file list was read without the projection
+		return;
+	}
+	has_projection = true;
+	projection = std::move(columns);
 }
 
 const vector<DuckLakeFileListEntry> &DuckLakeMultiFileList::GetFiles() const {
