@@ -451,6 +451,63 @@ static void FlushInlinedFileDeletions(ClientContext &context, DuckLakeCatalog &c
 }
 
 //===--------------------------------------------------------------------===//
+// Flush Deletions Operator
+//===--------------------------------------------------------------------===//
+DuckLakeFlushDeletions::DuckLakeFlushDeletions(PhysicalPlan &physical_plan, const vector<LogicalType> &types,
+                                               DuckLakeTableEntry &table)
+    : PhysicalOperator(physical_plan, PhysicalOperatorType::EXTENSION, types, 0), table(table) {
+}
+
+SourceResultType DuckLakeFlushDeletions::GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+                                                         OperatorSourceInput &input) const {
+	auto &catalog = table.ParentCatalog().Cast<DuckLakeCatalog>();
+	auto &transaction = DuckLakeTransaction::Get(context.client, catalog);
+	FlushInlinedFileDeletions(context.client, catalog, transaction, table);
+	// deletions are not data rows, so the row count stays zero
+	auto &latest_table = DuckLakeCompactor::GetLatestTableEntry(catalog, transaction, table);
+	chunk.data[0].Append(Value(latest_table.schema.GetSchemaName()));
+	chunk.data[1].Append(Value(latest_table.name));
+	chunk.data[2].Append(Value::BIGINT(0));
+	chunk.SetChildCardinality(1);
+	return SourceResultType::FINISHED;
+}
+
+string DuckLakeFlushDeletions::GetName() const {
+	return "DUCKLAKE_FLUSH_DELETIONS";
+}
+
+class DuckLakeLogicalFlushDeletions : public LogicalExtensionOperator {
+public:
+	DuckLakeLogicalFlushDeletions(TableIndex table_index, DuckLakeTableEntry &table)
+	    : table_index(table_index), table(table) {
+	}
+
+	TableIndex table_index;
+	DuckLakeTableEntry &table;
+
+public:
+	PhysicalOperator &CreatePlan(ClientContext &context, PhysicalPlanGenerator &planner) override {
+		return planner.Make<DuckLakeFlushDeletions>(types, table);
+	}
+
+	string GetName() const override {
+		return "DUCKLAKE_FLUSH_DELETIONS";
+	}
+
+	string GetExtensionName() const override {
+		return "ducklake";
+	}
+
+	vector<ColumnBinding> GetColumnBindings() override {
+		return GenerateColumnBindings(table_index, 3);
+	}
+
+	void ResolveTypes() override {
+		types = {LogicalType::VARCHAR, LogicalType::VARCHAR, LogicalType::BIGINT};
+	}
+};
+
+//===--------------------------------------------------------------------===//
 // Function
 //===--------------------------------------------------------------------===//
 static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, TableFunctionBindInput &input,
@@ -478,7 +535,12 @@ static unique_ptr<LogicalOperator> FlushInlinedDataBind(ClientContext &context, 
 			                            inlined_table);
 			flushes.push_back(flusher.GenerateFlushCommand());
 		}
-		FlushInlinedFileDeletions(context, ducklake_catalog, transaction, table_entry);
+		auto inlined_deletion_table = transaction.GetMetadataManager().GetInlinedDeletionTableName(
+		    table_entry.GetTableId(), transaction.GetSnapshot());
+		if (!inlined_deletion_table.empty()) {
+			flushes.push_back(
+			    make_uniq<DuckLakeLogicalFlushDeletions>(input.binder->GenerateTableIndex(), table_entry));
+		}
 	}
 	return_names.push_back("schema_name");
 	return_names.push_back("table_name");
