@@ -2087,8 +2087,8 @@ void DuckLakeMetadataManager::VerifyInlinedColumnsHealable(const V2_0Dev1Additio
 			}
 		}
 		// the catalog tells a user column of that name from the column an interrupted heal added
-		// a payload holds the columns live at its schema version, so a legacy column renamed before it matches none
-		// a registration without a version row resolves no snapshot, so every column its table ever had counts
+		// the columns of a payload are those live at its schema version
+		// a registration without a version row falls back to every column its table ever had
 		auto columns = GetInlinedTableColumnsSql(optional_idx(), column_rows_healed, DuckLakeBranchChain::Main());
 		auto branch_column = SQLString::ToString(col_names.branch_id.GetIdentifierName());
 		auto tables = StringUtil::Join(literals, ", ");
