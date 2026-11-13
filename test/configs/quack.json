@@ -167,6 +167,12 @@
       ]
     },
     {
+      "reason": "Snapshots expire when the transaction commits on quack, so the change feed of the same transaction still reads the snapshots it expired.",
+      "paths": [
+        "test/sql/table_changes/table_changes_rewrite_memo_expiry.test"
+      ]
+    },
+    {
       "reason": "FIXME: Each metadata query runs in its own server-side transaction on quack, so a reader that began before a concurrent TRUNCATE reads the post-truncate record counts from ducklake_table_stats.",
       "paths": [
         "test/sql/metadata/duckdb_tables_record_counts_concurrent.test"

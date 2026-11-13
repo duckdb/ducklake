@@ -1,0 +1,183 @@
+# name: test/sql/table_changes/table_changes_expired_rewrite_snapshots.test
+# description: the change feed keeps the changes of a rewritten file when the snapshots around the rewrite are expired
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# the snapshot ids below assume the 1.1 numbering, the expiry itself commits no snapshot
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/table_changes_expired_rewrite_snapshots', METADATA_CATALOG 'ducklake_meta', DATA_INLINING_ROW_LIMIT 0, DUCKLAKE_VERSION '1.1')
+
+statement ok
+USE ducklake
+
+# snapshots 2 and 3 insert, 4 deletes, 5 rewrites and 6 inserts again
+statement ok
+CREATE TABLE t(a INT)
+
+statement ok
+INSERT INTO t VALUES (1), (2)
+
+statement ok
+INSERT INTO t VALUES (3), (4)
+
+statement ok
+DELETE FROM t WHERE a = 3
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
+
+statement ok
+INSERT INTO t VALUES (5)
+
+query IIII
+SELECT snapshot_id, rowid, change_type, a FROM table_changes('t', 3, 6) ORDER BY ALL
+----
+3	2	insert	3
+3	3	insert	4
+4	2	delete	3
+6	4	insert	5
+
+# expiring the delete snapshot keeps the rewritten file and its delete file, so the feed is unchanged
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [4])
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1
+----
+1
+
+query IIII
+SELECT snapshot_id, rowid, change_type, a FROM table_changes('t', 3, 6) ORDER BY ALL
+----
+3	2	insert	3
+3	3	insert	4
+4	2	delete	3
+6	4	insert	5
+
+# once the rewrite snapshot is expired, its delete file goes and the rewrite reports what it ended and wrote
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [5])
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_delete_file WHERE table_id = 1
+----
+0
+
+query IIII
+SELECT snapshot_id, rowid, change_type, a FROM table_changes('t', 3, 6) ORDER BY ALL
+----
+3	2	insert	3
+3	3	insert	4
+5	2	delete	3
+5	3	update_postimage	4
+5	3	update_preimage	4
+6	4	insert	5
+
+query I
+SELECT list(a ORDER BY a) FROM t AT (VERSION => 6)
+----
+[1, 2, 4, 5]
+
+# snapshots 7 creates, 8 inserts, 9 and 10 delete, 11 rewrites and 12 updates the rewritten row
+statement ok
+CREATE TABLE v(id INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO v VALUES (1, 'a'), (2, 'b'), (3, 'c')
+
+statement ok
+DELETE FROM v WHERE id = 1
+
+statement ok
+DELETE FROM v WHERE id = 2
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'v', delete_threshold => 0)
+
+statement ok
+UPDATE v SET s = 'x' WHERE id = 3
+
+query IIIII
+SELECT snapshot_id, rowid, change_type, id, s FROM table_changes('v', 10, 12) ORDER BY ALL
+----
+10	1	delete	2	b
+12	2	update_postimage	3	x
+12	2	update_preimage	3	c
+
+# expiring the rewrite snapshot keeps the delete of the old version of the updated row
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [11])
+
+query IIIII
+SELECT snapshot_id, rowid, change_type, id, s FROM table_changes('v', 10, 12) ORDER BY ALL
+----
+10	1	delete	2	b
+11	2	delete	3	c
+12	2	insert	3	x
+
+query I
+SELECT list((id, s) ORDER BY id) FROM v AT (VERSION => 12)
+----
+[(3, x)]
+
+# table names holding the rewrite marker of y neither hide y's deletes nor keep y's ended file from cleanup
+statement ok
+CREATE TABLE y(a INT)
+
+statement ok
+INSERT INTO y VALUES (1), (2)
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM y
+
+statement ok
+CREATE TABLE "x,rewrite_delete:3,y"(x INT)
+
+statement ok
+CREATE TABLE "q""rewrite_delete:3,""r"(x INT)
+
+statement ok
+COMMIT
+
+# y is table 3, and the names put its marker between commas in the changes of the snapshot that empties it
+query II
+SELECT (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'y'),
+       changes_made LIKE '%,rewrite_delete:3,%'
+FROM ducklake_meta.ducklake_snapshot_changes WHERE snapshot_id = 15
+----
+3	true
+
+# deleting every row ends y's data file at that snapshot, which holds the marker only inside quoted names
+query III
+SELECT data_file_id, begin_snapshot, end_snapshot FROM ducklake_meta.ducklake_data_file
+WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'y')
+----
+10	14	15
+
+# the feed reads the deletes of the ended file, since the snapshot is no rewrite of y
+query IIII
+SELECT snapshot_id, rowid, change_type, a FROM table_changes('y', 14, 15) ORDER BY ALL
+----
+14	0	insert	1
+14	1	insert	2
+15	0	delete	1
+15	1	delete	2
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [14])
+
+query I
+SELECT count(*) FROM ducklake_meta.ducklake_data_file
+WHERE table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'y')
+----
+0

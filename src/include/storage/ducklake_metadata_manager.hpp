@@ -427,9 +427,11 @@ public:
 	GetTableDeletions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot, DuckLakeSnapshot snapshot,
 	                  bool include_local_changes = true,
 	                  optional_ptr<const vector<DuckLakeProjectedColumn>> projection = nullptr);
-	//! The snapshots of the range that rewrote data files of the table without changing its rows
+	//! The snapshots of the range that rewrote data files of the table and still exist, memoized per transaction
 	set<idx_t> GetTableRewriteSnapshots(TableIndex table_id, DuckLakeSnapshot start_snapshot,
 	                                    DuckLakeSnapshot snapshot);
+	//! Forgets the memoized rewrite snapshots, as an expiry of the transaction removes some of them
+	void ClearRewriteSnapshotsMemo();
 	virtual vector<DuckLakeFileListExtendedEntry>
 	GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                         const FilterPushdownInfo *filter_info = nullptr,
@@ -748,8 +750,10 @@ protected:
 	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
 
 	virtual string GetLatestSnapshotQuery() const;
-	//! The changes of the snapshots from first_snapshot to last_snapshot that recorded a rewrite
-	virtual string GetRewriteSnapshotsQuery(idx_t first_snapshot, idx_t last_snapshot) const;
+	//! The snapshots of the range that recorded a rewrite of the table and still exist
+	virtual string GetRewriteSnapshotsQuery(TableIndex table_id, idx_t first_snapshot, idx_t last_snapshot) const;
+	//! Excludes the files a rewrite ended while the rewrite snapshot exists, the change feed reads its changes
+	string RewrittenFilesFilter();
 
 	virtual string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
 	                                              const string &metadata_table_prefix);
@@ -903,6 +907,8 @@ protected:
 	map<TableIndex, string> table_paths;
 	bool pending_cache_clear = false;
 	bool read_file_counts = false;
+	//! The rewrite snapshots of a (table, snapshot range), valid for the transaction as they are committed
+	map<pair<idx_t, pair<idx_t, idx_t>>, set<idx_t>> rewrite_snapshots_memo;
 };
 
 } // namespace duckdb
