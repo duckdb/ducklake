@@ -497,10 +497,21 @@ struct DuckLakeFileListEntry {
 	shared_ptr<DuckLakeCommittedInlinedRows> inlined_rows;
 };
 
+//! An earlier delete file of the view, dating the rows an undated chosen file copied from it
+struct DuckLakeEarlierDeleteFile {
+	DuckLakeFileData file;
+	//! The begin of the file, the date of its rows when it carries none
+	idx_t begin_snapshot;
+	//! The bound of its dates, the cap of its writer's segment below the begin of the chosen file
+	idx_t snapshot_max;
+};
+
 struct DuckLakeDeleteScanEntry {
 	DuckLakeFileData file;
 	DuckLakeFileData delete_file;
 	DuckLakeFileData previous_delete_file;
+	//! The earlier files dating the rows an undated chosen file copied, read on a branch when it begins in the range
+	vector<DuckLakeEarlierDeleteFile> earlier_delete_files;
 	idx_t row_count;
 	optional_idx row_id_start;
 	MappingIndex mapping_id;

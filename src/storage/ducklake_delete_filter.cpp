@@ -288,6 +288,48 @@ void DuckLakeDeleteFilter::Initialize(const DuckLakeInlinedDataDeletes &inlined_
 	delete_data->snapshot_ids = std::move(merged_snapshot_ids);
 }
 
+//! The rows an undated delete file copied from the earlier files keep their dates, the range then applies to every row
+static void DateCopiedDeletes(ClientContext &context, const DuckLakeDeleteScanEntry &delete_scan,
+                              const DeleteFileScanResult &current_deletes, unsafe_unique_array<bool> &rows_to_scan,
+                              unordered_map<idx_t, idx_t> &position_to_snapshot) {
+	for (auto &earlier : delete_scan.earlier_delete_files) {
+		auto earlier_deletes =
+		    DuckLakeDeleteFilter::ScanDeleteFile(context, earlier.file, optional_idx(), earlier.snapshot_max);
+		for (idx_t i = 0; i < earlier_deletes.deleted_rows.size(); i++) {
+			auto delete_idx = earlier_deletes.deleted_rows[i];
+			if (delete_idx >= delete_scan.row_count) {
+				throw InvalidInputException(
+				    "Invalid delete data - delete index read from file %s is out of range for data file %s",
+				    earlier.file.path, delete_scan.file.path);
+			}
+			if (!rows_to_scan[delete_idx]) {
+				continue;
+			}
+			auto snapshot =
+			    earlier_deletes.has_embedded_snapshots ? earlier_deletes.snapshot_ids[i] : earlier.begin_snapshot;
+			auto dated = position_to_snapshot.find(delete_idx);
+			if (dated == position_to_snapshot.end()) {
+				position_to_snapshot[delete_idx] = snapshot;
+			} else {
+				dated->second = MinValue(dated->second, snapshot);
+			}
+		}
+	}
+	for (auto delete_idx : current_deletes.deleted_rows) {
+		if (!rows_to_scan[delete_idx]) {
+			continue;
+		}
+		auto dated = position_to_snapshot.find(delete_idx);
+		auto snapshot = dated == position_to_snapshot.end() ? delete_scan.snapshot_id.GetIndex() : dated->second;
+		bool in_range =
+		    snapshot >= delete_scan.start_snapshot.GetIndex() && snapshot <= delete_scan.end_snapshot.GetIndex();
+		if (!in_range ||
+		    (delete_scan.insert_snapshot.IsValid() && snapshot == delete_scan.insert_snapshot.GetIndex())) {
+			rows_to_scan[delete_idx] = false;
+		}
+	}
+}
+
 void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDeleteScanEntry &delete_scan) {
 	// Scanning deletes - we need to scan the opposite (i.e. only the rows that were deleted)
 	// rows_to_scan[i] = true means row i was deleted and should be returned
@@ -322,6 +364,9 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 				position_to_snapshot[delete_idx] = delete_snapshot;
 			}
 		}
+		if (!has_embedded_snapshots && !delete_scan.earlier_delete_files.empty()) {
+			DateCopiedDeletes(context, delete_scan, current_deletes, rows_to_scan, position_to_snapshot);
+		}
 	} else if (delete_scan.file_deleted) {
 		// Full file delete, all rows are being scanned
 		memset(rows_to_scan.get(), 1, sizeof(bool) * delete_scan.row_count);
@@ -347,7 +392,9 @@ void DuckLakeDeleteFilter::Initialize(ClientContext &context, const DuckLakeDele
 		}
 	}
 
-	if (!delete_scan.previous_delete_file.path.empty() && !has_embedded_snapshots) {
+	// a dated file and the earlier files of an undated one name the rows deleted before the range themselves
+	bool rows_dated = has_embedded_snapshots || !delete_scan.earlier_delete_files.empty();
+	if (!delete_scan.previous_delete_file.path.empty() && !rows_dated) {
 		// the previous file names rows deleted before the range, its dates past its writer's cap never applied here
 		auto previous_deletes = ScanDeleteFile(context, delete_scan.previous_delete_file, optional_idx(),
 		                                       delete_scan.previous_delete_snapshot_max);

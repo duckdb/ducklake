@@ -4592,16 +4592,21 @@ vector<DuckLakeDeleteScanEntry> DuckLakeMetadataManager::ReadTableDeletions(Duck
 	                     ", data.row_id_start, data.record_count, data.mapping_id, " + insert_snapshot + ", " +
 	                     GetDeleteFileSelectList("current_delete") + ", " + GetDeleteFileSelectList("previous_delete");
 	// the segments of the add events bound the dated deletes and the rows of inherited files
+	// partial_max tells an undated chosen file, the earlier files of the view date the rows it copied
 	string segment_column = on_branch ? ", begin_segment" : "";
 	// on an equal back dated begin the file of the later segment is the later one
 	string segment_order = on_branch ? ", begin_segment DESC" : "";
 	// the id breaks the tie of an equal segment and begin, as the choice of the current file does
 	string delete_id_order = on_branch ? ", delete_file_id DESC" : "";
-	string delete_file_segments =
-	    on_branch ? ", current_delete.begin_segment, previous_delete.begin_segment, data.begin_segment" : "";
-	string file_delete_segments =
-	    on_branch ? ", CAST(NULL AS BIGINT), previous_delete.begin_segment, data.begin_segment" : "";
-	string inlined_segments = on_branch ? ", CAST(NULL AS BIGINT), CAST(NULL AS BIGINT), data.begin_segment" : "";
+	string delete_file_segments = on_branch ? ", current_delete.begin_segment, previous_delete.begin_segment, "
+	                                          "data.begin_segment, current_delete.partial_max"
+	                                        : "";
+	string file_delete_segments = on_branch ? ", CAST(NULL AS BIGINT), previous_delete.begin_segment, "
+	                                          "data.begin_segment, CAST(NULL AS BIGINT)"
+	                                        : "";
+	string inlined_segments = on_branch ? ", CAST(NULL AS BIGINT), CAST(NULL AS BIGINT), data.begin_segment, "
+	                                      "CAST(NULL AS BIGINT)"
+	                                    : "";
 
 	// Check if we have an inlined deletion table for this table (usually cached, no DB hit)
 	auto inlined_table_name = GetInlinedDeletionTableName(table_id, end_snapshot, include_local_changes);
@@ -4787,6 +4792,7 @@ FROM main_results
 
 	// Build entries from the unified query result
 	vector<DuckLakeDeleteScanEntry> files;
+	vector<idx_t> undated_entries;
 	for (auto &row : *result) {
 		DuckLakeDeleteScanEntry entry;
 		idx_t col_idx = 0;
@@ -4812,6 +4818,7 @@ FROM main_results
 			auto current_segment = OptIdx(row, col_idx++);
 			auto previous_segment = OptIdx(row, col_idx++);
 			auto data_segment = OptIdx(row, col_idx++);
+			auto partial_max = OptIdx(row, col_idx++);
 			entry.end_snapshot = chain.SnapshotBound(current_segment, end_snapshot.snapshot_id);
 			if (previous_segment.IsValid()) {
 				entry.previous_delete_snapshot_max = chain.SegmentCap(previous_segment.GetIndex());
@@ -4819,6 +4826,11 @@ FROM main_results
 			if (!entry.insert_snapshot.IsValid() && data_segment.IsValid() &&
 			    chain.SegmentCap(data_segment.GetIndex()).IsValid()) {
 				entry.row_snapshot_max = chain.SnapshotBound(data_segment, end_snapshot.snapshot_id);
+			}
+			// an undated chosen file that begins in the range copied rows the earlier files of the view date
+			if (!entry.delete_file.path.empty() && !partial_max.IsValid() &&
+			    entry.snapshot_id.GetIndex() > start_snapshot.snapshot_id) {
+				undated_entries.push_back(files.size());
 			}
 		}
 
@@ -4835,6 +4847,9 @@ FROM main_results
 		}
 
 		files.push_back(std::move(entry));
+	}
+	if (!undated_entries.empty()) {
+		ReadEarlierDeleteFiles(table, end_snapshot, files, undated_entries);
 	}
 	if (!has_inlined_table) {
 		return files;
@@ -4873,6 +4888,39 @@ WHERE %s AND begin_snapshot < %d AND file_id IN (%s)
 		entry.inlined_file_deletions[row.GetValue<idx_t>(1)] = row.GetValue<idx_t>(2);
 	}
 	return files;
+}
+
+void DuckLakeMetadataManager::ReadEarlierDeleteFiles(DuckLakeTableEntry &table, DuckLakeSnapshot end_snapshot,
+                                                     vector<DuckLakeDeleteScanEntry> &files,
+                                                     const vector<idx_t> &undated_entries) {
+	auto table_id = table.GetTableId();
+	auto &chain = transaction.GetCatalog().AttachedChain();
+	unordered_map<idx_t, reference<DuckLakeDeleteScanEntry>> entries;
+	vector<string> file_filters;
+	for (auto position : undated_entries) {
+		auto &entry = files[position];
+		entries.emplace(entry.file_id.index, entry);
+		file_filters.push_back(StringUtil::Format("(data_file_id = %d AND begin_snapshot < %d)", entry.file_id.index,
+		                                          entry.snapshot_id.GetIndex()));
+	}
+	// one file per begin below the chosen file, the later segment and id are the cumulative one of an equal begin
+	auto filter = StringUtil::Format("table_id = %d AND (%s)", table_id.index, StringUtil::Join(file_filters, " OR "));
+	auto query = StringUtil::Format(
+	    "SELECT earlier.data_file_id, earlier.begin_snapshot, earlier.begin_segment, %s\nFROM (%s) earlier",
+	    GetDeleteFileSelectList("earlier"), ChosenDeleteFiles(chain, DeleteFiles(table_id), filter, true));
+	auto result = Query(end_snapshot, query);
+	result->ThrowIfError("Failed to get the earlier delete files from DuckLake: ");
+	for (auto &row : *result) {
+		idx_t col_idx = 0;
+		auto &entry = entries.at(row.GetValue<idx_t>(col_idx++)).get();
+		DuckLakeEarlierDeleteFile earlier;
+		earlier.begin_snapshot = row.GetValue<idx_t>(col_idx++);
+		auto begin_segment = OptIdx(row, col_idx++);
+		// a date past the cap of the writer's segment never applied, the chosen file dates the rows from its begin on
+		earlier.snapshot_max = chain.SnapshotBound(begin_segment, entry.snapshot_id.GetIndex() - 1);
+		earlier.file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
+		entry.earlier_delete_files.push_back(std::move(earlier));
+	}
 }
 
 set<idx_t> DuckLakeMetadataManager::GetTableRewriteSnapshots(TableIndex table_id, DuckLakeSnapshot start_snapshot,

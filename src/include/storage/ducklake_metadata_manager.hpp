@@ -311,6 +311,9 @@ public:
 	//! Runs the deletion scan of GetTableDeletions, which caches it
 	vector<DuckLakeDeleteScanEntry> ReadTableDeletions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot,
 	                                                   DuckLakeSnapshot end_snapshot, bool include_local_changes);
+	//! The earlier delete files of the view dating the rows the undated chosen files of the entries copied
+	void ReadEarlierDeleteFiles(DuckLakeTableEntry &table, DuckLakeSnapshot end_snapshot,
+	                            vector<DuckLakeDeleteScanEntry> &files, const vector<idx_t> &undated_entries);
 	//! SQL that the commit of a transaction that changed options runs, so two commits cannot both insert an option
 	virtual string ConfigOptionLockSql() const {
 		return string();

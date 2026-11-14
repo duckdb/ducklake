@@ -257,6 +257,7 @@
         "test/sql/branches/branch_version_space.test",
         "test/sql/branches/branch_schema_versions_lineage.test",
         "test/sql/branches/branch_feed_previous_delete_tie.test",
+        "test/sql/branches/branch_feed_undated_cumulative.test",
         "test/sql/branches/branch_delete_file_choice.test",
         "test/sql/branches/branch_insertions_delete_choice.test",
         "test/sql/branches/branch_replacement_writes_no_branch_rows.test",
