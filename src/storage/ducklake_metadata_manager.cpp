@@ -2072,12 +2072,9 @@ bool DuckLakeMetadataManager::HasHealMarker() {
 		return false;
 	}
 	for (auto &row : *result) {
-		// LCOV_EXCL_START
-		// written by a concurrent attach that healed first, which no test can time
 		if (row.GetValue<string>(0) == DUCKLAKE_HEAL_GENERATION) {
 			return true;
 		}
-		// LCOV_EXCL_STOP
 	}
 	return false;
 }
@@ -9788,10 +9785,7 @@ static std::tuple<idx_t, idx_t, string> FlushedPayloadOrder(const FlushedInlined
 	idx_t schema_version = 0;
 	auto table_id = DuckLakeMetadataManager::ParseInlinedTableName(name, schema_version);
 	if (!table_id.IsValid()) {
-		// LCOV_EXCL_START
-		// the reader refuses a payload not named like DuckDB's before any flush of it
 		return std::make_tuple(NumericLimits<idx_t>::Maximum(), NumericLimits<idx_t>::Maximum(), name);
-		// LCOV_EXCL_STOP
 	}
 	return std::make_tuple(table_id.GetIndex(), schema_version, name);
 }

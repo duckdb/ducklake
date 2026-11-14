@@ -707,10 +707,8 @@ vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
 		map<idx_t, idx_t> next_file_ids;
 		inlined_rows.clear();
 		if (attempt > 0) {
-			// LCOV_EXCL_START
-			// the flush can have dropped an inlined table it emptied, no test times a flush between the two reads
+			// the flush can have dropped an inlined table it emptied
 			inlined_data_tables = ListInlinedDataTables(transaction);
-			// LCOV_EXCL_STOP
 		}
 		for (auto &table : inlined_data_tables) {
 			vector<MultiFileColumnDefinition> columns;

@@ -405,6 +405,7 @@
         "test/sql/data_inlining/inlined_shared_flush_two_tables.test",
         "test/sql/data_inlining/inlined_foreign_payload_name.test",
         "test/sql/migration/dev1_inlined_shared_unhealable.test",
+        "test/sql/migration/dev1_heal_marker_older_generation.test",
         "test/sql/data_inlining/postgres_inlined_shared_read_committed.test",
         "test/sql/data_inlining/inlined_create_tables_statement_count.test",
         "test/sql/data_inlining/inlined_data_flush_cleanup.test",

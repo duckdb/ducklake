@@ -303,10 +303,7 @@ static void DateCopiedDeletes(ClientContext &context, const DuckLakeDeleteScanEn
 				    earlier.file.path, delete_scan.file.path);
 			}
 			if (!rows_to_scan[delete_idx]) {
-				// LCOV_EXCL_START
-				// a cumulative chosen file names every row of its earlier files
 				continue;
-				// LCOV_EXCL_STOP
 			}
 			auto snapshot =
 			    earlier_deletes.has_embedded_snapshots ? earlier_deletes.snapshot_ids[i] : earlier.begin_snapshot;

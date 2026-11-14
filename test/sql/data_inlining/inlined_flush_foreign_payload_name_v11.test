@@ -1,0 +1,97 @@
+# name: test/sql/data_inlining/inlined_flush_foreign_payload_name_v11.test
+# description: a flush of a 1.1 catalog orders a payload table not named like DuckDB's behind the others and empties it with them
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+CREATE TABLE dl.u (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+statement ok
+INSERT INTO dl.u VALUES (10), (20)
+
+query II
+SELECT table_id, table_name FROM meta.ducklake_inlined_data_tables ORDER BY table_id
+----
+1	ducklake_inlined_data_1_1
+2	ducklake_inlined_data_2_2
+
+# another writer registered the payload of t under a name of its own
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1 RENAME TO inlined_payload_t
+
+statement ok
+UPDATE meta.ducklake_inlined_data_tables SET table_name = 'inlined_payload_t' WHERE table_id = 1
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 10)
+
+# a scan refuses the name, the flush reads the payload by its registration and orders it behind the one named like DuckDB's
+statement error
+SELECT i FROM dl.t ORDER BY i
+----
+inlined data table inlined_payload_t is not named like DuckDB's
+
+query III
+SELECT schema_name, table_name, rows_flushed FROM ducklake_flush_inlined_data('dl') ORDER BY ALL
+----
+main	t	3
+main	u	2
+
+query II
+SELECT (SELECT count(*) FROM meta.inlined_payload_t), (SELECT count(*) FROM meta.ducklake_inlined_data_2_2)
+----
+0	0
+
+query II
+SELECT table_id, record_count FROM meta.ducklake_data_file ORDER BY table_id
+----
+1	3
+2	2
+
+query I
+SELECT i FROM dl.u ORDER BY i
+----
+10
+20
+
+# under the name of DuckDB the flushed rows of t read from its file
+statement ok
+ALTER TABLE meta.inlined_payload_t RENAME TO ducklake_inlined_data_1_1
+
+statement ok
+UPDATE meta.ducklake_inlined_data_tables SET table_name = 'ducklake_inlined_data_1_1' WHERE table_id = 1
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+3
+
+statement ok
+DETACH dl
