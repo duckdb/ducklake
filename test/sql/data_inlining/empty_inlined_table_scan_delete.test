@@ -1,0 +1,87 @@
+# name: test/sql/data_inlining/empty_inlined_table_scan_delete.test
+# description: A delete or update reads the files of its scan after an earlier scan found an inlined table without rows
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/empty_inlined_table_scan_delete',
+    DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+# the insert writes a file next to the inlined table of the new table, which the count finds without rows
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t FROM range(100)
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+100
+
+query I
+UPDATE ducklake.t SET i = i + 1
+----
+100
+
+query I
+SELECT sum(i) FROM ducklake.t
+----
+5050
+
+query I
+DELETE FROM ducklake.t
+----
+100
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+0
+
+# a superseded inlined table without rows next to the one holding the row
+statement ok
+CREATE TABLE ducklake.t2(a INTEGER, b VARCHAR)
+
+statement ok
+ALTER TABLE ducklake.t2 ALTER b SET DEFAULT '5'
+
+statement ok
+INSERT INTO ducklake.t2(a) VALUES (1)
+
+query II
+SELECT a, b FROM ducklake.t2
+----
+1	5
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE ducklake.t2 ADD COLUMN j INTEGER
+
+query I
+UPDATE ducklake.t2 SET j = 7
+----
+1
+
+statement ok
+COMMIT
+
+query III
+SELECT a, b, j FROM ducklake.t2
+----
+1	5	7

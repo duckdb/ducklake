@@ -639,8 +639,8 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 		transaction_row_start += file.row_count;
 		result.push_back(std::move(file_entry));
 	}
-	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction, read_info.snapshot);
-	for (auto &table : inlined_data_tables) {
+	// the extended entries are looked up by name, the inlined tables of the scan itself stay those of its files
+	for (auto &table : read_info.table.GetInlinedDataTables(transaction, read_info.snapshot)) {
 		DuckLakeFileListExtendedEntry file_entry;
 		file_entry.file.path = table.table_name.GetIdentifierName();
 		file_entry.row_count = 0;
@@ -707,8 +707,7 @@ vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
 		inlined_rows.clear();
 		if (attempt > 0) {
 			// the flush can have dropped an inlined table it emptied
-			inlined_data_tables =
-			    read_info.table.GetInlinedDataTables(transaction, read_info.snapshot, read_info.include_local_changes);
+			inlined_data_tables = ListInlinedDataTables(transaction);
 		}
 		for (auto &table : inlined_data_tables) {
 			vector<MultiFileColumnDefinition> columns;
@@ -752,19 +751,24 @@ vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
 	                           read_info.table.name);
 }
 
-void DuckLakeMultiFileList::GetFilesForTable() const {
-	auto transaction_ref = read_info.GetTransaction();
-	auto &transaction = *transaction_ref;
-	inlined_data_tables =
+vector<DuckLakeInlinedTableInfo> DuckLakeMultiFileList::ListInlinedDataTables(DuckLakeTransaction &transaction) const {
+	auto result =
 	    read_info.table.GetInlinedDataTables(transaction, read_info.snapshot, read_info.include_local_changes);
 	// the inlined tables an earlier scan found without live rows at this snapshot have nothing to read
 	auto &catalog = transaction.GetCatalog();
-	inlined_data_tables.erase(std::remove_if(inlined_data_tables.begin(), inlined_data_tables.end(),
-	                                         [&](const DuckLakeInlinedTableInfo &table) {
-		                                         return catalog.InlinedTableIsEmpty(transaction, table.table_name,
-		                                                                            read_info.snapshot.snapshot_id);
-	                                         }),
-	                          inlined_data_tables.end());
+	result.erase(std::remove_if(result.begin(), result.end(),
+	                            [&](const DuckLakeInlinedTableInfo &table) {
+		                            return catalog.InlinedTableIsEmpty(transaction, table.table_name,
+		                                                               read_info.snapshot.snapshot_id);
+	                            }),
+	             result.end());
+	return result;
+}
+
+void DuckLakeMultiFileList::GetFilesForTable() const {
+	auto transaction_ref = read_info.GetTransaction();
+	auto &transaction = *transaction_ref;
+	inlined_data_tables = ListInlinedDataTables(transaction);
 	identifier_map_t<shared_ptr<DuckLakeCommittedInlinedRows>> inlined_rows;
 	if (!IsTransactionLocal(read_info.table_id)) {
 		files = ReadCommittedFiles(transaction, inlined_rows);
