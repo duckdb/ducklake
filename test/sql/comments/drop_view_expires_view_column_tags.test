@@ -17,22 +17,22 @@ CREATE VIEW ducklake.v AS SELECT 1 AS c
 statement ok
 COMMENT ON COLUMN ducklake.v.c IS 'my col comment'
 
-# verify view column tag row is active
+# verify view column tag row is active, no end row names it
 query II
-SELECT key, value FROM __ducklake_metadata_ducklake.ducklake_view_column_tag WHERE end_snapshot IS NULL;
+SELECT key, value FROM __ducklake_metadata_ducklake.ducklake_view_column_tag t WHERE NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_view_column_tag_visibility e WHERE e.view_id = t.view_id AND e.column_name = t.column_name AND e.key = t.key AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot);
 ----
 comment	my col comment
 
 statement ok
 DROP VIEW ducklake.v
 
-# after DROP VIEW, no active rows in ducklake_view_column_tag (DropViews expires ducklake_view_column_tag)
+# after DROP VIEW, the row of the tag has an end at the snapshot of the drop (DropViews ends ducklake_view_column_tag)
 query I
-SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_view_column_tag WHERE end_snapshot IS NULL;
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_view_column_tag t WHERE NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_view_column_tag_visibility e WHERE e.view_id = t.view_id AND e.column_name = t.column_name AND e.key = t.key AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot);
 ----
 0
 
-query I
-SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_view_column_tag WHERE end_snapshot IS NOT NULL;
+query IIII
+SELECT e.branch_id, t.value, e.row_snapshot, e.snapshot_id FROM __ducklake_metadata_ducklake.ducklake_view_column_tag_visibility e JOIN __ducklake_metadata_ducklake.ducklake_view_column_tag t ON t.view_id = e.view_id AND t.column_name = e.column_name AND t.key = e.key AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot;
 ----
-1
+0	my col comment	2	3

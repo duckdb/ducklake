@@ -83,8 +83,9 @@ SELECT COUNT(*) FROM dl.t AT (VERSION => 'soon')
 ----
 No snapshot tag with the name "soon" exists
 
+# the dropped tag keeps its row, ended by the snapshot of the expiry
 query IIII
-SELECT snapshot_id, begin_snapshot, end_snapshot, expires_at IS NULL FROM meta.ducklake_snapshot_tag WHERE tag_name = 'soon'
+SELECT t.snapshot_id, t.begin_snapshot, e.snapshot_id, t.expires_at IS NULL FROM meta.ducklake_snapshot_tag t LEFT JOIN meta.ducklake_snapshot_tag_visibility e ON e.tag_name = t.tag_name AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot WHERE t.tag_name = 'soon'
 ----
 3	6	8	false
 
@@ -108,7 +109,7 @@ SELECT snapshot_id, changes FROM ducklake_snapshots('dl') ORDER BY snapshot_id D
 10	{tags_created=[later], tags_dropped=[later]}
 
 query IIII
-SELECT snapshot_id, begin_snapshot, end_snapshot, expires_at = TIMESTAMPTZ '2100-01-01 00:00:00+00' FROM meta.ducklake_snapshot_tag WHERE tag_name = 'later' ORDER BY begin_snapshot
+SELECT t.snapshot_id, t.begin_snapshot, e.snapshot_id, t.expires_at = TIMESTAMPTZ '2100-01-01 00:00:00+00' FROM meta.ducklake_snapshot_tag t LEFT JOIN meta.ducklake_snapshot_tag_visibility e ON e.tag_name = t.tag_name AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot WHERE t.tag_name = 'later' ORDER BY t.begin_snapshot
 ----
 4	7	10	true
 4	10	NULL	false

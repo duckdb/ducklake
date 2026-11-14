@@ -43,6 +43,8 @@ public:
 
 	bool MetadataExists() override;
 	bool InlinedDeletionTableExists(const Identifier &table_name) override;
+	//! One listing of the server's metadata schema fills the memo, the local catalog knows none of its tables
+	bool ProbeMetadataColumns() override;
 
 protected:
 	string MetadataExistsQuery() const override;

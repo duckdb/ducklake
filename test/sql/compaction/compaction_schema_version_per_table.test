@@ -48,10 +48,10 @@ SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'table_to_compact')
 1
 
 # verify schema evolution table
-query III
+query IIII
 FROM __ducklake_metadata_ducklake.ducklake_schema_versions
 ----
-1	1	1
+1	1	1	0
 
 
 statement ok

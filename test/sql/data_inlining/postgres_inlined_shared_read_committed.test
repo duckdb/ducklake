@@ -1,0 +1,102 @@
+# name: test/sql/data_inlining/postgres_inlined_shared_read_committed.test
+# description: two connections end the first rows of two tables born alike at once on Postgres under READ COMMITTED, the shared companion keeps both ends under their table ids
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS pgshared CASCADE')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/pgshared', METADATA_SCHEMA 'pgshared', META_ISOLATION_LEVEL 'READ COMMITTED', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+CREATE TABLE dl.u (i INTEGER)
+
+# the first rows of both tables share their row id and their birth
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+INSERT INTO dl.u VALUES (10), (20)
+
+statement ok
+COMMIT
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM dl.t WHERE i = 1
+
+statement ok con2
+DELETE FROM dl.u WHERE i = 10
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+# both ends sit in the shared companion under their table ids, the committed end of t does not stand for the row of u
+query IIIIII
+SELECT * FROM postgres_query('pg', 'SELECT table_id, row_id, row_branch_id, row_snapshot, branch_id, snapshot_id FROM pgshared.ducklake_inlined_data_visibility ORDER BY table_id')
+----
+1	0	0	3	0	4
+2	0	0	3	0	5
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+2
+
+query I
+SELECT i FROM dl.u ORDER BY i
+----
+20
+
+query I
+SELECT i FROM dl.t AT (VERSION => 4) ORDER BY i
+----
+2
+
+query I
+SELECT i FROM dl.u AT (VERSION => 4) ORDER BY i
+----
+10
+20
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA pgshared CASCADE')
+
+statement ok
+DETACH pg

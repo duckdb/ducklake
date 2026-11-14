@@ -25,10 +25,10 @@ select simple(1)
 1
 
 # # Check Macro Tables
-query IIIII
-FROM __ducklake_metadata_ducklake.ducklake_macro;
+query IIII
+SELECT schema_id, macro_id, macro_name, begin_snapshot FROM __ducklake_metadata_ducklake.ducklake_macro;
 ----
-0	1	simple	1	NULL
+0	1	simple	1
 
 query IIIII
 FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
@@ -43,8 +43,9 @@ FROM __ducklake_metadata_ducklake.ducklake_macro_parameters;
 statement ok
 drop macro simple;
 
+# the drop ends the row in the companion table
 query II
-SELECT begin_snapshot, end_snapshot FROM __ducklake_metadata_ducklake.ducklake_macro;
+SELECT m.begin_snapshot, e.snapshot_id FROM __ducklake_metadata_ducklake.ducklake_macro m LEFT JOIN __ducklake_metadata_ducklake.ducklake_macro_visibility e ON e.macro_id = m.macro_id AND e.row_branch_id = m.branch_id AND e.row_snapshot = m.begin_snapshot;
 ----
 1	2
 
@@ -73,7 +74,7 @@ select simple(1)
 
 # It now gets a new id
 query IIIII
-FROM __ducklake_metadata_ducklake.ducklake_macro;
+SELECT m.schema_id, m.macro_id, m.macro_name, m.begin_snapshot, e.snapshot_id FROM __ducklake_metadata_ducklake.ducklake_macro m LEFT JOIN __ducklake_metadata_ducklake.ducklake_macro_visibility e ON e.macro_id = m.macro_id AND e.row_branch_id = m.branch_id AND e.row_snapshot = m.begin_snapshot ORDER BY m.macro_id;
 ----
 0	1	simple	1	2
 0	2	simple	3	NULL

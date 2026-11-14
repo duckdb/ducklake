@@ -236,8 +236,8 @@ static unique_ptr<FunctionData> DuckLakeSnapshotsBind(ClientContext &context, Ta
 		result->snapshots =
 		    RemoteSnapshotsToCollection(context, metadata_manager.GetAllSnapshots(), newest_snapshot_id);
 	} else {
-		auto query_result =
-		    metadata_manager.ReadSnapshots(StringUtil::Format("snapshot_id <= %llu", newest_snapshot_id));
+		auto query_result = metadata_manager.ReadSnapshots(
+		    StringUtil::Format("snapshot_id <= %llu%s", newest_snapshot_id, metadata_manager.BranchLineageFilter()));
 		result->snapshots = query_result->TakeCollection();
 	}
 	DuckLakeSnapshotsFunction::GetSnapshotTypes(return_types, names);

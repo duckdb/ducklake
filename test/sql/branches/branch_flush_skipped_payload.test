@@ -1,0 +1,127 @@
+# name: test/sql/branches/branch_flush_skipped_payload.test
+# description: a flush skips a superseded payload whose remaining rows the transaction deletes, the ends of a branch on its versions stay while the end on the flushed payload is rehomed
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+# the first two rows are born at 2 in the first payload, the third at 4 in the payload of the altered table
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN j INTEGER
+
+statement ok
+INSERT INTO dl.t VALUES (3, 30)
+
+query II
+SELECT table_name, schema_version FROM meta.ducklake_inlined_data_tables ORDER BY schema_version
+----
+ducklake_inlined_data_1_1	1
+ducklake_inlined_data_1_2	2
+
+# dev forks from main at 4 and holds the snapshot 5
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 4)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 5, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 4 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (5, NULL, NULL, NULL, NULL, 1)
+
+# dev ends the first and the third row at its 5
+statement ok
+INSERT INTO meta.ducklake_inlined_data_visibility VALUES (1, 0, 0, 2, 1, 5), (1, 2, 0, 4, 1, 5)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query II
+SELECT i, j FROM dev.t ORDER BY i
+----
+2	NULL
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# the transaction deletes the remaining rows of the first payload, so the flush writes no file for it and skips it
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.t WHERE i IN (1, 2)
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+# the commit deletes the rehomed ends of the flushed payload alone, in one VALUES keyed statement
+query I
+SELECT sum(len(regexp_extract_all(query, 'WITH ends[^;]*VALUES[^;]*DELETE FROM [^;]*ducklake_inlined_data_visibility'))) FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1
+
+# the ends of dev on the skipped payload stay, its rows stay with the ends of main at its commit 5
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+1	0	0	2	0	5
+1	0	0	2	1	5
+1	1	0	2	0	5
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1
+----
+2
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_2
+----
+0
+
+# the end of dev on the third row is a deletion row of dev on the flushed file
+query III
+SELECT row_id, begin_snapshot, branch_id FROM meta.ducklake_inlined_delete_1
+----
+0	5	1
+
+query II
+SELECT i, j FROM dl.t ORDER BY i
+----
+3	30
+
+query II
+SELECT i, j FROM dev.t ORDER BY i
+----
+2	NULL
+
+query II
+SELECT i, j FROM dev.t AT (VERSION => 4) ORDER BY i
+----
+1	NULL
+2	NULL
+3	30
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH dl

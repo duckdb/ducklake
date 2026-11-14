@@ -60,6 +60,8 @@ struct FlushedInlinedTableInfo {
 	idx_t flush_snapshot_id;
 	//! A flush that writes no file leaves no rows to delete
 	bool wrote_files = true;
+	//! The ends of other branches on the moved versions, which the commit deletes by their key
+	vector<DuckLakeRehomedEnd> rehomed_ends;
 };
 
 struct DroppedDataFileStats {
@@ -208,7 +210,8 @@ public:
 
 	DuckLakeSnapshotCommit &GetCommitInfo();
 	//! Execute SQL on the metadata connection without placeholder substitution or metadata-manager wrapping.
-	unique_ptr<QueryResult> ExecuteRaw(string query);
+	//! Reads pass invalidates_caches false so the parsed listings of the transaction survive them.
+	unique_ptr<QueryResult> ExecuteRaw(string query, bool invalidates_caches = true);
 	//! Execute a statement on the metadata connection, logged with its query text like ExecuteRaw.
 	unique_ptr<QueryResult> ExecuteStatement(unique_ptr<SQLStatement> statement);
 	Connection &GetConnection();
@@ -304,8 +307,9 @@ public:
 	//! Whether the metadata transaction expired snapshots, which a rollback restores
 	bool ExpiredSnapshotsInMetadataTransaction();
 	void MarkMetadataWritten();
-	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
-	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files);
+	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows and the rehomed ends
+	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files,
+	                                vector<DuckLakeRehomedEnd> rehomed_ends);
 	bool InlinedTableFlushed(const Identifier &table_name);
 	//! Marks the inlined file deletions of the table flushed up to the snapshot, the commit deletes them
 	void MarkInlinedFileDeletionsFlushed(TableIndex table_id, idx_t flush_snapshot_id);
@@ -456,8 +460,9 @@ private:
 	void CheckSnapshotTagExpiry(const string &name, const Value &expires_at) const;
 	//! The live tags whose expiry time has passed, which an expiry drops
 	vector<DuckLakeSnapshotTagInfo> ExpiredSnapshotTagsInternal();
-	//! What the commit attempt expires, what the statements expired for the first attempt
-	DuckLakeExpiry ExpiredSnapshotsForCommit(idx_t attempt, idx_t latest_snapshot_id);
+	//! What the commit attempt expires, what the statements expired for the first attempt when the head the
+	//! commit read is the head they read
+	DuckLakeExpiry ExpiredSnapshotsForCommit(idx_t attempt, idx_t head_snapshot_id);
 	bool ChangesMadeBesidesExpiry() const;
 
 	void AlterEntryInternal(DuckLakeTableEntry &old_entry, unique_ptr<CatalogEntry> new_entry);
@@ -483,9 +488,11 @@ private:
 	mutex snapshot_tag_lock;
 	//! The expiry criteria of this transaction, applied by its commit
 	vector<DuckLakeSnapshotFilter> expiry_filters;
-	//! The snapshots the statements of this transaction expired, and the latest snapshot the first expiry saw
+	//! The snapshots the statements of this transaction expired
 	vector<DuckLakeSnapshotInfo> expired_in_transaction;
-	optional_idx expiry_snapshot_id;
+	//! The head of the attached branch when the statements first expired, a commit that reads another head
+	//! reselects what it expires like a retry does
+	optional_idx expiry_head_snapshot_id;
 	//! Whether statements wrote to the metadata transaction, which a retried commit rolls back
 	bool metadata_written = false;
 	bool snapshots_expired = false;

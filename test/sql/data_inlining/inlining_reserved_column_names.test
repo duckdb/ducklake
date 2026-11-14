@@ -24,7 +24,7 @@ SELECT COUNT(*) FROM GLOB('{TEST_DIR}/ducklake_reserved_cols_files/**')
 
 # the metadata columns of the inlined table are prefixed
 query I
-SELECT COUNT(*) FROM (DESCRIBE __ducklake_metadata_ducklake.ducklake_inlined_data_1_1) WHERE column_name IN ('_ducklake_row_id', '_ducklake_begin_snapshot', '_ducklake_end_snapshot')
+SELECT COUNT(*) FROM (DESCRIBE __ducklake_metadata_ducklake.ducklake_inlined_data_1_1) WHERE column_name IN ('_ducklake_row_id', '_ducklake_begin_snapshot', '_ducklake_branch_id')
 ----
 3
 

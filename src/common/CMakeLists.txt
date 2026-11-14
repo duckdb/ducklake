@@ -1,5 +1,6 @@
 add_library(
   ducklake_common OBJECT
+  ducklake_branch_chain.cpp
   ducklake_data_file.cpp
   ducklake_name_map.cpp
   ducklake_snapshot.cpp

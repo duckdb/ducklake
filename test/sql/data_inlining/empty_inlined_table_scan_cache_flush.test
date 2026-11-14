@@ -1,0 +1,74 @@
+# name: test/sql/data_inlining/empty_inlined_table_scan_cache_flush.test
+# description: A transaction that started before a flush keeps reading the inlined rows a later transaction found moved
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/empty_inlined_table_scan_cache_flush',
+    DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (42)
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT i FROM ducklake.t
+----
+42
+
+# the flush moves the inlined rows into a file dated at their snapshot
+statement ok con2
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't')
+
+query II con2
+SELECT i, filename LIKE '%.parquet' FROM ducklake.t AT (VERSION => 2)
+----
+42	true
+
+# the transaction that started before the flush still reads the rows from the inlined table
+query II con1
+SELECT i, filename FROM ducklake.t
+----
+42	ducklake_inlined_data_1_1
+
+query II con1
+SELECT i, filename FROM ducklake.t AT (VERSION => 2)
+----
+42	ducklake_inlined_data_1_1
+
+statement ok con1
+COMMIT
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# a transaction at the latest snapshot skips the emptied inlined table and reads the rows through the file
+query II con1
+SELECT i, filename LIKE '%.parquet' FROM ducklake.t AT (VERSION => 2)
+----
+42	true
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%FROM%ducklake_inlined_data_1_1%'
+----
+0
+
+statement ok
+CALL disable_logging()
+
+query II
+SELECT i, filename LIKE '%.parquet' FROM ducklake.t
+----
+42	true

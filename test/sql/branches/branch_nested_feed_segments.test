@@ -1,0 +1,168 @@
+# name: test/sql/branches/branch_nested_feed_segments.test
+# description: the deletions feed of a nested branch reads each delete file of its chain up to the cap of the segment that wrote it
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1), (2), (3), (4)
+
+# the delete of main is inlined, the flush below turns it into a delete file that starts at snapshot 3
+statement ok
+CALL ducklake_set_option('lake', 'data_inlining_row_limit', 10)
+
+statement ok
+DELETE FROM lake.t WHERE i = 1
+
+query I
+SELECT id FROM lake.current_snapshot()
+----
+3
+
+# dev forks main at 3 and holds a cumulative delete file of its own at 4
+statement ok
+COPY (SELECT ''::VARCHAR AS file_path, p::BIGINT AS pos, s::BIGINT AS _ducklake_internal_snapshot_id FROM (VALUES (0, 3), (1, 4)) v(p, s)) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet' (FORMAT PARQUET)
+
+statement ok
+INSERT INTO meta.ducklake_delete_file (delete_file_id, table_id, data_file_id, path, path_is_relative, format, delete_count, file_size_bytes, partial_max) SELECT 1099511627776, 1, 0, '{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet', false, 'parquet', 2, file_size_bytes, 4 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet')
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 3)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 4, NOW(), schema_version, 1099511627776, 1099511627777, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 3
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (4, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_delete_file_visibility VALUES (1, 1, 1099511627776, 4, false)
+
+# feature forks dev at 4 and replaces the delete file of dev with a cumulative one of its own at 5
+statement ok
+COPY (SELECT ''::VARCHAR AS file_path, p::BIGINT AS pos, s::BIGINT AS _ducklake_internal_snapshot_id FROM (VALUES (0, 3), (1, 4), (2, 5)) v(p, s)) TO '{TEST_DIR}/{BASE_TEST_NAME}_feature_delete.parquet' (FORMAT PARQUET)
+
+statement ok
+INSERT INTO meta.ducklake_delete_file (delete_file_id, table_id, data_file_id, path, path_is_relative, format, delete_count, file_size_bytes, partial_max) SELECT 2199023255552, 1, 0, '{TEST_DIR}/{BASE_TEST_NAME}_feature_delete.parquet', false, 'parquet', 3, file_size_bytes, 5 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_feature_delete.parquet')
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (2, 'feature', 1, 4)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 5, NOW(), schema_version, 2199023255552, 2199023255553, 2 FROM meta.ducklake_snapshot WHERE branch_id = 1 AND snapshot_id = 4
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (5, NULL, NULL, NULL, NULL, 2)
+
+statement ok
+INSERT INTO meta.ducklake_delete_file_visibility VALUES (2, 1, 1099511627776, 5, true), (2, 1, 2199023255552, 5, false)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS feature (METADATA_CATALOG 'meta', BRANCH 'feature')
+
+# the inlined delete of main, the delete file of dev and the delete file of feature each report their snapshot on feature once
+query IIII
+FROM feature.table_changes('t', 3, 5) ORDER BY ALL
+----
+3	0	delete	1
+4	1	delete	2
+5	2	delete	3
+
+query IIII
+FROM feature.table_changes('t', 3, 3) ORDER BY ALL
+----
+3	0	delete	1
+
+query IIII
+FROM feature.table_changes('t', 4, 4) ORDER BY ALL
+----
+4	1	delete	2
+
+query IIII
+FROM feature.table_changes('t', 5, 5) ORDER BY ALL
+----
+5	2	delete	3
+
+# dev reads its own file up to its head, the date of feature is above it
+query IIII
+FROM dev.table_changes('t', 3, 4) ORDER BY ALL
+----
+3	0	delete	1
+4	1	delete	2
+
+query IIII
+FROM dev.table_changes('t', 4, 4) ORDER BY ALL
+----
+4	1	delete	2
+
+query IIII
+FROM lake.table_changes('t', 3, 3) ORDER BY ALL
+----
+3	0	delete	1
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+# after the flush the delete of main is a dated delete file read up to the cap of main's segment
+query IIII
+FROM feature.table_changes('t', 3, 5) ORDER BY ALL
+----
+3	0	delete	1
+4	1	delete	2
+5	2	delete	3
+
+query IIII
+FROM feature.table_changes('t', 3, 3) ORDER BY ALL
+----
+3	0	delete	1
+
+query IIII
+FROM feature.table_changes('t', 4, 4) ORDER BY ALL
+----
+4	1	delete	2
+
+query IIII
+FROM feature.table_changes('t', 5, 5) ORDER BY ALL
+----
+5	2	delete	3
+
+# dev chooses its own file over the flushed one of main and reads both dates from it
+query IIII
+FROM dev.table_changes('t', 3, 4) ORDER BY ALL
+----
+3	0	delete	1
+4	1	delete	2
+
+query IIII
+FROM dev.table_changes('t', 4, 4) ORDER BY ALL
+----
+4	1	delete	2
+
+query IIII
+FROM lake.table_changes('t', 3, 3) ORDER BY ALL
+----
+3	0	delete	1
+
+statement ok
+DETACH feature
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH lake

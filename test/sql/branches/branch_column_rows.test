@@ -1,0 +1,249 @@
+# name: test/sql/branches/branch_column_rows.test
+# description: the version rows of columns end in a companion table, a branch attached at the fork keeps the columns of the fork
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, j INTEGER, k VARCHAR)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 2, 'a')
+
+# dev forks at the insert, every column so far is born on main
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+# main renames, retypes, drops and adds columns after the fork
+statement ok
+ALTER TABLE dl.t RENAME COLUMN i TO i2
+
+statement ok
+ALTER TABLE dl.t ALTER j TYPE BIGINT
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN k
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN l INTEGER DEFAULT 7
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE dl.t)
+----
+i2	INTEGER
+j	BIGINT
+l	INTEGER
+
+# a rename or retype writes a new version row and ends the old one, a drop ends the live row
+query IIII
+SELECT c.column_name, c.begin_snapshot, c.branch_id, (SELECT e.snapshot_id FROM meta.ducklake_column_visibility e WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id AND e.row_snapshot = c.begin_snapshot) FROM meta.ducklake_column c ORDER BY c.begin_snapshot, c.column_id
+----
+i	1	0	3
+j	1	0	4
+k	1	0	5
+i2	3	0	NULL
+j	4	0	NULL
+l	6	0	NULL
+
+# an end names the row by its birth and carries the branch that ended it
+query IIII
+SELECT e.branch_id, c.column_name, e.row_snapshot, e.snapshot_id FROM meta.ducklake_column_visibility e JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id AND c.branch_id = e.row_branch_id AND c.begin_snapshot = e.row_snapshot ORDER BY e.snapshot_id
+----
+0	i	1	3
+0	j	1	4
+0	k	1	5
+
+# one end per row per branch
+statement error
+INSERT INTO meta.ducklake_column_visibility SELECT * FROM meta.ducklake_column_visibility WHERE snapshot_id = 3
+----
+constraint
+
+# a column added and dropped in one transaction is never visible, its row ends in its own snapshot
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN m INTEGER
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN m
+
+statement ok
+COMMIT
+
+query I
+SELECT column_name FROM (DESCRIBE dl.t)
+----
+i2
+j
+l
+
+query I
+SELECT column_name FROM (DESCRIBE FROM dl.t AT (VERSION => 7))
+----
+i2
+j
+l
+
+query III
+SELECT c.column_name, c.begin_snapshot, e.snapshot_id FROM meta.ducklake_column c JOIN meta.ducklake_column_visibility e ON e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id AND e.row_snapshot = c.begin_snapshot WHERE c.column_name = 'm'
+----
+m	7	7
+
+# main reads the columns of the fork through time travel
+query III
+SELECT i, j, k FROM dl.t AT (VERSION => 2)
+----
+1	2	a
+
+statement ok
+DETACH dl
+
+# the branch forked before the changes and keeps the columns of the fork
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+2
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE dl.t)
+----
+i	INTEGER
+j	INTEGER
+k	VARCHAR
+
+query III
+SELECT i, j, k FROM dl.t
+----
+1	2	a
+
+query III
+SELECT i, j, k FROM dl.t AT (VERSION => 2)
+----
+1	2	a
+
+statement error
+SELECT i2 FROM dl.t
+----
+not found
+
+statement ok
+DETACH dl
+
+# dev drops k at its own snapshot 3, a schema change of its own with the next schema version
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS m (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 3, NOW(), schema_version + 1, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_column_visibility SELECT 1, table_id, column_id, branch_id, begin_snapshot, 3 FROM meta.ducklake_column WHERE column_name = 'k'
+
+# feature forks dev after its drop, early forks dev at the fork itself, before that drop
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (2, 'feature', 1, 3), (3, 'early', 1, 2)
+
+statement ok
+DETACH m
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+3
+
+query I
+SELECT column_name FROM (DESCRIBE dl.t)
+----
+i
+j
+
+query II
+SELECT * FROM dl.t
+----
+1	2
+
+query I
+SELECT column_name FROM (DESCRIBE FROM dl.t AT (VERSION => 2))
+----
+i
+j
+k
+
+statement ok
+DETACH dl
+
+# the end of dev sits on the middle segment of feature, its head reads the end and version 2 does not
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'feature')
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+3
+
+query I
+SELECT column_name FROM (DESCRIBE dl.t)
+----
+i
+j
+
+query III
+SELECT i, j, k FROM dl.t AT (VERSION => 2)
+----
+1	2	a
+
+statement ok
+DETACH dl
+
+# early caps dev at 2, so the end of dev at 3 is beyond its view and k is still there
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'early')
+
+query I
+SELECT column_name FROM (DESCRIBE dl.t)
+----
+i
+j
+k
+
+statement ok
+DETACH dl
+
+# the end of dev does not touch main
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT column_name FROM (DESCRIBE dl.t)
+----
+i2
+j
+l
+
+query III
+SELECT i, j, k FROM dl.t AT (VERSION => 2)
+----
+1	2	a
+
+statement ok
+DETACH dl

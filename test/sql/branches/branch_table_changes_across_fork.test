@@ -1,0 +1,145 @@
+# name: test/sql/branches/branch_table_changes_across_fork.test
+# description: a change feed on a branch crosses the fork and continues with the snapshots of the branch alone
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1), (2)
+
+statement ok
+INSERT INTO lake.t VALUES (3), (4)
+
+statement ok
+DELETE FROM lake.t WHERE i = 3
+
+query I
+SELECT id FROM lake.current_snapshot()
+----
+4
+
+# dev forks main at 4, deletes the first file at its 5 and adds a file of its own at its 6
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 4)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 5, NOW(), schema_version, 1099511627776, 1099511627776, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 4
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 6, NOW(), schema_version, 1099511627776, 1099511627777, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 4
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (5, NULL, NULL, NULL, NULL, 1), (6, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility VALUES (1, 1, 0, 5, true)
+
+statement ok
+COPY (SELECT i::INTEGER AS i FROM (VALUES (5), (6)) v(i)) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_insert.parquet' (FORMAT PARQUET, FIELD_IDS {i: 1})
+
+statement ok
+INSERT INTO meta.ducklake_data_file (data_file_id, table_id, path, path_is_relative, file_format, record_count, file_size_bytes, row_id_start) SELECT 1099511627776, 1, '{TEST_DIR}/{BASE_TEST_NAME}_dev_insert.parquet', false, 'parquet', 2, file_size_bytes, 100 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_insert.parquet')
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility VALUES (1, 1, 1099511627776, 6, false)
+
+# main inserts and deletes after the fork, its 5 and 6 are another lineage
+statement ok
+INSERT INTO lake.t VALUES (7)
+
+statement ok
+DELETE FROM lake.t WHERE i = 4
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT i FROM dev.t ORDER BY i
+----
+4
+5
+6
+
+query IIII
+FROM dev.table_changes('t', 2, 6) ORDER BY ALL
+----
+2	0	insert	1
+2	1	insert	2
+3	2	insert	3
+3	3	insert	4
+4	2	delete	3
+5	0	delete	1
+5	1	delete	2
+6	100	insert	5
+6	101	insert	6
+
+query IIII
+FROM dev.table_changes('t', 5, 6) ORDER BY ALL
+----
+5	0	delete	1
+5	1	delete	2
+6	100	insert	5
+6	101	insert	6
+
+# below the fork the feed of dev is the feed of main
+query IIII
+FROM dev.table_changes('t', 2, 4) ORDER BY ALL
+----
+2	0	insert	1
+2	1	insert	2
+3	2	insert	3
+3	3	insert	4
+4	2	delete	3
+
+query IIII
+FROM lake.table_changes('t', 2, 4) ORDER BY ALL
+----
+2	0	insert	1
+2	1	insert	2
+3	2	insert	3
+3	3	insert	4
+4	2	delete	3
+
+query IIII
+FROM lake.table_changes('t', 5, 6) ORDER BY ALL
+----
+5	4	insert	7
+6	3	delete	4
+
+# the timestamp form resolves both bounds in the lineage of dev
+statement ok
+SET VARIABLE t2 = (SELECT snapshot_time FROM dev.snapshots() WHERE snapshot_id = 2)
+
+statement ok
+SET VARIABLE t6 = (SELECT snapshot_time FROM dev.snapshots() WHERE snapshot_id = 6)
+
+query IIII
+FROM dev.table_changes('t', getvariable('t2'), getvariable('t6')) ORDER BY ALL
+----
+2	0	insert	1
+2	1	insert	2
+3	2	insert	3
+3	3	insert	4
+4	2	delete	3
+5	0	delete	1
+5	1	delete	2
+6	100	insert	5
+6	101	insert	6
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH lake

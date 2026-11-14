@@ -1,0 +1,200 @@
+# name: test/sql/migration/dev1_inlined_heal_chunks.test
+# description: a heal of more payloads than one chunk holds folds the per payload companions of every chunk and writes the marker with the last chunk
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+# the first nine tables take the table ids 1 to 9 one commit at a time, the rest are created in one transaction
+loop i 1 10
+
+statement ok
+CREATE TABLE dl.t_${i} (i INTEGER)
+
+endloop
+
+# one payload with one row per table, one table more than a chunk of the heal holds
+statement ok
+BEGIN
+
+loop i 10 502
+
+statement ok
+CREATE TABLE dl.t_${i} (i INTEGER)
+
+endloop
+
+loop i 1 502
+
+statement ok
+INSERT INTO dl.t_${i} VALUES (${i})
+
+endloop
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_tables
+----
+501
+
+query II
+SELECT table_id, table_name FROM meta.ducklake_table WHERE table_id IN (1, 9) ORDER BY table_id
+----
+1	t_1
+9	t_9
+
+# the payloads heal in the order of their names, the ninth table's payload sorts last and heals in a chunk of its own
+query I
+SELECT table_name FROM meta.ducklake_inlined_data_tables WHERE table_id IN (1, 9) ORDER BY table_id
+----
+ducklake_inlined_data_1_1
+ducklake_inlined_data_9_9
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_tables WHERE table_name IN ('ducklake_inlined_data_10_10', 'ducklake_inlined_data_501_10')
+----
+2
+
+statement ok
+DELETE FROM dl.t_1 WHERE i = 1
+
+statement ok
+DELETE FROM dl.t_9 WHERE i = 9
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+1	0	0	10	0	11
+9	0	0	10	0	12
+
+# the older dev build kept the ends of each payload in a companion of its own and wrote no marker of this generation
+statement ok
+BEGIN
+
+loop i 1 10
+
+statement ok
+CREATE TABLE meta.ducklake_inlined_data_${i}_${i}_visibility(branch_id BIGINT, row_id BIGINT, row_branch_id BIGINT, row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, row_id, row_branch_id, row_snapshot))
+
+endloop
+
+loop i 10 502
+
+statement ok
+CREATE TABLE meta.ducklake_inlined_data_${i}_10_visibility(branch_id BIGINT, row_id BIGINT, row_branch_id BIGINT, row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, row_id, row_branch_id, row_snapshot))
+
+endloop
+
+statement ok
+INSERT INTO meta.ducklake_inlined_data_1_1_visibility VALUES (0, 0, 0, 10, 11)
+
+statement ok
+INSERT INTO meta.ducklake_inlined_data_9_9_visibility VALUES (0, 0, 0, 10, 12)
+
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
+statement ok
+DROP TABLE meta.ducklake_inlined_data_visibility
+
+statement ok
+COMMIT
+
+statement ok
+DETACH dl
+
+# a read only attach cannot create the shared companion
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+attach it writable once
+
+# the writable attach heals the payloads chunk by chunk, folds the companions of each chunk and writes the marker last
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.4
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+1	0	0	10	0	11
+9	0	0	10	0	12
+
+statement error
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
+----
+does not exist
+
+statement error
+SELECT count(*) FROM meta.ducklake_inlined_data_9_9_visibility
+----
+does not exist
+
+statement error
+SELECT count(*) FROM meta.ducklake_inlined_data_10_10_visibility
+----
+does not exist
+
+statement error
+SELECT count(*) FROM meta.ducklake_inlined_data_501_10_visibility
+----
+does not exist
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_tables
+----
+501
+
+query I
+SELECT count(*) FROM dl.t_1
+----
+0
+
+query I
+SELECT i FROM dl.t_1 AT (VERSION => 10)
+----
+1
+
+query I
+SELECT count(*) FROM dl.t_9
+----
+0
+
+query I
+SELECT i FROM dl.t_9 AT (VERSION => 11)
+----
+9
+
+query I
+SELECT i FROM dl.t_501
+----
+501
+
+statement ok
+DETACH dl
+
+# the healed catalog attaches read only
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+
+query I
+SELECT i FROM dl.t_2
+----
+2
+
+statement ok
+DETACH dl

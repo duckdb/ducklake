@@ -85,13 +85,13 @@ SELECT table_name, column_name, comment FROM duckdb_columns() WHERE database_nam
 t	v	column comment
 t3	v	new column comment
 
-# one comment per entry
+# one live comment per entry, a live row is one without an end row
 query II
-SELECT count(*), count(DISTINCT object_id) FROM __ducklake_metadata_lake.ducklake_tag WHERE key = 'comment' AND end_snapshot IS NULL
+SELECT count(*), count(DISTINCT object_id) FROM __ducklake_metadata_lake.ducklake_tag t WHERE key = 'comment' AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_lake.ducklake_tag_visibility e WHERE e.object_id = t.object_id AND e.key = t.key AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)
 ----
 3	3
 
 query II
-SELECT count(*), count(DISTINCT (table_id, column_id)) FROM __ducklake_metadata_lake.ducklake_column_tag WHERE key = 'comment' AND end_snapshot IS NULL
+SELECT count(*), count(DISTINCT (table_id, column_id)) FROM __ducklake_metadata_lake.ducklake_column_tag t WHERE key = 'comment' AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_lake.ducklake_column_tag_visibility e WHERE e.table_id = t.table_id AND e.column_id = t.column_id AND e.key = t.key AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)
 ----
 2	2

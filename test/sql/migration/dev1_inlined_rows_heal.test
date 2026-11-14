@@ -1,0 +1,319 @@
+# name: test/sql/migration/dev1_inlined_rows_heal.test
+# description: the inlined data tables of an older dev build, ended in place and without the shared companion, are refused read only, heal on a writable attach and resume from every statement of the heal
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER, v VARCHAR)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 'a'), (2, 'b'), (3, 'c')
+
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+statement ok
+UPDATE dl.t SET v = 'c2' WHERE i = 3
+
+statement ok
+CREATE TABLE dl.f AS SELECT range AS i FROM range(20)
+
+statement ok
+DELETE FROM dl.f WHERE i = 7
+
+query II
+SELECT i, v FROM dl.t ORDER BY i
+----
+1	a
+3	c2
+
+query I
+SELECT count(*) FROM dl.f
+----
+19
+
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
+# the older dev build ended its row versions in place, knew no shared companion, no birth branch and no branch of a deletion
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1 ADD COLUMN _ducklake_end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_inlined_data_1_1 SET _ducklake_end_snapshot = 3 WHERE _ducklake_row_id = 1 AND _ducklake_begin_snapshot = 2
+
+statement ok
+UPDATE meta.ducklake_inlined_data_1_1 SET _ducklake_end_snapshot = 4 WHERE _ducklake_row_id = 2 AND _ducklake_begin_snapshot = 2
+
+statement ok
+DROP TABLE meta.ducklake_inlined_data_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1 DROP COLUMN _ducklake_branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_delete_2 DROP COLUMN branch_id
+
+statement ok
+DETACH dl
+
+# a read only attach cannot backfill the companion
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+attach it writable once
+
+# the writable attach appends the branch column, fills the companion and drops the end column
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM meta.ducklake_inlined_data_1_1)
+----
+_ducklake_row_id
+_ducklake_begin_snapshot
+i
+v
+_ducklake_branch_id
+
+query IIIII
+FROM meta.ducklake_inlined_data_1_1 ORDER BY ALL
+----
+0	2	1	a	0
+1	2	2	b	0
+2	2	3	c	0
+2	4	3	c2	0
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+1	1	0	2	0	3
+1	2	0	2	0	4
+
+query III
+SELECT row_id, begin_snapshot, branch_id FROM meta.ducklake_inlined_delete_2
+----
+7	6	0
+
+query II
+SELECT i, v FROM dl.t ORDER BY i
+----
+1	a
+3	c2
+
+query II
+SELECT i, v FROM dl.t AT (VERSION => 2) ORDER BY i
+----
+1	a
+2	b
+3	c
+
+query II
+SELECT i, v FROM dl.t AT (VERSION => 3) ORDER BY i
+----
+1	a
+3	c
+
+query I
+SELECT count(*) FROM dl.f
+----
+19
+
+# the heal wrote its marker last
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.4
+
+# the healed catalog ends the versions it deletes in the companion
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+1	0	0	2	0	7
+1	1	0	2	0	3
+1	2	0	2	0	4
+
+# an interrupted heal wrote no marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
+# a heal interrupted after the branch column was added resumes with the rest and fills the branches
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1 ADD COLUMN _ducklake_end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_inlined_data_1_1 SET _ducklake_end_snapshot = 3 WHERE _ducklake_row_id = 1 AND _ducklake_begin_snapshot = 2
+
+statement ok
+UPDATE meta.ducklake_inlined_data_1_1 SET _ducklake_end_snapshot = 4 WHERE _ducklake_row_id = 2 AND _ducklake_begin_snapshot = 2
+
+statement ok
+UPDATE meta.ducklake_inlined_data_1_1 SET _ducklake_end_snapshot = 7 WHERE _ducklake_row_id = 0 AND _ducklake_begin_snapshot = 2
+
+statement ok
+DROP TABLE meta.ducklake_inlined_data_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1 DROP COLUMN _ducklake_branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1 ADD COLUMN _ducklake_branch_id BIGINT
+
+query I
+SELECT count(*) FILTER (WHERE _ducklake_branch_id IS NULL) FROM meta.ducklake_inlined_data_1_1
+----
+4
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+attach it writable once
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT list(DISTINCT _ducklake_branch_id) FROM meta.ducklake_inlined_data_1_1
+----
+[0]
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+1	0	0	2	0	7
+1	1	0	2	0	3
+1	2	0	2	0	4
+
+query II
+SELECT i, v FROM dl.t ORDER BY i
+----
+3	c2
+
+query II
+SELECT i, v FROM dl.t AT (VERSION => 4) ORDER BY i
+----
+1	a
+3	c2
+
+# an interrupted heal wrote no marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
+# a heal interrupted after the companion was created resumes with the backfill
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1 ADD COLUMN _ducklake_end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_inlined_data_1_1 SET _ducklake_end_snapshot = 3 WHERE _ducklake_row_id = 1 AND _ducklake_begin_snapshot = 2
+
+statement ok
+UPDATE meta.ducklake_inlined_data_1_1 SET _ducklake_end_snapshot = 4 WHERE _ducklake_row_id = 2 AND _ducklake_begin_snapshot = 2
+
+statement ok
+UPDATE meta.ducklake_inlined_data_1_1 SET _ducklake_end_snapshot = 7 WHERE _ducklake_row_id = 0 AND _ducklake_begin_snapshot = 2
+
+statement ok
+DELETE FROM meta.ducklake_inlined_data_visibility
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+1	0	0	2	0	7
+1	1	0	2	0	3
+1	2	0	2	0	4
+
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM meta.ducklake_inlined_data_1_1)
+----
+_ducklake_row_id
+_ducklake_begin_snapshot
+i
+v
+_ducklake_branch_id
+
+# an interrupted heal wrote no marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
+# a heal interrupted after the backfill drops the end column without duplicating the ends
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1 ADD COLUMN _ducklake_end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_inlined_data_1_1 SET _ducklake_end_snapshot = 3 WHERE _ducklake_row_id = 1 AND _ducklake_begin_snapshot = 2
+
+statement ok
+UPDATE meta.ducklake_inlined_data_1_1 SET _ducklake_end_snapshot = 4 WHERE _ducklake_row_id = 2 AND _ducklake_begin_snapshot = 2
+
+statement ok
+UPDATE meta.ducklake_inlined_data_1_1 SET _ducklake_end_snapshot = 7 WHERE _ducklake_row_id = 0 AND _ducklake_begin_snapshot = 2
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility
+----
+3
+
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM meta.ducklake_inlined_data_1_1)
+----
+_ducklake_row_id
+_ducklake_begin_snapshot
+i
+v
+_ducklake_branch_id
+
+query II
+SELECT i, v FROM dl.t ORDER BY i
+----
+3	c2
+
+query II
+SELECT i, v FROM dl.t AT (VERSION => 2) ORDER BY i
+----
+1	a
+2	b
+3	c
+
+statement ok
+DETACH dl
+
+# a healed catalog attaches read only
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+
+query II
+SELECT i, v FROM dl.t ORDER BY i
+----
+3	c2
+
+statement ok
+DETACH dl

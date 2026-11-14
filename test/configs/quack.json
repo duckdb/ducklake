@@ -72,6 +72,8 @@
         "test/sql/benchmark/postgres_catalog.test",
         "test/sql/issues/issue_843_postgres_legacy_inlined_types.test",
         "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test",
+        "test/sql/data_inlining/postgres_inlined_visibility_rows.test",
+        "test/sql/data_inlining/postgres_inlined_second_attach.test",
         "test/sql/compaction/compaction_idle_metadata_transaction.test",
         "test/sql/compaction/postgres_expire_snapshots_time_zone.test",
         "test/sql/retry/postgres_commit_error_query_text.test",
@@ -82,9 +84,13 @@
         "test/sql/tags/postgres_tags_read_committed.test",
         "test/sql/general/postgres_nul_byte_text.test",
         "test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test",
+        "test/sql/catalog/postgres_native_catalog_load.test",
+        "test/sql/metadata/postgres_read_committed_branch_memo.test",
+        "test/sql/metadata/postgres_read_committed_listing_cache.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test",
         "test/sql/metadata/postgres_attach_cache_clear.test",
-        "test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test"
+        "test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test",
+        "test/sql/data_inlining/postgres_inlined_shared_read_committed.test"
       ]
     },
     {
@@ -186,6 +192,12 @@
       ]
     },
     {
+      "reason": "FIXME: Each metadata query runs in its own server-side transaction on quack, so a reader that began before a concurrent flush reads the moved rows from the data file instead of the inlined table.",
+      "paths": [
+        "test/sql/data_inlining/empty_inlined_table_scan_cache_flush.test"
+      ]
+    },
+    {
       "reason": "Test relies on a file-based metadata catalog.",
       "paths": [
         "test/sql/general/default_path.test",
@@ -233,7 +245,20 @@
     {
       "reason": "The commit batch of a quack catalog is sent through quack_query_by_name, so the number of column inserts cannot be counted",
       "paths": [
-        "test/sql/issues/issue_1146_column_insert_batches.test"
+        "test/sql/issues/issue_1146_column_insert_batches.test",
+        "test/sql/data_inlining/inlined_create_tables_statement_count.test"
+      ]
+    },
+    {
+      "reason": "The commit batch of a quack catalog is sent through quack_query_by_name, so the client log holds no delete file event insert to count",
+      "paths": [
+        "test/sql/delete/delete_replacement_commit_statements.test"
+      ]
+    },
+    {
+      "reason": "The commit batch of a quack catalog is sent through quack_query_by_name, so the client log holds no rehomed end delete to count",
+      "paths": [
+        "test/sql/branches/branch_flush_skipped_payload.test"
       ]
     },
     {
@@ -247,6 +272,80 @@
       "paths": [
         "test/sql/cleanup/expire_cleanup_in_transaction.test",
         "test/sql/cleanup/expire_cleanup_concurrent_commit.test"
+      ]
+    },
+    {
+      "reason": "A failed attach keeps the metadata catalog attached on quack, which the test attaches again under the same name to edit the old layout",
+      "paths": [
+        "test/sql/migration/dev1_heal_refuses_old_branches.test"
+      ]
+    },
+    {
+      "reason": "The conflict read of a server side quack commit runs in the sidecar, so the client log never shows it",
+      "paths": [
+        "test/sql/deletion_inlining/inlined_file_deletes_concurrent_branch_column.test"
+      ]
+    },
+    {
+      "reason": "Starts a DuckDB file REST server of its own, covered by the DuckDB file run",
+      "paths": [
+        "test/sql/rest/rest_aggregates.test",
+        "test/sql/rest/rest_alter.test",
+        "test/sql/rest/rest_api_requests.test",
+        "test/sql/rest/rest_arrow.test",
+        "test/sql/rest/rest_branch_attach.test",
+        "test/sql/rest/rest_client_transaction_paths.test",
+        "test/sql/rest/rest_column_mappings.test",
+        "test/sql/rest/rest_commit_edge_cases.test",
+        "test/sql/rest/rest_commit_request_fields.test",
+        "test/sql/rest/rest_concurrent_commit.test",
+        "test/sql/rest/rest_conflicts.test",
+        "test/sql/rest/rest_connect.test",
+        "test/sql/rest/rest_ddl.test",
+        "test/sql/rest/rest_delete.test",
+        "test/sql/rest/rest_delete_overwrite.test",
+        "test/sql/rest/rest_encrypted_lake.test",
+        "test/sql/rest/rest_entry_ids.test",
+        "test/sql/rest/rest_failed_commit.test",
+        "test/sql/rest/rest_file_counts.test",
+        "test/sql/rest/rest_file_order.test",
+        "test/sql/rest/rest_filter_expressions.test",
+        "test/sql/rest/rest_filter_settings.test",
+        "test/sql/rest/rest_filter_types.test",
+        "test/sql/rest/rest_filters.test",
+        "test/sql/rest/rest_flush_inlined_data.test",
+        "test/sql/rest/rest_functions.test",
+        "test/sql/rest/rest_initial_default.test",
+        "test/sql/rest/rest_inlined_changes.test",
+        "test/sql/rest/rest_insert_files.test",
+        "test/sql/rest/rest_insert_rows.test",
+        "test/sql/rest/rest_json_responses.test",
+        "test/sql/rest/rest_maintenance.test",
+        "test/sql/rest/rest_malformed_requests.test",
+        "test/sql/rest/rest_null_type_column.test",
+        "test/sql/rest/rest_paged_file_lists.test",
+        "test/sql/rest/rest_paging.test",
+        "test/sql/rest/rest_partition_values.test",
+        "test/sql/rest/rest_prefix.test",
+        "test/sql/rest/rest_projection.test",
+        "test/sql/rest/rest_review_probes.test",
+        "test/sql/rest/rest_rewrite_change_feed.test",
+        "test/sql/rest/rest_serve_branch_refused.test",
+        "test/sql/rest/rest_serve_isolated_refusal_keeps_registration.test",
+        "test/sql/rest/rest_serve_refusal_keeps_registration.test",
+        "test/sql/rest/rest_server_edge_cases.test",
+        "test/sql/rest/rest_skipped_add_field.test",
+        "test/sql/rest/rest_snapshot_tags.test",
+        "test/sql/rest/rest_snapshots_main_lineage.test",
+        "test/sql/rest/rest_struct_projection.test",
+        "test/sql/rest/rest_time_travel.test",
+        "test/sql/rest/rest_timestamptz_promotion.test",
+        "test/sql/rest/rest_token.test",
+        "test/sql/rest/rest_transaction_snapshot.test",
+        "test/sql/rest/rest_types.test",
+        "test/sql/rest/rest_unusual_inputs.test",
+        "test/sql/rest/rest_value_types.test",
+        "test/sql/rest/rest_view_column_comment.test"
       ]
     }
   ]

@@ -1,0 +1,77 @@
+# name: test/sql/branches/branch_only_file_attach.test
+# description: a branch attach reads a file whose only add event lives on the branch
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (42)
+
+# the branch forks at the creation of the table and takes the snapshot of the insert as its own first snapshot
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 1)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok
+DELETE FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes SELECT snapshot_id, changes_made, author, commit_message, commit_extra_info, 1 FROM meta.ducklake_snapshot_changes WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok
+DELETE FROM meta.ducklake_snapshot_changes WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, snapshot_id, is_delete FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND snapshot_id = 2
+
+statement ok
+DELETE FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND snapshot_id = 2
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+2
+
+query I
+SELECT i FROM dl.t
+----
+42
+
+statement ok
+DETACH dl
+
+# main keeps the table but has no event for the file
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+1
+
+query I
+SELECT i FROM dl.t
+----
+
+statement ok
+DETACH dl

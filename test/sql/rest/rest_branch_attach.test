@@ -1,0 +1,27 @@
+# name: test/sql/rest/rest_branch_attach.test
+# description: A BRANCH attach through a REST catalog is refused, the server serves the lineage of its own catalog
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok rest_db:rest_server_con
+CREATE TABLE rest_lake.t AS SELECT 42 AS i
+
+# the main branch is the lineage the server serves
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (BRANCH 'main')
+
+query I
+SELECT i FROM dl.t
+----
+42
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:rest:{rest_server}' AS dev (BRANCH 'dev')
+----
+BRANCH attaches through a REST catalog are not supported yet
+
+include test/template/rest_teardown.test_template

@@ -41,7 +41,7 @@ SELECT k, l FROM ducklake.t ORDER BY k
 # the table stats of the list elements come from the merged inlined stats
 query II
 SELECT min_value, max_value FROM ducklake_meta.ducklake_table_column_stats
-WHERE column_id = (SELECT column_id FROM ducklake_meta.ducklake_column WHERE column_name = 'element' AND end_snapshot IS NULL)
+WHERE column_id = (SELECT column_id FROM ducklake_meta.ducklake_column WHERE column_name = 'element')
 ----
 3	3
 
@@ -82,7 +82,7 @@ SELECT k, l, s, m, d FROM ducklake.t ORDER BY k
 query IIII
 SELECT c.column_name, s.contains_null::BOOLEAN, s.min_value, s.max_value FROM ducklake_meta.ducklake_table_column_stats s
 JOIN ducklake_meta.ducklake_column c USING (table_id, column_id)
-WHERE c.end_snapshot IS NULL AND c.column_name IN ('a', 'b', 'd', 'value') ORDER BY c.column_name
+WHERE c.column_name IN ('a', 'b', 'd', 'value') ORDER BY c.column_name
 ----
 a	true	1	1
 b	true	x	x
@@ -137,7 +137,7 @@ SELECT k, n FROM ducklake.t WHERE k >= 8 ORDER BY k
 query III
 SELECT s.contains_null::BOOLEAN, s.min_value, s.max_value FROM ducklake_meta.ducklake_table_column_stats s
 JOIN ducklake_meta.ducklake_column c USING (table_id, column_id)
-WHERE c.end_snapshot IS NULL AND c.column_name = 'e'
+WHERE c.column_name = 'e'
 ----
 true	5	5
 

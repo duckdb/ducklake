@@ -1,0 +1,88 @@
+# name: test/sql/delete/delete_replacement_commit_statements.test
+# description: a replacement and a flush of main write their delete file events as values of branch 0 and read no branch table
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1), (2), (3), (4), (5)
+
+statement ok
+DELETE FROM lake.t WHERE i = 1
+
+# the second delete is inlined
+statement ok
+CALL ducklake_set_option('lake', 'data_inlining_row_limit', 10)
+
+statement ok
+DELETE FROM lake.t WHERE i = 2
+
+query I
+SELECT id FROM lake.current_snapshot()
+----
+4
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# the third delete replaces the delete file with a cumulative one
+statement ok
+CALL ducklake_set_option('lake', 'data_inlining_row_limit', 0)
+
+statement ok
+DELETE FROM lake.t WHERE i = 3
+
+# the flush replaces the delete file once more
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT i FROM lake.t ORDER BY i
+----
+4
+5
+
+# one cumulative delete file holds the three dates, its add event is the one of main at the begin of the first file
+query II
+SELECT COUNT(*), MAX(partial_max) FROM meta.ducklake_delete_file
+----
+1	5
+
+query III
+SELECT branch_id, snapshot_id, is_delete::BOOLEAN FROM meta.ducklake_delete_file_visibility
+----
+0	3	false
+
+# the two commits write the events of main as values and read no branch
+query I
+SELECT COUNT(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%INSERT INTO %ducklake_delete_file_visibility VALUES (0, %'
+----
+2
+
+query I
+SELECT COUNT(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE regexp_matches(query, 'INSERT INTO [^;]*ducklake_delete_file_visibility\s+SELECT')
+----
+0
+
+query I
+SELECT COUNT(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_branch%'
+----
+0
+
+statement ok
+DETACH lake

@@ -15,13 +15,13 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/snapshots_
 
 # Populate enough history to span several output chunks without thousands of commits.
 statement ok
-INSERT INTO meta.ducklake_snapshot
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id)
 SELECT i, to_timestamp(i), schema_version, next_catalog_id, next_file_id
 FROM range(1, 4098) r(i), meta.ducklake_snapshot
 WHERE snapshot_id = 0
 
 statement ok
-INSERT INTO meta.ducklake_snapshot_changes
+INSERT INTO meta.ducklake_snapshot_changes (snapshot_id, changes_made, author, commit_message, commit_extra_info)
 SELECT i,
        CASE WHEN i % 2 = 1 THEN 'inserted_into_table:' || i || ',deleted_from_table:' || (i + 1) END,
        CASE WHEN i % 2 = 1 THEN 'author ' || i END,

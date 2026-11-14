@@ -1,0 +1,38 @@
+# name: test/sql/branches/schema_versions_branch_column.test
+# description: schema versions written on main carry the main branch next to their begin snapshot
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN j INTEGER
+
+statement ok
+CREATE TABLE dl.u (k INTEGER)
+
+query IIII
+SELECT t.table_name, sv.begin_snapshot, sv.schema_version, sv.branch_id FROM meta.ducklake_schema_versions sv JOIN meta.ducklake_table t USING (table_id) ORDER BY sv.begin_snapshot
+----
+t	1	1	0
+t	2	2	0
+u	3	3	0
+
+query I
+SELECT schema_version FROM dl.snapshots() ORDER BY snapshot_id DESC LIMIT 1
+----
+3
+
+statement ok
+DETACH dl

@@ -1,0 +1,38 @@
+# name: test/sql/transaction/sqlite_alias_commit_no_restart.test
+# description: a commit on a SQLite catalog attached through the sqlite_scanner alias does not restart to check conflicts
+# group: [transaction]
+
+require ducklake
+
+require sqlite_scanner
+
+require parquet
+
+statement ok
+SET autoinstall_known_extensions=false
+
+statement ok
+SET autoload_known_extensions=false
+
+statement ok
+ATTACH 'ducklake:sqlite_scanner::memory:' AS lake (DATA_PATH '{TEST_DIR}/sqlite_alias')
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO lake.t VALUES (42)
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+COMMIT
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%STRING_AGG(changes_made%'
+----
+0

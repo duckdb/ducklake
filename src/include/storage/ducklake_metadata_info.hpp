@@ -184,6 +184,8 @@ struct DuckLakeFileInfo {
 	MappingIndex mapping_id;
 	map<FieldIndex, DuckLakeColumnStats> column_stats;
 	vector<DuckLakeFilePartitionInfo> partition_values;
+	//! The ends of other branches on the rows of a flushed file
+	vector<DuckLakeRehomedDeletion> rehomed_deletions;
 };
 
 struct DuckLakeInlinedDataInfo {
@@ -198,17 +200,30 @@ struct DuckLakeDeletedInlinedDataInfo {
 	vector<idx_t> deleted_row_ids;
 };
 
+//! An end of another branch on a row of a flushed file, keyed by the file id the commit allocated
+struct DuckLakeRehomedFileDeletion {
+	DataFileIndex file_id;
+	idx_t position;
+	idx_t snapshot_id;
+	idx_t branch_id;
+};
+
 //! Info for all inlined file deletions for a single table
 struct DuckLakeInlinedFileDeletionInfo {
 	TableIndex table_id;
 	//! Maps file_id -> set of deleted row_ids
 	DuckLakeInlinedFileDeletes file_deletions;
+	//! The ends of other branches a flush rehomes onto its files, deletion rows of those branches
+	vector<DuckLakeRehomedFileDeletion> rehomed_deletions;
 };
 
 struct DuckLakeDeleteFileInfo {
 	DataFileIndex id;
 	TableIndex table_id;
 	DataFileIndex data_file_id;
+	//! The delete file this one replaces and its writer, the branch of the add event the commit read it through
+	DataFileIndex overwritten_delete_file_id;
+	idx_t overwritten_delete_file_branch_id = 0;
 	string path;
 	DeleteFileFormat format = DeleteFileFormat::PARQUET;
 	idx_t delete_count;
@@ -318,6 +333,10 @@ struct DuckLakeSnapshotFilter {
 	//! Only these snapshots, if set
 	bool has_snapshot_ids = false;
 	vector<idx_t> snapshot_ids;
+	//! Only the snapshots of this branch, if set
+	optional_idx branch_id;
+	//! Only the snapshots in the view of the attached chain
+	bool chain_only = false;
 };
 
 struct DuckLakeSnapshotInfo {
@@ -329,15 +348,28 @@ struct DuckLakeSnapshotInfo {
 	Value author;
 	Value commit_message;
 	Value commit_extra_info;
+	//! The branch that owns the id, 0 before branches existed
+	idx_t branch_id = 0;
+};
+
+struct DuckLakeBranchInfo {
+	idx_t branch_id = 0;
+	string name;
+	//! The parent branch and the snapshot of it the branch continues from, unset on main
+	optional_idx parent_id;
+	optional_idx parent_branch_snapshot;
 };
 
 struct DuckLakeSnapshotTagInfo {
 	string name;
 	idx_t snapshot_id;
-	//! NULL when the tagged snapshot is gone
+	//! The branch of the tagged snapshot
+	idx_t snapshot_branch_id = 0;
+	//! NULL when the tagged snapshot is gone or outside the view of the attached branch
 	Value snapshot_time;
-	//! The snapshot that created the tag, unset until its transaction commits
+	//! The snapshot that created the tag, unset until its transaction commits, and the branch of that snapshot
 	optional_idx created_snapshot_id;
+	idx_t created_branch_id = 0;
 	//! NULL when the tag does not expire
 	Value expires_at = Value(LogicalType::TIMESTAMP_TZ);
 };
@@ -439,12 +471,16 @@ struct DuckLakeFileListEntry {
 	DuckLakeFileData delete_file;
 	optional_idx row_id_start;
 	optional_idx snapshot_id;
+	//! The branch of the add event the lineage reads the file through
+	idx_t snapshot_branch_id = 0;
 	//! Upper bound filter, we only include rows where _ducklake_internal_snapshot_id <= snapshot_filter
 	optional_idx snapshot_filter_max;
 	//! Lower bound filter, we only include rows where _ducklake_internal_snapshot_id >= snapshot_filter_min
 	optional_idx snapshot_filter_min;
 	//! We skip the rows whose _ducklake_internal_snapshot_id is one of these rewrite snapshots
 	vector<idx_t> snapshot_filter_excluded;
+	//! Upper bound for the dated deletes of an inherited delete file on a branch
+	optional_idx delete_snapshot_filter_max;
 	MappingIndex mapping_id;
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
 	//! The partitioning the file was written with and the values of its partition keys, only set by
@@ -461,10 +497,21 @@ struct DuckLakeFileListEntry {
 	shared_ptr<DuckLakeCommittedInlinedRows> inlined_rows;
 };
 
+//! An earlier delete file of the view, dating the rows an undated chosen file copied from it
+struct DuckLakeEarlierDeleteFile {
+	DuckLakeFileData file;
+	//! The begin of the file, the date of its rows when it carries none
+	idx_t begin_snapshot;
+	//! The bound of its dates, the cap of its writer's segment below the begin of the chosen file
+	idx_t snapshot_max;
+};
+
 struct DuckLakeDeleteScanEntry {
 	DuckLakeFileData file;
 	DuckLakeFileData delete_file;
 	DuckLakeFileData previous_delete_file;
+	//! The earlier files dating the rows an undated chosen file copied, read on a branch when it begins in the range
+	vector<DuckLakeEarlierDeleteFile> earlier_delete_files;
 	idx_t row_count;
 	optional_idx row_id_start;
 	MappingIndex mapping_id;
@@ -477,6 +524,10 @@ struct DuckLakeDeleteScanEntry {
 	optional_idx start_snapshot;
 	//! The end of the snapshot range for filtering
 	optional_idx end_snapshot;
+	//! The cap of the previous delete file's segment, unset on main and for a file of the attached branch
+	optional_idx previous_delete_snapshot_max;
+	//! The bound of the rows of an inherited partial data file, its rows past it were never visible
+	optional_idx row_snapshot_max;
 	//! Data file ID for matching inlined deletions
 	DataFileIndex file_id;
 	//! Inlined file deletions {row_id -> snapshot_id}
@@ -491,6 +542,8 @@ struct DuckLakeFileListExtendedEntry {
 	optional_idx row_id_start;
 	optional_idx snapshot_id;
 	optional_idx delete_file_begin_snapshot;
+	//! The writer of the delete file, the branch of the add event the lineage reads it through
+	idx_t delete_file_branch_id = 0;
 	idx_t row_count;
 	idx_t delete_count = 0;
 	MappingIndex mapping_id;
@@ -515,10 +568,20 @@ struct DuckLakeInlinedFileDeletionEntry {
 	DataFileIndex delete_file_id;
 	DuckLakeFileData delete_file;
 	idx_t delete_file_begin_snapshot = 0;
+	//! The writer of the delete file, the branch of the add event the lineage reads it through
+	idx_t delete_file_branch_id = 0;
 };
 
 //! End snapshots of deleted inlined row versions, keyed by row id and begin snapshot
 using DuckLakeDeletedRowVersions = map<pair<int64_t, int64_t>, int64_t>;
+
+//! An end another branch wrote on a version born on the flushing branch
+struct DuckLakeRehomedRowEnd {
+	idx_t branch_id;
+	idx_t snapshot_id;
+};
+//! The ends other branches wrote on the versions of a flushed table, keyed by (row_id, begin_snapshot)
+using DuckLakeRehomedRowEnds = map<pair<int64_t, int64_t>, vector<DuckLakeRehomedRowEnd>>;
 
 struct DuckLakeFileForCleanup {
 	DataFileIndex id;

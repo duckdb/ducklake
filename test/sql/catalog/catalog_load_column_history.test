@@ -51,8 +51,9 @@ a
 b
 x
 
+# the load at the older snapshot, the filters of the load at the latest snapshot hold for every row and are optimized away
 statement ok
-SET VARIABLE catalog_query = (SELECT query FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%column_tags%' LIMIT 1)
+SET VARIABLE catalog_query = (SELECT query FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%column_tags%' AND (query LIKE '%begin_snapshot <= ' || getvariable('with_x') || '%' OR query LIKE '%' || getvariable('with_x') || ' >= tag.begin_snapshot%') LIMIT 1)
 
 query II
 EXPLAIN (FORMAT json) SELECT * FROM query(getvariable('catalog_query'))

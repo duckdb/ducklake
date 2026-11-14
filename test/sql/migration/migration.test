@@ -76,10 +76,10 @@ FROM ducklake.test
 42
 84
 
-query III
+query IIII
 FROM __ducklake_metadata_ducklake.ducklake_schema_versions;
 ----
-1	1	1
+1	1	1	0
 
 statement ok
 DETACH ducklake;

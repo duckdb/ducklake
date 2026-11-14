@@ -128,6 +128,8 @@
         "test/sql/benchmark/postgres_catalog.test",
         "test/sql/issues/issue_843_postgres_legacy_inlined_types.test",
         "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test",
+        "test/sql/data_inlining/postgres_inlined_visibility_rows.test",
+        "test/sql/data_inlining/postgres_inlined_second_attach.test",
         "test/sql/compaction/compaction_idle_metadata_transaction.test",
         "test/sql/compaction/postgres_expire_snapshots_time_zone.test",
         "test/sql/retry/postgres_commit_error_query_text.test",
@@ -138,16 +140,19 @@
         "test/sql/tags/postgres_tags_read_committed.test",
         "test/sql/general/postgres_nul_byte_text.test",
         "test/sql/data_inlining/postgres_new_inlined_table_keeps_cache.test",
+        "test/sql/catalog/postgres_native_catalog_load.test",
+        "test/sql/metadata/postgres_read_committed_branch_memo.test",
+        "test/sql/metadata/postgres_read_committed_listing_cache.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test",
         "test/sql/metadata/postgres_attach_cache_clear.test",
-        "test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test"
+        "test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test",
+        "test/sql/data_inlining/postgres_inlined_shared_read_committed.test"
       ]
     },
     {
       "reason": "DuckDB as a catalog specific",
       "paths": [
         "test/sql/autoloading/autoload_data_path.test",
-        "test/sql/general/metadata_parameters.test",
         "test/sql/metadata/ducklake_settings.test"
       ]
     },

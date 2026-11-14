@@ -1,0 +1,203 @@
+# name: test/sql/branches/branch_replacement_segment_cap.test
+# description: the dated deletes of a replacement delete file apply up to the cap of the branch that wrote it, and a branch copy of an add event of main reads as main's
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+CREATE TABLE lake.u(i INTEGER)
+
+statement ok
+COMMIT
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO lake.t VALUES (1), (2), (3), (4)
+
+statement ok
+INSERT INTO lake.u VALUES (1), (2), (3), (4)
+
+statement ok
+COMMIT
+
+# the deletes of 3 write a delete file per table, the delete of 4 replaces the one of u with a file dated 3 and 4
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM lake.t WHERE i = 1
+
+statement ok
+DELETE FROM lake.u WHERE i = 1
+
+statement ok
+COMMIT
+
+statement ok
+DELETE FROM lake.u WHERE i = 2
+
+query I
+SELECT id FROM lake.current_snapshot()
+----
+4
+
+statement ok
+SET VARIABLE t_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't')
+
+statement ok
+SET VARIABLE u_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'u')
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file WHERE table_id = getvariable('u_id')
+----
+1
+
+# dev forks main at 3 and holds the snapshots 4 to 10
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 3)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT r.range, NOW(), schema_version, 1099511627776, 1099511627777, 1 FROM meta.ducklake_snapshot, range(4, 11) r WHERE branch_id = 0 AND snapshot_id = 3
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes SELECT r.range, NULL, NULL, NULL, NULL, 1 FROM range(4, 11) r
+
+# at 9 dev replaced the delete file of t with a cumulative one holding the delete of main at 3 and its own at 9
+statement ok
+COPY (SELECT ''::VARCHAR AS file_path, p::BIGINT AS pos, s::BIGINT AS _ducklake_internal_snapshot_id FROM (VALUES (0, 3), (1, 9)) v(p, s)) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet' (FORMAT PARQUET)
+
+statement ok
+SET VARIABLE t_file = (SELECT data_file_id FROM meta.ducklake_data_file WHERE table_id = getvariable('t_id'))
+
+statement ok
+INSERT INTO meta.ducklake_delete_file (delete_file_id, table_id, data_file_id, path, path_is_relative, format, delete_count, file_size_bytes, partial_max) SELECT 1099511627776, getvariable('t_id'), getvariable('t_file'), '{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet', false, 'parquet', 2, file_size_bytes, 9 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet')
+
+# the add event of the replacement is back dated to the begin of the replaced file, which dev ends at 9
+statement ok
+INSERT INTO meta.ducklake_delete_file_visibility SELECT 1, getvariable('t_id'), 1099511627776, 3, false
+
+statement ok
+INSERT INTO meta.ducklake_delete_file_visibility SELECT 1, getvariable('t_id'), delete_file_id, 9, true FROM meta.ducklake_delete_file WHERE table_id = getvariable('t_id') AND delete_file_id <> 1099511627776
+
+# feature forks dev at 10 and holds a snapshot of its own
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (2, 'feature', 1, 10)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 11, NOW(), schema_version, 2199023255552, 2199023255552, 2 FROM meta.ducklake_snapshot WHERE branch_id = 1 AND snapshot_id = 10
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (11, NULL, NULL, NULL, NULL, 2)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS feature (METADATA_CATALOG 'meta', BRANCH 'feature')
+
+# dev wrote the replacement, so its delete of 9 applies although main owns the id of the add event
+query I
+SELECT i FROM dev.t ORDER BY i
+----
+3
+4
+
+# feature reads dev up to 10, which holds both deletes
+query I
+SELECT i FROM feature.t ORDER BY i
+----
+3
+4
+
+query I
+SELECT i FROM feature.t AT (VERSION => 2) ORDER BY i
+----
+1
+2
+3
+4
+
+# main keeps its own delete file
+query I
+SELECT i FROM lake.t ORDER BY i
+----
+2
+3
+4
+
+# the replacement of main for u applies its delete of 3 on the branches and not the one of 4 above the fork
+query I
+SELECT i FROM dev.u ORDER BY i
+----
+2
+3
+4
+
+query I
+SELECT i FROM feature.u ORDER BY i
+----
+2
+3
+4
+
+query I
+SELECT i FROM lake.u ORDER BY i
+----
+3
+4
+
+statement ok
+DETACH feature
+
+statement ok
+DETACH dev
+
+# a branch copy of the add event of main next to it changes nothing, the earliest segment is the writer
+statement ok
+INSERT INTO meta.ducklake_delete_file_visibility SELECT 1, getvariable('u_id'), delete_file_id, 3, false FROM meta.ducklake_delete_file WHERE table_id = getvariable('u_id')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS feature (METADATA_CATALOG 'meta', BRANCH 'feature')
+
+query I
+SELECT i FROM dev.u ORDER BY i
+----
+2
+3
+4
+
+query I
+SELECT i FROM feature.u ORDER BY i
+----
+2
+3
+4
+
+statement ok
+DETACH feature
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH lake

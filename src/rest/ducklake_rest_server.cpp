@@ -8,6 +8,11 @@
 #include "duckdb/main/database.hpp"
 #include "duckdb/parallel/task_scheduler.hpp"
 #include "duckdb/main/database_manager.hpp"
+#include "duckdb/execution/expression_executor.hpp"
+#include "duckdb/parser/parser.hpp"
+#include "duckdb/parser/statement/attach_statement.hpp"
+#include "duckdb/planner/binder.hpp"
+#include "duckdb/planner/expression_binder/table_function_binder.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "ducklake_extension.hpp"
 #include "functions/ducklake_table_functions.hpp"
@@ -21,6 +26,13 @@
 
 namespace duckdb {
 
+//! The protocol carries no branch bounds, so a served DuckLake has to be on main
+static void RefuseServedBranch(Catalog &catalog) {
+	if (catalog.Cast<DuckLakeCatalog>().OnBranch()) {
+		throw NotImplementedException("Serving a branch of a DuckLake through REST is not supported yet");
+	}
+}
+
 //===--------------------------------------------------------------------===//
 // Request
 //===--------------------------------------------------------------------===//
@@ -31,6 +43,7 @@ DuckLakeRESTRequest::DuckLakeRESTRequest(DatabaseInstance &db, const string &cat
 	if (entry.GetCatalogType() != "ducklake") {
 		throw InvalidInputException("Catalog \"%s\" is not a DuckLake catalog", catalog_name);
 	}
+	RefuseServedBranch(entry);
 	catalog = &entry.Cast<DuckLakeCatalog>();
 	transaction = &DuckLakeTransaction::Get(context, *catalog);
 	GetMetadataManager();
@@ -336,9 +349,53 @@ void DuckLakeRESTServer::Wait() {
 //===--------------------------------------------------------------------===//
 // Registry
 //===--------------------------------------------------------------------===//
+//! The BRANCH option of an ATTACH, an expression is resolved by the caller and replaced by its value
+static Value ResolveAttachBranchOption(ClientContext &context, AttachInfo &info) {
+	auto expression = info.parsed_options.find("branch");
+	if (expression != info.parsed_options.end()) {
+		auto binder = Binder::CreateBinder(context);
+		TableFunctionBinder option_binder(*binder, context, "Attach", "Attach parameter");
+		auto bound_expression = option_binder.Bind(expression->second);
+		auto branch = ExpressionExecutor::EvaluateScalar(context, *bound_expression, true);
+		if (branch.IsNull()) {
+			throw BinderException("ducklake_rest_serve: BRANCH cannot be NULL");
+		}
+		info.options[expression->first] = std::move(branch);
+		info.parsed_options.erase(expression);
+	}
+	for (auto &option : info.options) {
+		if (StringUtil::CIEquals(option.first, "branch")) {
+			return option.second;
+		}
+	}
+	return Value();
+}
+
+//! The ATTACH of an isolated DuckLake, a BRANCH other than main is refused before the served DuckLake is released
+static string IsolatedAttachQuery(ClientContext &context, const string &path, const string &attach_options,
+                                  const string &catalog_name) {
+	auto query = StringUtil::Format("ATTACH %s AS %s", SQLString(path), SQLIdentifier(catalog_name));
+	if (attach_options.empty()) {
+		return query;
+	}
+	query += " (" + attach_options + ")";
+	Parser parser(context);
+	parser.ParseQuery(query);
+	if (parser.statements.size() != 1 || parser.statements[0]->type != StatementType::ATTACH_STATEMENT) {
+		throw BinderException("ducklake_rest_serve: attach_options has to hold the options of one ATTACH");
+	}
+	auto &statement = parser.statements[0]->Cast<AttachStatement>();
+	auto branch = ResolveAttachBranchOption(context, *statement.info);
+	if (!branch.IsNull() && !StringUtil::CIEquals(branch.ToString(), "main")) {
+		throw NotImplementedException("Serving a branch of a DuckLake through REST is not supported yet");
+	}
+	// rendered with the resolved branch, the isolated connection would resolve the expression on its own state
+	return statement.ToString();
+}
+
 //! Attaches the DuckLake in a database of its own, so the served catalog is isolated from the caller
-static shared_ptr<DatabaseInstance> OpenIsolatedDuckLake(ClientContext &context, const string &path,
-                                                         const string &attach_options, const string &catalog_name) {
+static shared_ptr<DatabaseInstance> OpenIsolatedDuckLake(ClientContext &context, const string &query,
+                                                         const string &catalog_name) {
 	// the database of the server uses as many threads as the database that starts it
 	DBConfig config;
 	config.SetOptionByName("threads",
@@ -346,12 +403,9 @@ static shared_ptr<DatabaseInstance> OpenIsolatedDuckLake(ClientContext &context,
 	DuckDB db(nullptr, &config);
 	db.LoadStaticExtension<DucklakeExtension>();
 	Connection con(db);
-	auto query = StringUtil::Format("ATTACH %s AS %s", SQLString(path), SQLIdentifier(catalog_name));
-	if (!attach_options.empty()) {
-		query += " (" + attach_options + ")";
-	}
 	auto result = con.Query(query);
 	result->ThrowIfError("Failed to attach the DuckLake served over REST: ");
+	RefuseServedBranch(DatabaseManager::Get(*db.instance).GetDatabase(Identifier(catalog_name))->GetCatalog());
 	return db.instance;
 }
 
@@ -486,18 +540,25 @@ static unique_ptr<FunctionData> DuckLakeRESTServeBind(ClientContext &context, Ta
 	bool isolated = StringUtil::StartsWith(target_str, "ducklake:");
 	const string catalog_name = isolated ? "ducklake_rest" : target_str;
 	string prefix = prefix_val.IsNull() ? catalog_name : StringValue::Get(prefix_val);
+	// a refused catalog leaves the one served under the prefix in place
+	string isolated_query;
+	if (isolated) {
+		isolated_query = IsolatedAttachQuery(context, target_str, attach_options, catalog_name);
+	} else {
+		auto &catalog = Catalog::GetCatalog(context, Identifier(target_str));
+		if (catalog.GetCatalogType() != "ducklake") {
+			throw BinderException("ducklake_rest_serve: catalog \"%s\" is not a DuckLake catalog", target_str);
+		}
+		RefuseServedBranch(catalog);
+	}
 	if (server) {
 		// a catalog that is served under the prefix has to release its DuckLake first
 		server->RemoveCatalog(prefix);
 	}
 	shared_ptr<DatabaseInstance> db;
 	if (isolated) {
-		db = OpenIsolatedDuckLake(context, target_str, attach_options, catalog_name);
+		db = OpenIsolatedDuckLake(context, isolated_query, catalog_name);
 	} else {
-		auto &catalog = Catalog::GetCatalog(context, Identifier(target_str));
-		if (catalog.GetCatalogType() != "ducklake") {
-			throw BinderException("ducklake_rest_serve: catalog \"%s\" is not a DuckLake catalog", target_str);
-		}
 		db = context.db;
 	}
 	if (!server) {

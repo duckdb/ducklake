@@ -1,0 +1,56 @@
+# name: test/sql/quack/inlined_relist_retry_limit.test
+# description: A Quack scan relists the inlined tables before every re read and gives up at the retry limit
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
+
+require quack
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range(4, 24)
+
+query II
+SELECT count(*), sum(i) FROM dl.t
+----
+23	276
+
+query I
+SELECT count(*) FROM meta.ducklake_data_file
+----
+1
+
+# the allocator of main falls below the written file, so every re read of the inlined rows finds a file written since
+statement ok
+UPDATE meta.ducklake_snapshot SET next_file_id = 0
+
+statement error
+SELECT count(*), sum(i) FROM dl.t
+----
+kept moving to files while it was read
+
+# an allocator above the file ends the re reads
+statement ok
+UPDATE meta.ducklake_snapshot SET next_file_id = 100
+
+query II
+SELECT count(*), sum(i) FROM dl.t
+----
+23	276
+
+statement ok
+DETACH dl

@@ -15,7 +15,7 @@ argument work count_star_cached_work
 include benchmark/micro/fixtures/compaction.benchmark.in
 
 run
-@for i in range(50)
+@for i in range(400)
 SELECT count(*) FROM lake.frag;
 @end
 

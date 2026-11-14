@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/optional_idx.hpp"
 
 namespace duckdb {
 
@@ -30,6 +31,8 @@ struct DuckLakeSnapshot {
 	idx_t schema_version;
 	idx_t next_catalog_id;
 	idx_t next_file_id;
+	//! The branch that owns snapshot_id, ids are numbered per branch
+	idx_t branch_id = 0;
 
 	void Serialize(Serializer &serializer) const;
 	static DuckLakeSnapshot Deserialize(Deserializer &deserializer);

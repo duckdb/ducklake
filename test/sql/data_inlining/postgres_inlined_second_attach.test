@@ -1,0 +1,62 @@
+# name: test/sql/data_inlining/postgres_inlined_second_attach.test
+# description: a second attach of a Postgres catalog finds the inlined tables on the server, not in the tables the scanner cached
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+# the shared companion enters the cache of the scanner, the payload the commit created on the server does not
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility
+----
+0
+
+# without the marker the second attach probes the tables of the server, not those the scanner cached
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
+# a writable attach heals nothing, the payload has the shape of 2.0
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl2 (METADATA_CATALOG 'meta')
+
+query I
+SELECT i FROM dl2.t ORDER BY i
+----
+1
+2
+3
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility
+----
+0
+
+# the heal wrote the marker back
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.4
+
+statement ok
+DETACH dl2
+
+statement ok
+DETACH dl

@@ -34,7 +34,7 @@ SELECT c = TIMESTAMPTZ '2024-01-01 08:00:00+00' FROM dl.t
 true
 
 query I rest_db:rest_server_con
-SELECT initial_default FROM __ducklake_metadata_rest_lake.ducklake_column WHERE column_name = 'c' AND end_snapshot IS NULL
+SELECT initial_default FROM __ducklake_metadata_rest_lake.ducklake_column c WHERE column_name = 'c' AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_rest_lake.ducklake_column_visibility e WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id AND e.row_snapshot = c.begin_snapshot)
 ----
 2024-01-01 08:00:00+00
 
@@ -67,7 +67,7 @@ statement ok
 CREATE TABLE dl.d(i INTEGER, d TIMESTAMPTZ DEFAULT '2024-01-01 00:00:00')
 
 query I rest_db:rest_server_con
-SELECT initial_default FROM __ducklake_metadata_rest_lake.ducklake_column WHERE column_name = 'd' AND end_snapshot IS NULL
+SELECT initial_default FROM __ducklake_metadata_rest_lake.ducklake_column c WHERE column_name = 'd' AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_rest_lake.ducklake_column_visibility e WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id AND e.row_snapshot = c.begin_snapshot)
 ----
 2024-01-01 08:00:00+00
 

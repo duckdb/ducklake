@@ -1,0 +1,111 @@
+# name: test/sql/branches/branch_expire_dry_run.test
+# description: an expiry on a branch protects the snapshots of that branch alone, its head and the forks of its children
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+# the tag of 4 is the fifth snapshot of main, so main holds 0 to 5
+statement ok
+CALL ducklake_create_tag('dl', 'v4', version => 4)
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+5
+
+# dev forks main at 2 with its own 3 to 6, feature forks dev at 3 and hotfix forks dev below the fork of dev
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2), (2, 'feature', 1, 3), (3, 'hotfix', 1, 1)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 3, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 4, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 5, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 6, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1), (4, NULL, NULL, NULL, NULL, 1), (5, NULL, NULL, NULL, NULL, 1), (6, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+6
+
+# the fork of feature stays
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [3], dry_run => true)
+----
+0
+
+# the tag and the head of main name snapshots of main, not the 4 and 5 of dev
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [4, 5], dry_run => true) ORDER BY snapshot_id
+----
+4
+5
+
+# the head of dev stays
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [6], dry_run => true)
+----
+0
+
+# the snapshots of main are not expired from a branch
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [1, 2], dry_run => true)
+----
+0
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+# the root caps of the chains stay on main, hotfix reads main up to 1 only
+query I
+SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [1, 2], dry_run => true)
+----
+0
+
+# the 3 of main is neither a cap nor tagged nor the head
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [3, 4, 5, 6], dry_run => true)
+----
+3
+
+statement ok
+DETACH dl

@@ -25,6 +25,6 @@ result_query IIIII
 SELECT tables, processed, created, stats.min_value, stats.max_value
 FROM __answer, __ducklake_metadata_lake.ducklake_table_column_stats stats
 JOIN __ducklake_metadata_lake.ducklake_table tbl USING (table_id)
-WHERE tbl.table_name = 'r0' AND tbl.end_snapshot IS NULL AND stats.column_id = 1
+WHERE tbl.table_name = 'r0' AND stats.column_id = 1
 ----
 50	50	50	60	100064

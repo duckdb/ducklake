@@ -1,0 +1,72 @@
+# name: test/sql/data_inlining/empty_inlined_table_scan_cache.test
+# description: A scan skips the inlined tables an earlier scan found without live rows at the same snapshot
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/empty_inlined_table_scan_cache',
+    DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1), (2)
+
+statement ok
+DELETE FROM ducklake.t
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# the first scan reads the inlined table, the second one knows it has no live rows at this snapshot
+query I
+SELECT i FROM ducklake.t
+----
+
+query I
+SELECT i FROM ducklake.t
+----
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%FROM%ducklake_inlined_data_1_1%'
+----
+1
+
+statement ok
+CALL disable_logging()
+
+# the rows of a later snapshot are read, and the snapshot without live rows stays empty
+statement ok
+INSERT INTO ducklake.t VALUES (3)
+
+query I
+SELECT i FROM ducklake.t
+----
+3
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+1
+
+query I
+SELECT i FROM ducklake.t AT (VERSION => 3)
+----
+
+query I
+SELECT i FROM ducklake.t
+----
+3

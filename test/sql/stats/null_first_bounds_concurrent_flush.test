@@ -154,7 +154,7 @@ SELECT count(*) FROM ducklake.h WHERE a > 10
 query II
 SELECT t.table_name, s.min_value IS NULL OR s.min_value::DOUBLE <= 100.19999694824219 AND s.max_value::DOUBLE >= 100.19999694824219
 FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id)
-WHERE t.table_name IN ('g', 'h') AND t.end_snapshot IS NULL AND s.column_id = (SELECT max(column_id) FROM __ducklake_metadata_ducklake.ducklake_column c WHERE c.table_id = t.table_id)
+WHERE t.table_name IN ('g', 'h') AND s.column_id = (SELECT max(column_id) FROM __ducklake_metadata_ducklake.ducklake_column c WHERE c.table_id = t.table_id)
 ORDER BY ALL
 ----
 g	true

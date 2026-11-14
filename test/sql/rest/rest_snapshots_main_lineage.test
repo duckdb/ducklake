@@ -1,0 +1,100 @@
+# name: test/sql/rest/rest_snapshots_main_lineage.test
+# description: The REST listing of snapshots holds the lineage of the served catalog, main and a branch both hold snapshot 3
+# group: [rest]
+
+require ducklake
+
+require parquet
+
+require json
+
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok rest_db:rest_server_con
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok rest_db:rest_server_con
+INSERT INTO dl.t VALUES (1)
+
+statement ok rest_db:rest_server_con
+INSERT INTO dl.t VALUES (2)
+
+# dev forks at the first insert, so its first own snapshot is 3 like the second insert of main
+statement ok rest_db:rest_server_con
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+statement ok rest_db:rest_server_con
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 3, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok rest_db:rest_server_con
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1)
+
+# the snapshot 3 of dev hides the file of the first insert
+statement ok rest_db:rest_server_con
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, 3, TRUE FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND is_delete = FALSE AND snapshot_id = 2
+
+query II rest_db:rest_server_con
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot WHERE snapshot_id = 3 ORDER BY branch_id
+----
+3	0
+3	1
+
+# the native listing of main
+query I rest_db:rest_server_con
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM ducklake_snapshots('dl')
+----
+[0, 1, 2, 3]
+
+statement ok rest_db:rest_server_con
+SET VARIABLE rest_listen_uri = (SELECT listen_uri FROM ducklake_rest_serve('dl'))
+
+set variable rest_server <variable:rest_server_con:rest_listen_uri>
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS client
+
+# the listing through REST is the listing of main
+query I
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM ducklake_snapshots('client')
+----
+[0, 1, 2, 3]
+
+query II
+SELECT snapshot_id, changes FROM ducklake_snapshots('client') WHERE snapshot_id = 3
+----
+3	{tables_inserted_into=[1]}
+
+# the pages of the listing hold the snapshots of main alone
+query II
+SELECT json_array_length(response->'$.snapshots'), response->>'$.next_page_token' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots?page_size=3', '')
+----
+3	2
+
+query II
+SELECT json_array_length(response->'$.snapshots'), response->>'$.next_page_token' IS NULL FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots?page_size=3&page_token=2', '')
+----
+1	true
+
+# time travel through REST reads the state of main
+query I
+SELECT i FROM client.t ORDER BY i
+----
+1
+2
+
+query I
+SELECT i FROM client.t AT (VERSION => 3) ORDER BY i
+----
+1
+2
+
+query I
+SELECT i FROM client.t AT (VERSION => 2)
+----
+1
+
+statement ok
+DETACH client
+
+include test/template/rest_teardown.test_template

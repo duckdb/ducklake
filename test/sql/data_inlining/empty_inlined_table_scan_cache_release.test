@@ -1,0 +1,87 @@
+# name: test/sql/data_inlining/empty_inlined_table_scan_cache_release.test
+# description: A compaction that released its metadata transaction records no empty inlined table under its old heads
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET threads=1
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/empty_inlined_table_scan_cache_release',
+    DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.flush_0(i INTEGER)
+
+statement ok
+CREATE TABLE ducklake.flush_1(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.flush_1 VALUES (42)
+
+statement ok
+CREATE TABLE ducklake.c(i INTEGER)
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0, table_name => 'c')
+
+statement ok
+INSERT INTO ducklake.c VALUES (1)
+
+statement ok
+INSERT INTO ducklake.c VALUES (2)
+
+# the sort keeps the compaction busy while the other connection flushes
+statement ok
+ALTER TABLE ducklake.c SET SORTED BY (COALESCE(sleep_ms(1200), i))
+
+statement ok con1
+BEGIN
+
+query I con1
+SELECT id FROM ducklake.current_snapshot()
+----
+7
+
+query I con1
+SELECT i FROM ducklake.flush_1
+----
+42
+
+# the autocommit compaction releases its metadata transaction after planning, its scan of flush_1 reopens a newer one
+statement ok
+CREATE VIEW action_0 AS WITH c AS MATERIALIZED (SELECT * FROM ducklake_merge_adjacent_files('ducklake', 'c'))
+    SELECT i, filename FROM c CROSS JOIN ducklake.flush_1
+
+statement ok
+CREATE VIEW action_1 AS SELECT sleep_ms(500)
+
+concurrentloop q 0 2
+
+statement ok
+SELECT * FROM action_{q}
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'flush_{q}')
+
+# the flushing connection finds the inlined table empty under heads that hold the flush
+statement ok
+SELECT i, filename FROM ducklake.flush_1 AT (VERSION => 7)
+
+endloop
+
+# the transaction that started before the flush still reads the rows from the inlined table
+query I con1
+SELECT i FROM ducklake.flush_1
+----
+42
+
+statement ok con1
+COMMIT

@@ -1,0 +1,56 @@
+# name: test/sql/migration/dev1_heal_marker_older_generation.test
+# description: a refused heal reads the marker of an older generation after its failure, reports the refusal and leaves the marker
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+# the older dev build wrote the marker of its own generation, and the ends of the inlined rows sit in no companion
+statement ok
+UPDATE meta.ducklake_metadata SET value = '2.0-dev1.3' WHERE key = 'heal_complete'
+
+statement ok
+DROP TABLE meta.ducklake_inlined_data_visibility
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+lacks the shared visibility table of its inlined rows, attach it writable once to heal it
+
+# the marker read after the refusal is of the older generation, so the refusal is reported
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+----
+Cannot heal this DuckLake catalog: the end snapshots of the inlined rows were dropped
+
+# the refused heal leaves the marker as it was
+statement ok
+ATTACH IF NOT EXISTS '{DUCKLAKE_CONNECTION}' AS meta
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.3
+
+statement ok
+DETACH meta

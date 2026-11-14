@@ -1,0 +1,136 @@
+# name: test/sql/data_inlining/inlined_superseded_drop_ends.test
+# description: the drop of a superseded inlined table leaves the ends of its table alone, the drop of the table keeps them until the expiry
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN j INTEGER
+
+statement ok
+INSERT INTO dl.t VALUES (4, 40), (5, 50)
+
+statement ok
+DELETE FROM dl.t WHERE i = 4
+
+# the ends of both payload versions of the table share the companion
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+1	1	0	2	0	3
+1	3	0	5	0	6
+
+query I
+SELECT table_name FROM meta.ducklake_inlined_data_tables ORDER BY ALL
+----
+ducklake_inlined_data_1_1
+ducklake_inlined_data_1_2
+
+# an end another branch wrote on the first row moves with the row, the flush rehomes it as a deletion row of that branch
+statement ok
+INSERT INTO meta.ducklake_inlined_data_visibility VALUES (1, 0, 0, 2, 1, 9)
+
+# a stray end of that branch names no version of the table, neither the flush nor the drop of the superseded payload takes it
+statement ok
+INSERT INTO meta.ducklake_inlined_data_visibility VALUES (1, 9, 0, 2, 1, 9)
+
+# the flush empties the superseded payload and drops it, the ends of the flushed versions went with the flush
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query I
+SELECT table_name FROM meta.ducklake_inlined_data_tables ORDER BY ALL
+----
+ducklake_inlined_data_1_2
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+1	9	0	2	1	9
+
+query III
+SELECT row_id, begin_snapshot, branch_id FROM meta.ducklake_inlined_delete_1
+----
+0	9	1
+
+# the ends written after the flush belong to the newer payload alone
+statement ok
+INSERT INTO dl.t VALUES (6, 60)
+
+statement ok
+DELETE FROM dl.t WHERE i = 6
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+1	5	0	8	0	9
+1	9	0	2	1	9
+
+query II
+SELECT i, j FROM dl.t ORDER BY i
+----
+1	NULL
+3	NULL
+5	50
+
+query I
+SELECT i FROM dl.t AT (VERSION => 2) ORDER BY i
+----
+1
+2
+3
+
+query II
+SELECT i, j FROM dl.t AT (VERSION => 8) ORDER BY i
+----
+1	NULL
+3	NULL
+5	50
+6	60
+
+# a dropped table keeps its ends, its older snapshots still read it
+statement ok
+DROP TABLE dl.t
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility WHERE table_id = 1
+----
+2
+
+# the expiry drops the payloads of the dropped table with their ends, the stray among them
+statement ok
+CALL ducklake_expire_snapshots('dl', older_than => now())
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility WHERE table_id = 1
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_tables
+----
+0
+
+statement ok
+DETACH dl

@@ -1,0 +1,82 @@
+# name: test/sql/branches/branch_nested_fork_below_parent.test
+# description: a branch forked below the fork of its parent reads the root up to its own fork and nothing of the parent
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+# dev forks from main at the first insert and adds the file of the second insert at its own snapshot 3
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 3, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, 3, FALSE FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND is_delete = FALSE AND snapshot_id = 3
+
+# feature forks from dev at 1, below the fork of dev, so its view is main up to 1
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (2, 'feature', 1, 1)
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'feature')
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+1
+
+# the table exists at 1 but neither insert of main nor the event of dev is in the view
+query I
+SELECT i FROM dl.t
+----
+
+query I
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
+----
+[0, 1]
+
+statement error
+SELECT i FROM dl.t AT (VERSION => 2)
+----
+No snapshot found at version 2
+
+statement ok
+DETACH dl
+
+# dev itself still reads main up to its fork and its own event
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+
+statement ok
+DETACH dl

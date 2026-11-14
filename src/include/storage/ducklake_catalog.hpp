@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "common/ducklake_branch_chain.hpp"
 #include "common/ducklake_encryption.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
@@ -377,6 +378,38 @@ public:
 	bool SupportsSnapshotTags() const {
 		return ducklake_version >= DuckLakeVersion::V2_0_DEV1;
 	}
+	bool SupportsBranching() const {
+		return ducklake_version >= DuckLakeVersion::V2_0_DEV1 && branch_metadata_present;
+	}
+	//! Marks a dev catalog from an older build whose branch tables a read-only attach cannot add
+	void SetBranchMetadataMissing() {
+		branch_metadata_present = false;
+	}
+	//! The branch the catalog is attached at, 0 for main
+	idx_t AttachedBranchId() const {
+		return attached_chain.BranchId();
+	}
+	bool OnBranch() const {
+		return attached_chain.OnBranch();
+	}
+	//! The branches the attached branch reads through, main alone by default
+	const DuckLakeBranchChain &AttachedChain() const {
+		return attached_chain;
+	}
+	void SetAttachedChain(DuckLakeBranchChain chain) {
+		attached_chain = std::move(chain);
+	}
+	//! Observes the heads of the chain a transaction loaded, a change of any of them drops the listings
+	void ObserveListingHead(const vector<idx_t> &heads);
+	//! Returns the cached parsed listing of a read at the head under the observed heads, nullptr otherwise
+	shared_ptr<vector<DuckLakeFileListEntry>> TryGetCachedListing(const string &key, idx_t snapshot_id,
+	                                                              const vector<idx_t> &heads);
+	//! Stores a parsed listing read at the head under the observed heads
+	void StoreCachedListing(const string &key, idx_t snapshot_id, const vector<idx_t> &heads,
+	                        shared_ptr<vector<DuckLakeFileListEntry>> entries);
+	//! Drops the cached listings, called when a transaction writes metadata
+	void InvalidateListingCache();
+
 	//! Whether an expiry commits a snapshot whose changes list the expired snapshots
 	bool RecordsExpiredSnapshots() const {
 		return SupportsSnapshotTags();
@@ -460,19 +493,20 @@ public:
 		return query_callback;
 	}
 
-	//! Check if an inlined deletion table is known to exist or not exist for the given table and snapshot
-	InlinedDeletionCacheResult CheckInlinedDeletionTableCache(TableIndex table_id, DuckLakeSnapshot snapshot);
-	//! Cache the result of an inlined deletion table existence check
-	void CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists);
+	//! Whether the inlined deletion table of a table is known to exist, or known absent to a view at or before the
+	//! heads
+	InlinedDeletionCacheResult CheckInlinedDeletionTableCache(TableIndex table_id, const vector<idx_t> &heads);
+	//! Cache the result of an inlined deletion table existence check, an absent table with the heads that found it so
+	void CacheInlinedDeletionTableResult(TableIndex table_id, const vector<idx_t> &heads, bool exists);
 	//! The rewrite snapshots of the table in the range, unless the snapshot changes were not read up to its end
 	bool TryGetRewriteSnapshots(TableIndex table_id, idx_t start_snapshot, idx_t end_snapshot, set<idx_t> &result);
 	//! The first snapshot whose changes were not read for rewrites yet
 	idx_t GetFirstUnreadRewriteSnapshot();
 	//! Cache the rewrite snapshots of every table, read from the snapshot changes up to end_snapshot
 	void CacheRewriteSnapshots(const vector<pair<TableIndex, idx_t>> &rewrites, idx_t end_snapshot);
-	//! The inlined deletion tables at the snapshot, list runs once per snapshot even for concurrent callers
+	//! The inlined deletion tables of the view with the heads, list runs once per view even for concurrent callers
 	shared_ptr<const unordered_set<string>>
-	GetInlinedDeletionTables(idx_t snapshot_id, const std::function<unordered_set<string>()> &list);
+	GetInlinedDeletionTables(const vector<idx_t> &heads, const std::function<unordered_set<string>()> &list);
 
 	//! The schema versions of the table at the snapshot of the transaction
 	DuckLakeTableSchemaVersions GetTableSchemaVersions(DuckLakeTransaction &transaction, TableIndex table_id);
@@ -487,6 +521,9 @@ public:
 	//! The columns found with values stay valid for the snapshot of a commit that directly follows theirs
 	void AdvanceColumnsWithValues(idx_t snapshot_id);
 	void ForgetColumnsWithValues(const set<TableIndex> &table_ids);
+	//! Whether a scan with the same or earlier lineage heads found no live rows in the inlined table at the snapshot
+	bool InlinedTableIsEmpty(DuckLakeTransaction &transaction, const Identifier &table_name, idx_t snapshot_id);
+	void SetInlinedTableEmpty(DuckLakeTransaction &transaction, const Identifier &table_name, idx_t snapshot_id);
 
 	//! Invalidate the cached table stats entry for a given stats cache key.
 	void InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id);
@@ -555,6 +592,15 @@ private:
 	unique_ptr<DuckLakeRESTClient> rest_client;
 	//! The resolved DuckLake spec version of the attached catalog
 	DuckLakeVersion ducklake_version = DuckLakeVersion::V1_0;
+	//! The chain of the branch the catalog is attached at, main by default
+	DuckLakeBranchChain attached_chain = DuckLakeBranchChain::Main();
+	//! Parsed listings shared across transactions at the observed heads of every branch of the chain
+	mutex listing_cache_lock;
+	vector<idx_t> listing_cache_heads;
+	//! Whether the cached listings belong to a read at the head under these heads, with the lock held
+	bool ListingCacheMatches(idx_t snapshot_id, const vector<idx_t> &heads) const;
+	unordered_map<string, shared_ptr<vector<DuckLakeFileListEntry>>> listing_cache;
+	bool branch_metadata_present = true;
 	//! A per-instance identifier used to scope ObjectCache keys.
 	string instance_id;
 	mutex cache_entries_lock;
@@ -573,15 +619,14 @@ private:
 	mutex inlined_deletion_cache_lock;
 	//! Table IDs where the inlined deletion table is known to exist (permanent - never invalidated)
 	unordered_set<idx_t> inlined_deletion_exists;
-	//! Table IDs where the inlined deletion table is known to NOT exist, with the snapshot_id at which we checked
-	//! Valid as long as current snapshot.snapshot_id <= cached snapshot_id
-	unordered_map<idx_t, idx_t> inlined_deletion_not_exists;
-	//! The rewrite snapshots of each table, read from the snapshot changes of committed snapshots
+	//! Table ids whose inlined deletion table a view found absent, keyed by the heads of that view
+	unordered_map<idx_t, vector<idx_t>> inlined_deletion_not_exists;
+	//! The rewrite snapshots of each table, ids of the attached lineage view read from its snapshot changes
 	mutex rewrite_snapshots_lock;
 	optional_idx rewrite_snapshots_read_until;
 	unordered_map<idx_t, set<idx_t>> rewrite_snapshots;
-	//! The inlined deletion tables of the metadata catalog, listed per snapshot id for the latest snapshots
-	map<idx_t, shared_ptr<const unordered_set<string>>> inlined_deletion_tables;
+	//! The inlined deletion tables of the metadata catalog, listed per lineage heads of the view for the latest ones
+	map<vector<idx_t>, shared_ptr<const unordered_set<string>>> inlined_deletion_tables;
 	//! Held while the inlined deletion tables are listed
 	mutex inlined_deletion_listing_lock;
 	//! Cache of (table_id, schema_version) -> begin_snapshot. The backing row is written once when the schema
@@ -591,6 +636,10 @@ private:
 	mutex columns_with_values_lock;
 	optional_idx columns_with_values_snapshot;
 	set<pair<idx_t, idx_t>> columns_with_values;
+	//! The inlined tables a scan found without live rows at one snapshot, each with the lowest heads that saw it empty
+	mutex empty_inlined_tables_lock;
+	optional_idx empty_inlined_tables_snapshot;
+	identifier_map_t<vector<idx_t>> empty_inlined_tables;
 	//! The schema versions of each table at the schema version they were looked up at, guarded by the same lock
 	unordered_map<idx_t, pair<idx_t, DuckLakeTableSchemaVersions>> table_schema_versions;
 	//! The id of the last committed snapshot, set at FlushChanges on a successful commit

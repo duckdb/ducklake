@@ -1,0 +1,104 @@
+# name: test/sql/rest/rest_serve_isolated_refusal_keeps_registration.test
+# description: A refused isolated replacement keeps the catalog served under the prefix registered
+# group: [rest]
+
+require ducklake
+
+require parquet
+
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS seed (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+
+statement ok rest_db:rest_server_con
+CREATE TABLE seed.t AS SELECT 42 AS i
+
+statement ok rest_db:rest_server_con
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 1)
+
+statement ok rest_db:rest_server_con
+DETACH seed
+
+statement ok rest_db:rest_server_con
+SET VARIABLE rest_listen_uri = (SELECT listen_uri FROM ducklake_rest_serve('ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db', prefix := 'live'))
+
+statement ok rest_db:rest_server_con
+SET VARIABLE rest_port = regexp_extract(getvariable('rest_listen_uri'), ':([0-9]+)/', 1)::UBIGINT
+
+set variable rest_server <variable:rest_server_con:rest_listen_uri>
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', '')
+----
+200
+
+# a branch replacing the isolated main under the prefix is refused before the served DuckLake is released
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db', port := getvariable('rest_port'), prefix := 'live', attach_options := 'BRANCH ''dev''')
+----
+Serving a branch of a DuckLake through REST is not supported yet
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', '')
+----
+200
+
+# so are attach options that do not parse or hold more than the options of one ATTACH
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db', port := getvariable('rest_port'), prefix := 'live', attach_options := 'BRANCH ''dev'')')
+----
+syntax error
+
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db', port := getvariable('rest_port'), prefix := 'live', attach_options := 'BRANCH ''main''); SELECT 1 FROM (SELECT 1')
+----
+attach_options has to hold the options of one ATTACH
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', '')
+----
+200
+
+# an explicit main is no branch, the replacement releases the served DuckLake and attaches the same file again
+statement ok rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db', port := getvariable('rest_port'), prefix := 'live', attach_options := 'BRANCH ''main''')
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', '')
+----
+200
+
+# a BRANCH expression is resolved by the caller, the branch it resolves to is refused before the release
+statement ok rest_db:rest_server_con
+SET VARIABLE served_branch = 'main'
+
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db', port := getvariable('rest_port'), prefix := 'live', attach_options := 'BRANCH (least(''dev'', getvariable(''served_branch'')))')
+----
+Serving a branch of a DuckLake through REST is not supported yet
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', '')
+----
+200
+
+# so is an expression that resolves to NULL
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db', port := getvariable('rest_port'), prefix := 'live', attach_options := 'BRANCH (getvariable(''missing_branch''))')
+----
+BRANCH cannot be NULL
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', '')
+----
+200
+
+# the isolated DuckLake attaches the branch the caller resolved, where the variable is unset the expression would be dev
+statement ok rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db', port := getvariable('rest_port'), prefix := 'live', attach_options := 'BRANCH (greatest(''dev'', getvariable(''served_branch'')))')
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', '')
+----
+200
+
+include test/template/rest_teardown.test_template

@@ -73,6 +73,9 @@ string DuckLakeInitializer::GetAttachOptions() {
 void DuckLakeInitializer::Initialize() {
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	if (transaction.GetMetadataManager().IsRemote()) {
+		if (!options.branch_name.empty() && !StringUtil::CIEquals(options.branch_name, "main")) {
+			throw NotImplementedException("BRANCH attaches through a REST catalog are not supported yet");
+		}
 		catalog.ConnectREST();
 		// a remote metadata server has no metadata database to attach or migrate
 		LoadExistingDuckLake(transaction);
@@ -125,8 +128,25 @@ void DuckLakeInitializer::Initialize() {
 	auto &current_metadata_manager = transaction.GetMetadataManager();
 	// probe the metadata server for optional capabilities (e.g. server-side commit retries) once per attach
 	current_metadata_manager.ProbeServerCapabilities();
-	if (metadata_cache_stale) {
+	// an attach at a branch reads through the fork, which a cache kept from another attach does not
+	if (metadata_cache_stale || !options.branch_name.empty()) {
 		current_metadata_manager.ClearCache();
+	}
+	if (!options.branch_name.empty() && !catalog.SupportsBranching()) {
+		ThrowUnsupportedByVersion(catalog.GetDuckLakeVersion(), "branches");
+	}
+	if (!options.branch_name.empty() && !StringUtil::CIEquals(options.branch_name, "main")) {
+		auto branches = current_metadata_manager.LoadBranches();
+		optional_idx branch_id;
+		for (auto &branch : branches) {
+			if (StringUtil::CIEquals(branch.name, options.branch_name)) {
+				branch_id = branch.branch_id;
+			}
+		}
+		if (!branch_id.IsValid()) {
+			throw InvalidInputException("No branch with the name \"%s\" exists", options.branch_name);
+		}
+		catalog.SetAttachedChain(DuckLakeBranchChain::Resolve(branches, branch_id.GetIndex()));
 	}
 	if (options.at_clause) {
 		// if the user specified a snapshot try to load it to trigger an error if it does not exist
@@ -273,6 +293,8 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto metadata = metadata_manager.LoadDuckLake();
 	DuckLakeVersion resolved_version = DuckLakeVersion::UNSET;
+	// the migration to the dev version heals the catalog and writes the marker, which the loaded metadata predates
+	bool healed_by_migration = false;
 	for (auto &tag : metadata.tags) {
 		if (tag.key == "version" && metadata_manager.IsRemote()) {
 			// the server takes care of migrating the metadata
@@ -334,6 +356,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			if (catalog_version == DuckLakeVersion::V1_1 && catalog_version < target_version) {
 				metadata_manager.MigrateV11();
 				catalog_version = DuckLakeVersion::V2_0_DEV1;
+				healed_by_migration = true;
 			}
 			migrating = false;
 			if (catalog_version != target_version) {
@@ -384,6 +407,65 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	// set correct version metadata manager
 	if (resolved_version != DuckLakeVersion::UNSET) {
 		SetVersionedMetadataManager(transaction, resolved_version);
+	}
+	// the server heals the catalog it serves, a client never probes its shapes
+	if (resolved_version == DuckLakeVersion::V2_0_DEV1 && !healed_by_migration &&
+	    !transaction.GetMetadataManager().IsRemote() && !DuckLakeMetadataManager::HasHealMarker(metadata)) {
+		if (catalog.GetAttached().IsReadOnly()) {
+			// once the inline range columns are gone the visibility events are the only readable ranges
+			auto &manager = transaction.GetMetadataManager();
+			if (!manager.HasSnapshotChangesBranchColumn() || !manager.HasSchemaVersionsBranchColumn() ||
+			    manager.HasSnapshotRebuildTable() || manager.HasSnapshotOldTable() ||
+			    manager.HasSnapshotChangesRebuildTable() || manager.HasSnapshotChangesOldTable() ||
+			    (manager.HasBranchTable() && !manager.HasBranchTableShape()) ||
+			    (manager.HasSnapshotRemapTable() && !manager.HasSnapshotRemapShape())) {
+				// the snapshot tables are keyed by branch, which only a writable attach can rebuild
+				throw InvalidInputException("This DuckLake catalog has the snapshot tables of an older dev build, "
+				                            "attach it writable once to heal it");
+			} else if (manager.HasAllFileRangeColumns()) {
+				catalog.SetBranchMetadataMissing();
+			} else if (!manager.HasRowVisibilityShapes()) {
+				// the version rows end in companion tables, which only a writable attach can backfill
+				throw InvalidInputException("This DuckLake catalog has the catalog tables of an older dev build, "
+				                            "attach it writable once to heal it");
+			} else if (!manager.HasInlinedVisibilityTable()) {
+				// the inlined rows end in one shared companion, which only a writable attach can create
+				throw InvalidInputException("This DuckLake catalog lacks the shared visibility table of its inlined "
+				                            "rows, attach it writable once to heal it");
+			} else if (!manager.HasInlinedRowShapes()) {
+				// the branch column and the shared companion ends of the inlined rows need a writable attach
+				throw InvalidInputException("This DuckLake catalog has the inlined data tables of an older dev build, "
+				                            "attach it writable once to heal it");
+			} else if ((manager.HasFileVisibilityTable() &&
+			            !manager.HasVisibilityEventShape("ducklake_file_visibility")) ||
+			           (manager.HasDeleteFileVisibilityTable() &&
+			            !manager.HasVisibilityEventShape("ducklake_delete_file_visibility")) ||
+			           manager.HasVisibilityMigrationTable("ducklake_file_visibility") ||
+			           manager.HasVisibilityMigrationTable("ducklake_delete_file_visibility")) {
+				throw InvalidInputException("This DuckLake catalog holds the visibility rows of an older dev build "
+				                            "or an unfinished rewrite of them, attach it writable once to heal it");
+			} else if (!manager.HasBranchZeroVisibility()) {
+				throw InvalidInputException("Cannot read this DuckLake catalog: the visibility events that "
+				                            "replaced the inline file ranges are missing");
+			} else {
+				// a heal that stopped after its last shape change left no shape to probe, only the marker tells
+				throw InvalidInputException("This DuckLake catalog has no marker of a completed heal, attach it "
+				                            "writable once to heal it");
+			}
+		} else {
+			// the additions change the metadata schema, which a kept cache would still miss
+			metadata_cache_stale = true;
+			try {
+				transaction.GetMetadataManager().AddV2_0Dev1Additions();
+				// commit now so a concurrent heal surfaces inside the attach retry scope
+				transaction.ReleaseMetadataTransaction();
+			} catch (std::exception &ex) {
+				// a concurrent attach may have healed it first
+				if (!transaction.GetMetadataManager().HasHealMarker()) {
+					throw;
+				}
+			}
+		}
 	}
 }
 

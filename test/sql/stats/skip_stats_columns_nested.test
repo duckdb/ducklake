@@ -76,7 +76,7 @@ INSERT INTO ducklake.nested VALUES (3, {'x': 3, 'y': 'r', 'z': 3})
 query II
 SELECT c.column_name, f.min_value IS NULL
 FROM ducklake_meta.ducklake_file_column_stats f
-JOIN ducklake_meta.ducklake_column c ON c.column_id=f.column_id AND c.end_snapshot IS NULL
+JOIN ducklake_meta.ducklake_column c ON c.column_id=f.column_id AND NOT EXISTS (SELECT 1 FROM ducklake_meta.ducklake_column_visibility e WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id AND e.row_snapshot = c.begin_snapshot)
 WHERE f.data_file_id=(SELECT max(data_file_id) FROM ducklake_meta.ducklake_data_file)
 ORDER BY c.column_name
 ----

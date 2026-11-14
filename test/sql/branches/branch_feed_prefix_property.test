@@ -1,0 +1,181 @@
+# name: test/sql/branches/branch_feed_prefix_property.test
+# description: below the cap the change feeds of a branch and of a nested branch are the change feed of main
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1), (2), (3)
+
+statement ok
+INSERT INTO lake.t VALUES (4), (5)
+
+statement ok
+DELETE FROM lake.t WHERE i = 2
+
+statement ok
+UPDATE lake.t SET i = i + 10 WHERE i = 4
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+statement ok
+INSERT INTO lake.t VALUES (6)
+
+statement ok
+DELETE FROM lake.t WHERE i = 1
+
+query I
+SELECT id FROM lake.current_snapshot()
+----
+8
+
+# dev forks main at 8 and feature forks dev at 9, each with a snapshot of its own
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 8), (2, 'feature', 1, 9)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 9, NOW(), schema_version, 1099511627776, 1099511627776, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 8
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 10, NOW(), schema_version, 2199023255552, 2199023255552, 2 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 8
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (9, NULL, NULL, NULL, NULL, 1), (10, NULL, NULL, NULL, NULL, 2)
+
+# main continues after the fork with the ids the branches hold themselves
+statement ok
+INSERT INTO lake.t VALUES (7)
+
+statement ok
+DELETE FROM lake.t WHERE i = 3
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS feature (METADATA_CATALOG 'meta', BRANCH 'feature')
+
+query I
+SELECT i FROM lake.t ORDER BY i
+----
+5
+6
+7
+14
+
+query I
+SELECT i FROM dev.t ORDER BY i
+----
+3
+5
+6
+14
+
+query I
+SELECT i FROM feature.t ORDER BY i
+----
+3
+5
+6
+14
+
+query IIII
+FROM lake.table_changes('t', 2, 8) ORDER BY ALL
+----
+2	0	insert	1
+2	1	insert	2
+2	2	insert	3
+3	3	insert	4
+3	4	insert	5
+4	1	delete	2
+5	3	update_postimage	14
+5	3	update_preimage	4
+7	5	insert	6
+8	0	delete	1
+
+query IIII
+FROM dev.table_changes('t', 2, 8) ORDER BY ALL
+----
+2	0	insert	1
+2	1	insert	2
+2	2	insert	3
+3	3	insert	4
+3	4	insert	5
+4	1	delete	2
+5	3	update_postimage	14
+5	3	update_preimage	4
+7	5	insert	6
+8	0	delete	1
+
+query IIII
+FROM feature.table_changes('t', 2, 8) ORDER BY ALL
+----
+2	0	insert	1
+2	1	insert	2
+2	2	insert	3
+3	3	insert	4
+3	4	insert	5
+4	1	delete	2
+5	3	update_postimage	14
+5	3	update_preimage	4
+7	5	insert	6
+8	0	delete	1
+
+# the snapshots main committed after the fork are not in the feeds of the branches
+query IIII
+FROM lake.table_changes('t', 9, 10) ORDER BY ALL
+----
+9	6	insert	7
+10	2	delete	3
+
+query IIII
+FROM dev.table_changes('t', 9, 9) ORDER BY ALL
+----
+
+query IIII
+FROM feature.table_changes('t', 9, 10) ORDER BY ALL
+----
+
+# for every range at or below the cap the feeds of dev and feature equal the feed of main, read one catalog per statement
+loop s 2 9
+
+loop e 2 9
+
+statement ok
+SET VARIABLE main_feed = (SELECT list(r ORDER BY r) FROM (SELECT (snapshot_id, rowid, change_type, i) AS r FROM lake.table_changes('t', {s}, {e})))
+
+query I
+SELECT (SELECT list(r ORDER BY r) FROM (SELECT (snapshot_id, rowid, change_type, i) AS r FROM dev.table_changes('t', {s}, {e}))) IS NOT DISTINCT FROM getvariable('main_feed')
+----
+true
+
+query I
+SELECT (SELECT list(r ORDER BY r) FROM (SELECT (snapshot_id, rowid, change_type, i) AS r FROM feature.table_changes('t', {s}, {e}))) IS NOT DISTINCT FROM getvariable('main_feed')
+----
+true
+
+endloop
+
+endloop
+
+statement ok
+DETACH feature
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH lake

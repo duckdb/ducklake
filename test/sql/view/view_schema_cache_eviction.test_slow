@@ -94,7 +94,7 @@ query II
 SELECT s.schema_name, v.view_name
 FROM metadata.ducklake_view v
 JOIN metadata.ducklake_schema s ON s.schema_id = v.schema_id
-WHERE v.end_snapshot IS NULL
+WHERE NOT EXISTS (SELECT 1 FROM metadata.ducklake_view_visibility e WHERE e.view_id = v.view_id AND e.row_branch_id = v.branch_id AND e.row_snapshot = v.begin_snapshot)
 ----
 target	v1
 
@@ -112,10 +112,11 @@ SELECT * FROM ducklake.target.v1
 query I
 SELECT COUNT(*)
 FROM metadata.ducklake_view v
-WHERE v.end_snapshot IS NULL
+WHERE NOT EXISTS (SELECT 1 FROM metadata.ducklake_view_visibility e WHERE e.view_id = v.view_id AND e.row_branch_id = v.branch_id AND e.row_snapshot = v.begin_snapshot)
   AND NOT EXISTS (
     SELECT 1 FROM metadata.ducklake_schema s
-    WHERE s.schema_id = v.schema_id AND s.end_snapshot IS NULL
+    WHERE s.schema_id = v.schema_id
+      AND NOT EXISTS (SELECT 1 FROM metadata.ducklake_schema_visibility e WHERE e.schema_id = s.schema_id AND e.row_branch_id = s.branch_id AND e.row_snapshot = s.begin_snapshot)
   )
 ----
 0

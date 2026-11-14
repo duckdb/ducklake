@@ -1,0 +1,77 @@
+# name: test/sql/branches/branch_tag_above_fork.test
+# description: a branch attach reads the tags of main born up to the snapshot it continues from
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+CALL ducklake_create_tag('dl', 'first', version => 2)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+# dev continues from the snapshot that created the first tag, the second tag is born on main after it
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 3)
+
+statement ok
+CALL ducklake_create_tag('dl', 'second', version => 4)
+
+# a tag born before the fork can only name a snapshot of main the branch reads, this row is written by hand
+statement ok
+INSERT INTO meta.ducklake_snapshot_tag (tag_name, snapshot_id, snapshot_branch_id, branch_id, begin_snapshot, expires_at) VALUES ('later', 4, 0, 0, 3, NULL)
+
+query III
+SELECT tag_name, snapshot_id, snapshot_time IS NULL FROM ducklake_tags('dl') ORDER BY tag_name
+----
+first	2	false
+later	4	false
+second	4	false
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+# the tags born up to the fork are visible, the time of a target past the fork is unknown
+query III
+SELECT tag_name, snapshot_id, snapshot_time IS NULL FROM ducklake_tags('dl') ORDER BY tag_name
+----
+first	2	false
+later	4	true
+
+query I
+SELECT i FROM dl.t AT (VERSION => 'first')
+----
+1
+
+# the second tag is born on main after the fork
+statement error
+SELECT i FROM dl.t AT (VERSION => 'second')
+----
+No snapshot tag with the name "second" exists
+
+# the hand written tag names a snapshot of main the branch does not read
+statement error
+SELECT i FROM dl.t AT (VERSION => 'later')
+----
+Snapshot tag "later" names snapshot 4 of main, which is newer than the snapshot the attached branch continues from
+
+statement ok
+DETACH dl

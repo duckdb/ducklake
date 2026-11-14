@@ -471,6 +471,7 @@ void DuckLakeDelete::FlushDeleteWithSnapshots(DuckLakeTransaction &transaction, 
 	// track the old delete file for deletion from metadata
 	written_file.overwritten_delete_file.delete_file_id = data_file_info.delete_file_id;
 	written_file.overwritten_delete_file.path = data_file_info.delete_file.path;
+	written_file.overwritten_delete_file.branch_id = data_file_info.delete_file_branch_id;
 
 	written_file.max_snapshot = MaxSnapshotId(sorted_deletes_with_snapshots);
 
@@ -527,7 +528,8 @@ void DuckLakeDelete::FlushDelete(DuckLakeTransaction &transaction, ClientContext
 		auto threshold = catalog.DataInliningRowLimit(context, table);
 		if (threshold > 0 && sorted_deletes.size() <= threshold) {
 			// use inlined file deletions
-			if (catalog.CheckInlinedDeletionTableCache(table.GetTableId(), transaction.GetSnapshot()) !=
+			auto &heads = transaction.GetMetadataManager().GetLineageHeads();
+			if (catalog.CheckInlinedDeletionTableCache(table.GetTableId(), heads) !=
 			    InlinedDeletionCacheResult::EXISTS) {
 				// this commit may create the inlined-delete table - take the client-side path
 				transaction.SetRequiresNewInlinedTable(true);

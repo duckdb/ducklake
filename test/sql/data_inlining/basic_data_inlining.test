@@ -52,11 +52,11 @@ SELECT rowid, snapshot_id, * FROM ducklake.test
 1000000000000000000	NULL	1	2
 1000000000000000001	NULL	NULL	3
 
-query III
-SELECT filename, file_row_number, file_index FROM ducklake.test
+query II
+SELECT filename, file_row_number FROM ducklake.test
 ----
-__ducklake_inlined_transaction_local_data	0	1
-__ducklake_inlined_transaction_local_data	1	1
+__ducklake_inlined_transaction_local_data	0
+__ducklake_inlined_transaction_local_data	1
 
 statement ok
 COMMIT

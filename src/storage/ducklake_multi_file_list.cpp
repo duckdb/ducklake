@@ -1,6 +1,7 @@
 #include "common/ducklake_util.hpp"
 #include "storage/ducklake_scan.hpp"
 #include "storage/ducklake_multi_file_list.hpp"
+#include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "storage/ducklake_inlined_data_reader.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
@@ -638,8 +639,8 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 		transaction_row_start += file.row_count;
 		result.push_back(std::move(file_entry));
 	}
-	inlined_data_tables = read_info.table.GetInlinedDataTables(transaction, read_info.snapshot);
-	for (auto &table : inlined_data_tables) {
+	// the extended entries are looked up by name, the inlined tables of the scan itself stay those of its files
+	for (auto &table : read_info.table.GetInlinedDataTables(transaction, read_info.snapshot)) {
 		DuckLakeFileListExtendedEntry file_entry;
 		file_entry.file.path = table.table_name.GetIdentifierName();
 		file_entry.row_count = 0;
@@ -695,19 +696,19 @@ vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
 	static constexpr idx_t MAX_ATTEMPTS = 10;
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto scan_projection = has_projection ? optional_ptr<const vector<DuckLakeProjectedColumn>>(projection) : nullptr;
-	// a remote metadata manager reads the files and the inlined rows of the same snapshot
+	// a remote metadata manager reads the files and the inlined rows of the same snapshot, and a Postgres read of the
+	// inlined rows runs its payload and allocator scans as separate remote statements, so only Quack buffers them first
 	if (!metadata_manager.CommitsEachStatement() || metadata_manager.IsRemote() || inlined_data_tables.empty()) {
 		return metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter_info.get(),
 		                                         read_info.include_local_changes, scan_projection);
 	}
 	// every query sees the latest commits, so the inlined rows are read first and again if a file was written since
 	for (idx_t attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-		optional_idx next_file_id;
+		map<idx_t, idx_t> next_file_ids;
 		inlined_rows.clear();
 		if (attempt > 0) {
 			// the flush can have dropped an inlined table it emptied
-			inlined_data_tables =
-			    read_info.table.GetInlinedDataTables(transaction, read_info.snapshot, read_info.include_local_changes);
+			inlined_data_tables = ListInlinedDataTables(transaction);
 		}
 		for (auto &table : inlined_data_tables) {
 			vector<MultiFileColumnDefinition> columns;
@@ -727,15 +728,21 @@ vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
 				              columns.end());
 			}
 			inlined_rows[table.table_name] =
-			    DuckLakeInlinedDataReader::ReadCommittedRows(read_info, table.table_name, columns, next_file_id);
+			    DuckLakeInlinedDataReader::ReadCommittedRows(read_info, table.table_name, columns, next_file_ids);
 		}
 		auto result = metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter_info.get(),
 		                                                read_info.include_local_changes, scan_projection);
-		// without inlined rows a flush cannot move any of them
-		bool written_since = next_file_id.IsValid() &&
-		                     std::any_of(result.begin(), result.end(), [&](const DuckLakeFileListEntry &entry) {
-			                     return entry.file_id.IsValid() && entry.file_id.index >= next_file_id.GetIndex();
-		                     });
+		// without inlined rows a flush cannot move any of them, a file written since the read reaches the allocator
+		// of the branch that wrote its add event
+		bool written_since = std::any_of(result.begin(), result.end(), [&](const DuckLakeFileListEntry &entry) {
+			if (!entry.file_id.IsValid()) {
+				// LCOV_EXCL_START
+				return false;
+				// LCOV_EXCL_STOP
+			}
+			auto allocator = next_file_ids.find(entry.snapshot_branch_id);
+			return allocator != next_file_ids.end() && entry.file_id.index >= allocator->second;
+		});
 		if (!written_since) {
 			return result;
 		}
@@ -745,11 +752,24 @@ vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
 	                           read_info.table.name);
 }
 
+vector<DuckLakeInlinedTableInfo> DuckLakeMultiFileList::ListInlinedDataTables(DuckLakeTransaction &transaction) const {
+	auto result =
+	    read_info.table.GetInlinedDataTables(transaction, read_info.snapshot, read_info.include_local_changes);
+	// the inlined tables an earlier scan found without live rows at this snapshot have nothing to read
+	auto &catalog = transaction.GetCatalog();
+	result.erase(std::remove_if(result.begin(), result.end(),
+	                            [&](const DuckLakeInlinedTableInfo &table) {
+		                            return catalog.InlinedTableIsEmpty(transaction, table.table_name,
+		                                                               read_info.snapshot.snapshot_id);
+	                            }),
+	             result.end());
+	return result;
+}
+
 void DuckLakeMultiFileList::GetFilesForTable() const {
 	auto transaction_ref = read_info.GetTransaction();
 	auto &transaction = *transaction_ref;
-	inlined_data_tables =
-	    read_info.table.GetInlinedDataTables(transaction, read_info.snapshot, read_info.include_local_changes);
+	inlined_data_tables = ListInlinedDataTables(transaction);
 	identifier_map_t<shared_ptr<DuckLakeCommittedInlinedRows>> inlined_rows;
 	if (!IsTransactionLocal(read_info.table_id)) {
 		files = ReadCommittedFiles(transaction, inlined_rows);
@@ -814,6 +834,8 @@ void DuckLakeMultiFileList::GetTableDeletions() const {
 		file_entry.row_id_start = file.row_id_start;
 		file_entry.snapshot_id = file.snapshot_id;
 		file_entry.mapping_id = file.mapping_id;
+		// the rows of an inherited partial file past the cap of its writer's segment were never visible
+		file_entry.snapshot_filter_max = file.row_snapshot_max;
 		files.emplace_back(std::move(file_entry));
 	}
 	AddInlinedDataTables(transaction);

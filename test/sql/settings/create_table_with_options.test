@@ -139,7 +139,7 @@ statement ok
 INSERT INTO ducklake.t6 VALUES (1, 'aaa'), (2, 'zzz')
 
 query III
-SELECT column_id, min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 't6' AND end_snapshot IS NULL) ORDER BY column_id
+SELECT column_id, min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 't6') ORDER BY column_id
 ----
 1	1	2
 2	NULL	NULL
@@ -148,7 +148,7 @@ statement ok
 CREATE TABLE ducklake.t6_ctas WITH (skip_stats_columns = ['S'], data_inlining_row_limit = 0) AS SELECT 1 AS id, 'aaa' AS s
 
 query III
-SELECT column_id, min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 't6_ctas' AND end_snapshot IS NULL) ORDER BY column_id
+SELECT column_id, min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 't6_ctas') ORDER BY column_id
 ----
 1	1	1
 2	NULL	NULL

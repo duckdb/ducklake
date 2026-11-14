@@ -1513,24 +1513,39 @@ unique_ptr<LogicalOperator> DuckLakeCatalog::BindAlterAddIndex(Binder &binder, T
 	throw NotImplementedException("Adding indexes or constraints is not supported in DuckLake");
 }
 
+//! Whether every head of the chain is at or after the observed one, so the view holds the observed commits
+static bool HeadsAtOrAfter(const vector<idx_t> &heads, const vector<idx_t> &observed) {
+	if (heads.empty() || heads.size() != observed.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < heads.size(); i++) {
+		if (heads[i] < observed[i]) {
+			return false;
+		}
+	}
+	return true;
+}
+
 InlinedDeletionCacheResult DuckLakeCatalog::CheckInlinedDeletionTableCache(TableIndex table_id,
-                                                                           DuckLakeSnapshot snapshot) {
+                                                                           const vector<idx_t> &heads) {
 	lock_guard<mutex> guard(inlined_deletion_cache_lock);
 	if (inlined_deletion_exists.find(table_id.index) != inlined_deletion_exists.end()) {
 		return InlinedDeletionCacheResult::EXISTS;
 	}
 	auto it = inlined_deletion_not_exists.find(table_id.index);
-	if (it != inlined_deletion_not_exists.end() && snapshot.snapshot_id <= it->second) {
+	if (it != inlined_deletion_not_exists.end() && HeadsAtOrAfter(it->second, heads)) {
+		// no branch of the chain committed after the view that found the table absent
 		return InlinedDeletionCacheResult::DOES_NOT_EXIST;
 	}
 	return InlinedDeletionCacheResult::UNKNOWN;
 }
 
 shared_ptr<const unordered_set<string>>
-DuckLakeCatalog::GetInlinedDeletionTables(idx_t snapshot_id, const std::function<unordered_set<string>()> &list) {
+DuckLakeCatalog::GetInlinedDeletionTables(const vector<idx_t> &heads,
+                                          const std::function<unordered_set<string>()> &list) {
 	auto cached_listing = [&]() -> shared_ptr<const unordered_set<string>> {
 		lock_guard<mutex> guard(inlined_deletion_cache_lock);
-		auto entry = inlined_deletion_tables.find(snapshot_id);
+		auto entry = inlined_deletion_tables.find(heads);
 		return entry == inlined_deletion_tables.end() ? nullptr : entry->second;
 	};
 	auto tables = cached_listing();
@@ -1545,7 +1560,7 @@ DuckLakeCatalog::GetInlinedDeletionTables(idx_t snapshot_id, const std::function
 	}
 	tables = make_shared_ptr<const unordered_set<string>>(list());
 	lock_guard<mutex> guard(inlined_deletion_cache_lock);
-	inlined_deletion_tables[snapshot_id] = tables;
+	inlined_deletion_tables[heads] = tables;
 	// transactions at a few recent snapshots can read side by side, older listings are dropped
 	static constexpr idx_t MAX_LISTED_SNAPSHOTS = 8;
 	while (inlined_deletion_tables.size() > MAX_LISTED_SNAPSHOTS) {
@@ -1554,13 +1569,21 @@ DuckLakeCatalog::GetInlinedDeletionTables(idx_t snapshot_id, const std::function
 	return tables;
 }
 
-void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists) {
+void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, const vector<idx_t> &heads, bool exists) {
 	lock_guard<mutex> guard(inlined_deletion_cache_lock);
 	if (exists) {
 		inlined_deletion_exists.insert(table_id.index);
 		inlined_deletion_not_exists.erase(table_id.index);
-	} else {
-		inlined_deletion_not_exists[table_id.index] = snapshot.snapshot_id;
+		return;
+	}
+	if (heads.empty()) {
+		// a released view has no heads to scope the verdict by
+		return;
+	}
+	auto entry = inlined_deletion_not_exists.find(table_id.index);
+	if (entry == inlined_deletion_not_exists.end() || HeadsAtOrAfter(heads, entry->second)) {
+		// the latest view that found the table absent covers the most views
+		inlined_deletion_not_exists[table_id.index] = heads;
 	}
 }
 
@@ -1653,6 +1676,38 @@ void DuckLakeCatalog::ForgetColumnsWithValues(const set<TableIndex> &table_ids) 
 		auto begin = columns_with_values.lower_bound(make_pair(table_id.index, idx_t(0)));
 		auto end = columns_with_values.lower_bound(make_pair(table_id.index + 1, idx_t(0)));
 		columns_with_values.erase(begin, end);
+	}
+}
+
+bool DuckLakeCatalog::InlinedTableIsEmpty(DuckLakeTransaction &transaction, const Identifier &table_name,
+                                          idx_t snapshot_id) {
+	auto &heads = transaction.GetMetadataManager().GetLineageHeads();
+	lock_guard<mutex> guard(empty_inlined_tables_lock);
+	if (!empty_inlined_tables_snapshot.IsValid() || empty_inlined_tables_snapshot.GetIndex() != snapshot_id) {
+		return false;
+	}
+	// a transaction whose view predates the flush that emptied the table may not see the flushed file yet
+	auto entry = empty_inlined_tables.find(table_name);
+	return entry != empty_inlined_tables.end() && HeadsAtOrAfter(heads, entry->second);
+}
+
+void DuckLakeCatalog::SetInlinedTableEmpty(DuckLakeTransaction &transaction, const Identifier &table_name,
+                                           idx_t snapshot_id) {
+	auto &heads = transaction.GetMetadataManager().GetLineageHeads();
+	if (heads.empty()) {
+		return;
+	}
+	lock_guard<mutex> guard(empty_inlined_tables_lock);
+	if (!empty_inlined_tables_snapshot.IsValid() || empty_inlined_tables_snapshot.GetIndex() != snapshot_id) {
+		empty_inlined_tables.clear();
+		empty_inlined_tables_snapshot = snapshot_id;
+	}
+	auto entry = empty_inlined_tables.find(table_name);
+	if (entry == empty_inlined_tables.end()) {
+		empty_inlined_tables.emplace(table_name, heads);
+	} else if (HeadsAtOrAfter(entry->second, heads)) {
+		// the earliest view that found the table empty lets the most transactions skip it
+		entry->second = heads;
 	}
 }
 
@@ -1814,6 +1869,49 @@ bool DuckLakeCatalog::UnregisterCatalog() {
 		}
 	}
 	return metadata_catalog_unused;
+}
+
+bool DuckLakeCatalog::ListingCacheMatches(idx_t snapshot_id, const vector<idx_t> &heads) const {
+	// a flush on a parent writes an add event dated before the cap that the branch inherits,
+	// so a commit on any branch of the chain drops the shared listings, which only reads at the head share
+	return !listing_cache_heads.empty() && listing_cache_heads == heads && heads.back() == snapshot_id;
+}
+
+void DuckLakeCatalog::ObserveListingHead(const vector<idx_t> &heads) {
+	lock_guard<mutex> guard(listing_cache_lock);
+	if (!heads.empty() && ListingCacheMatches(heads.back(), heads)) {
+		return;
+	}
+	listing_cache.clear();
+	listing_cache_heads = heads;
+}
+
+shared_ptr<vector<DuckLakeFileListEntry>> DuckLakeCatalog::TryGetCachedListing(const string &key, idx_t snapshot_id,
+                                                                               const vector<idx_t> &heads) {
+	lock_guard<mutex> guard(listing_cache_lock);
+	if (!ListingCacheMatches(snapshot_id, heads)) {
+		return nullptr;
+	}
+	auto entry = listing_cache.find(key);
+	return entry == listing_cache.end() ? nullptr : entry->second;
+}
+
+void DuckLakeCatalog::StoreCachedListing(const string &key, idx_t snapshot_id, const vector<idx_t> &heads,
+                                         shared_ptr<vector<DuckLakeFileListEntry>> entries) {
+	lock_guard<mutex> guard(listing_cache_lock);
+	if (!ListingCacheMatches(snapshot_id, heads)) {
+		return;
+	}
+	if (listing_cache.size() >= 256) {
+		listing_cache.clear();
+	}
+	listing_cache.emplace(key, std::move(entries));
+}
+
+void DuckLakeCatalog::InvalidateListingCache() {
+	lock_guard<mutex> guard(listing_cache_lock);
+	listing_cache.clear();
+	listing_cache_heads.clear();
 }
 
 } // namespace duckdb

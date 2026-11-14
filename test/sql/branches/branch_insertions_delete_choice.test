@@ -1,0 +1,155 @@
+# name: test/sql/branches/branch_insertions_delete_choice.test
+# description: the insertions feed of a branch joins one delete file per data file and begin, the one of the segment nearest itself
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+# the insert and a delete of one of its rows commit together, the delete file begins with the data file
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO lake.t VALUES (1), (2), (3), (4)
+
+statement ok
+DELETE FROM lake.t WHERE i = 1
+
+statement ok
+COMMIT
+
+query I
+SELECT id FROM lake.current_snapshot()
+----
+2
+
+query I
+SELECT snapshot_id FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND NOT is_delete
+----
+2
+
+query I
+SELECT snapshot_id FROM meta.ducklake_delete_file_visibility WHERE branch_id = 0 AND NOT is_delete
+----
+2
+
+statement ok
+SET VARIABLE t_table = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't')
+
+statement ok
+SET VARIABLE t_file = (SELECT data_file_id FROM meta.ducklake_data_file WHERE table_id = getvariable('t_table'))
+
+# dev forks main at 2 with a snapshot 3 of its own
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 3, NOW(), schema_version, 1099511627776, 1099511627777, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 2
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1)
+
+# the cumulative delete file of dev holds the date of main and its own 3, its add event is back dated like a replacement
+statement ok
+COPY (SELECT ''::VARCHAR AS file_path, p::BIGINT AS pos, s::BIGINT AS _ducklake_internal_snapshot_id FROM (VALUES (0, 2), (1, 3)) v(p, s)) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet' (FORMAT PARQUET)
+
+statement ok
+INSERT INTO meta.ducklake_delete_file (delete_file_id, table_id, data_file_id, path, path_is_relative, format, delete_count, file_size_bytes, partial_max) SELECT 1099511627776, getvariable('t_table'), getvariable('t_file'), '{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet', false, 'parquet', 2, file_size_bytes, 3 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet')
+
+statement ok
+INSERT INTO meta.ducklake_delete_file_visibility VALUES (1, getvariable('t_table'), 1099511627776, 2, false)
+
+# two live delete files of the data file begin at 2
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file WHERE data_file_id = getvariable('t_file')
+----
+2
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility WHERE NOT is_delete AND snapshot_id = 2
+----
+2
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+# the feed of dev joins the file of dev alone and reports each row once, the row deleted at 2 was never visible
+query II
+SELECT snapshot_id, i FROM ducklake_table_insertions('dev', 'main', 't', 2, 2) ORDER BY i
+----
+2	2
+2	3
+2	4
+
+# the delete dev dated 3 keeps the insertion of its row
+query II
+SELECT snapshot_id, i FROM ducklake_table_insertions('dev', 'main', 't', 2, 3) ORDER BY i
+----
+2	2
+2	3
+2	4
+
+query IIII
+FROM dev.table_changes('t', 2, 3) ORDER BY ALL
+----
+2	1	insert	2
+2	2	insert	3
+2	3	insert	4
+3	1	delete	2
+
+query I
+SELECT i FROM dev.t ORDER BY i
+----
+3
+4
+
+query I
+SELECT i FROM dev.t AT (VERSION => 2) ORDER BY i
+----
+2
+3
+4
+
+# main reads and reports its own file alone
+query II
+SELECT snapshot_id, i FROM ducklake_table_insertions('lake', 'main', 't', 2, 2) ORDER BY i
+----
+2	2
+2	3
+2	4
+
+query IIII
+FROM lake.table_changes('t', 2, 2) ORDER BY ALL
+----
+2	1	insert	2
+2	2	insert	3
+2	3	insert	4
+
+query I
+SELECT i FROM lake.t ORDER BY i
+----
+2
+3
+4
+
+query I
+SELECT delete_file LIKE '%_dev_delete.parquet' FROM ducklake_list_files('lake', 't')
+----
+false
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH lake
