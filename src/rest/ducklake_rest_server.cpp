@@ -349,21 +349,26 @@ void DuckLakeRESTServer::Wait() {
 //===--------------------------------------------------------------------===//
 // Registry
 //===--------------------------------------------------------------------===//
-//! The BRANCH option of an ATTACH, a constant comes bound, an expression is evaluated as ATTACH evaluates it
-static Value AttachBranchOption(ClientContext &context, AttachInfo &info) {
+//! The BRANCH option of an ATTACH, an expression is resolved by the caller and replaced by its value
+static Value ResolveAttachBranchOption(ClientContext &context, AttachInfo &info) {
+	auto expression = info.parsed_options.find("branch");
+	if (expression != info.parsed_options.end()) {
+		auto binder = Binder::CreateBinder(context);
+		TableFunctionBinder option_binder(*binder, context, "Attach", "Attach parameter");
+		auto bound_expression = option_binder.Bind(expression->second);
+		auto branch = ExpressionExecutor::EvaluateScalar(context, *bound_expression, true);
+		if (branch.IsNull()) {
+			throw BinderException("ducklake_rest_serve: BRANCH cannot be NULL");
+		}
+		info.options[expression->first] = std::move(branch);
+		info.parsed_options.erase(expression);
+	}
 	for (auto &option : info.options) {
 		if (StringUtil::CIEquals(option.first, "branch")) {
 			return option.second;
 		}
 	}
-	auto expression = info.parsed_options.find("branch");
-	if (expression == info.parsed_options.end()) {
-		return Value();
-	}
-	auto binder = Binder::CreateBinder(context);
-	TableFunctionBinder option_binder(*binder, context, "Attach", "Attach parameter");
-	auto bound_expression = option_binder.Bind(expression->second);
-	return ExpressionExecutor::EvaluateScalar(context, *bound_expression, true);
+	return Value();
 }
 
 //! The ATTACH of an isolated DuckLake, a BRANCH other than main is refused before the served DuckLake is released
@@ -379,11 +384,13 @@ static string IsolatedAttachQuery(ClientContext &context, const string &path, co
 	if (parser.statements.size() != 1 || parser.statements[0]->type != StatementType::ATTACH_STATEMENT) {
 		throw BinderException("ducklake_rest_serve: attach_options has to hold the options of one ATTACH");
 	}
-	auto branch = AttachBranchOption(context, *parser.statements[0]->Cast<AttachStatement>().info);
+	auto &statement = parser.statements[0]->Cast<AttachStatement>();
+	auto branch = ResolveAttachBranchOption(context, *statement.info);
 	if (!branch.IsNull() && !StringUtil::CIEquals(branch.ToString(), "main")) {
 		throw NotImplementedException("Serving a branch of a DuckLake through REST is not supported yet");
 	}
-	return query;
+	// rendered with the resolved branch, the isolated connection would resolve the expression on its own state
+	return statement.ToString();
 }
 
 //! Attaches the DuckLake in a database of its own, so the served catalog is isolated from the caller

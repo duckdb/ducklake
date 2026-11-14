@@ -67,4 +67,38 @@ SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/
 ----
 200
 
+# a BRANCH expression is resolved by the caller, the branch it resolves to is refused before the release
+statement ok rest_db:rest_server_con
+SET VARIABLE served_branch = 'main'
+
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db', port := getvariable('rest_port'), prefix := 'live', attach_options := 'BRANCH (least(''dev'', getvariable(''served_branch'')))')
+----
+Serving a branch of a DuckLake through REST is not supported yet
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', '')
+----
+200
+
+# so is an expression that resolves to NULL
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db', port := getvariable('rest_port'), prefix := 'live', attach_options := 'BRANCH (getvariable(''missing_branch''))')
+----
+BRANCH cannot be NULL
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', '')
+----
+200
+
+# the isolated DuckLake attaches the branch the caller resolved, where the variable is unset the expression would be dev
+statement ok rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db', port := getvariable('rest_port'), prefix := 'live', attach_options := 'BRANCH (greatest(''dev'', getvariable(''served_branch'')))')
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', '')
+----
+200
+
 include test/template/rest_teardown.test_template
