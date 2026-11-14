@@ -608,6 +608,14 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	return PostgresQuery(remote_query);
 }
 
+string PostgresMetadataManager::ExpiryCompanionProbeQuery() const {
+	// the probe is standard SQL, so the server runs it in one round trip
+	auto remote_query = DuckLakeMetadataManager::ExpiryCompanionProbeQuery();
+	SubstituteCatalogPlaceholders(remote_query,
+	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
+	return PostgresQuery(remote_query);
+}
+
 string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot,
                                                                    bool include_exactness) const {
 	// one statement reads the latest snapshot and the table stats from the same state at any isolation level

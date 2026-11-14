@@ -9361,12 +9361,13 @@ string DuckLakeMetadataManager::DeleteSnapshotsSql(const vector<DuckLakeSnapshot
 	                          branch_filter, snapshot_ids);
 }
 
-void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
+void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots,
+                                              const DuckLakeSnapshot &head) {
 	auto &catalog = transaction.GetCatalog();
 	auto result =
 	    Execute(DeleteSnapshotsSql(snapshots, catalog.SupportsBranching(), to_string(catalog.AttachedBranchId())));
 	result->ThrowIfError("Failed to delete snapshots in DuckLake: ");
-	CleanupExpiredSnapshots(snapshots);
+	CleanupExpiredSnapshots(snapshots, head);
 }
 
 //! The rows of main ended on main with no main snapshot left between birth and end, other branches keep theirs
@@ -9440,16 +9441,70 @@ void DuckLakeMetadataManager::DeleteOrphanInlinedRowEnds(idx_t table_id, const v
 	    "Failed to delete the ends of table %d from ducklake_inlined_data_visibility in DuckLake: ", table_id));
 }
 
-void DuckLakeMetadataManager::CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
+string DuckLakeMetadataManager::ExpiryCompanionProbeQuery() const {
+	vector<string> arms;
+	for (auto &kind : RowVisibilityKinds()) {
+		if (kind.kind == "column") {
+			// column rows go with their table
+			continue;
+		}
+		arms.push_back(StringUtil::Format("SELECT '%s' AS kind, CAST(NULL AS BIGINT) AS table_id, "
+		                                  "EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_%s_visibility) AS present",
+		                                  kind.kind, kind.kind));
+	}
+	arms.push_back("SELECT 'inlined', table_id, TRUE FROM (SELECT DISTINCT table_id FROM "
+	               "{METADATA_CATALOG}.ducklake_inlined_data_visibility) inlined");
+	arms.push_back("SELECT 'file', CAST(NULL AS BIGINT), EXISTS (SELECT 1 FROM "
+	               "{METADATA_CATALOG}.ducklake_file_visibility WHERE branch_id = 0 AND is_delete)");
+	arms.push_back("SELECT 'delete_file', CAST(NULL AS BIGINT), EXISTS (SELECT 1 FROM "
+	               "{METADATA_CATALOG}.ducklake_delete_file_visibility WHERE branch_id = 0 AND is_delete)");
+	return StringUtil::Join(arms, "\nUNION ALL ");
+}
+
+DuckLakeMetadataManager::ExpiryCompanions DuckLakeMetadataManager::ProbeExpiryCompanions() {
+	ExpiryCompanions companions;
+	auto result = Query(ExpiryCompanionProbeQuery());
+	result->ThrowIfError("Failed to probe the visibility tables for cleanup in DuckLake: ");
+	for (auto &row : *result) {
+		auto kind = row.GetValue<string>(0);
+		bool present = row.GetValue<bool>(2);
+		if (kind == "inlined") {
+			companions.inlined_tables.insert(row.GetValue<idx_t>(1));
+		} else if (kind == "file") {
+			companions.file_deletes = present;
+		} else if (kind == "delete_file") {
+			companions.delete_file_deletes = present;
+		} else if (!present) {
+			companions.empty_kinds.insert(kind);
+		}
+	}
+	return companions;
+}
+
+void DuckLakeMetadataManager::CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots,
+                                                      const DuckLakeSnapshot &head) {
 	unique_ptr<QueryResult> result;
 
-	// get a list of tables that are no longer required after these deletions
 	auto main_filter = MainSnapshotFilter();
 	bool branch_aware = transaction.GetCatalog().SupportsBranching();
-	string cleanup_tables_query;
+	// an unreachable row needs an end of main and a sweep removes ends alone, so the probe bounds the cleanup
+	// ends a read committed catalog commits after the probe wait for the next expiry, like stray ends
+	ExpiryCompanions companions;
 	if (branch_aware) {
-		// a table goes when every one of its version rows is unreachable
-		cleanup_tables_query = StringUtil::Format(R"(
+		companions = ProbeExpiryCompanions();
+	}
+	// a kind the probe skipped counts as holding ends
+	auto has_ends = [&](const string &kind) {
+		return !branch_aware || companions.empty_kinds.count(kind) == 0;
+	};
+
+	// get a list of tables that are no longer required after these deletions
+	vector<TableIndex> cleanup_tables;
+	if (has_ends("table")) {
+		string cleanup_tables_query;
+		if (branch_aware) {
+			// a table goes when every one of its version rows is unreachable
+			cleanup_tables_query = StringUtil::Format(R"(
 SELECT DISTINCT t.table_id
 FROM {METADATA_CATALOG}.ducklake_table t
 WHERE %s AND NOT EXISTS (
@@ -9457,10 +9512,10 @@ WHERE %s AND NOT EXISTS (
     FROM {METADATA_CATALOG}.ducklake_table t2
     WHERE t2.table_id = t.table_id AND NOT (%s)
 );)",
-		                                          UnreachableRowFilter(RowKind("table"), "t"),
-		                                          UnreachableRowFilter(RowKind("table"), "t2"));
-	} else {
-		cleanup_tables_query = StringUtil::Format(R"(
+			                                          UnreachableRowFilter(RowKind("table"), "t"),
+			                                          UnreachableRowFilter(RowKind("table"), "t2"));
+		} else {
+			cleanup_tables_query = StringUtil::Format(R"(
 SELECT table_id
 FROM {METADATA_CATALOG}.ducklake_table t
 WHERE end_snapshot IS NOT NULL AND NOT EXISTS (
@@ -9476,13 +9531,12 @@ AND NOT EXISTS (
     FROM {METADATA_CATALOG}.ducklake_snapshot
     WHERE  snapshot_id >= begin_snapshot AND snapshot_id < t2.end_snapshot%s))
   );)",
-		                                          main_filter, main_filter);
-	}
-	result = Query(cleanup_tables_query);
-
-	vector<TableIndex> cleanup_tables;
-	for (auto &row : *result) {
-		cleanup_tables.push_back(TableIndex(row.GetValue<idx_t>(0)));
+			                                          main_filter, main_filter);
+		}
+		result = Query(cleanup_tables_query);
+		for (auto &row : *result) {
+			cleanup_tables.push_back(TableIndex(row.GetValue<idx_t>(0)));
+		}
 	}
 	auto deleted_table_ids = GenerateIDList(cleanup_tables);
 
@@ -9518,10 +9572,13 @@ AND NOT EXISTS (
 		table_id_filter = StringUtil::Format("f.table_id IN (%s) OR ", deleted_table_ids);
 	}
 
-	result =
-	    Query(UnusedFilesQuery(DataFiles(), "data_file_id", table_id_filter,
-	                           FileVisibilityGuard("ducklake_file_visibility", "data_file_id"), MainSnapshotFilter()));
-	auto cleanup_files = read_cleanup_files(*result);
+	vector<DuckLakeFileForCleanup> cleanup_files;
+	if (!branch_aware || companions.file_deletes || !deleted_table_ids.empty()) {
+		// a file goes with its table or once a delete event of main ended it
+		result = Query(UnusedFilesQuery(DataFiles(), "data_file_id", table_id_filter,
+		                                FileVisibilityGuard("ducklake_file_visibility", "data_file_id"), main_filter));
+		cleanup_files = read_cleanup_files(*result);
+	}
 	auto deleted_file_ids = CleanupFileIdList(cleanup_files);
 	vector<string> tables_to_delete_from;
 	if (!cleanup_files.empty()) {
@@ -9548,10 +9605,13 @@ WHERE data_file_id IN (%s);
 		file_id_filter = StringUtil::Format("f.data_file_id IN (%s) OR ", deleted_file_ids);
 	}
 
-	result = Query(UnusedFilesQuery(DeleteFiles(), "delete_file_id", table_id_filter + file_id_filter,
-	                                FileVisibilityGuard("ducklake_delete_file_visibility", "delete_file_id"),
-	                                MainSnapshotFilter()));
-	auto cleanup_deletes = read_cleanup_files(*result);
+	vector<DuckLakeFileForCleanup> cleanup_deletes;
+	if (!branch_aware || companions.delete_file_deletes || !deleted_table_ids.empty() || !deleted_file_ids.empty()) {
+		result = Query(UnusedFilesQuery(DeleteFiles(), "delete_file_id", table_id_filter + file_id_filter,
+		                                FileVisibilityGuard("ducklake_delete_file_visibility", "delete_file_id"),
+		                                main_filter));
+		cleanup_deletes = read_cleanup_files(*result);
+	}
 	if (!cleanup_deletes.empty()) {
 		// delete the delete files
 		auto delete_file_ids = CleanupFileIdList(cleanup_deletes);
@@ -9611,9 +9671,11 @@ WHERE table_id IN (%s);)",
 			                                         delete_tbl, deleted_table_ids));
 			result->ThrowIfError("Failed to delete from " + delete_tbl + " in DuckLake: ");
 		}
-		if (branch_aware) {
-			// the companions of the specs name them by their id, so their ends go once the spec rows are gone
+		// the companions of the specs name them by their id, so their ends go once the spec rows are gone
+		if (branch_aware && has_ends("partition")) {
 			DeleteOrphanRowEnds(RowKind("partition"));
+		}
+		if (branch_aware && has_ends("sort")) {
 			DeleteOrphanRowEnds(RowKind("sort"));
 		}
 		auto options_result = Execute(StringUtil::Format(R"(
@@ -9630,7 +9692,7 @@ WHERE scope = 'table' AND scope_id IN (%s);)",
 		}
 		if (!drop_inlined_tables.empty()) {
 			// a Postgres catalog sends the batch in one postgres_execute, so the drops are not bound one by one
-			auto result = Execute(transaction.GetSnapshot(), drop_inlined_tables);
+			auto result = Execute(head, drop_inlined_tables);
 			result->ThrowIfError("Failed to drop inlined-data table in DuckLake: ");
 		}
 	}
@@ -9660,6 +9722,9 @@ WHERE scope = 'table' AND scope_id IN (%s);)",
 			}
 		}
 		if (row_kind) {
+			if (!has_ends(row_kind->kind)) {
+				continue;
+			}
 			// the unreachable version rows go first, then the ends that named them
 			result = Execute(StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s AS r WHERE %s;", delete_tbl,
 			                                    UnreachableRowFilter(*row_kind, "r")));
@@ -9698,9 +9763,9 @@ WHERE scope = 'schema' AND NOT EXISTS(
 	// A v1.1 catalog prefixes the bound column names, so inlined tables cannot share the statement
 	// above. Runs after the drop block, so dropped tables are already unregistered and this needs
 	// no table_id filter.
-	{
-		// every payload with a row born at or before the snapshot of this transaction is in the listing
-		auto listed_snapshot = transaction.GetSnapshot().snapshot_id;
+	if (!branch_aware || !companions.inlined_tables.empty()) {
+		// every payload with a row born at or before the head the expiry read is in the listing
+		auto listed_snapshot = head.snapshot_id;
 		auto inlined = Query("SELECT table_id, table_name FROM {METADATA_CATALOG}.ducklake_inlined_data_tables "
 		                     "ORDER BY table_id, schema_version;");
 		inlined->ThrowIfError("Failed to list inlined-data tables for cleanup in DuckLake: ");
@@ -9718,6 +9783,9 @@ WHERE scope = 'schema' AND NOT EXISTS(
 			auto table_id = row.GetValue<idx_t>(0);
 			auto inlined_table_name = row.GetValue<Identifier>(1);
 			if (branch_aware) {
+				if (!companions.inlined_tables.count(table_id)) {
+					continue;
+				}
 				// the versions of main no snapshot of main reads any more, then the ends naming no version
 				if (table_id != swept_table) {
 					sweep_ends();

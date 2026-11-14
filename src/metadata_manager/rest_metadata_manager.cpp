@@ -677,7 +677,7 @@ vector<DuckLakeSnapshotInfo> RESTMetadataManager::GetAllSnapshots(const DuckLake
 
 // LCOV_EXCL_START
 // the bind of the expiry refuses REST catalogs
-void RESTMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
+void RESTMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots, const DuckLakeSnapshot &head) {
 	ThrowMaintenanceOnServer("expiring snapshots");
 }
 // LCOV_EXCL_STOP

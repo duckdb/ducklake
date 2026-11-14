@@ -1,0 +1,159 @@
+# name: test/sql/cleanup/expire_skips_empty_companions.test
+# description: an expiry probes the companions once and runs no row model cleanup where they hold nothing, a dropped table and its file still go
+# group: [cleanup]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+statement ok
+INSERT INTO dl.t FROM range(100)
+
+statement ok
+CREATE TABLE dl.u (i INTEGER)
+
+statement ok
+INSERT INTO dl.u VALUES (1)
+
+# nothing was dropped, deleted or updated, so every companion is empty
+query I
+SELECT count(*) FROM meta.ducklake_table_visibility
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_file_visibility WHERE is_delete
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [1, 2, 3])
+
+statement ok
+CALL disable_logging()
+
+# one probe of the companions
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%EXISTS (SELECT 1 FROM%ducklake_schema_visibility)%'
+----
+1
+
+# the commit reuses the head the expiry read
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%ducklake_metadata WHERE key = %version%), branch_id%'
+----
+1
+
+# no DELETE names a companion and no table, file or inlined listing query runs
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%DELETE FROM%' AND query LIKE '%visibility%'
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%SELECT DISTINCT t.table_id%' OR query LIKE '%ASOF LEFT JOIN%' OR query LIKE '%ducklake_inlined_data_tables%'
+----
+0
+
+# the expiry commits a snapshot of its own
+query I
+SELECT snapshot_id FROM dl.snapshots() ORDER BY snapshot_id
+----
+0
+4
+5
+6
+
+query I
+SELECT count(*) FROM dl.t
+----
+103
+
+# a dropped table ends its row, its columns and its file, none of them a kind the cleanup loop deletes
+statement ok
+DROP TABLE dl.t
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [4, 5, 6])
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%EXISTS (SELECT 1 FROM%ducklake_schema_visibility)%'
+----
+1
+
+# the table query and both file queries run, the kinds and inlined tables without ends run nothing
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%SELECT DISTINCT t.table_id%'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%ASOF LEFT JOIN%'
+----
+2
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%AS r%WHERE r.%' OR query LIKE '%_visibility AS e%'
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_table
+----
+1
+
+query I
+SELECT count(*) FROM meta.ducklake_table_visibility
+----
+0
+
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+1
+
+query I
+SELECT i FROM dl.u
+----
+1

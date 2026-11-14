@@ -943,10 +943,24 @@ public:
 	//! The branch id is a placeholder in a commit batch and a literal where no snapshot substitutes it
 	static string DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots, bool branch_aware,
 	                                 const string &branch_id = "{BRANCH_ID}");
-	//! Deletes the snapshots once the caller checked the catalog version
-	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
+	//! Deletes the snapshots once the caller checked the catalog version, the head is the one the expiry read
+	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots, const DuckLakeSnapshot &head);
 	//! Deletes the metadata that only the deleted snapshots referenced, once the caller checked the catalog version
-	virtual void CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
+	virtual void CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots, const DuckLakeSnapshot &head);
+	//! The companions holding ends, which bound the row model cleanup of an expiry
+	struct ExpiryCompanions {
+		//! The kinds whose companion holds no end, so a kind the probe skips keeps its cleanup
+		set<string> empty_kinds;
+		//! The inlined tables with an end in the shared companion
+		set<idx_t> inlined_tables;
+		//! Whether main holds a delete event of a data file or of a delete file
+		bool file_deletes = false;
+		bool delete_file_deletes = false;
+	};
+	//! Probes every companion in one statement, so the cleanup skips the kinds, tables and files without ends
+	ExpiryCompanions ProbeExpiryCompanions();
+	//! The probe of the companions, standard SQL a Postgres catalog ships to the server
+	virtual string ExpiryCompanionProbeQuery() const;
 	//! Deletes the ends whose version row is gone
 	void DeleteOrphanRowEnds(const RowVisibilityKind &kind);
 	//! Deletes the ends of rows born at or before the listed snapshot whose version is in none of the payloads
