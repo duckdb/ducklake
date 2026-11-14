@@ -244,6 +244,7 @@
         "test/sql/branches/branch_nested_inlined.test",
         "test/sql/branches/branch_inlined_table_changes.test",
         "test/sql/rest/rest_serve_branch_refused.test",
+        "test/sql/rest/rest_serve_isolated_refusal_keeps_registration.test",
         "test/sql/rest/rest_serve_refusal_keeps_registration.test",
         "test/sql/rest/rest_snapshots_main_lineage.test",
         "test/sql/branches/branch_table_changes_across_fork.test",
