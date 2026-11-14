@@ -6773,15 +6773,14 @@ bool DuckLakeMetadataManager::InlinedDeletionTableExists(const Identifier &table
 	                                             table_name) != nullptr;
 }
 
+bool DuckLakeMetadataManager::KeepsInlinedDeletionVerdicts() const {
+	// a main flush rehomes the ends of a branch as deletion rows inside the branch's view, below its loaded heads
+	return !ShowsConcurrentCommits() || !transaction.GetCatalog().OnBranch();
+}
+
 bool DuckLakeMetadataManager::ListedInlinedDeletionTableExists(const Identifier &table_name,
                                                                const std::function<unique_ptr<QueryResult>()> &list) {
-	// the listing is keyed by the heads of the view, a commit of any chain branch can create a deletion table
-	auto newest_snapshot_id = transaction.GetNewestVisibleSnapshotId();
-	auto heads = GetLineageHeads();
-	if (heads.empty()) {
-		heads.push_back(newest_snapshot_id);
-	}
-	auto tables = transaction.GetCatalog().GetInlinedDeletionTables(heads, [&]() {
+	auto list_tables = [&]() {
 		auto result = list();
 		result->ThrowIfError("Failed to probe for DuckLake inlined-deletion table: ");
 		unordered_set<string> listed;
@@ -6789,7 +6788,17 @@ bool DuckLakeMetadataManager::ListedInlinedDeletionTableExists(const Identifier 
 			listed.insert(row.GetValue<string>(0));
 		}
 		return listed;
-	});
+	};
+	if (!KeepsInlinedDeletionVerdicts()) {
+		return list_tables().count(table_name.GetIdentifierName()) > 0;
+	}
+	// the listing is keyed by the heads of the view, a commit of any chain branch can create a deletion table
+	auto newest_snapshot_id = transaction.GetNewestVisibleSnapshotId();
+	auto heads = GetLineageHeads();
+	if (heads.empty()) {
+		heads.push_back(newest_snapshot_id);
+	}
+	auto tables = transaction.GetCatalog().GetInlinedDeletionTables(heads, list_tables);
 	return tables->count(table_name.GetIdentifierName()) > 0;
 }
 
@@ -6810,8 +6819,9 @@ Identifier DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table
 
 	// Check catalog-level cache (persists across transactions), scoped by the heads of the view
 	auto &catalog = transaction.GetCatalog();
-	if (catalog.CheckInlinedDeletionTableCache(table_id, GetLineageHeads()) ==
-	    InlinedDeletionCacheResult::DOES_NOT_EXIST) {
+	bool keep_verdict = KeepsInlinedDeletionVerdicts();
+	if (keep_verdict && catalog.CheckInlinedDeletionTableCache(table_id, GetLineageHeads()) ==
+	                        InlinedDeletionCacheResult::DOES_NOT_EXIST) {
 		return Identifier(); // known to not exist
 	}
 	// A committed table may not be visible in this transaction's catalog snapshot.
@@ -6820,7 +6830,9 @@ Identifier DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table
 		catalog.CacheInlinedDeletionTableResult(table_id, GetLineageHeads(), true);
 		return table_name;
 	}
-	catalog.CacheInlinedDeletionTableResult(table_id, GetLineageHeads(), false);
+	if (keep_verdict) {
+		catalog.CacheInlinedDeletionTableResult(table_id, GetLineageHeads(), false);
+	}
 	return Identifier();
 }
 

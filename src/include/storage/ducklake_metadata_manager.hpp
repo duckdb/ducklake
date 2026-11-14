@@ -776,6 +776,8 @@ public:
 	//! Whether the listing of the snapshot's inlined deletion tables, run once per snapshot, names the table
 	bool ListedInlinedDeletionTableExists(const Identifier &table_name,
 	                                      const std::function<unique_ptr<QueryResult>()> &list);
+	//! Whether the absent verdict and the deletion table listing of a view may serve its later statements
+	bool KeepsInlinedDeletionVerdicts() const;
 	//! Also drops the empty inlined data tables of the replaced tables
 	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables,
 	                                     const set<TableIndex> &replaced_tables);
