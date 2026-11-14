@@ -303,7 +303,10 @@ static void DateCopiedDeletes(ClientContext &context, const DuckLakeDeleteScanEn
 				    earlier.file.path, delete_scan.file.path);
 			}
 			if (!rows_to_scan[delete_idx]) {
+				// LCOV_EXCL_START
+				// a cumulative chosen file names every row of its earlier files
 				continue;
+				// LCOV_EXCL_STOP
 			}
 			auto snapshot =
 			    earlier_deletes.has_embedded_snapshots ? earlier_deletes.snapshot_ids[i] : earlier.begin_snapshot;
@@ -316,9 +319,6 @@ static void DateCopiedDeletes(ClientContext &context, const DuckLakeDeleteScanEn
 		}
 	}
 	for (auto delete_idx : current_deletes.deleted_rows) {
-		if (!rows_to_scan[delete_idx]) {
-			continue;
-		}
 		auto dated = position_to_snapshot.find(delete_idx);
 		auto snapshot = dated == position_to_snapshot.end() ? delete_scan.snapshot_id.GetIndex() : dated->second;
 		bool in_range =

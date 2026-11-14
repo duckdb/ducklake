@@ -385,6 +385,8 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 	}
 }
 
+// the filter of a catalog before 2.0 alone lists the tagged snapshots, and tags need a 2.0 catalog
+// LCOV_EXCL_START
 string DuckLakeTransactionState::TaggedSnapshotIdList(const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &tags) {
 	vector<string> snapshot_ids;
 	for (auto &tag : tags) {
@@ -392,6 +394,7 @@ string DuckLakeTransactionState::TaggedSnapshotIdList(const case_insensitive_map
 	}
 	return StringUtil::Join(snapshot_ids, ", ");
 }
+// LCOV_EXCL_STOP
 
 void DuckLakeTransactionState::CheckTaggedSnapshotsExist(const DuckLakeCommitContext &context) const {
 	if (new_snapshot_tags.empty()) {
@@ -792,11 +795,13 @@ DuckLakeTransactionState::GetNewDeleteFiles(const DuckLakeCommitState &commit_st
 				auto &overwritten = file.overwritten_delete_file;
 				if (overwritten.delete_file_id.IsValid()) {
 					if (overwritten.branch_id != commit_state.commit_snapshot.branch_id) {
+						// LCOV_EXCL_START
 						// a branch ends an inherited delete file with an event of its own once branches write
 						throw InternalException("GetNewDeleteFiles: delete file %llu of branch %llu replaced on "
 						                        "branch %llu",
 						                        overwritten.delete_file_id.index, overwritten.branch_id,
 						                        commit_state.commit_snapshot.branch_id);
+						// LCOV_EXCL_STOP
 					}
 					// the replaced file of the commit branch goes with its row, its events and its data
 					overwritten_delete_files.push_back(overwritten);

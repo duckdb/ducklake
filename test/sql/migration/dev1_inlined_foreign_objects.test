@@ -1,5 +1,5 @@
 # name: test/sql/migration/dev1_inlined_foreign_objects.test
-# description: a view and tables named like an inlined deletion table or a per payload companion without their columns are left alone by the probes of the metadata schema
+# description: a view and tables named like an inlined deletion table, an inlined data table or a per payload companion without their columns are left alone by the probes of the metadata schema
 # group: [migration]
 
 require ducklake
@@ -26,6 +26,20 @@ CREATE TABLE meta.ducklake_inlined_delete_7 (note VARCHAR)
 
 statement ok
 CREATE TABLE meta.ducklake_inlined_data_1_1_visibility (note VARCHAR)
+
+# names with another run of digits, a letter or a table id past the range of an index are no inlined tables
+statement ok
+CREATE TABLE meta.ducklake_inlined_delete_7_1 (note VARCHAR)
+
+statement ok
+CREATE TABLE meta.ducklake_inlined_delete_7x (note VARCHAR)
+
+statement ok
+CREATE TABLE meta.ducklake_inlined_data_99999999999999999999_1 (note VARCHAR)
+
+# a table named like an inlined data table without its columns is left to its reader
+statement ok
+CREATE TABLE meta.ducklake_inlined_data_7_1 (note VARCHAR)
 
 # the older dev build wrote no heal marker
 statement ok
@@ -79,6 +93,11 @@ query I
 SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
 ----
 0
+
+query IIII
+SELECT (SELECT count(*) FROM meta.ducklake_inlined_delete_7_1), (SELECT count(*) FROM meta.ducklake_inlined_delete_7x), (SELECT count(*) FROM meta.ducklake_inlined_data_99999999999999999999_1), (SELECT count(*) FROM meta.ducklake_inlined_data_7_1)
+----
+0	0	0	0
 
 statement ok
 DETACH dl

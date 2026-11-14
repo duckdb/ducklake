@@ -65,5 +65,52 @@ DETACH dl
 statement ok
 CALL postgres_execute('pg', 'DROP SCHEMA dev_migration_failure CASCADE')
 
+# a heal that fails leaves no marker, so the next attach heals again
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS dev_heal_failure CASCADE')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/dev_heal_failure', METADATA_SCHEMA 'dev_heal_failure')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DETACH dl
+
+# the older dev build wrote no heal marker, and a constraint rejects the marker the heal writes last
+statement ok
+CALL postgres_execute('pg', 'DELETE FROM dev_heal_failure.ducklake_metadata WHERE key = ''heal_complete''')
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev_heal_failure.ducklake_metadata ADD CONSTRAINT reject_heal_marker CHECK (key <> ''heal_complete'') NOT VALID')
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_SCHEMA 'dev_heal_failure')
+----
+reject_heal_marker
+
+statement ok
+CALL postgres_execute('pg', 'ALTER TABLE dev_heal_failure.ducklake_metadata DROP CONSTRAINT reject_heal_marker')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_SCHEMA 'dev_heal_failure')
+
+query I
+SELECT * FROM dl.t
+----
+42
+
+query I
+SELECT * FROM postgres_query('pg', 'SELECT value FROM dev_heal_failure.ducklake_metadata WHERE key = ''heal_complete''')
+----
+2.0-dev1.4
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA dev_heal_failure CASCADE')
+
 statement ok
 DETACH pg

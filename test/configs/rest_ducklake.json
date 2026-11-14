@@ -230,6 +230,7 @@
       "paths": [
         "test/sql/alter/multi_alter_same_column_transaction.test",
         "test/sql/data_inlining/data_inlining_flush_transaction_delete.test",
+        "test/sql/data_inlining/inlined_flush_transaction_delete_v11.test",
         "test/sql/data_inlining/flush_renamed_in_transaction.test",
         "test/sql/functions/ducklake_snapshots.test",
         "test/sql/sorted_table/data_inlining_flush_sorted_alter_table.test",
@@ -590,6 +591,7 @@
         "test/sql/migration/dev1_inlined_deletes_heal.test",
         "test/sql/migration/dev1_inlined_heal_null_schema_branch.test",
         "test/sql/migration/dev1_inlined_rows_heal.test",
+        "test/sql/migration/dev1_read_only_shape_probes.test",
         "test/sql/migration/dev1_inlined_rows_unhealable.test",
         "test/sql/migration/dev1_missing_changes_table.test",
         "test/sql/migration/dev1_missing_column_visibility.test",

@@ -391,6 +391,7 @@
         "test/sql/data_inlining/inlined_dead_rows_expire.test",
         "test/sql/data_inlining/inlined_superseded_drop_failure.test",
         "test/sql/migration/dev1_inlined_rows_heal.test",
+        "test/sql/migration/dev1_read_only_shape_probes.test",
         "test/sql/migration/dev1_inlined_rows_unhealable.test",
         "test/sql/migration/dev1_inlined_fold_companions.test",
         "test/sql/migration/dev1_inlined_heal_refusals.test",
