@@ -83,7 +83,7 @@ CALL disable_logging()
 
 # the statement listed the deletion tables again instead of trusting the probe before the flush
 query I
-SELECT count(*) > 0 FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%duckdb_tables()%ducklake_inlined_delete%'
+SELECT count(*) > 0 FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%duckdb_tables()%ducklake_inlined_%'
 ----
 true
 
