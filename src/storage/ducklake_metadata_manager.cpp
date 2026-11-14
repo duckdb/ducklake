@@ -7774,8 +7774,7 @@ static string ScheduledDeletionTuple(idx_t file_id, const DuckLakePath &path) {
 	                          DuckLakeUtil::BoolLiteral(path.path_is_relative));
 }
 
-//! Removes a replaced delete file of the commit branch, its back dated cumulative replacement holds every date of it
-//! A branch replacing an inherited file ends it with an event of its own and drops the dates above the writer's cap
+//! Removes a replaced delete file of the commit branch and schedules its data for deletion
 string
 DuckLakeMetadataManager::DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverwrittenDeleteFile> &overwritten_files,
                                                       const vector<DuckLakePath> &resolved_paths) {
