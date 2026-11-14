@@ -4595,6 +4595,8 @@ vector<DuckLakeDeleteScanEntry> DuckLakeMetadataManager::ReadTableDeletions(Duck
 	string segment_column = on_branch ? ", begin_segment" : "";
 	// on an equal back dated begin the file of the later segment is the later one
 	string segment_order = on_branch ? ", begin_segment DESC" : "";
+	// the id breaks the tie of an equal segment and begin, as the choice of the current file does
+	string delete_id_order = on_branch ? ", delete_file_id DESC" : "";
 	string delete_file_segments =
 	    on_branch ? ", current_delete.begin_segment, previous_delete.begin_segment, data.begin_segment" : "";
 	string file_delete_segments =
@@ -4679,7 +4681,7 @@ LEFT JOIN LATERAL (
 		format%s{FILE_COUNTS}
 	FROM %s
 	WHERE table_id = %d AND begin_snapshot < %d
-	ORDER BY data_file_id ASC%s, begin_snapshot DESC
+	ORDER BY data_file_id ASC%s, begin_snapshot DESC%s
 ) AS previous_delete
 USING (data_file_id)
 JOIN (
@@ -4708,7 +4710,7 @@ LEFT JOIN LATERAL (
 		format%s{FILE_COUNTS}
 	FROM %s
 	WHERE table_id = %d AND begin_snapshot <= data.end_snapshot
-	ORDER BY data_file_id ASC%s, begin_snapshot DESC
+	ORDER BY data_file_id ASC%s, begin_snapshot DESC%s
 ) AS previous_delete
 USING (data_file_id), (
 	SELECT CAST(NULL AS VARCHAR) AS path,
@@ -4720,10 +4722,10 @@ USING (data_file_id), (
 ) current_delete
 )",
 	    select_list, delete_file_segments, segment_column, current_delete_files, segment_column, DeleteFiles(table_id),
-	    table_id.index, start_snapshot.snapshot_id, segment_order, DataFiles(table_id), table_id.index,
+	    table_id.index, start_snapshot.snapshot_id, segment_order, delete_id_order, DataFiles(table_id), table_id.index,
 	    delete_file_in_range, select_list, file_delete_segments, DataFiles(table_id), table_id.index,
 	    start_snapshot.snapshot_id, rewrite_end_filter, segment_column, DeleteFiles(table_id), table_id.index,
-	    segment_order);
+	    segment_order, delete_id_order);
 	// the row group count only exists in the metadata of DuckLake 1.1
 	string row_group_count =
 	    transaction.GetCatalog().SupportsV1_1Metadata() ? "row_group_count" : "CAST(NULL AS BIGINT) AS row_group_count";

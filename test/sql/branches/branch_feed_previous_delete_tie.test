@@ -1,5 +1,5 @@
 # name: test/sql/branches/branch_feed_previous_delete_tie.test
-# description: on an equal back dated begin the previous delete file of a file delete is the one of the later segment
+# description: the previous delete file of a file delete is chosen by segment, begin snapshot and delete file id
 # group: [branches]
 
 require ducklake
@@ -48,14 +48,15 @@ SELECT snapshot_id FROM meta.ducklake_delete_file_visibility WHERE branch_id = 0
 3
 
 # dev forks main at 6, at its 7 it replaces the delete file with a cumulative one dated 3, 6 and 7, at its 8 it deletes the file
+# an older cumulative file of dev with the same begin holds the dates 3 and 6 only, dev ends it at 7 as well
 statement ok
 INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 6)
 
 statement ok
-INSERT INTO meta.ducklake_snapshot SELECT 7, NOW(), schema_version, 1099511627776, 1099511627777, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 6
+INSERT INTO meta.ducklake_snapshot SELECT 7, NOW(), schema_version, 1099511627777, 1099511627778, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 6
 
 statement ok
-INSERT INTO meta.ducklake_snapshot SELECT 8, NOW(), schema_version, 1099511627776, 1099511627777, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 6
+INSERT INTO meta.ducklake_snapshot SELECT 8, NOW(), schema_version, 1099511627777, 1099511627778, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 6
 
 statement ok
 INSERT INTO meta.ducklake_snapshot_changes VALUES (7, NULL, NULL, NULL, NULL, 1), (8, NULL, NULL, NULL, NULL, 1)
@@ -64,17 +65,36 @@ statement ok
 COPY (SELECT ''::VARCHAR AS file_path, p::BIGINT AS pos, s::BIGINT AS _ducklake_internal_snapshot_id FROM (VALUES (0, 3), (1, 6), (2, 7)) v(p, s)) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet' (FORMAT PARQUET)
 
 statement ok
-INSERT INTO meta.ducklake_delete_file (delete_file_id, table_id, data_file_id, path, path_is_relative, format, delete_count, file_size_bytes, partial_max) SELECT 1099511627776, 1, 0, '{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet', false, 'parquet', 3, file_size_bytes, 7 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet')
+INSERT INTO meta.ducklake_delete_file (delete_file_id, table_id, data_file_id, path, path_is_relative, format, delete_count, file_size_bytes, partial_max) SELECT 1099511627777, 1, 0, '{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet', false, 'parquet', 3, file_size_bytes, 7 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet')
 
 # the add event of the replacement is back dated to the begin of the replaced file, which dev ends at 7
+statement ok
+INSERT INTO meta.ducklake_delete_file_visibility VALUES (1, 1, 1099511627777, 3, false)
+
+statement ok
+COPY (SELECT ''::VARCHAR AS file_path, p::BIGINT AS pos, s::BIGINT AS _ducklake_internal_snapshot_id FROM (VALUES (0, 3), (1, 6)) v(p, s)) TO '{TEST_DIR}/{BASE_TEST_NAME}_older_delete.parquet' (FORMAT PARQUET)
+
+statement ok
+INSERT INTO meta.ducklake_delete_file (delete_file_id, table_id, data_file_id, path, path_is_relative, format, delete_count, file_size_bytes, partial_max) SELECT 1099511627776, 1, 0, '{TEST_DIR}/{BASE_TEST_NAME}_older_delete.parquet', false, 'parquet', 2, file_size_bytes, 6 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_older_delete.parquet')
+
 statement ok
 INSERT INTO meta.ducklake_delete_file_visibility VALUES (1, 1, 1099511627776, 3, false)
 
 statement ok
-INSERT INTO meta.ducklake_delete_file_visibility SELECT 1, 1, delete_file_id, 7, true FROM meta.ducklake_delete_file WHERE delete_file_id <> 1099511627776
+INSERT INTO meta.ducklake_delete_file_visibility SELECT 1, 1, delete_file_id, 7, true FROM meta.ducklake_delete_file WHERE delete_file_id <> 1099511627777
 
 statement ok
 INSERT INTO meta.ducklake_file_visibility VALUES (1, 1, 0, 8, true)
+
+# the newest file is stored after the older one, so the order of the metadata rows does not favour it
+statement ok
+CREATE TEMP TABLE newest_file AS SELECT * FROM meta.ducklake_delete_file WHERE delete_file_id = 1099511627777
+
+statement ok
+DELETE FROM meta.ducklake_delete_file WHERE delete_file_id = 1099511627777
+
+statement ok
+INSERT INTO meta.ducklake_delete_file SELECT * FROM newest_file
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
