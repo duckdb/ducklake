@@ -2315,21 +2315,16 @@ DuckLakeExpiry DuckLakeTransaction::ExpiredSnapshotsForCommit(idx_t attempt, idx
 vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpireSnapshotsNow(const DuckLakeSnapshotFilter &filter) {
 	auto &metadata_manager = GetMetadataManager();
 	bool expires_on_commit = ExpiresSnapshotsOnCommit();
-	auto read_head = [&]() {
-		auto head = metadata_manager.GetSnapshot();
-		lock_guard<mutex> guard(snapshot_lock);
-		if (!snapshot) {
-			// the commit reuses the head the expiry read, a transaction that read earlier keeps its snapshot
-			snapshot = make_uniq<DuckLakeSnapshot>(*head);
-			ducklake_catalog.ObserveListingHead(metadata_manager.GetLineageHeads());
-		}
-		return head;
-	};
 	unique_ptr<DuckLakeSnapshot> head;
+	vector<idx_t> heads;
+	auto read_head = [&]() {
+		head = metadata_manager.GetSnapshot();
+		heads = metadata_manager.GetLineageHeads();
+	};
 	if (expires_on_commit) {
 		// expiring deletes inlined rows by their snapshot columns so the catalog version must be current
 		// read before the snapshots, so a commit they miss moves the head the commit compares with
-		head = read_head();
+		read_head();
 	}
 	// one read of the tags gives the protected snapshots and the tags whose expiry time has passed
 	auto tags = GetSnapshotTagsInternal(false);
@@ -2338,13 +2333,30 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpireSnapshotsNow(const DuckL
 	if (expires_on_commit) {
 		expired_tags = ExpiredSnapshotTagsInternal(tags);
 	}
+	auto keep_head = [&]() {
+		// the commit reuses the head the expiry read unless the expiry removes it
+		for (auto &snapshot_info : expired) {
+			if (snapshot_info.id == head->snapshot_id) {
+				return;
+			}
+		}
+		lock_guard<mutex> guard(snapshot_lock);
+		if (!snapshot) {
+			snapshot = make_uniq<DuckLakeSnapshot>(*head);
+			ducklake_catalog.ObserveListingHead(heads);
+		}
+	};
 	if (expired.empty() && expired_tags.empty()) {
+		if (head) {
+			keep_head();
+		}
 		return expired;
 	}
 	if (!expires_on_commit) {
 		// expiring deletes inlined rows by their snapshot columns so the catalog version must be current
-		head = read_head();
+		read_head();
 	}
+	keep_head();
 	if (!expired.empty()) {
 		if (!metadata_manager.CommitsEachStatement()) {
 			// set first, a failure part way leaves some of the snapshots deleted
