@@ -275,6 +275,7 @@
     {
       "reason": "Reads or writes the branch column of the 2.0 snapshot and schema versions tables, which a 1.0 catalog does not have",
       "paths": [
+        "test/sql/cleanup/expire_reads_head_once.test",
         "test/sql/branches/schema_versions_branch_column.test",
         "test/sql/time_travel/at_timestamp_gap_without_expiry.test"
       ]

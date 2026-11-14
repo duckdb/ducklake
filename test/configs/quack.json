@@ -275,6 +275,12 @@
       ]
     },
     {
+      "reason": "A quack catalog selects the expired snapshots when the transaction commits, so the commit reads the head next to the expiry's read",
+      "paths": [
+        "test/sql/cleanup/expire_reads_head_once.test"
+      ]
+    },
+    {
       "reason": "A failed attach keeps the metadata catalog attached on quack, which the test attaches again under the same name to edit the old layout",
       "paths": [
         "test/sql/migration/dev1_heal_refuses_old_branches.test"

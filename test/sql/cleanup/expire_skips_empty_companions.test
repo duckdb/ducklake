@@ -63,13 +63,6 @@ WHERE query LIKE '%EXISTS (SELECT 1 FROM%ducklake_schema_visibility)%'
 ----
 1
 
-# the commit reuses the head the expiry read
-query I
-SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%ducklake_metadata WHERE key = %version%), branch_id%'
-----
-1
-
 # no DELETE names a companion and no table, file or inlined listing query runs
 query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')

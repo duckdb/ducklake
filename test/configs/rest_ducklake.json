@@ -69,6 +69,7 @@
     {
       "reason": "Expires snapshots or deletes files, which is maintenance of the REST server and not part of the REST API",
       "paths": [
+        "test/sql/cleanup/expire_reads_head_once.test",
         "test/sql/add_files/add_files_compaction.test",
         "test/sql/cleanup/cleanup_old_files.test",
         "test/sql/compaction/cleanup_old_files_global_option.test",
