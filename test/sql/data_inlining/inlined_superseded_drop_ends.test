@@ -44,9 +44,13 @@ SELECT table_name FROM meta.ducklake_inlined_data_tables ORDER BY ALL
 ducklake_inlined_data_1_1
 ducklake_inlined_data_1_2
 
-# an end another branch wrote on the first row is no end of the flushing branch, neither the flush nor the drop takes it
+# an end another branch wrote on the first row moves with the row, the flush rehomes it as a deletion row of that branch
 statement ok
 INSERT INTO meta.ducklake_inlined_data_visibility VALUES (1, 0, 0, 2, 1, 9)
+
+# a stray end of that branch names no version of the table, neither the flush nor the drop of the superseded payload takes it
+statement ok
+INSERT INTO meta.ducklake_inlined_data_visibility VALUES (1, 9, 0, 2, 1, 9)
 
 # the flush empties the superseded payload and drops it, the ends of the flushed versions went with the flush
 statement ok
@@ -60,7 +64,12 @@ ducklake_inlined_data_1_2
 query IIIIII
 FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
 ----
-1	0	0	2	1	9
+1	9	0	2	1	9
+
+query III
+SELECT row_id, begin_snapshot, branch_id FROM meta.ducklake_inlined_delete_1
+----
+0	9	1
 
 # the ends written after the flush belong to the newer payload alone
 statement ok
@@ -72,8 +81,8 @@ DELETE FROM dl.t WHERE i = 6
 query IIIIII
 FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
 ----
-1	0	0	2	1	9
 1	5	0	8	0	9
+1	9	0	2	1	9
 
 query II
 SELECT i, j FROM dl.t ORDER BY i
@@ -106,7 +115,7 @@ SELECT count(*) FROM meta.ducklake_inlined_data_visibility WHERE table_id = 1
 ----
 2
 
-# the expiry drops the payloads of the dropped table with their ends
+# the expiry drops the payloads of the dropped table with their ends, the stray among them
 statement ok
 CALL ducklake_expire_snapshots('dl', older_than => now())
 

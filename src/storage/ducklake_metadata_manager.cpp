@@ -6585,6 +6585,11 @@ DuckLakeMetadataManager::WriteNewInlinedFileDeletesSql(const vector<DuckLakeInli
 				tuples.push_back(StringUtil::Format("(%d, %d, {SNAPSHOT_ID}%s)", file_id, row_id, branch_value));
 			}
 		}
+		for (auto &rehomed : entry.rehomed_deletions) {
+			// the end of another branch on a flushed row, dated in that branch's numbering and keyed to it
+			tuples.push_back(StringUtil::Format("(%d, %d, %d, %d)", rehomed.file_id.index, rehomed.position,
+			                                    rehomed.snapshot_id, rehomed.branch_id));
+		}
 		batch_queries += InsertValuesSql(SQLIdentifier::ToString(table_name), tuples);
 	}
 	return batch_queries;
@@ -6730,7 +6735,13 @@ bool DuckLakeMetadataManager::InlinedDeletionTableExists(const Identifier &table
 
 bool DuckLakeMetadataManager::ListedInlinedDeletionTableExists(const Identifier &table_name,
                                                                const std::function<unique_ptr<QueryResult>()> &list) {
-	auto tables = transaction.GetCatalog().GetInlinedDeletionTables(transaction.GetNewestVisibleSnapshotId(), [&]() {
+	// the listing is keyed by the heads of the view, a commit of any chain branch can create a deletion table
+	auto newest_snapshot_id = transaction.GetNewestVisibleSnapshotId();
+	auto heads = GetLineageHeads();
+	if (heads.empty()) {
+		heads.push_back(newest_snapshot_id);
+	}
+	auto tables = transaction.GetCatalog().GetInlinedDeletionTables(heads, [&]() {
 		auto result = list();
 		result->ThrowIfError("Failed to probe for DuckLake inlined-deletion table: ");
 		unordered_set<string> listed;
@@ -6757,18 +6768,19 @@ Identifier DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table
 		return table_name;
 	}
 
-	// Check catalog-level cache (persists across transactions)
+	// Check catalog-level cache (persists across transactions), scoped by the heads of the view
 	auto &catalog = transaction.GetCatalog();
-	if (catalog.CheckInlinedDeletionTableCache(table_id, snapshot) == InlinedDeletionCacheResult::DOES_NOT_EXIST) {
+	if (catalog.CheckInlinedDeletionTableCache(table_id, GetLineageHeads()) ==
+	    InlinedDeletionCacheResult::DOES_NOT_EXIST) {
 		return Identifier(); // known to not exist
 	}
 	// A committed table may not be visible in this transaction's catalog snapshot.
 	if (InlinedDeletionTableExists(table_name)) {
 		delete_inlined_table_cache.insert(table_id.index);
-		catalog.CacheInlinedDeletionTableResult(table_id, snapshot, true);
+		catalog.CacheInlinedDeletionTableResult(table_id, GetLineageHeads(), true);
 		return table_name;
 	}
-	catalog.CacheInlinedDeletionTableResult(table_id, snapshot, false);
+	catalog.CacheInlinedDeletionTableResult(table_id, GetLineageHeads(), false);
 	return Identifier();
 }
 
@@ -6940,17 +6952,19 @@ ORDER BY %s;)",
 
 DuckLakeDeletedRowVersions DuckLakeMetadataManager::GetDeletedInlinedRowVersions(DuckLakeTableEntry &table,
                                                                                  const Identifier &inlined_table_name,
-                                                                                 DuckLakeSnapshot snapshot) {
+                                                                                 DuckLakeSnapshot snapshot,
+                                                                                 DuckLakeRehomedRowEnds &rehomed_rows) {
 	auto col_names = InlinedColNames();
 	string query;
-	if (transaction.GetCatalog().SupportsBranching()) {
-		// a dead version is named by the end the flushing branch wrote on a version born on it at or before the flush
+	bool branch_aware = transaction.GetCatalog().SupportsBranching();
+	if (branch_aware) {
+		// the own ends name the dead versions, the ends of other branches on the moved versions are rehomed
 		auto kind = InlinedRowKind(inlined_table_name, col_names);
 		query = StringUtil::Format(
-		    "SELECT row_id, row_snapshot, snapshot_id FROM %s;",
+		    "SELECT row_id, row_snapshot, branch_id, snapshot_id FROM %s;",
 		    CompanionEnds(kind, "",
-		                  "row_branch_id = {BRANCH_ID} AND row_snapshot <= {SNAPSHOT_ID} AND branch_id = {BRANCH_ID} "
-		                  "AND snapshot_id <= {SNAPSHOT_ID}"));
+		                  "row_branch_id = {BRANCH_ID} AND row_snapshot <= {SNAPSHOT_ID} AND (branch_id <> {BRANCH_ID} "
+		                  "OR snapshot_id <= {SNAPSHOT_ID})"));
 	} else {
 		query = StringUtil::Format(
 		    "SELECT %s, %s, %s FROM %s inlined_data WHERE {SNAPSHOT_ID} >= %s AND %s IS NOT NULL;", col_names.row_id,
@@ -6961,7 +6975,12 @@ DuckLakeDeletedRowVersions DuckLakeMetadataManager::GetDeletedInlinedRowVersions
 	CheckInlinedDataReadError(*result, inlined_table_name);
 	DuckLakeDeletedRowVersions deleted_rows;
 	for (auto &row : *result) {
-		deleted_rows.emplace(make_pair(row.GetValue<int64_t>(0), row.GetValue<int64_t>(1)), row.GetValue<int64_t>(2));
+		auto version = make_pair(row.GetValue<int64_t>(0), row.GetValue<int64_t>(1));
+		if (branch_aware && row.GetValue<idx_t>(2) != snapshot.branch_id) {
+			rehomed_rows[version].push_back({row.GetValue<idx_t>(2), row.GetValue<idx_t>(3)});
+			continue;
+		}
+		deleted_rows.emplace(version, row.GetValue<int64_t>(branch_aware ? 3 : 2));
 	}
 	return deleted_rows;
 }
@@ -9716,8 +9735,23 @@ string DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<Fl
 			                       col_names.end_snapshot, col_names.end_snapshot, flushed.flush_snapshot_id);
 			continue;
 		}
-		// the versions born on the flushing branch, those its deletes of this commit ended after the flush excepted
 		auto kind = InlinedRowKind(table_name, col_names);
+		if (!flushed.rehomed_ends.empty()) {
+			// the ends of other branches on the moved versions, rehomed as deletion rows of the written files
+			vector<string> ends;
+			for (auto &end : flushed.rehomed_ends) {
+				ends.push_back(StringUtil::Format("(%d, %d, %d)", end.branch_id, end.row_id, end.row_snapshot));
+			}
+			result += ChunkValuesStatements(ends, [&](const string &values) {
+				auto rehomed = StringUtil::Format(R"(row_branch_id = {BRANCH_ID}
+  AND (branch_id, row_id, row_snapshot) IN (
+      SELECT branch_id, row_id, row_snapshot
+      FROM (VALUES %s) ends(branch_id, row_id, row_snapshot)))",
+				                                  values);
+				return StringUtil::Format("DELETE FROM %s;\n", CompanionEnds(kind, "", rehomed));
+			});
+		}
+		// the versions born on the flushing branch, those its deletes of this commit ended after the flush excepted
 		auto later_ends = StringUtil::Format(R"(e.branch_id = {BRANCH_ID} AND e.row_id = d.%s
         AND e.row_branch_id = d.%s AND e.row_snapshot = d.%s
         AND e.snapshot_id > %d)",

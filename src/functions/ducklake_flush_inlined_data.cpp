@@ -101,8 +101,10 @@ SinkResultType DuckLakeFlushData::Sink(ExecutionContext &context, DataChunk &chu
 using DeletesPerFile = unordered_map<string, set<PositionWithSnapshot>>;
 //! Partitioned writes can reorder rows, so positions come from the written file
 static set<PositionWithSnapshot> GetWrittenFileDeletes(ClientContext &context, const DuckLakeTableEntry &table,
-                                                       const DuckLakeDataFile &file, const string &encryption_key,
-                                                       const DuckLakeDeletedRowVersions &deleted_rows) {
+                                                       DuckLakeDataFile &file, const string &encryption_key,
+                                                       const DuckLakeDeletedRowVersions &deleted_rows,
+                                                       const DuckLakeRehomedRowEnds &rehomed_rows,
+                                                       vector<DuckLakeRehomedEnd> &rehomed_ends) {
 	DuckLakeFileData file_data;
 	file_data.path = file.file_name;
 	file_data.encryption_key = encryption_key;
@@ -124,9 +126,20 @@ static set<PositionWithSnapshot> GetWrittenFileDeletes(ClientContext &context, c
 		auto row_ids = chunk.data[0].Values<int64_t>();
 		auto snapshot_ids = chunk.data[1].Values<int64_t>();
 		for (idx_t i = 0; i < chunk.size(); i++, position++) {
-			auto entry = deleted_rows.find(make_pair(row_ids[i].GetValue(), snapshot_ids[i].GetValue()));
+			auto version = make_pair(row_ids[i].GetValue(), snapshot_ids[i].GetValue());
+			auto entry = deleted_rows.find(version);
 			if (entry != deleted_rows.end()) {
 				result.insert(PositionWithSnapshot {position, entry->second});
+			}
+			auto rehomed = rehomed_rows.find(version);
+			if (rehomed == rehomed_rows.end()) {
+				continue;
+			}
+			// the ends of other branches on this row become deletion rows of the file, keyed to those branches
+			for (auto &end : rehomed->second) {
+				file.rehomed_deletions.push_back({NumericCast<idx_t>(position), end.snapshot_id, end.branch_id});
+				rehomed_ends.push_back(
+				    {end.branch_id, NumericCast<idx_t>(version.first), NumericCast<idx_t>(version.second)});
 			}
 		}
 	}
@@ -141,12 +154,16 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 	auto snapshot = transaction.GetSnapshot();
 
 	DuckLakeInsert::RemoveEmptyFiles(context, global_state);
+	vector<DuckLakeRehomedEnd> rehomed_ends;
 	if (!global_state.written_files.empty()) {
 		DeletesPerFile deletes_per_file;
-		auto deleted_rows = metadata_manager.GetDeletedInlinedRowVersions(table, inlined_table.table_name, snapshot);
-		if (!deleted_rows.empty()) {
+		DuckLakeRehomedRowEnds rehomed_rows;
+		auto deleted_rows =
+		    metadata_manager.GetDeletedInlinedRowVersions(table, inlined_table.table_name, snapshot, rehomed_rows);
+		if (!deleted_rows.empty() || !rehomed_rows.empty()) {
 			for (auto &file : global_state.written_files) {
-				auto deletes = GetWrittenFileDeletes(context, table, file, encryption_key, deleted_rows);
+				auto deletes = GetWrittenFileDeletes(context, table, file, encryption_key, deleted_rows, rehomed_rows,
+				                                     rehomed_ends);
 				if (!deletes.empty()) {
 					deletes_per_file.emplace(file.file_name, std::move(deletes));
 				}
@@ -183,7 +200,7 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 
 	bool wrote_files = !global_state.written_files.empty();
 	transaction.AppendFiles(global_state.table.GetTableId(), std::move(global_state.written_files));
-	transaction.MarkInlinedDataForDeletion(inlined_table, snapshot.snapshot_id, wrote_files);
+	transaction.MarkInlinedDataForDeletion(inlined_table, snapshot.snapshot_id, wrote_files, std::move(rehomed_ends));
 	return SinkFinalizeType::READY;
 }
 

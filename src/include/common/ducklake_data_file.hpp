@@ -64,6 +64,20 @@ struct DuckLakeDeleteFile {
 	}
 };
 
+//! An end another branch wrote on a row a flush moved, the deletion row of the written file at that branch
+struct DuckLakeRehomedDeletion {
+	idx_t position;
+	idx_t snapshot_id;
+	idx_t branch_id;
+};
+
+//! The key of such an end in the shared companion of the inlined rows
+struct DuckLakeRehomedEnd {
+	idx_t branch_id;
+	idx_t row_id;
+	idx_t row_snapshot;
+};
+
 struct DuckLakeDataFile {
 	string file_name;
 	idx_t row_count;
@@ -80,6 +94,8 @@ struct DuckLakeDataFile {
 	optional_idx max_partial_file_snapshot;
 	//! The row_id_start extracted from the file (for flushed files that have embedded row_ids)
 	optional_idx flush_row_id_start;
+	//! The ends of other branches on the rows of a flushed file
+	vector<DuckLakeRehomedDeletion> rehomed_deletions;
 	//! If the file was created by ducklake
 	bool created_by_ducklake = true;
 };

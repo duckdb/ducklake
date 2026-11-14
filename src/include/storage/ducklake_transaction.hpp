@@ -60,6 +60,8 @@ struct FlushedInlinedTableInfo {
 	idx_t flush_snapshot_id;
 	//! A flush that writes no file leaves no rows to delete
 	bool wrote_files = true;
+	//! The ends of other branches on the moved versions, which the commit deletes by their key
+	vector<DuckLakeRehomedEnd> rehomed_ends;
 };
 
 struct DroppedDataFileStats {
@@ -305,8 +307,9 @@ public:
 	//! Whether the metadata transaction expired snapshots, which a rollback restores
 	bool ExpiredSnapshotsInMetadataTransaction();
 	void MarkMetadataWritten();
-	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows
-	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files);
+	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows and the rehomed ends
+	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files,
+	                                vector<DuckLakeRehomedEnd> rehomed_ends);
 	bool InlinedTableFlushed(const Identifier &table_name);
 	//! Marks the inlined file deletions of the table flushed up to the snapshot, the commit deletes them
 	void MarkInlinedFileDeletionsFlushed(TableIndex table_id, idx_t flush_snapshot_id);

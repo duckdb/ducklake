@@ -493,19 +493,20 @@ public:
 		return query_callback;
 	}
 
-	//! Check if an inlined deletion table is known to exist or not exist for the given table and snapshot
-	InlinedDeletionCacheResult CheckInlinedDeletionTableCache(TableIndex table_id, DuckLakeSnapshot snapshot);
-	//! Cache the result of an inlined deletion table existence check
-	void CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists);
+	//! Whether the inlined deletion table of a table is known to exist, or known absent to a view at or before the
+	//! heads
+	InlinedDeletionCacheResult CheckInlinedDeletionTableCache(TableIndex table_id, const vector<idx_t> &heads);
+	//! Cache the result of an inlined deletion table existence check, an absent table with the heads that found it so
+	void CacheInlinedDeletionTableResult(TableIndex table_id, const vector<idx_t> &heads, bool exists);
 	//! The rewrite snapshots of the table in the range, unless the snapshot changes were not read up to its end
 	bool TryGetRewriteSnapshots(TableIndex table_id, idx_t start_snapshot, idx_t end_snapshot, set<idx_t> &result);
 	//! The first snapshot whose changes were not read for rewrites yet
 	idx_t GetFirstUnreadRewriteSnapshot();
 	//! Cache the rewrite snapshots of every table, read from the snapshot changes up to end_snapshot
 	void CacheRewriteSnapshots(const vector<pair<TableIndex, idx_t>> &rewrites, idx_t end_snapshot);
-	//! The inlined deletion tables at the snapshot, list runs once per snapshot even for concurrent callers
+	//! The inlined deletion tables of the view with the heads, list runs once per view even for concurrent callers
 	shared_ptr<const unordered_set<string>>
-	GetInlinedDeletionTables(idx_t snapshot_id, const std::function<unordered_set<string>()> &list);
+	GetInlinedDeletionTables(const vector<idx_t> &heads, const std::function<unordered_set<string>()> &list);
 
 	//! The schema versions of the table at the snapshot of the transaction
 	DuckLakeTableSchemaVersions GetTableSchemaVersions(DuckLakeTransaction &transaction, TableIndex table_id);
@@ -618,15 +619,14 @@ private:
 	mutex inlined_deletion_cache_lock;
 	//! Table IDs where the inlined deletion table is known to exist (permanent - never invalidated)
 	unordered_set<idx_t> inlined_deletion_exists;
-	//! Table IDs where the inlined deletion table is known to NOT exist, with the snapshot_id at which we checked
-	//! Valid as long as current snapshot.snapshot_id <= cached snapshot_id, the ids of the attached lineage
-	unordered_map<idx_t, idx_t> inlined_deletion_not_exists;
+	//! Table ids whose inlined deletion table a view found absent, keyed by the heads of that view
+	unordered_map<idx_t, vector<idx_t>> inlined_deletion_not_exists;
 	//! The rewrite snapshots of each table, ids of the attached lineage view read from its snapshot changes
 	mutex rewrite_snapshots_lock;
 	optional_idx rewrite_snapshots_read_until;
 	unordered_map<idx_t, set<idx_t>> rewrite_snapshots;
-	//! The inlined deletion tables of the metadata catalog, listed per snapshot id of the lineage for the latest ones
-	map<idx_t, shared_ptr<const unordered_set<string>>> inlined_deletion_tables;
+	//! The inlined deletion tables of the metadata catalog, listed per lineage heads of the view for the latest ones
+	map<vector<idx_t>, shared_ptr<const unordered_set<string>>> inlined_deletion_tables;
 	//! Held while the inlined deletion tables are listed
 	mutex inlined_deletion_listing_lock;
 	//! Cache of (table_id, schema_version) -> begin_snapshot. The backing row is written once when the schema

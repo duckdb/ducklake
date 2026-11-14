@@ -1513,24 +1513,39 @@ unique_ptr<LogicalOperator> DuckLakeCatalog::BindAlterAddIndex(Binder &binder, T
 	throw NotImplementedException("Adding indexes or constraints is not supported in DuckLake");
 }
 
+//! Whether every head of the chain is at or after the observed one, so the view holds the observed commits
+static bool HeadsAtOrAfter(const vector<idx_t> &heads, const vector<idx_t> &observed) {
+	if (heads.empty() || heads.size() != observed.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < heads.size(); i++) {
+		if (heads[i] < observed[i]) {
+			return false;
+		}
+	}
+	return true;
+}
+
 InlinedDeletionCacheResult DuckLakeCatalog::CheckInlinedDeletionTableCache(TableIndex table_id,
-                                                                           DuckLakeSnapshot snapshot) {
+                                                                           const vector<idx_t> &heads) {
 	lock_guard<mutex> guard(inlined_deletion_cache_lock);
 	if (inlined_deletion_exists.find(table_id.index) != inlined_deletion_exists.end()) {
 		return InlinedDeletionCacheResult::EXISTS;
 	}
 	auto it = inlined_deletion_not_exists.find(table_id.index);
-	if (it != inlined_deletion_not_exists.end() && snapshot.snapshot_id <= it->second) {
+	if (it != inlined_deletion_not_exists.end() && HeadsAtOrAfter(it->second, heads)) {
+		// no branch of the chain committed after the view that found the table absent
 		return InlinedDeletionCacheResult::DOES_NOT_EXIST;
 	}
 	return InlinedDeletionCacheResult::UNKNOWN;
 }
 
 shared_ptr<const unordered_set<string>>
-DuckLakeCatalog::GetInlinedDeletionTables(idx_t snapshot_id, const std::function<unordered_set<string>()> &list) {
+DuckLakeCatalog::GetInlinedDeletionTables(const vector<idx_t> &heads,
+                                          const std::function<unordered_set<string>()> &list) {
 	auto cached_listing = [&]() -> shared_ptr<const unordered_set<string>> {
 		lock_guard<mutex> guard(inlined_deletion_cache_lock);
-		auto entry = inlined_deletion_tables.find(snapshot_id);
+		auto entry = inlined_deletion_tables.find(heads);
 		return entry == inlined_deletion_tables.end() ? nullptr : entry->second;
 	};
 	auto tables = cached_listing();
@@ -1545,7 +1560,7 @@ DuckLakeCatalog::GetInlinedDeletionTables(idx_t snapshot_id, const std::function
 	}
 	tables = make_shared_ptr<const unordered_set<string>>(list());
 	lock_guard<mutex> guard(inlined_deletion_cache_lock);
-	inlined_deletion_tables[snapshot_id] = tables;
+	inlined_deletion_tables[heads] = tables;
 	// transactions at a few recent snapshots can read side by side, older listings are dropped
 	static constexpr idx_t MAX_LISTED_SNAPSHOTS = 8;
 	while (inlined_deletion_tables.size() > MAX_LISTED_SNAPSHOTS) {
@@ -1554,13 +1569,21 @@ DuckLakeCatalog::GetInlinedDeletionTables(idx_t snapshot_id, const std::function
 	return tables;
 }
 
-void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, DuckLakeSnapshot snapshot, bool exists) {
+void DuckLakeCatalog::CacheInlinedDeletionTableResult(TableIndex table_id, const vector<idx_t> &heads, bool exists) {
 	lock_guard<mutex> guard(inlined_deletion_cache_lock);
 	if (exists) {
 		inlined_deletion_exists.insert(table_id.index);
 		inlined_deletion_not_exists.erase(table_id.index);
-	} else {
-		inlined_deletion_not_exists[table_id.index] = snapshot.snapshot_id;
+		return;
+	}
+	if (heads.empty()) {
+		// a released view has no heads to scope the verdict by
+		return;
+	}
+	auto entry = inlined_deletion_not_exists.find(table_id.index);
+	if (entry == inlined_deletion_not_exists.end() || HeadsAtOrAfter(heads, entry->second)) {
+		// the latest view that found the table absent covers the most views
+		inlined_deletion_not_exists[table_id.index] = heads;
 	}
 }
 
@@ -1654,19 +1677,6 @@ void DuckLakeCatalog::ForgetColumnsWithValues(const set<TableIndex> &table_ids) 
 		auto end = columns_with_values.lower_bound(make_pair(table_id.index + 1, idx_t(0)));
 		columns_with_values.erase(begin, end);
 	}
-}
-
-//! Whether every head of the chain is at or after the observed one, so the view holds the observed commits
-static bool HeadsAtOrAfter(const vector<idx_t> &heads, const vector<idx_t> &observed) {
-	if (heads.empty() || heads.size() != observed.size()) {
-		return false;
-	}
-	for (idx_t i = 0; i < heads.size(); i++) {
-		if (heads[i] < observed[i]) {
-			return false;
-		}
-	}
-	return true;
 }
 
 bool DuckLakeCatalog::InlinedTableIsEmpty(DuckLakeTransaction &transaction, const Identifier &table_name,

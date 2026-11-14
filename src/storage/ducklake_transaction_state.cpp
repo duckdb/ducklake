@@ -844,18 +844,23 @@ DuckLakeTransactionState::GetNewInlinedFileDeletes(DuckLakeCommitState &commit_s
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = commit_state.GetTableId(entry.first);
 		auto &table_changes = entry.second;
-		if (!table_changes.new_inlined_file_deletes) {
+		auto &own_deletes = table_changes.new_inlined_file_deletes;
+		bool has_own_deletes = own_deletes && !own_deletes->file_deletes.empty();
+		auto rehomed = commit_state.rehomed_file_deletions.find(table_id);
+		bool has_rehomed_deletes = rehomed != commit_state.rehomed_file_deletions.end();
+		if (!has_own_deletes && !has_rehomed_deletes) {
 			continue;
-		}
-		if (table_changes.new_inlined_file_deletes->file_deletes.empty()) {
-			// LCOV_EXCL_START
-			continue;
-			// LCOV_EXCL_STOP
 		}
 		DuckLakeInlinedFileDeletionInfo info;
 		info.table_id = table_id;
-		// copy, not move - data must survive commit retries in FlushChanges
-		info.file_deletions.file_deletes = table_changes.new_inlined_file_deletes->file_deletes;
+		if (has_own_deletes) {
+			// copy, not move - data must survive commit retries in FlushChanges
+			info.file_deletions.file_deletes = own_deletes->file_deletes;
+		}
+		if (has_rehomed_deletes) {
+			// the ends other branches wrote on the rows a flush of this commit moved
+			info.rehomed_deletions = rehomed->second;
+		}
 		result.push_back(std::move(info));
 	}
 	return result;
@@ -1782,6 +1787,7 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		                      context);
 		commit_state.PrepareFloatBounds(table_id, new_stats.column_stats);
 		vector<DuckLakeDeleteFile> delete_files;
+		vector<DuckLakeRehomedFileDeletion> rehomed_deletions;
 		for (auto &file : table_changes.new_data_files) {
 			// flushed files (with max_partial_file_snapshot) have embedded row_ids, we gotta use the original
 			// row_id_start
@@ -1794,6 +1800,10 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 				delete_file.data_file_id = data_file.id;
 				delete_files.push_back(std::move(delete_file));
 			}
+			for (auto &rehomed : data_file.rehomed_deletions) {
+				// the end of another branch on a row of this flushed file, keyed by the file id of this commit
+				rehomed_deletions.push_back({data_file.id, rehomed.position, rehomed.snapshot_id, rehomed.branch_id});
+			}
 
 			// merge the stats into the new global state
 			new_stats.MergeFileStats(file, data_file.column_stats);
@@ -1801,6 +1811,9 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		}
 		// add any delete files that were made on top of these transaction-local files
 		commit_state.local_delete_files[table_id] = std::move(delete_files);
+		if (!rehomed_deletions.empty()) {
+			commit_state.rehomed_file_deletions[table_id] = std::move(rehomed_deletions);
+		}
 
 		if (table_changes.new_inlined_data) {
 			auto &inlined_data = *table_changes.new_inlined_data;

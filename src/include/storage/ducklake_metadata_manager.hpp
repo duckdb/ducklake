@@ -895,10 +895,11 @@ public:
 	                                                           const DuckLakeTableEntry &table,
 	                                                           const string &sort_order_sql,
 	                                                           const vector<string> &columns_to_read);
-	//! The deleted versions of the inlined rows that a flush writes
+	//! The deleted versions of the inlined rows that a flush writes, and the ends other branches wrote on its versions
 	virtual DuckLakeDeletedRowVersions GetDeletedInlinedRowVersions(DuckLakeTableEntry &table,
 	                                                                const Identifier &inlined_table_name,
-	                                                                DuckLakeSnapshot snapshot);
+	                                                                DuckLakeSnapshot snapshot,
+	                                                                DuckLakeRehomedRowEnds &rehomed_rows);
 	//! The inlined deletions of rows of data files, which a flush writes to delete files
 	virtual vector<DuckLakeInlinedFileDeletionEntry> GetInlinedFileDeletionsForFlush(DuckLakeTableEntry &table,
 	                                                                                 DuckLakeSnapshot snapshot);

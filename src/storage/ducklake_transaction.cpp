@@ -1513,6 +1513,7 @@ DuckLakeFileInfo DuckLakeTransaction::BuildDataFileInfo(const DuckLakeDataFile &
 	data_file.begin_snapshot = file.begin_snapshot;
 	data_file.max_partial_file_snapshot = file.max_partial_file_snapshot;
 	data_file.column_stats = file.column_stats;
+	data_file.rehomed_deletions = file.rehomed_deletions;
 	for (auto &partition_entry : file.partition_values) {
 		DuckLakeFilePartitionInfo partition_info;
 		partition_info.partition_column_idx = partition_entry.partition_column_idx;
@@ -2395,9 +2396,10 @@ void DuckLakeTransaction::MarkMetadataWritten() {
 }
 
 void DuckLakeTransaction::MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id,
-                                                     bool wrote_files) {
+                                                     bool wrote_files, vector<DuckLakeRehomedEnd> rehomed_ends) {
 	lock_guard<mutex> guard(flushed_inlined_lock);
-	state->flushed_inlined_tables.push_back({std::move(inlined_table), flush_snapshot_id, wrote_files});
+	state->flushed_inlined_tables.push_back(
+	    {std::move(inlined_table), flush_snapshot_id, wrote_files, std::move(rehomed_ends)});
 }
 
 bool DuckLakeTransaction::InlinedTableFlushed(const Identifier &table_name) {
