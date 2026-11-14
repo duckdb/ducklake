@@ -35,8 +35,6 @@ RESTMetadataManager::~RESTMetadataManager() {
 
 //! The core refers to the inlined data of a table at a schema version by the name that the inlined data table has in a
 //! metadata database (users see it as the filename of the rows). The REST API only knows the table and the version.
-static const char *INLINED_TABLE_PREFIX = "ducklake_inlined_data_";
-
 static Identifier InlinedTableName(TableIndex table_id, idx_t schema_version) {
 	return DuckLakeMetadataManager::InlinedTableNameFor(table_id.index, schema_version);
 }
@@ -46,15 +44,13 @@ struct RESTInlinedTableHandle {
 	idx_t schema_version;
 };
 
-static RESTInlinedTableHandle ParseInlinedTableName(const string &name) {
-	if (!StringUtil::StartsWith(name, INLINED_TABLE_PREFIX)) {
+static RESTInlinedTableHandle ParseRESTInlinedTableName(const string &name) {
+	idx_t schema_version;
+	auto table_id = DuckLakeMetadataManager::ParseInlinedTableName(name, schema_version);
+	if (!table_id.IsValid()) {
 		throw InternalException("\"%s\" is not the name of the inlined data of a REST catalog", name);
 	}
-	auto parts = StringUtil::Split(name.substr(strlen(INLINED_TABLE_PREFIX)), '_');
-	if (parts.size() != 2) {
-		throw InternalException("\"%s\" is not the name of the inlined data of a REST catalog", name);
-	}
-	return {TableIndex(std::stoull(parts[0])), std::stoull(parts[1])};
+	return {TableIndex(table_id.GetIndex()), schema_version};
 }
 
 //! Entries created by the transaction are referred to by negative placeholder ids
@@ -493,7 +489,7 @@ unique_ptr<QueryResult> RESTMetadataManager::ReadCachedInlinedRows(RESTInlinedRo
                                                                    DuckLakeSnapshot snapshot,
                                                                    const string &inlined_table_name,
                                                                    const vector<string> &columns_to_read) {
-	auto handle = ParseInlinedTableName(inlined_table_name);
+	auto handle = ParseRESTInlinedTableName(inlined_table_name);
 	idx_t start_snapshot_id = kind == RESTInlinedRowsKind::SCAN ? 0 : start_snapshot.snapshot_id;
 	RESTInlinedRowsKey key {kind, start_snapshot_id, snapshot.snapshot_id, handle.table_id.index};
 	auto rows_ptr = inlined_rows_cache.Find(key, columns_to_read);

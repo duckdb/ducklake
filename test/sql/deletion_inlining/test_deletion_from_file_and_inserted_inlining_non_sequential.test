@@ -41,10 +41,10 @@ FROM ducklake_meta.ducklake_inlined_data_1_1 ORDER BY ALL
 11	2	500	0
 12	2	777	0
 
-query IIIII
-FROM ducklake_meta.ducklake_inlined_data_1_1_visibility
+query IIIIII
+FROM ducklake_meta.ducklake_inlined_data_visibility
 ----
-0	11	0	2	3
+1	11	0	2	0	3
 
 query III
 SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delete_1 ORDER BY row_id

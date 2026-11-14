@@ -204,10 +204,10 @@ FROM ducklake_meta.ducklake_inlined_data_1_1 order by ALL
 53	9	54	0
 54	9	55	0
 
-query IIIII
-FROM ducklake_meta.ducklake_inlined_data_1_1_visibility
+query IIIIII
+FROM ducklake_meta.ducklake_inlined_data_visibility
 ----
-0	52	0	9	11
+1	52	0	9	0	11
 
 statement ok
 CALL ducklake_flush_inlined_data('ducklake')

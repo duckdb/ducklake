@@ -34,14 +34,9 @@ CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true)
 statement ok
 CALL ducklake_delete_orphaned_files('ducklake', older_than => now())
 
-# the inlined data table of the dropped table is reclaimed with its companion
+# the inlined data table of the dropped table is reclaimed
 query I
 SELECT COUNT(*) FROM duckdb_tables() WHERE database_name='ducklake_meta' AND schema_name IN ('main', 'public') AND table_name LIKE 'ducklake_inlined_data_1%'
-----
-0
-
-query I
-SELECT COUNT(*) FROM duckdb_tables() WHERE database_name='ducklake_meta' AND schema_name IN ('main', 'public') AND table_name LIKE '%_visibility' AND table_name LIKE 'ducklake_inlined_data_%'
 ----
 0
 

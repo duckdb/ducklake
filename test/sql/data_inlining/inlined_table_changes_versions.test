@@ -26,7 +26,7 @@ statement ok
 DELETE FROM dl.t WHERE i = 1
 
 query I
-SELECT snapshot_id FROM meta.ducklake_inlined_data_1_1_visibility ORDER BY ALL
+SELECT snapshot_id FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
 ----
 3
 4

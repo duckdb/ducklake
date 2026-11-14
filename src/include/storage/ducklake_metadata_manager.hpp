@@ -398,12 +398,18 @@ public:
 
 		//! The companion is ducklake_<kind>_visibility, the row table is RowTableName(kind)
 		string kind;
+		//! The row table when it is not named after the kind, the payload of the inlined rows
+		string row_table;
 		//! The key columns of the companion
 		vector<string> key_columns;
+		//! The constant of a key column in every statement of the kind, empty for a column of the row table
+		vector<string> key_literals;
 		//! The key columns of the row table when named unlike the companion's, which the inlined rows prefix
 		vector<string> payload_key_columns;
 		//! The row table column of the key column at the index
 		const string &PayloadKey(idx_t i) const;
+		//! Whether the key column at the index is a constant of the kind
+		bool IsKeyLiteral(idx_t i) const;
 		//! The birth columns of the row table
 		string branch_column = "branch_id";
 		string begin_column = "begin_snapshot";
@@ -419,10 +425,13 @@ public:
 	static const vector<RowVisibilityKind> &RowVisibilityKinds();
 	//! The catalog kind with the name
 	static const RowVisibilityKind &RowKind(const string &kind);
-	//! The kind of an inlined data table, whose companion names the row versions by row id
+	//! The kind of an inlined data table, whose shared companion names the row versions by table id and row id
 	static RowVisibilityKind InlinedRowKind(const Identifier &table_name, const DuckLakeInlinedColNames &col_names);
 	//! The row table of a kind, the partition and sort specs keep their info suffix
 	static string RowTableName(const string &kind);
+	static string RowTableName(const RowVisibilityKind &kind);
+	//! The key column at the index as the row alias reads it, the literal of a constant key
+	static string KeyValue(const RowVisibilityKind &kind, idx_t i, const string &row_alias);
 	//! The type of a key column, the tag keys and names are text
 	static string RowKeyType(const string &key);
 	//! Matches a key column of two aliases, text keys compare byte for byte like the tag writers
@@ -430,8 +439,10 @@ public:
 	//! Matches the key, projected as left_column under the left alias, with the row column of the right alias
 	static string RowKeyMatch(const string &left, const string &left_column, const string &right,
 	                          const string &right_column, const string &key);
-	//! The companion table holding the end events of the version rows of a kind
+	//! The companion table holding the end events of the version rows of a catalog kind
 	static string GetRowVisibilityTableStatement(const RowVisibilityKind &kind, bool if_not_exists = false);
+	//! The companion of every inlined data table, keyed by the table and the birth of the row version
+	static string GetInlinedVisibilityTableStatement();
 	virtual string GetDataFileTableStatement();
 	virtual string GetDeleteFileTableStatement();
 	virtual string GetFileColumnStatsTableStatement();
@@ -651,8 +662,14 @@ public:
 	                                 const string &alias, const string &read_snapshot,
 	                                 const DuckLakeInlinedColNames &col_names,
 	                                 const LiveRowOptions &options = LiveRowOptions());
-	//! The companion of an inlined data table, which holds the ends of its row versions
+	//! The per payload companion of an older dev build, which the heal folds into the shared companion
 	static Identifier InlinedCompanionName(const Identifier &table_name);
+	//! Whether the name is that of a per payload companion, the name of a payload followed by _visibility
+	static bool IsInlinedCompanionName(const string &name);
+	//! The companion of a kind under the alias with the filter, which carries the constant keys of the kind
+	static string CompanionEnds(const RowVisibilityKind &kind, const string &alias, const string &filter);
+	//! The versions of a table over its payloads as one derived table of row id, branch and begin snapshot
+	static string InlinedVersionsOf(const vector<Identifier> &payloads, const DuckLakeInlinedColNames &col_names);
 	//! The end events of the version rows the filter selects under the alias t that the commit chain sees
 	static string EndRows(const DuckLakeBranchChain &chain, const RowVisibilityKind &kind, const string &filter);
 	static string EndRows(const DuckLakeBranchChain &chain, const string &kind, const string &filter);
@@ -765,13 +782,14 @@ public:
 	string DropInlinedTableIfEmpty(TableIndex table_id, const DuckLakeTableEntry &table);
 	//! A query that returns a row if the inlined data table holds any row
 	static string InlinedTableHasRowsQuery(const Identifier &table_name);
-	//! Unregisters and drops an inlined data table, from 2.0 on its companion after it
-	static string DropInlinedTableSql(idx_t table_id, idx_t schema_version, const Identifier &table_name,
-	                                  bool branch_aware);
+	//! Unregisters and drops an inlined data table, its ends in the shared companion name no row
+	static string DropInlinedTableSql(idx_t table_id, idx_t schema_version, const Identifier &table_name);
 	virtual Identifier GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
 	                                          vector<string> &inlined_tables, string &inlined_table_queries);
 	static Identifier InlinedTableNameFor(idx_t table_id, idx_t schema_version);
-	//! The payload table of inlined rows, from 2.0 on with its birth branch and followed by its companion
+	//! The table id of an inlined data table named by InlinedTableNameFor, invalid for any other name
+	static optional_idx ParseInlinedTableName(const string &name, idx_t &schema_version);
+	//! The payload table of inlined rows, from 2.0 on with its birth branch
 	static string InlinedTableDdlSql(const Identifier &table_name, const string &column_defs,
 	                                 const DuckLakeInlinedColNames &col_names, bool branch_aware);
 	DuckLakeInlinedColNames InlinedColNames() const;
@@ -927,6 +945,8 @@ public:
 	virtual void CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	//! Deletes the ends whose version row is gone
 	void DeleteOrphanRowEnds(const RowVisibilityKind &kind);
+	//! Deletes the ends of a table whose version is in none of its payloads
+	void DeleteOrphanInlinedRowEnds(idx_t table_id, const vector<Identifier> &payloads);
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	//! The tables with data files that are not dropped
 	unordered_set<idx_t> GetTablesWithLiveDataFiles();
@@ -1068,10 +1088,20 @@ public:
 	//! Whether every inlined deletion table carries the branch column
 	bool HasInlinedDeletionShapes();
 	static string InlinedDeletionMigrationSql(const InlinedDeletionAdditions &add);
-	//! The inlined data tables of the catalog with their heal steps and the companions whose payload is gone
-	vector<RowVisibilityAdditions> ProbeInlinedDataTables(vector<Identifier> &orphan_companions);
-	//! Whether every inlined data table and deletion table has the 2.0 shape and no companion lost its payload
+	//! A per payload companion of an older dev build, folded into the shared companion and dropped
+	struct InlinedCompanionFold {
+		Identifier companion;
+		idx_t table_id;
+		//! A companion without payload is dropped without the fold, its ends name no row
+		bool payload_present;
+	};
+	//! The inlined data tables of the catalog with their heal steps and the per payload companions to fold
+	vector<RowVisibilityAdditions> ProbeInlinedDataTables(vector<InlinedCompanionFold> &companions);
+	//! Whether every inlined data table and deletion table has the 2.0 shape and no per payload companion is left
 	bool HasInlinedRowShapes();
+	//! Whether the shared companion of the inlined rows exists
+	bool HasInlinedVisibilityTable();
+	static string InlinedCompanionFoldSql(const InlinedCompanionFold &fold);
 	//! The inlined data tables of the catalog, from the memo of the pass when complete, registered ones otherwise
 	vector<Identifier> ListInlinedDataTables();
 	//! The user table names of the inlined data tables, keyed by the inlined table name
@@ -1115,12 +1145,14 @@ public:
 		bool delete_file_visibility_migration = false;
 		//! The catalog tables whose version rows end in companion tables, one entry per kind
 		vector<RowVisibilityAdditions> row_additions;
-		//! The inlined data tables, whose row versions end in companion tables like the catalog rows
+		//! The shared companion of the inlined rows is created
+		bool inlined_visibility_table = true;
+		//! The inlined data tables, whose row versions end in the shared companion like the catalog rows
 		vector<RowVisibilityAdditions> inlined_additions;
 		//! The inlined deletion tables, whose rows gain the branch they were deleted on
 		vector<InlinedDeletionAdditions> deletion_tables;
-		//! The companions whose payload table a drop interrupted between its statements left behind
-		vector<Identifier> orphan_companions;
+		//! The per payload companions of an older dev build, folded into the shared companion
+		vector<InlinedCompanionFold> inlined_companions;
 	};
 	V2_0Dev1Additions ProbeV2_0Dev1Additions();
 	void VerifyHealableV2_0Dev1(const V2_0Dev1Additions &missing);

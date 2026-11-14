@@ -1,5 +1,5 @@
 # name: test/sql/migration/dev1_inlined_foreign_objects.test
-# description: a view and a table named like an inlined deletion table without its columns are left alone by the probes of the metadata schema
+# description: a view and tables named like an inlined deletion table or a per payload companion without their columns are left alone by the probes of the metadata schema
 # group: [migration]
 
 require ducklake
@@ -24,6 +24,9 @@ CREATE VIEW meta.note AS SELECT 1 AS n
 statement ok
 CREATE TABLE meta.ducklake_inlined_delete_7 (note VARCHAR)
 
+statement ok
+CREATE TABLE meta.ducklake_inlined_data_1_1_visibility (note VARCHAR)
+
 # the older dev build wrote no heal marker
 statement ok
 DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
@@ -31,7 +34,7 @@ DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 statement ok
 DETACH dl
 
-# the probes skip the view and the table without the columns of a deletion table and reach the missing marker
+# the probes skip the view and the tables without the columns of a deletion table or a companion and reach the missing marker
 statement error
 ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
 ----
@@ -51,7 +54,7 @@ SELECT i FROM dl.t
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 ----
-2.0-dev1.3
+2.0-dev1.4
 
 statement ok
 INSERT INTO dl.t VALUES (2)
@@ -69,6 +72,11 @@ SELECT n FROM meta.note
 
 query I
 SELECT count(*) FROM meta.ducklake_inlined_delete_7
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
 ----
 0
 

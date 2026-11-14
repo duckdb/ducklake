@@ -42,10 +42,10 @@ COMMIT
 ----
 conflict
 
-query IIIII
-FROM meta.ducklake_inlined_data_1_1_visibility
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility
 ----
-0	1	0	2	3
+1	1	0	2	0	3
 
 query I
 SELECT i FROM dl.t ORDER BY i
@@ -57,11 +57,11 @@ SELECT i FROM dl.t ORDER BY i
 statement ok con2
 DELETE FROM dl.t WHERE i = 3
 
-query IIIII
-FROM meta.ducklake_inlined_data_1_1_visibility ORDER BY ALL
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
 ----
-0	1	0	2	3
-0	2	0	2	4
+1	1	0	2	0	3
+1	2	0	2	0	4
 
 query I
 SELECT i FROM dl.t

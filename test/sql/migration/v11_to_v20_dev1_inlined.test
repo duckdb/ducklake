@@ -75,7 +75,7 @@ SELECT i, v FROM dl.t ORDER BY i
 statement ok
 DETACH dl
 
-# the migration appends the branch column, moves the ends into the companion and drops the end column
+# the migration appends the branch column, moves the ends into the shared companion and drops the end column
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 
@@ -88,7 +88,7 @@ SELECT value FROM dl.options() WHERE option_name = 'version'
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 ----
-2.0-dev1.3
+2.0-dev1.4
 
 query I
 SELECT column_name FROM (DESCRIBE SELECT * FROM meta.ducklake_inlined_data_1_1)
@@ -108,12 +108,12 @@ FROM meta.ducklake_inlined_data_1_1 ORDER BY ALL
 2	4	3	c2	0
 2	5	3	c3	0
 
-query IIIII
-FROM meta.ducklake_inlined_data_1_1_visibility ORDER BY ALL
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
 ----
-0	1	0	2	3
-0	2	0	2	4
-0	2	0	4	5
+1	1	0	2	0	3
+1	2	0	2	0	4
+1	2	0	4	0	5
 
 query III
 SELECT row_id, begin_snapshot, branch_id FROM meta.ducklake_inlined_delete_2
@@ -155,17 +155,17 @@ SELECT count(*) FROM dl.f AT (VERSION => 6)
 ----
 20
 
-# the migrated catalog ends the versions it deletes in the companion and flushes them
+# the migrated catalog ends the versions it deletes in the shared companion and flushes them
 statement ok
 DELETE FROM dl.t WHERE i = 1
 
-query IIIII
-FROM meta.ducklake_inlined_data_1_1_visibility ORDER BY ALL
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
 ----
-0	0	0	2	8
-0	1	0	2	3
-0	2	0	2	4
-0	2	0	4	5
+1	0	0	2	0	8
+1	1	0	2	0	3
+1	2	0	2	0	4
+1	2	0	4	0	5
 
 statement ok
 CALL ducklake_flush_inlined_data('dl')
@@ -176,7 +176,7 @@ SELECT count(*) FROM meta.ducklake_inlined_data_1_1
 0
 
 query I
-SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility
 ----
 0
 

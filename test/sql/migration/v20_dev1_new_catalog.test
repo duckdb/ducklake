@@ -22,7 +22,7 @@ SELECT value FROM dl.options() WHERE option_name = 'version'
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 ----
-2.0-dev1.3
+2.0-dev1.4
 
 # SQLite reports the timestamp column as text
 query II

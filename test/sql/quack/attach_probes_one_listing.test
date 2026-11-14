@@ -89,7 +89,7 @@ SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%LIMI
 query I
 SELECT value FROM __ducklake_metadata_dl.ducklake_metadata WHERE key = 'heal_complete'
 ----
-2.0-dev1.3
+2.0-dev1.4
 
 query I
 SELECT count(*) FROM dl.t

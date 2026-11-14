@@ -118,7 +118,7 @@ SELECT value FROM dl.options() WHERE option_name = 'version'
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 ----
-2.0-dev1.3
+2.0-dev1.4
 
 # once, the attach that migrated runs no second heal
 query I

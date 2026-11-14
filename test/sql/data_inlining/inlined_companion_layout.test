@@ -1,5 +1,5 @@
 # name: test/sql/data_inlining/inlined_companion_layout.test
-# description: the companion of an inlined data table has the columns and key of the other companions and is created and dropped with its payload
+# description: the inlined data tables of a catalog share one companion, keyed by the table and the birth of the version like the other companions
 # group: [data_inlining]
 
 require ducklake
@@ -29,29 +29,30 @@ i
 _ducklake_branch_id
 
 query I
-SELECT column_name FROM (DESCRIBE SELECT * FROM meta.ducklake_inlined_data_1_1_visibility)
+SELECT column_name FROM (DESCRIBE SELECT * FROM meta.ducklake_inlined_data_visibility)
 ----
-branch_id
+table_id
 row_id
 row_branch_id
 row_snapshot
+branch_id
 snapshot_id
 
-# the key names the version by its birth, one end per version per branch
+# the key names the version by its table and birth, one end per version per branch
 statement ok
-INSERT INTO meta.ducklake_inlined_data_1_1_visibility VALUES (0, 0, 0, 2, 9)
+INSERT INTO meta.ducklake_inlined_data_visibility VALUES (1, 0, 0, 2, 0, 9)
 
 statement error
-INSERT INTO meta.ducklake_inlined_data_1_1_visibility VALUES (0, 0, 0, 2, 8)
+INSERT INTO meta.ducklake_inlined_data_visibility VALUES (1, 0, 0, 2, 0, 8)
 ----
 
 statement ok
-INSERT INTO meta.ducklake_inlined_data_1_1_visibility VALUES (1, 0, 0, 2, 9)
+INSERT INTO meta.ducklake_inlined_data_visibility VALUES (1, 0, 0, 2, 1, 9)
 
 statement ok
-DELETE FROM meta.ducklake_inlined_data_1_1_visibility WHERE snapshot_id = 9
+DELETE FROM meta.ducklake_inlined_data_visibility WHERE snapshot_id = 9
 
-# a new inlined table of a later schema version comes with a companion of its own
+# a new inlined table of a later schema version shares the companion, which holds no end of the table
 statement ok
 ALTER TABLE dl.t ADD COLUMN j INTEGER
 
@@ -68,11 +69,11 @@ j
 _ducklake_branch_id
 
 query I
-SELECT count(*) FROM meta.ducklake_inlined_data_1_2_visibility
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility WHERE table_id = 1
 ----
 0
 
-# the flush empties the superseded inlined table, which is dropped with its companion
+# the flush empties the superseded inlined table, which is dropped, the shared companion stays with the catalog
 statement ok
 CALL ducklake_flush_inlined_data('dl')
 
@@ -86,10 +87,10 @@ SELECT count(*) FROM meta.ducklake_inlined_data_1_1
 ----
 does not exist
 
-statement error
-SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility WHERE table_id = 1
 ----
-does not exist
+0
 
 query II
 SELECT i, j FROM dl.t ORDER BY i

@@ -32,7 +32,7 @@ DELETE FROM dl.u WHERE i = 3
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 ----
-2.0-dev1.3
+2.0-dev1.4
 
 query II
 SELECT (SELECT count(*) FROM dl.t), (SELECT count(*) FROM dl.u)
@@ -94,7 +94,7 @@ SELECT (SELECT count(*) FILTER (WHERE branch_id IS NULL) FROM meta.ducklake_tabl
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 ----
-2.0-dev1.3
+2.0-dev1.4
 
 # the tables are still there and the deleted rows stay deleted
 query I
@@ -128,7 +128,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 ----
-2.0-dev1.3
+2.0-dev1.4
 
 query I
 SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'

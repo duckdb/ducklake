@@ -37,10 +37,10 @@ FROM meta.ducklake_inlined_data_1_1
 ----
 1	2	2	0
 
-query IIIII
-FROM meta.ducklake_inlined_data_1_1_visibility
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility
 ----
-0	1	0	2	3
+1	1	0	2	0	3
 
 query I
 SELECT record_count FROM meta.ducklake_data_file
@@ -70,7 +70,7 @@ SELECT count(*) FROM meta.ducklake_inlined_data_1_1
 0
 
 query I
-SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility
 ----
 0
 

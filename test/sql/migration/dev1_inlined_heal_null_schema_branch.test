@@ -35,9 +35,6 @@ ALTER TABLE meta.ducklake_inlined_data_1_2 RENAME COLUMN b TO _ducklake_branch_i
 statement ok
 ALTER TABLE meta.ducklake_inlined_data_1_2 ADD COLUMN _ducklake_end_snapshot BIGINT
 
-statement ok
-DROP TABLE meta.ducklake_inlined_data_1_2_visibility
-
 # the branch column of the schema versions was added but not backfilled
 statement ok
 ALTER TABLE meta.ducklake_schema_versions DROP COLUMN branch_id

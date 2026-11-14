@@ -243,9 +243,6 @@ statement ok
 ALTER TABLE meta.ducklake_inlined_data_1_2 ADD COLUMN _ducklake_end_snapshot BIGINT
 
 statement ok
-DROP TABLE meta.ducklake_inlined_data_1_2_visibility
-
-statement ok
 ALTER TABLE meta.ducklake_inlined_data_1_2 DROP COLUMN _ducklake_branch_id
 
 statement ok

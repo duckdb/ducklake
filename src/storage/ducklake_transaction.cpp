@@ -1634,8 +1634,6 @@ void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version, optional_i
 
 void DuckLakeTransaction::DropEmptySupersededInlinedTablesClientSide() {
 	DuckLakeCommitContext context;
-	// a 2.0 payload is dropped with its companion
-	context.supports_v2_0_metadata = ducklake_catalog.SupportsBranching();
 	context.query_metadata = [&](string q) {
 		return metadata_manager->Query(q);
 	};

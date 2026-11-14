@@ -124,7 +124,7 @@ second
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 ----
-2.0-dev1.3
+2.0-dev1.4
 
 query II
 SELECT column_name, comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 't'

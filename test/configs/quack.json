@@ -89,7 +89,8 @@
         "test/sql/metadata/postgres_read_committed_listing_cache.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test",
         "test/sql/metadata/postgres_attach_cache_clear.test",
-        "test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test"
+        "test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test",
+        "test/sql/data_inlining/postgres_inlined_shared_read_committed.test"
       ]
     },
     {
@@ -244,7 +245,8 @@
     {
       "reason": "The commit batch of a quack catalog is sent through quack_query_by_name, so the number of column inserts cannot be counted",
       "paths": [
-        "test/sql/issues/issue_1146_column_insert_batches.test"
+        "test/sql/issues/issue_1146_column_insert_batches.test",
+        "test/sql/data_inlining/inlined_create_tables_statement_count.test"
       ]
     },
     {

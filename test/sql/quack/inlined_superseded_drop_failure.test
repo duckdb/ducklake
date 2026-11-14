@@ -61,10 +61,10 @@ CALL quack_query_by_name('__ducklake_metadata_dl', 'SELECT count(*) FROM ducklak
 ----
 does not exist
 
-statement error
-CALL quack_query_by_name('__ducklake_metadata_dl', 'SELECT count(*) FROM ducklake_inlined_data_1_1_visibility')
+query I
+SELECT count(*) FROM __ducklake_metadata_dl.ducklake_inlined_data_visibility WHERE table_id = 1
 ----
-does not exist
+0
 
 statement ok
 INSERT INTO dl.t VALUES (4, 4)

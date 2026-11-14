@@ -428,8 +428,12 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				// the version rows end in companion tables, which only a writable attach can backfill
 				throw InvalidInputException("This DuckLake catalog has the catalog tables of an older dev build, "
 				                            "attach it writable once to heal it");
+			} else if (!manager.HasInlinedVisibilityTable()) {
+				// the inlined rows end in one shared companion, which only a writable attach can create
+				throw InvalidInputException("This DuckLake catalog lacks the shared visibility table of its inlined "
+				                            "rows, attach it writable once to heal it");
 			} else if (!manager.HasInlinedRowShapes()) {
-				// the inlined rows end in companions and carry their branch, which only a writable attach can add
+				// the branch column and the shared companion ends of the inlined rows need a writable attach
 				throw InvalidInputException("This DuckLake catalog has the inlined data tables of an older dev build, "
 				                            "attach it writable once to heal it");
 			} else if ((manager.HasFileVisibilityTable() &&

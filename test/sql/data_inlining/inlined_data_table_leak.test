@@ -51,9 +51,9 @@ SELECT COUNT(*) FROM duckdb_tables() WHERE database_name='ducklake_meta' AND sch
 ----
 0
 
-# the companions of the inlined tables go with them
+# the ends of the dropped table go with its inlined tables
 query I
-SELECT COUNT(*) FROM duckdb_tables() WHERE database_name='ducklake_meta' AND schema_name IN ('main', 'public') AND table_name LIKE 'ducklake_inlined_data_%_visibility'
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_visibility WHERE table_id = 1
 ----
 0
 

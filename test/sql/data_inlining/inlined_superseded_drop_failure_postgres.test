@@ -75,10 +75,10 @@ SELECT count(*) FROM pg.sdrop.ducklake_inlined_data_1_1
 ----
 does not exist
 
-statement error
-SELECT count(*) FROM pg.sdrop.ducklake_inlined_data_1_1_visibility
+query I
+SELECT count(*) FROM pg.sdrop.ducklake_inlined_data_visibility WHERE table_id = 1
 ----
-does not exist
+0
 
 query II
 SELECT * FROM dl.t ORDER BY x

@@ -191,13 +191,13 @@ CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.ducklake_schema_
 
 # the inlined rows of a dev catalog carried their end in the payload and knew no branch
 statement ok
-CALL postgres_execute('pg', 'CREATE TABLE dev1_skips_present_ddl.inlined_data_1_1 AS SELECT d._ducklake_row_id, d._ducklake_begin_snapshot, e.snapshot_id AS _ducklake_end_snapshot, d.i FROM dev1_skips_present_ddl.ducklake_inlined_data_1_1 d LEFT JOIN dev1_skips_present_ddl.ducklake_inlined_data_1_1_visibility e ON e.row_id = d._ducklake_row_id AND e.row_branch_id = d._ducklake_branch_id AND e.row_snapshot = d._ducklake_begin_snapshot')
+CALL postgres_execute('pg', 'CREATE TABLE dev1_skips_present_ddl.inlined_data_1_1 AS SELECT d._ducklake_row_id, d._ducklake_begin_snapshot, e.snapshot_id AS _ducklake_end_snapshot, d.i FROM dev1_skips_present_ddl.ducklake_inlined_data_1_1 d LEFT JOIN dev1_skips_present_ddl.ducklake_inlined_data_visibility e ON e.table_id = 1 AND e.row_id = d._ducklake_row_id AND e.row_branch_id = d._ducklake_branch_id AND e.row_snapshot = d._ducklake_begin_snapshot')
 
 statement ok
 CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_inlined_data_1_1')
 
 statement ok
-CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_inlined_data_1_1_visibility')
+CALL postgres_execute('pg', 'DROP TABLE dev1_skips_present_ddl.ducklake_inlined_data_visibility')
 
 statement ok
 CALL postgres_execute('pg', 'ALTER TABLE dev1_skips_present_ddl.inlined_data_1_1 RENAME TO ducklake_inlined_data_1_1')
@@ -233,7 +233,7 @@ query I
 SELECT value FROM postgres_query('pg',
     'SELECT value FROM dev1_skips_present_ddl.ducklake_metadata WHERE key = ''heal_complete''')
 ----
-2.0-dev1.3
+2.0-dev1.4
 
 # the migration rebuilt the snapshot tables with the branch column
 query I
@@ -269,14 +269,14 @@ SELECT * FROM postgres_query('pg', 'SELECT t.value, e.row_snapshot, e.snapshot_i
 ----
 first	2	3
 
-# the inlined rows carry their branch again and end in their companion
+# the inlined rows carry their branch again and end in the shared companion
 query I
 SELECT string_agg(column_name, ', ' ORDER BY ordinal_position) FROM postgres_query('pg', 'SELECT column_name, ordinal_position FROM information_schema.columns WHERE table_schema = ''dev1_skips_present_ddl'' AND table_name = ''ducklake_inlined_data_1_1''')
 ----
 _ducklake_row_id, _ducklake_begin_snapshot, i, _ducklake_branch_id
 
 query I
-SELECT count(*) FROM postgres_query('pg', 'SELECT 1 FROM information_schema.tables WHERE table_schema = ''dev1_skips_present_ddl'' AND table_name = ''ducklake_inlined_data_1_1_visibility''')
+SELECT count(*) FROM postgres_query('pg', 'SELECT 1 FROM information_schema.tables WHERE table_schema = ''dev1_skips_present_ddl'' AND table_name = ''ducklake_inlined_data_visibility''')
 ----
 1
 

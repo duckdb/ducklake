@@ -2944,7 +2944,7 @@ WHERE idt.schema_version < (
 		}
 		// keep the registration if the drop fails
 		auto res = context.execute_in_transaction(DuckLakeMetadataManager::DropInlinedTableSql(
-		    candidate.table_id, candidate.schema_version, candidate.table_name, context.supports_v2_0_metadata));
+		    candidate.table_id, candidate.schema_version, candidate.table_name));
 		if (res->HasError()) {
 			if (!failed_drop) {
 				failed_drop = std::move(res);

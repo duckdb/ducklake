@@ -16,6 +16,7 @@ string DuckLakeMetadataManagerV2_0<Base>::GetCreateTableStatements() {
 	for (auto &kind : DuckLakeMetadataManager::RowVisibilityKinds()) {
 		result += DuckLakeMetadataManager::GetRowVisibilityTableStatement(kind) + "\n";
 	}
+	result += DuckLakeMetadataManager::GetInlinedVisibilityTableStatement() + "\n";
 	return result;
 }
 

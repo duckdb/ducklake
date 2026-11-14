@@ -23,9 +23,9 @@ CREATE TABLE dl.t (i INTEGER)
 statement ok
 INSERT INTO dl.t VALUES (1), (2), (3)
 
-# the companion enters the cache of the scanner, the payload the commit created on the server does not
+# the shared companion enters the cache of the scanner, the payload the commit created on the server does not
 query I
-SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility
 ----
 0
 
@@ -33,7 +33,7 @@ SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
 statement ok
 DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 
-# a writable attach heals nothing, the companion has its payload
+# a writable attach heals nothing, the payload has the shape of 2.0
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl2 (METADATA_CATALOG 'meta')
 
@@ -45,7 +45,7 @@ SELECT i FROM dl2.t ORDER BY i
 3
 
 query I
-SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility
 ----
 0
 
@@ -53,7 +53,7 @@ SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 ----
-2.0-dev1.3
+2.0-dev1.4
 
 statement ok
 DETACH dl2

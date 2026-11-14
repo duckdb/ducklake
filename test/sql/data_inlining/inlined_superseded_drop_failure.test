@@ -58,16 +58,16 @@ SELECT table_name FROM __ducklake_metadata_dl.ducklake_inlined_data_tables ORDER
 ducklake_inlined_data_1_1
 ducklake_inlined_data_1_2
 
-# the failed drop kept the companion with its payload
+# the flushed table has no end left in the shared companion
 query I
-SELECT count(*) FROM __ducklake_metadata_dl.ducklake_inlined_data_1_1_visibility
+SELECT count(*) FROM __ducklake_metadata_dl.ducklake_inlined_data_visibility WHERE table_id = 1
 ----
 0
 
 statement ok
 DROP TABLE __ducklake_metadata_dl.drop_blocker
 
-# a flush with nothing to flush drops the superseded table with its companion
+# a flush with nothing to flush drops the superseded table
 statement ok
 CALL ducklake_flush_inlined_data('dl')
 
@@ -81,10 +81,10 @@ SELECT count(*) FROM __ducklake_metadata_dl.ducklake_inlined_data_1_1
 ----
 does not exist
 
-statement error
-SELECT count(*) FROM __ducklake_metadata_dl.ducklake_inlined_data_1_1_visibility
+query I
+SELECT count(*) FROM __ducklake_metadata_dl.ducklake_inlined_data_visibility WHERE table_id = 1
 ----
-does not exist
+0
 
 statement ok
 INSERT INTO dl.t VALUES (4, 4)

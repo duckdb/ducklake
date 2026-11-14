@@ -29,7 +29,7 @@ SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1
 3
 
 query I
-SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1_visibility
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_visibility
 ----
 1
 
@@ -46,7 +46,7 @@ SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1
 2
 
 query I
-SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1_visibility
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_visibility
 ----
 0
 
@@ -70,7 +70,7 @@ statement ok
 DELETE FROM ducklake.t1 WHERE i=5
 
 query I
-SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1_visibility
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_visibility
 ----
 2
 
@@ -83,7 +83,7 @@ SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1
 2
 
 query I
-SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_1_1_visibility
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_visibility
 ----
 0
 

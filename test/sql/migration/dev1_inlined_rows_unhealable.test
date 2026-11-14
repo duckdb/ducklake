@@ -1,5 +1,5 @@
 # name: test/sql/migration/dev1_inlined_rows_unhealable.test
-# description: an inlined data table with rows whose end column is gone and whose companion is missing cannot be healed, an empty one gets its companion back
+# description: an inlined data table with rows whose end column is gone while the shared companion is missing cannot be healed, an empty one gets the companion back
 # group: [migration]
 
 require ducklake
@@ -27,7 +27,7 @@ statement ok
 DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 
 statement ok
-DROP TABLE meta.ducklake_inlined_data_1_1_visibility
+DROP TABLE meta.ducklake_inlined_data_visibility
 
 statement ok
 DETACH dl
@@ -35,14 +35,14 @@ DETACH dl
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
 ----
-attach it writable once
+lacks the shared visibility table of its inlined rows, attach it writable once
 
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
 ----
 Cannot heal this DuckLake catalog: the end snapshots of the inlined rows were dropped and the visibility rows that replaced them are missing
 
-# an empty inlined table without companion gets its companion recreated
+# an empty inlined table without the shared companion gets the companion recreated
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_empty.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_empty_files', METADATA_CATALOG 'meta2', DATA_INLINING_ROW_LIMIT 10)
 
@@ -65,7 +65,7 @@ statement ok
 DELETE FROM meta2.ducklake_metadata WHERE key = 'heal_complete'
 
 statement ok
-DROP TABLE meta2.ducklake_inlined_data_1_1_visibility
+DROP TABLE meta2.ducklake_inlined_data_visibility
 
 statement ok
 DETACH dl
@@ -74,7 +74,7 @@ statement ok
 ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_empty.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_empty_files', METADATA_CATALOG 'meta2', DATA_INLINING_ROW_LIMIT 10)
 
 query I
-SELECT count(*) FROM meta2.ducklake_inlined_data_1_1_visibility
+SELECT count(*) FROM meta2.ducklake_inlined_data_visibility
 ----
 0
 
@@ -85,7 +85,7 @@ statement ok
 DELETE FROM dl.t WHERE i = 2
 
 query I
-SELECT count(*) FROM meta2.ducklake_inlined_data_1_1_visibility
+SELECT count(*) FROM meta2.ducklake_inlined_data_visibility
 ----
 1
 

@@ -67,8 +67,8 @@ SELECT sum(id), sum(c) FROM lake.t
 ----
 10	7
 
-# the companion of the superseded inlined table went with it
-statement error con2
-SELECT count(*) FROM __ducklake_metadata_lake.ducklake_inlined_data_1_1_visibility
+# the dropped inlined table left no end in the shared companion
+query I con2
+SELECT count(*) FROM __ducklake_metadata_lake.ducklake_inlined_data_visibility WHERE table_id = 1
 ----
-does not exist
+0

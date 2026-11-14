@@ -1,5 +1,5 @@
 # name: test/sql/data_inlining/postgres_inlined_visibility_rows.test
-# description: the companion of an inlined data table and the end writer run natively on Postgres with the key named like the other companions
+# description: the shared companion of the inlined data tables and the end writer run natively on Postgres with the key named like the other companions
 # group: [data_inlining]
 
 require ducklake
@@ -36,11 +36,11 @@ DELETE FROM dl.t WHERE i = 2
 statement ok
 UPDATE dl.t SET i = 30 WHERE i = 3
 
-query IIIII
-SELECT * FROM postgres_query('pg', 'SELECT branch_id, row_id, row_branch_id, row_snapshot, snapshot_id FROM pgvis.ducklake_inlined_data_1_1_visibility ORDER BY row_id, row_snapshot')
+query IIIIII
+SELECT * FROM postgres_query('pg', 'SELECT table_id, row_id, row_branch_id, row_snapshot, branch_id, snapshot_id FROM pgvis.ducklake_inlined_data_visibility ORDER BY row_id, row_snapshot')
 ----
-0	1	0	2	3
-0	2	0	2	4
+1	1	0	2	0	3
+1	2	0	2	0	4
 
 query IIII
 SELECT * FROM postgres_query('pg', 'SELECT _ducklake_row_id, _ducklake_begin_snapshot, i, _ducklake_branch_id FROM pgvis.ducklake_inlined_data_1_1 ORDER BY _ducklake_row_id, _ducklake_begin_snapshot')
@@ -52,14 +52,14 @@ SELECT * FROM postgres_query('pg', 'SELECT _ducklake_row_id, _ducklake_begin_sna
 
 # the key carries the name every retried constraint violation is recognized by
 query I
-SELECT * FROM postgres_query('pg', 'SELECT conname FROM pg_constraint WHERE conrelid = ''pgvis.ducklake_inlined_data_1_1_visibility''::regclass')
+SELECT * FROM postgres_query('pg', 'SELECT conname FROM pg_constraint WHERE conrelid = ''pgvis.ducklake_inlined_data_visibility''::regclass')
 ----
-ducklake_inlined_data_1_1_visibility_pkey
+ducklake_inlined_data_visibility_pkey
 
 statement error
-CALL postgres_execute('pg', 'INSERT INTO pgvis.ducklake_inlined_data_1_1_visibility VALUES (0, 1, 0, 2, 9)')
+CALL postgres_execute('pg', 'INSERT INTO pgvis.ducklake_inlined_data_visibility VALUES (1, 1, 0, 2, 0, 9)')
 ----
-ducklake_inlined_data_1_1_visibility_pkey
+ducklake_inlined_data_visibility_pkey
 
 query I
 SELECT i FROM dl.t ORDER BY i
@@ -85,7 +85,7 @@ statement ok
 CALL ducklake_flush_inlined_data('dl')
 
 query I
-SELECT * FROM postgres_query('pg', 'SELECT count(*) FROM pgvis.ducklake_inlined_data_1_1_visibility')
+SELECT * FROM postgres_query('pg', 'SELECT count(*) FROM pgvis.ducklake_inlined_data_visibility')
 ----
 0
 

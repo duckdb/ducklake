@@ -1,0 +1,89 @@
+# name: test/sql/migration/dev1_inlined_shared_unhealable.test
+# description: an inlined data table with rows whose ends are in no companion while the shared companion is missing cannot be healed, next to the shared companion it heals nothing
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+# the older dev build wrote no heal marker
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
+statement ok
+DROP TABLE meta.ducklake_inlined_data_visibility
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+lacks the shared visibility table of its inlined rows, attach it writable once to heal it
+
+# the payload has rows, no end column and no companion to fold, so its ends are lost
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+----
+Cannot heal this DuckLake catalog: the end snapshots of the inlined rows were dropped and the visibility rows that replaced them are missing
+
+# the same payload next to the shared companion is a folded one, the heal leaves it alone
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_folded.db' AS dl2 (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_folded_files', METADATA_CATALOG 'meta2', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl2.t (i INTEGER)
+
+statement ok
+INSERT INTO dl2.t VALUES (1), (2)
+
+statement ok
+DELETE FROM dl2.t WHERE i = 2
+
+statement ok
+DELETE FROM meta2.ducklake_metadata WHERE key = 'heal_complete'
+
+statement ok
+DETACH dl2
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_folded.db' AS dl2 (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_folded_files', METADATA_CATALOG 'meta2', READ_ONLY)
+----
+no marker of a completed heal
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_folded.db' AS dl2 (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_folded_files', METADATA_CATALOG 'meta2', DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT i FROM dl2.t
+----
+1
+
+query IIIIII
+FROM meta2.ducklake_inlined_data_visibility
+----
+1	1	0	2	0	3
+
+query I
+SELECT value FROM meta2.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.4
+
+statement ok
+DETACH dl2

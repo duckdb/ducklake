@@ -38,13 +38,13 @@ SELECT list(DISTINCT _ducklake_row_id) FROM meta.ducklake_inlined_data_1_1
 [0]
 
 query III
-SELECT count(*), min(snapshot_id), max(snapshot_id) FROM meta.ducklake_inlined_data_1_1_visibility
+SELECT count(*), min(snapshot_id), max(snapshot_id) FROM meta.ducklake_inlined_data_visibility
 ----
 9	3	11
 
 # the end of each version is the birth of the next
 query I
-SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility WHERE snapshot_id <> row_snapshot + 1
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility WHERE snapshot_id <> row_snapshot + 1
 ----
 0
 
@@ -72,7 +72,7 @@ SELECT count(*) FROM meta.ducklake_inlined_data_1_1
 0
 
 query I
-SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility
 ----
 0
 

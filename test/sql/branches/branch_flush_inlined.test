@@ -52,7 +52,7 @@ SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_1 WHERE _ducklake_branch_id = 
 0
 
 query I
-SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_1_visibility WHERE branch_id = 0
+SELECT COUNT(*) FROM meta.ducklake_inlined_data_visibility WHERE table_id = 1 AND branch_id = 0
 ----
 0
 

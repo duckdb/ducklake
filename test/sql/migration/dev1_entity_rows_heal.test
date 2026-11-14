@@ -121,7 +121,7 @@ j2
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 ----
-2.0-dev1.3
+2.0-dev1.4
 
 query II
 SELECT i, j2 FROM dl.t

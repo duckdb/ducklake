@@ -47,11 +47,11 @@ SELECT i, v FROM dl.t ORDER BY i
 4	d
 
 # the ends of main after the fork and the versions it re inserted are not in the view of dev
-query IIIII
-FROM meta.ducklake_inlined_data_1_1_visibility ORDER BY ALL
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
 ----
-0	1	0	2	3
-0	2	0	2	4
+1	1	0	2	0	3
+1	2	0	2	0	4
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')

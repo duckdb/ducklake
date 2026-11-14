@@ -1,5 +1,5 @@
 # name: test/sql/migration/dev1_inlined_rows_heal.test
-# description: the inlined data tables of an older dev build, ended in place and without companions, are refused read only, heal on a writable attach and resume from every statement of the heal
+# description: the inlined data tables of an older dev build, ended in place and without the shared companion, are refused read only, heal on a writable attach and resume from every statement of the heal
 # group: [migration]
 
 require ducklake
@@ -46,7 +46,7 @@ SELECT count(*) FROM dl.f
 statement ok
 DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 
-# the older dev build ended its row versions in place, knew no birth branch and no branch of a deletion
+# the older dev build ended its row versions in place, knew no shared companion, no birth branch and no branch of a deletion
 statement ok
 ALTER TABLE meta.ducklake_inlined_data_1_1 ADD COLUMN _ducklake_end_snapshot BIGINT
 
@@ -57,7 +57,7 @@ statement ok
 UPDATE meta.ducklake_inlined_data_1_1 SET _ducklake_end_snapshot = 4 WHERE _ducklake_row_id = 2 AND _ducklake_begin_snapshot = 2
 
 statement ok
-DROP TABLE meta.ducklake_inlined_data_1_1_visibility
+DROP TABLE meta.ducklake_inlined_data_visibility
 
 statement ok
 ALTER TABLE meta.ducklake_inlined_data_1_1 DROP COLUMN _ducklake_branch_id
@@ -95,11 +95,11 @@ FROM meta.ducklake_inlined_data_1_1 ORDER BY ALL
 2	2	3	c	0
 2	4	3	c2	0
 
-query IIIII
-FROM meta.ducklake_inlined_data_1_1_visibility ORDER BY ALL
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
 ----
-0	1	0	2	3
-0	2	0	2	4
+1	1	0	2	0	3
+1	2	0	2	0	4
 
 query III
 SELECT row_id, begin_snapshot, branch_id FROM meta.ducklake_inlined_delete_2
@@ -134,18 +134,18 @@ SELECT count(*) FROM dl.f
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 ----
-2.0-dev1.3
+2.0-dev1.4
 
 # the healed catalog ends the versions it deletes in the companion
 statement ok
 DELETE FROM dl.t WHERE i = 1
 
-query IIIII
-FROM meta.ducklake_inlined_data_1_1_visibility ORDER BY ALL
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
 ----
-0	0	0	2	7
-0	1	0	2	3
-0	2	0	2	4
+1	0	0	2	0	7
+1	1	0	2	0	3
+1	2	0	2	0	4
 
 # an interrupted heal wrote no marker
 statement ok
@@ -165,7 +165,7 @@ statement ok
 UPDATE meta.ducklake_inlined_data_1_1 SET _ducklake_end_snapshot = 7 WHERE _ducklake_row_id = 0 AND _ducklake_begin_snapshot = 2
 
 statement ok
-DROP TABLE meta.ducklake_inlined_data_1_1_visibility
+DROP TABLE meta.ducklake_inlined_data_visibility
 
 statement ok
 ALTER TABLE meta.ducklake_inlined_data_1_1 DROP COLUMN _ducklake_branch_id
@@ -194,12 +194,12 @@ SELECT list(DISTINCT _ducklake_branch_id) FROM meta.ducklake_inlined_data_1_1
 ----
 [0]
 
-query IIIII
-FROM meta.ducklake_inlined_data_1_1_visibility ORDER BY ALL
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
 ----
-0	0	0	2	7
-0	1	0	2	3
-0	2	0	2	4
+1	0	0	2	0	7
+1	1	0	2	0	3
+1	2	0	2	0	4
 
 query II
 SELECT i, v FROM dl.t ORDER BY i
@@ -230,7 +230,7 @@ statement ok
 UPDATE meta.ducklake_inlined_data_1_1 SET _ducklake_end_snapshot = 7 WHERE _ducklake_row_id = 0 AND _ducklake_begin_snapshot = 2
 
 statement ok
-DELETE FROM meta.ducklake_inlined_data_1_1_visibility
+DELETE FROM meta.ducklake_inlined_data_visibility
 
 statement ok
 DETACH dl
@@ -238,12 +238,12 @@ DETACH dl
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
 
-query IIIII
-FROM meta.ducklake_inlined_data_1_1_visibility ORDER BY ALL
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
 ----
-0	0	0	2	7
-0	1	0	2	3
-0	2	0	2	4
+1	0	0	2	0	7
+1	1	0	2	0	3
+1	2	0	2	0	4
 
 query I
 SELECT column_name FROM (DESCRIBE SELECT * FROM meta.ducklake_inlined_data_1_1)
@@ -278,7 +278,7 @@ statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
 
 query I
-SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility
 ----
 3
 

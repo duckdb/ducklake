@@ -26,7 +26,10 @@
       "reason": "Tests the migration of metadata that the test writes to the metadata catalog directly",
       "paths": [
         "test/sql/migration/stale_version_after_migration.test",
-        "test/sql/migration/v01_partitioned.test"
+        "test/sql/migration/v01_partitioned.test",
+        "test/sql/migration/dev1_inlined_fold_companions.test",
+        "test/sql/migration/dev1_inlined_shared_unhealable.test",
+        "test/sql/migration/dev1_inlined_heal_chunks.test"
       ]
     },
     {
@@ -53,7 +56,8 @@
         "test/sql/transaction/commit_retry_skips_catalog_load.test",
         "test/sql/branches/branchless_skips_guards.test",
         "test/sql/deletion_inlining/inlined_file_deletes_concurrent_branch_column.test",
-        "test/sql/metadata/file_listing_reused_in_transaction.test"
+        "test/sql/metadata/file_listing_reused_in_transaction.test",
+        "test/sql/data_inlining/inlined_create_tables_statement_count.test"
       ]
     },
     {
@@ -585,7 +589,6 @@
         "test/sql/migration/dev1_heal_refuses_old_branches.test",
         "test/sql/migration/dev1_inlined_deletes_heal.test",
         "test/sql/migration/dev1_inlined_heal_null_schema_branch.test",
-        "test/sql/migration/dev1_inlined_orphan_companion.test",
         "test/sql/migration/dev1_inlined_rows_heal.test",
         "test/sql/migration/dev1_inlined_rows_unhealable.test",
         "test/sql/migration/dev1_missing_changes_table.test",
@@ -604,7 +607,12 @@
         "test/sql/migration/v11_to_v20_dev1_inlined_deletes.test",
         "test/sql/migration/v11_to_v20_dev1_missing_macro_table.test",
         "test/sql/migration/v11_to_v20_dev1_resume_rebuilt.test",
-        "test/sql/migration/v11_to_v20_dev1_resume_tag_table.test"
+        "test/sql/migration/v11_to_v20_dev1_resume_tag_table.test",
+        "test/sql/data_inlining/inlined_shared_visibility_layout.test",
+        "test/sql/data_inlining/inlined_superseded_drop_ends.test",
+        "test/sql/data_inlining/inlined_shared_expire.test",
+        "test/sql/data_inlining/inlined_shared_flush_two_tables.test",
+        "test/sql/data_inlining/inlined_foreign_payload_name.test"
       ]
     },
     {
@@ -733,7 +741,8 @@
         "test/sql/data_inlining/postgres_inlined_second_attach.test",
         "test/sql/data_inlining/postgres_inlined_visibility_rows.test",
         "test/sql/metadata/postgres_read_committed_branch_memo.test",
-        "test/sql/metadata/postgres_read_committed_listing_cache.test"
+        "test/sql/metadata/postgres_read_committed_listing_cache.test",
+        "test/sql/data_inlining/postgres_inlined_shared_read_committed.test"
       ]
     },
     {
@@ -815,7 +824,8 @@
         "test/sql/branches/branch_feed_previous_delete_tie.test",
         "test/sql/branches/branch_delete_file_choice.test",
         "test/sql/branches/branch_insertions_delete_choice.test",
-        "test/sql/branches/branch_replacement_writes_no_branch_rows.test"
+        "test/sql/branches/branch_replacement_writes_no_branch_rows.test",
+        "test/sql/branches/branch_nested_inlined_shared.test"
       ]
     }
   ]
