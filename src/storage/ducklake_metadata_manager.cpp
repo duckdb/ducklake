@@ -9793,12 +9793,12 @@ string DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<Fl
 				ends.push_back(StringUtil::Format("(%d, %d, %d)", end.branch_id, end.row_id, end.row_snapshot));
 			}
 			result += ChunkValuesStatements(ends, [&](const string &values) {
-				auto rehomed = StringUtil::Format(R"(row_branch_id = {BRANCH_ID}
-  AND (branch_id, row_id, row_snapshot) IN (
-      SELECT branch_id, row_id, row_snapshot
-      FROM (VALUES %s) ends(branch_id, row_id, row_snapshot)))",
-				                                  values);
-				return StringUtil::Format("DELETE FROM %s;\n", CompanionEnds(kind, "", rehomed));
+				// the keys name a CTE, SQLite has no column list on a derived table
+				auto rehomed = "row_branch_id = {BRANCH_ID} AND (branch_id, row_id, row_snapshot) IN "
+				               "(SELECT branch_id, row_id, row_snapshot FROM ends)";
+				return StringUtil::Format("WITH ends(branch_id, row_id, row_snapshot) AS (VALUES %s)\n"
+				                          "DELETE FROM %s;\n",
+				                          values, CompanionEnds(kind, "", rehomed));
 			});
 		}
 		// the versions born on the flushing branch, those its deletes of this commit ended after the flush excepted

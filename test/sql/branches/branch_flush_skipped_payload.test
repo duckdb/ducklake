@@ -75,7 +75,7 @@ CALL disable_logging()
 
 # the commit deletes the rehomed ends of the flushed payload alone, in one VALUES keyed statement
 query I
-SELECT sum(len(regexp_extract_all(query, 'DELETE FROM [^;]*ducklake_inlined_data_visibility[^;]*VALUES'))) FROM duckdb_logs_parsed('DuckLakeMetadata')
+SELECT sum(len(regexp_extract_all(query, 'WITH ends[^;]*VALUES[^;]*DELETE FROM [^;]*ducklake_inlined_data_visibility'))) FROM duckdb_logs_parsed('DuckLakeMetadata')
 ----
 1
 
