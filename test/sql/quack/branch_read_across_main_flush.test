@@ -6,7 +6,7 @@ require ducklake
 
 require parquet
 
-require-env DUCKLAKE_CONNECTION
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
 
 require quack
 
