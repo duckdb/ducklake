@@ -45,7 +45,7 @@ Cannot heal this DuckLake catalog: the end snapshots of the inlined rows were dr
 
 # the refused heal leaves the marker as it was
 statement ok
-ATTACH '{DUCKLAKE_CONNECTION}' AS meta
+ATTACH IF NOT EXISTS '{DUCKLAKE_CONNECTION}' AS meta
 
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'

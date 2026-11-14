@@ -164,7 +164,7 @@ FROM dev.table_changes('t', 5, 5) ORDER BY ALL
 ----
 5	2	delete	3
 
-# the row 3 of the first file is not in the chosen cumulative file, so the feed dates it with nothing and reports no deletion of it
+# row 3 of the first file is not in the chosen cumulative file, so the feed reports no deletion of it
 statement ok
 COPY (SELECT ''::VARCHAR AS file_path, p::BIGINT AS pos FROM (VALUES (0), (1), (3)) v(p)) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet' (FORMAT PARQUET)
 

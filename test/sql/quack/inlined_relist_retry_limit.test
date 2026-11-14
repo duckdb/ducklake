@@ -1,5 +1,5 @@
 # name: test/sql/quack/inlined_relist_retry_limit.test
-# description: A scan on a Quack catalog lists the inlined tables again before every re read and gives up when the allocators keep every file at or above them
+# description: A Quack scan relists the inlined tables before every re read and gives up at the retry limit
 # group: [quack]
 
 require ducklake
