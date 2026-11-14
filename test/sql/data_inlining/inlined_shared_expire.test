@@ -161,5 +161,117 @@ SELECT i, j FROM dl.t AT (VERSION => 10) ORDER BY i
 3	NULL
 5	50
 
+# the sweep judges the ends of rows born at or before the snapshot the expiring transaction read, 12 here
+# a hand written end of a row born at 14 names a row of a payload a later commit may add, it waits for a later sweep
+# a hand written end of a row born at 5 names a row of no payload and goes
+statement ok
+INSERT INTO meta.ducklake_inlined_data_visibility VALUES (1, 7, 0, 14, 0, 15), (1, 8, 0, 5, 0, 6)
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [6])
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+1	0	0	3	0	11
+1	7	0	14	0	15
+
+query II
+SELECT i, j FROM dl.t ORDER BY i
+----
+3	NULL
+5	50
+
+# two more snapshots move the bound past 14 and the next sweep takes the end
+statement ok
+INSERT INTO dl.u VALUES (4)
+
+statement ok
+INSERT INTO dl.u VALUES (5)
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [13])
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+1	0	0	3	0	11
+
+# a table with three payload versions, the dead version lives in the middle one
+statement ok
+CREATE TABLE dl.v (i INTEGER)
+
+statement ok
+INSERT INTO dl.v VALUES (1)
+
+statement ok
+ALTER TABLE dl.v ADD COLUMN j INTEGER
+
+statement ok
+INSERT INTO dl.v VALUES (2, 20)
+
+statement ok
+ALTER TABLE dl.v ADD COLUMN k INTEGER
+
+statement ok
+INSERT INTO dl.v VALUES (3, 30, 300)
+
+statement ok
+DELETE FROM dl.v WHERE i = 2
+
+query I
+SELECT table_name FROM meta.ducklake_inlined_data_tables WHERE table_id = 3 ORDER BY schema_version
+----
+ducklake_inlined_data_3_4
+ducklake_inlined_data_3_5
+ducklake_inlined_data_3_6
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility WHERE table_id = 3
+----
+3	1	0	20	0	23
+
+# the version is still read by 21 and 22, the sweep over the three payloads finds it in the middle one and keeps its end
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [20])
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility WHERE table_id = 3
+----
+3	1	0	20	0	23
+
+query III
+SELECT i, j, k FROM dl.v AT (VERSION => 22) ORDER BY i
+----
+1	NULL	NULL
+2	20	NULL
+3	30	300
+
+query III
+SELECT i, j, k FROM dl.v ORDER BY i
+----
+1	NULL	NULL
+3	30	300
+
+# once no snapshot reads the version, it goes from the middle payload and its end with it
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [21, 22])
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_3_5
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility WHERE table_id = 3
+----
+0
+
+query III
+SELECT i, j, k FROM dl.v ORDER BY i
+----
+1	NULL	NULL
+3	30	300
+
 statement ok
 DETACH dl

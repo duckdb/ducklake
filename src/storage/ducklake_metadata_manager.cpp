@@ -5373,16 +5373,6 @@ string DuckLakeMetadataManager::CompanionEnds(const RowVisibilityKind &kind, con
 	                          alias.empty() ? "" : " AS " + alias, StringUtil::Join(predicates, " AND "));
 }
 
-string DuckLakeMetadataManager::InlinedVersionsOf(const vector<Identifier> &payloads,
-                                                  const DuckLakeInlinedColNames &col_names) {
-	vector<string> versions;
-	for (auto &payload : payloads) {
-		versions.push_back(StringUtil::Format("SELECT %s, %s, %s FROM {METADATA_CATALOG}.%s", col_names.row_id,
-		                                      col_names.branch_id, col_names.begin_snapshot, payload));
-	}
-	return "(" + StringUtil::Join(versions, " UNION ALL ") + ")";
-}
-
 string DuckLakeMetadataManager::EndRows(const DuckLakeBranchChain &chain, const RowVisibilityKind &kind,
                                         const string &filter) {
 	// the ends of a commit run before the version rows it adds, so a row born at the commit snapshot is not ended
@@ -9335,17 +9325,26 @@ WHERE NOT EXISTS (
 	ends->ThrowIfError(StringUtil::Format("Failed to delete from ducklake_%s_visibility in DuckLake: ", kind.kind));
 }
 
-void DuckLakeMetadataManager::DeleteOrphanInlinedRowEnds(idx_t table_id, const vector<Identifier> &payloads) {
+void DuckLakeMetadataManager::DeleteOrphanInlinedRowEnds(idx_t table_id, const vector<Identifier> &payloads,
+                                                         idx_t listed_snapshot) {
 	// the ends of a table name versions of any of its payloads, every payload names the same table id
 	auto col_names = InlinedColNames();
 	auto kind = InlinedRowKind(payloads[0], col_names);
-	auto filter = StringUtil::Format(R"(NOT EXISTS (
+	// a row born after the listed snapshot can live in a payload the listing missed, its end waits for the next sweep
+	vector<string> predicates {StringUtil::Format("e.row_snapshot <= %llu", listed_snapshot)};
+	// one probe per payload, a union of the payloads would exceed the compound limit of SQLite at 500 versions
+	// a payload dropped since the listing fails the statement, which the next cleanup retries
+	for (auto &payload : payloads) {
+		predicates.push_back(StringUtil::Format(R"(NOT EXISTS (
     SELECT 1
-    FROM %s r
-    WHERE r.%s = e.row_id AND r.%s = e.row_branch_id AND r.%s = e.row_snapshot
-))",
-	                                 InlinedVersionsOf(payloads, col_names), col_names.row_id, col_names.branch_id,
-	                                 col_names.begin_snapshot);
+    FROM {METADATA_CATALOG}.%s r
+    WHERE r.%s = e.row_id AND r.%s = e.row_branch_id
+      AND r.%s = e.row_snapshot
+  ))",
+		                                        payload, col_names.row_id, col_names.branch_id,
+		                                        col_names.begin_snapshot));
+	}
+	auto filter = StringUtil::Join(predicates, "\n  AND ");
 	auto ends = Execute(StringUtil::Format("DELETE FROM %s;", CompanionEnds(kind, "e", filter)));
 	ends->ThrowIfError(StringUtil::Format(
 	    "Failed to delete the ends of table %d from ducklake_inlined_data_visibility in DuckLake: ", table_id));
@@ -9610,6 +9609,8 @@ WHERE scope = 'schema' AND NOT EXISTS(
 	// above. Runs after the drop block, so dropped tables are already unregistered and this needs
 	// no table_id filter.
 	{
+		// every payload with a row born at or before the snapshot of this transaction is in the listing
+		auto listed_snapshot = transaction.GetSnapshot().snapshot_id;
 		auto inlined = Query("SELECT table_id, table_name FROM {METADATA_CATALOG}.ducklake_inlined_data_tables "
 		                     "ORDER BY table_id, schema_version;");
 		inlined->ThrowIfError("Failed to list inlined-data tables for cleanup in DuckLake: ");
@@ -9619,7 +9620,7 @@ WHERE scope = 'schema' AND NOT EXISTS(
 		vector<Identifier> swept_payloads;
 		auto sweep_ends = [&]() {
 			if (!swept_payloads.empty()) {
-				DeleteOrphanInlinedRowEnds(swept_table, swept_payloads);
+				DeleteOrphanInlinedRowEnds(swept_table, swept_payloads, listed_snapshot);
 				swept_payloads.clear();
 			}
 		};

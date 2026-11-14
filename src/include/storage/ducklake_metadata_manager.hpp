@@ -668,8 +668,6 @@ public:
 	static bool IsInlinedCompanionName(const string &name);
 	//! The companion of a kind under the alias with the filter, which carries the constant keys of the kind
 	static string CompanionEnds(const RowVisibilityKind &kind, const string &alias, const string &filter);
-	//! The versions of a table over its payloads as one derived table of row id, branch and begin snapshot
-	static string InlinedVersionsOf(const vector<Identifier> &payloads, const DuckLakeInlinedColNames &col_names);
 	//! The end events of the version rows the filter selects under the alias t that the commit chain sees
 	static string EndRows(const DuckLakeBranchChain &chain, const RowVisibilityKind &kind, const string &filter);
 	static string EndRows(const DuckLakeBranchChain &chain, const string &kind, const string &filter);
@@ -946,8 +944,8 @@ public:
 	virtual void CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	//! Deletes the ends whose version row is gone
 	void DeleteOrphanRowEnds(const RowVisibilityKind &kind);
-	//! Deletes the ends of a table whose version is in none of its payloads
-	void DeleteOrphanInlinedRowEnds(idx_t table_id, const vector<Identifier> &payloads);
+	//! Deletes the ends of rows born at or before the listed snapshot whose version is in none of the payloads
+	void DeleteOrphanInlinedRowEnds(idx_t table_id, const vector<Identifier> &payloads, idx_t listed_snapshot);
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	//! The tables with data files that are not dropped
 	unordered_set<idx_t> GetTablesWithLiveDataFiles();
