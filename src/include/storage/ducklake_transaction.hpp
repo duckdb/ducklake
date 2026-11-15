@@ -60,6 +60,8 @@ struct FlushedInlinedTableInfo {
 	idx_t flush_snapshot_id;
 	//! A flush that writes no file leaves no rows to delete
 	bool wrote_files = true;
+	//! Whether the ends read of the flush returned ends of the flushing branch, which the commit deletes
+	bool has_own_ends = true;
 	//! The ends of other branches on the moved versions, which the commit deletes by their key
 	vector<DuckLakeRehomedEnd> rehomed_ends;
 };
@@ -141,6 +143,8 @@ public:
 	bool AddCompaction(TableIndex table_id, DuckLakeCompactionEntry entry);
 	set<DataFileIndex> GetCompactedFiles(TableIndex table_id) const;
 	set<TableIndex> GetCompactedTables() const;
+	//! The tables this transaction deleted inlined rows from
+	set<TableIndex> TablesWithInlinedDeletes() const;
 	bool HasLocalDeletes(TableIndex table_id) const;
 	bool HasLocalDeleteForFile(TableIndex table_id, const string &path) const;
 	bool HasAnyLocalChanges(TableIndex table_id) const;
@@ -309,7 +313,7 @@ public:
 	void MarkMetadataWritten();
 	//! Marks the inlined data flushed up to the snapshot, the commit deletes its rows and the rehomed ends
 	void MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id, bool wrote_files,
-	                                vector<DuckLakeRehomedEnd> rehomed_ends);
+	                                bool has_own_ends, vector<DuckLakeRehomedEnd> rehomed_ends);
 	bool InlinedTableFlushed(const Identifier &table_name);
 	//! Marks the inlined file deletions of the table flushed up to the snapshot, the commit deletes them
 	void MarkInlinedFileDeletionsFlushed(TableIndex table_id, idx_t flush_snapshot_id);

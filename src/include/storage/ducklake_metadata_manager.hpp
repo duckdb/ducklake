@@ -922,6 +922,7 @@ public:
 	//! The statements deleting the flushed inlined rows and the flushed inlined file deletions of the committing branch
 	static string GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
 	                                               const map<TableIndex, idx_t> &flushed_file_deletions,
+	                                               const set<TableIndex> &tables_with_inlined_deletes,
 	                                               const DuckLakeInlinedColNames &col_names, bool branch_aware);
 	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids,
 	                              bool write_branch_id);

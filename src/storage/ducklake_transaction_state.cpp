@@ -309,12 +309,7 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 	}
 	CheckFileConflicts(changes, other_changes, context);
 	// inlined deletes of data file rows conflict per file in CheckFileConflicts
-	set<TableIndex> tables_deleted_inlined_rows;
-	for (auto &entry : local_changes.Changes()) {
-		if (!entry.second.new_inlined_data_deletes.empty()) {
-			tables_deleted_inlined_rows.insert(entry.first);
-		}
-	}
+	auto tables_deleted_inlined_rows = local_changes.TablesWithInlinedDeletes();
 	for (auto &table_id : changes.tables_deleted_inlined) {
 		ConflictCheck(table_id, other_changes.dropped_tables, "delete from table", "dropped it");
 		ConflictCheck(table_id, other_changes.altered_tables, "delete from table", "altered it");
@@ -2724,8 +2719,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 
 	// delete the flushed inlined rows and inlined file deletions after the deletes of the transaction
 	batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(
-	    flushed_inlined_tables, flushed_inlined_file_deletions, context.InlinedColNames(),
-	    context.supports_v2_0_metadata);
+	    flushed_inlined_tables, flushed_inlined_file_deletions, local_changes.TablesWithInlinedDeletes(),
+	    context.InlinedColNames(), context.supports_v2_0_metadata);
 	// the live files and inlined rows decide the stats that this commit cannot update from memory
 	batch_queries += DuckLakeMetadataManager::RefreshTableSizesSql(
 	    refreshed_table_sizes, refreshed_record_counts, context.supports_v2_0_metadata, FileVisibilityChain(context));

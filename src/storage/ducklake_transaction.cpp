@@ -621,6 +621,17 @@ set<TableIndex> LocalTableChanges::GetCompactedTables() const {
 	return result;
 }
 
+set<TableIndex> LocalTableChanges::TablesWithInlinedDeletes() const {
+	lock_guard<mutex> guard(lock);
+	set<TableIndex> result;
+	for (auto &entry : changes) {
+		if (!entry.second.new_inlined_data_deletes.empty()) {
+			result.insert(entry.first);
+		}
+	}
+	return result;
+}
+
 bool LocalTableChanges::HasLocalDeletes(TableIndex table_id) const {
 	lock_guard<mutex> guard(lock);
 	auto table_changes = Find(table_id);
@@ -2432,10 +2443,11 @@ void DuckLakeTransaction::MarkMetadataWritten() {
 }
 
 void DuckLakeTransaction::MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id,
-                                                     bool wrote_files, vector<DuckLakeRehomedEnd> rehomed_ends) {
+                                                     bool wrote_files, bool has_own_ends,
+                                                     vector<DuckLakeRehomedEnd> rehomed_ends) {
 	lock_guard<mutex> guard(flushed_inlined_lock);
 	state->flushed_inlined_tables.push_back(
-	    {std::move(inlined_table), flush_snapshot_id, wrote_files, std::move(rehomed_ends)});
+	    {std::move(inlined_table), flush_snapshot_id, wrote_files, has_own_ends, std::move(rehomed_ends)});
 }
 
 bool DuckLakeTransaction::InlinedTableFlushed(const Identifier &table_name) {

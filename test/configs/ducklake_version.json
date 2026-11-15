@@ -386,6 +386,7 @@
         "test/sql/data_inlining/inlined_visibility_rows.test",
         "test/sql/data_inlining/inlined_update_versions.test",
         "test/sql/data_inlining/inlined_flush_keeps_own_deletes.test",
+        "test/sql/data_inlining/inlined_flush_statement_shapes.test",
         "test/sql/data_inlining/inlined_companion_layout.test",
         "test/sql/data_inlining/inlined_table_changes_versions.test",
         "test/sql/data_inlining/inlined_delete_conflict.test",

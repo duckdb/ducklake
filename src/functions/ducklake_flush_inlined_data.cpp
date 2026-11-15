@@ -155,11 +155,13 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 
 	DuckLakeInsert::RemoveEmptyFiles(context, global_state);
 	vector<DuckLakeRehomedEnd> rehomed_ends;
+	bool has_own_ends = false;
 	if (!global_state.written_files.empty()) {
 		DeletesPerFile deletes_per_file;
 		DuckLakeRehomedRowEnds rehomed_rows;
 		auto deleted_rows =
 		    metadata_manager.GetDeletedInlinedRowVersions(table, inlined_table.table_name, snapshot, rehomed_rows);
+		has_own_ends = !deleted_rows.empty();
 		if (!deleted_rows.empty() || !rehomed_rows.empty()) {
 			for (auto &file : global_state.written_files) {
 				auto deletes = GetWrittenFileDeletes(context, table, file, encryption_key, deleted_rows, rehomed_rows,
@@ -200,7 +202,8 @@ SinkFinalizeType DuckLakeFlushData::Finalize(Pipeline &pipeline, Event &event, C
 
 	bool wrote_files = !global_state.written_files.empty();
 	transaction.AppendFiles(global_state.table.GetTableId(), std::move(global_state.written_files));
-	transaction.MarkInlinedDataForDeletion(inlined_table, snapshot.snapshot_id, wrote_files, std::move(rehomed_ends));
+	transaction.MarkInlinedDataForDeletion(inlined_table, snapshot.snapshot_id, wrote_files, has_own_ends,
+	                                       std::move(rehomed_ends));
 	return SinkFinalizeType::READY;
 }
 

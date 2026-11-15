@@ -243,7 +243,8 @@
         "test/sql/sorted_table/data_inlining_flush_sorted_transaction_renamed.test",
         "test/sql/data_inlining/flush_renamed_table_name.test",
         "test/sql/data_inlining/inlined_flush_delete_conflict.test",
-        "test/sql/data_inlining/inlined_flush_keeps_own_deletes.test"
+        "test/sql/data_inlining/inlined_flush_keeps_own_deletes.test",
+        "test/sql/data_inlining/inlined_flush_statement_shapes.test"
       ]
     },
     {

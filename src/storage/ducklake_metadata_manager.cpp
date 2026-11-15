@@ -5846,26 +5846,27 @@ string DuckLakeMetadataManager::InlinedFlushSource(const Identifier &inlined_tab
 	auto col_names = InlinedColNames();
 	auto local_delete_ids = LocalInlinedDeleteIds(transaction, table, inlined_table_name);
 	if (catalog.SupportsBranching()) {
-		// the versions born on the flushing branch with the end each dead one has in its view
-		auto live =
-		    InlinedRows(true, catalog.AttachedChain(), inlined_table_name, "inlined_data", "{SNAPSHOT_ID}", col_names);
+		// the versions born on the flushing branch, the dead ones included
 		vector<string> projection {"inlined_data." + SQLIdentifier::ToString(col_names.row_id),
 		                           "inlined_data." + SQLIdentifier::ToString(col_names.begin_snapshot),
-		                           "inlined_data." + SQLIdentifier::ToString(col_names.branch_id),
-		                           "inlined_data_end." + SQLIdentifier::ToString(col_names.end_snapshot)};
-		for (auto &col : table.GetColumns().Physical()) {
-			auto name = SQLIdentifier::ToString(col.Name());
-			projection.push_back(CastColumnToTarget("inlined_data." + name, col.Type()) + " AS " + name);
-		}
+		                           "inlined_data." + SQLIdentifier::ToString(col_names.branch_id)};
+		string source = "{METADATA_CATALOG}." + inlined_table_name + " inlined_data";
 		auto filter = StringUtil::Format("inlined_data.%s = {BRANCH_ID} AND inlined_data.%s <= {SNAPSHOT_ID}",
 		                                 col_names.branch_id, col_names.begin_snapshot);
 		if (!local_delete_ids.empty()) {
 			// the live version of a row this transaction deleted keeps its end at the commit snapshot
+			auto live = InlinedRows(true, catalog.AttachedChain(), inlined_table_name, "inlined_data", "{SNAPSHOT_ID}",
+			                        col_names);
+			source = live.from;
+			projection.push_back("inlined_data_end." + SQLIdentifier::ToString(col_names.end_snapshot));
 			filter += StringUtil::Format(" AND NOT (inlined_data.%s IN %s AND inlined_data_end.%s IS NULL)",
 			                             col_names.row_id, local_delete_ids, col_names.end_snapshot);
 		}
-		return StringUtil::Format("(SELECT %s FROM %s WHERE %s)", StringUtil::Join(projection, ", "), live.from,
-		                          filter);
+		for (auto &col : table.GetColumns().Physical()) {
+			auto name = SQLIdentifier::ToString(col.Name());
+			projection.push_back(CastColumnToTarget("inlined_data." + name, col.Type()) + " AS " + name);
+		}
+		return StringUtil::Format("(SELECT %s FROM %s WHERE %s)", StringUtil::Join(projection, ", "), source, filter);
 	}
 	vector<string> projection {SQLIdentifier::ToString(col_names.row_id),
 	                           SQLIdentifier::ToString(col_names.begin_snapshot),
@@ -7067,23 +7068,38 @@ DuckLakeMetadataManager::GetInlinedFileDeletionsForFlush(DuckLakeTableEntry &tab
 	auto &chain = catalog.AttachedChain();
 	// on a branch the segment of its add event names the writer of the existing delete file
 	string delete_segment = catalog.OnBranch() ? ", existing_del.begin_segment" : "";
+	// the path of a data file does not depend on its visibility, its end in the view is its earliest delete event
+	string data_end = "data.end_snapshot";
+	string data_end_join;
+	if (catalog.SupportsBranching()) {
+		data_end = "data_end.end_snapshot";
+		data_end_join = StringUtil::Format(R"(
+LEFT JOIN (SELECT v.data_file_id, MIN(v.snapshot_id) AS end_snapshot
+           FROM {METADATA_CATALOG}.ducklake_file_visibility v
+           WHERE v.table_id = %d AND v.is_delete = TRUE AND %s
+           GROUP BY v.data_file_id) data_end ON data_end.data_file_id = del.file_id)",
+		                                   table_id.index, FileEventFilter(chain, "v"));
+	}
 	// the inlined deletions with the delete file active when their data file was last visible
 	auto result = Query(snapshot, StringUtil::Format(R"(
 SELECT del.file_id, data.path, data.path_is_relative, del.row_id, del.begin_snapshot,
-       existing_del.delete_file_id, existing_del.path as del_path, existing_del.path_is_relative as del_path_is_relative,
+       existing_del.delete_file_id, existing_del.path as del_path,
+       existing_del.path_is_relative as del_path_is_relative,
        existing_del.begin_snapshot as del_begin_snapshot, existing_del.encryption_key as del_encryption_key,
        existing_del.format as del_format%s
 FROM {METADATA_CATALOG}.%s del
-JOIN %s data ON del.file_id = data.data_file_id
+JOIN {METADATA_CATALOG}.ducklake_data_file data
+    ON del.file_id = data.data_file_id AND data.table_id = %d%s
 LEFT JOIN %s existing_del
     ON del.file_id = existing_del.data_file_id AND existing_del.table_id = %d
        AND {SNAPSHOT_ID} >= existing_del.begin_snapshot
        AND (existing_del.end_snapshot IS NULL
-            OR existing_del.end_snapshot >= COALESCE(data.end_snapshot, {SNAPSHOT_ID} + 1))
+            OR existing_del.end_snapshot >= COALESCE(%s, {SNAPSHOT_ID} + 1))
 WHERE %s
 	)",
-	                                                 delete_segment, inlined_table_name, DataFiles(), DeleteFiles(),
-	                                                 table_id.index, InlinedDeletionView("del", "{SNAPSHOT_ID}")));
+	                                                 delete_segment, inlined_table_name, table_id.index, data_end_join,
+	                                                 DeleteFiles(table_id), table_id.index, data_end,
+	                                                 InlinedDeletionView("del", "{SNAPSHOT_ID}")));
 	result->ThrowIfError("Failed to query inlined file deletions for flush: ");
 	auto &separator = catalog.Separator();
 	for (auto &row : *result) {
@@ -9871,6 +9887,7 @@ static std::tuple<idx_t, idx_t, string> FlushedPayloadOrder(const FlushedInlined
 
 string DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
                                                                  const map<TableIndex, idx_t> &flushed_file_deletions,
+                                                                 const set<TableIndex> &tables_with_inlined_deletes,
                                                                  const DuckLakeInlinedColNames &col_names,
                                                                  bool branch_aware) {
 	string result;
@@ -9879,8 +9896,22 @@ string DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<Fl
 	std::sort(ordered.begin(), ordered.end(), [](const FlushedInlinedTableInfo &a, const FlushedInlinedTableInfo &b) {
 		return FlushedPayloadOrder(a) < FlushedPayloadOrder(b);
 	});
-	for (auto &flushed_ref : ordered) {
-		auto &flushed = flushed_ref.get();
+	// the own ends of a table are deleted once, after the row deletes of the payloads flushed at one snapshot
+	map<pair<idx_t, idx_t>, idx_t> last_payload_of_table;
+	set<pair<idx_t, idx_t>> tables_with_own_ends;
+	for (idx_t i = 0; i < ordered.size(); i++) {
+		auto &flushed = ordered[i].get();
+		if (!flushed.wrote_files) {
+			continue;
+		}
+		auto table_key = make_pair(std::get<0>(FlushedPayloadOrder(flushed)), flushed.flush_snapshot_id);
+		last_payload_of_table[table_key] = i;
+		if (flushed.has_own_ends) {
+			tables_with_own_ends.insert(table_key);
+		}
+	}
+	for (idx_t i = 0; i < ordered.size(); i++) {
+		auto &flushed = ordered[i].get();
 		if (!flushed.wrote_files) {
 			// a concurrent schema change can drop an inlined table without rows
 			continue;
@@ -9910,19 +9941,30 @@ string DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<Fl
 				                          values, CompanionEnds(kind, "", rehomed));
 			});
 		}
-		// the versions born on the flushing branch, those its deletes of this commit ended after the flush excepted
-		auto later_ends = StringUtil::Format(R"(e.branch_id = {BRANCH_ID} AND e.row_id = d.%s
+		auto table_key = make_pair(std::get<0>(FlushedPayloadOrder(flushed)), flushed.flush_snapshot_id);
+		if (tables_with_inlined_deletes.count(TableIndex(table_key.first)) > 0) {
+			// only the ends of this commit lie above the flush snapshot, a concurrent inlined delete conflicts with it
+			auto later_ends = StringUtil::Format(R"(e.branch_id = {BRANCH_ID} AND e.row_id = d.%s
         AND e.row_branch_id = d.%s AND e.row_snapshot = d.%s
         AND e.snapshot_id > %d)",
-		                                     col_names.row_id, col_names.branch_id, col_names.begin_snapshot,
-		                                     flushed.flush_snapshot_id);
-		result += StringUtil::Format(R"(DELETE FROM {METADATA_CATALOG}.%s AS d
+			                                     col_names.row_id, col_names.branch_id, col_names.begin_snapshot,
+			                                     flushed.flush_snapshot_id);
+			result += StringUtil::Format(R"(DELETE FROM {METADATA_CATALOG}.%s AS d
 WHERE d.%s = {BRANCH_ID} AND d.%s <= %d
   AND NOT EXISTS (
       SELECT 1 FROM %s);
 )",
-		                             table_name, col_names.branch_id, col_names.begin_snapshot,
-		                             flushed.flush_snapshot_id, CompanionEnds(kind, "e", later_ends));
+			                             table_name, col_names.branch_id, col_names.begin_snapshot,
+			                             flushed.flush_snapshot_id, CompanionEnds(kind, "e", later_ends));
+		} else {
+			// the versions born on the flushing branch up to the flush
+			result += StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s WHERE %s = {BRANCH_ID} AND %s <= %d;\n",
+			                             table_name, col_names.branch_id, col_names.begin_snapshot,
+			                             flushed.flush_snapshot_id);
+		}
+		if (last_payload_of_table[table_key] != i || tables_with_own_ends.count(table_key) == 0) {
+			continue;
+		}
 		// the ends the branch wrote on its own versions up to the flush, which the flushed file dates its deletes by
 		auto own_ends = StringUtil::Format(
 		    "branch_id = {BRANCH_ID} AND row_branch_id = {BRANCH_ID} AND snapshot_id <= %d", flushed.flush_snapshot_id);
