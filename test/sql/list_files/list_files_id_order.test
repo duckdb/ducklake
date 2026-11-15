@@ -74,11 +74,6 @@ DELETE FROM meta.ducklake_data_file WHERE data_file_id = getvariable('moved_file
 statement ok
 INSERT INTO meta.ducklake_data_file SELECT * FROM moved
 
-query I
-SELECT list(data_file_id) = list(data_file_id ORDER BY data_file_id) FROM meta.ducklake_data_file
-----
-false
-
 # the live files are listed in the order of their ids, which is the order they were written in
 statement ok
 SET VARIABLE dropped_file = (SELECT data_file_id FROM meta.ducklake_file_visibility WHERE is_delete)

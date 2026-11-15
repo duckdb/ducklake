@@ -1225,6 +1225,8 @@ protected:
 
 	virtual string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
 	                                              const string &metadata_table_prefix);
+	//! Whether a requested file order renders a stats order, a backend may reject every term
+	bool OrdersByStats(const vector<DuckLakeFileListOrder> &file_order);
 	//! The snapshot placeholders of the query are replaced later, unless an override does it
 	virtual string GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                                     const FilterPushdownInfo *filter_info,

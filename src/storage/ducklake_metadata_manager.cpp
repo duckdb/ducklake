@@ -4179,6 +4179,17 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 //! Every statistics CTE adds a join to the file list query, whose planning grows fast with their number
 static constexpr idx_t MAX_STATS_CTES = 32;
 
+bool DuckLakeMetadataManager::OrdersByStats(const vector<DuckLakeFileListOrder> &file_order) {
+	for (const auto &order : file_order) {
+		auto cte_name = StatsCteName(order.column_field_index);
+		if (!CastStatsToTarget(StatsColumn(cte_name, order.use_max ? "max_value" : "min_value"), order.column_type)
+		         .empty()) {
+			return true;
+		}
+	}
+	return false;
+}
+
 string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                                                       const FilterPushdownInfo *filter_info,
                                                       const vector<DuckLakeFileListOrder> &file_order,
@@ -4459,7 +4470,7 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 		}
 		files.push_back(std::move(file_entry));
 	}
-	if (file_order.empty() && catalog.SupportsBranching()) {
+	if (catalog.SupportsBranching() && !OrdersByStats(file_order)) {
 		RestoreFileIdOrder(files);
 	}
 	if (cacheable) {
