@@ -1,0 +1,233 @@
+# name: test/sql/catalog/sqlite_native_catalog_load.test
+# description: a SQLite catalog loads its schema with statements SQLite runs, reading what a DuckDB catalog of the same lake reads
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+require json
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_native_catalog_load.db' AS sl (DATA_PATH '{DATA_PATH}/sqlite_native_catalog_load_sqlite', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/sqlite_native_catalog_load_duckdb.db' AS dl (DATA_PATH '{DATA_PATH}/sqlite_native_catalog_load_duckdb', DATA_INLINING_ROW_LIMIT 10)
+
+# the same lake in both catalogs
+foreach lake sl dl
+
+statement ok
+CREATE SCHEMA {lake}."sch ""q"" é"
+
+statement ok
+CREATE TABLE {lake}.t1 (a INTEGER NOT NULL, b VARCHAR DEFAULT 'de''f', s STRUCT(x INTEGER, y VARCHAR), old INTEGER)
+
+statement ok
+COMMENT ON TABLE {lake}.t1 IS 'quote " backslash \ newline
+tab	unicode é 日本 braces {} [] colon: end'
+
+statement ok
+COMMENT ON COLUMN {lake}.t1.b IS 'col "b" \n literal'
+
+statement ok
+INSERT INTO {lake}.t1 VALUES (1, 'x', {'x': 1, 'y': 'y'}, 0)
+
+# a second inlined data table of t1
+statement ok
+ALTER TABLE {lake}.t1 ADD COLUMN d INTEGER DEFAULT 42
+
+statement ok
+INSERT INTO {lake}.t1 VALUES (2, 'z', NULL, 0, 7)
+
+statement ok
+ALTER TABLE {lake}.t1 RENAME COLUMN a TO "a ""renamed"""
+
+statement ok
+ALTER TABLE {lake}.t1 DROP COLUMN old
+
+# a column tag next to the comment
+statement ok
+INSERT INTO __ducklake_metadata_{lake}.ducklake_column_tag (table_id, column_id, begin_snapshot, key, value, branch_id)
+SELECT c.table_id, c.column_id, c.begin_snapshot, 'owner', 'main"tenance', 0
+FROM __ducklake_metadata_{lake}.ducklake_column c JOIN __ducklake_metadata_{lake}.ducklake_table t USING (table_id)
+WHERE t.table_name = 't1' AND c.column_name = 'd'
+
+statement ok
+CREATE TABLE {lake}."sch ""q"" é"."tab ""q"" é" (k INTEGER, v VARCHAR, n DOUBLE)
+
+statement ok
+COMMENT ON TABLE {lake}."sch ""q"" é"."tab ""q"" é" IS 'it''s a "table"'
+
+statement ok
+ALTER TABLE {lake}."sch ""q"" é"."tab ""q"" é" SET PARTITIONED BY (k, v)
+
+statement ok
+ALTER TABLE {lake}."sch ""q"" é"."tab ""q"" é" SET SORTED BY (n DESC NULLS FIRST, v)
+
+statement ok
+CREATE VIEW {lake}.v AS SELECT "a ""renamed""" AS a, b AS "b c" FROM {lake}.t1
+
+statement ok
+COMMENT ON VIEW {lake}.v IS 'view "c" \'
+
+statement ok
+COMMENT ON COLUMN {lake}.v.a IS 'view column "a"'
+
+statement ok
+COMMENT ON COLUMN {lake}.v."b c" IS 'view column "b c" é'
+
+statement ok
+CREATE MACRO {lake}.m(x, y := 'de"f', z := 2) AS x || y || z
+
+statement ok
+CREATE MACRO {lake}.two(n := 2) AS TABLE SELECT n AS v
+
+statement ok
+CREATE MACRO {lake}.noparams() AS 7
+
+statement ok
+CREATE MACRO {lake}.cat(a, b, c) AS a || b || c
+
+statement ok
+DETACH {lake}
+
+endloop
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_native_catalog_load.db' AS sl (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/sqlite_native_catalog_load_duckdb.db' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name IN ('sl', 'dl')
+----
+4
+
+statement ok
+CALL disable_logging()
+
+# the SQLite load ran its six statements through sqlite_query, the three list aggregates as json
+query III
+SELECT count(DISTINCT query) FILTER (query LIKE '%ducklake_%_visibility%'),
+	count(DISTINCT query) FILTER (query LIKE '%json_group_array(%'),
+	count(DISTINCT query) FILTER (query LIKE '%COLLATE BINARY%')
+FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%sqlite_query(%'
+----
+6	3	2
+
+# the native statements carry no DuckDB construct and the SQLite catalog loaded nothing through the scanner
+query II
+SELECT count(*) FILTER (query LIKE '%sqlite_query(%' AND (query LIKE '%LIST({%' OR query LIKE '%COLLATE "C"%' OR query LIKE '%::VARCHAR%')),
+	count(*) FILTER (query LIKE '%"__ducklake_metadata_sl".%' AND query LIKE '%ducklake_%_visibility%')
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+0	0
+
+# the DuckDB catalog loaded through its own SQL
+query I
+SELECT count(DISTINCT query) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%"__ducklake_metadata_dl".%' AND query LIKE '%LIST({%'
+----
+3
+
+# both catalogs read the same lake
+foreach lake sl dl
+
+query TTT
+SELECT schema_name, table_name, replace(replace(comment, chr(10), '<nl>'), chr(9), '<tab>') FROM duckdb_tables() WHERE database_name = '{lake}' ORDER BY ALL
+----
+main	t1	quote " backslash \ newline<nl>tab<tab>unicode é 日本 braces {} [] colon: end
+sch "q" é	tab "q" é	it's a "table"
+
+query TTTITTT
+SELECT table_name, column_name, data_type, is_nullable, column_default, comment, tags FROM duckdb_columns() WHERE database_name = '{lake}' ORDER BY table_name, column_index
+----
+t1	a "renamed"	INTEGER	0	NULL	NULL	{}
+t1	b	VARCHAR	1	'de''f'	col "b" \n literal	{}
+t1	s	STRUCT(x INTEGER, y VARCHAR)	1	NULL	NULL	{}
+t1	d	INTEGER	1	42	NULL	{owner='main"tenance'}
+tab "q" é	k	INTEGER	1	NULL	NULL	{}
+tab "q" é	v	VARCHAR	1	NULL	NULL	{}
+tab "q" é	n	DOUBLE	1	NULL	NULL	{}
+v	a	INTEGER	1	NULL	view column "a"	{}
+v	b c	VARCHAR	1	NULL	view column "b c" é	{}
+
+query TT
+SELECT view_name, comment FROM duckdb_views() WHERE database_name = '{lake}' AND NOT internal
+----
+v	view "c" \
+
+query IIII
+SELECT "a ""renamed""", b, s, d FROM {lake}.t1 ORDER BY 1
+----
+1	x	{'x': 1, 'y': y}	42
+2	z	NULL	7
+
+query II
+SELECT a, "b c" FROM {lake}.v ORDER BY a
+----
+1	x
+2	z
+
+query III
+SELECT {lake}.m('a'), {lake}.m('a', y := 'b', z := 3), {lake}.noparams()
+----
+ade"f2	ab3	7
+
+# the parameters of a macro come back in their declared order
+query I
+SELECT {lake}.cat('x', 'y', 'z')
+----
+xyz
+
+query II
+SELECT (SELECT v FROM {lake}.two()), (SELECT v FROM {lake}.two(n := 5))
+----
+2	5
+
+# the partition and sort specs are loaded, a new file goes into its partition directory in the sort order
+statement ok
+INSERT INTO {lake}."sch ""q"" é"."tab ""q"" é" VALUES (9, 'w', 1.0), (9, 'w', NULL), (9, 'w', 5.0)
+
+query I
+SELECT count(*) FROM ducklake_list_files('{lake}', 'tab "q" é', schema => 'sch "q" é') WHERE data_file LIKE '%k=9%v=w%'
+----
+1
+
+query I
+SELECT n FROM {lake}."sch ""q"" é"."tab ""q"" é"
+----
+NULL
+5.0
+1.0
+
+endloop
+
+# a failing native statement reports the error of the read with the statement SQLite ran
+statement ok
+DETACH sl
+
+statement ok
+ATTACH '{TEST_DIR}/sqlite_native_catalog_load.db' AS raw (TYPE sqlite)
+
+statement ok
+DROP TABLE raw.ducklake_sort_info
+
+statement ok
+DETACH raw
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_native_catalog_load.db' AS sl (DATA_INLINING_ROW_LIMIT 0)
+
+statement error
+SELECT count(*) FROM sl.t1
+----
+<REGEX>:.*Failed to get sort information from DuckLake.*Statement: SELECT.*

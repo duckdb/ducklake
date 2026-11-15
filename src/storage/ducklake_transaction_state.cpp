@@ -2380,17 +2380,20 @@ static FloatWidenedBounds GetFloatBoundsToRewrite(DuckLakeCommitState &commit_st
 	if (column_pairs.empty()) {
 		return result;
 	}
-	// the version rows of the commit chain, the live ones are those not ended before the commit snapshot
+	// the version rows of the commit chain, the live ones are those no end of the chain view closes
+	string from = "{METADATA_CATALOG}.ducklake_column c";
 	string live = "c.end_snapshot IS NULL";
 	string chain_filter;
 	if (context.supports_v2_0_metadata) {
-		live = DuckLakeMetadataManager::RowVisibility(context.commit_chain, "c", "column", "{SNAPSHOT_ID}");
+		auto source = DuckLakeMetadataManager::LiveRows(true, context.commit_chain, "column", "c", "{SNAPSHOT_ID}");
+		from = source.from;
+		live = source.filter;
 		chain_filter = " AND (" + context.commit_chain.Predicate("c", "begin_snapshot") + ")";
 	}
 	auto query = StringUtil::Format(R"(
 SELECT c.table_id, c.column_id, c.column_type, %s
-FROM {METADATA_CATALOG}.ducklake_column c WHERE (c.table_id, c.column_id) IN (%s)%s)",
-	                                live, column_pairs, chain_filter);
+FROM %s WHERE (c.table_id, c.column_id) IN (%s)%s)",
+	                                live, from, column_pairs, chain_filter);
 	auto query_result = context.query_metadata_with_snapshot(commit_state.commit_snapshot, query);
 	query_result->ThrowIfError("Failed to read column types before widening FLOAT bounds: ");
 	auto float_type = DuckLakeTypes::ToString(LogicalType::FLOAT);

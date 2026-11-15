@@ -1,7 +1,6 @@
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "common/ducklake_util.hpp"
 #include "duckdb/main/database.hpp"
-#include "duckdb/main/extension_helper.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_metadata_info.hpp"
@@ -549,21 +548,6 @@ ORDER BY c.relname, a.attnum)",
 	return ProbeMetadataColumnsFromListing(PostgresQuery(remote_query));
 }
 
-//! The json extension casts the shipped aggregates back, a copy linked into the binary loads without autoloading
-static bool JsonExtensionAvailable(DatabaseInstance &db) {
-	if (db.ExtensionIsLoaded("json")) {
-		return true;
-	}
-	DuckDB wrapper(db);
-	if (ExtensionHelper::LoadExtension(wrapper, "json") == ExtensionLoadResult::LOADED_EXTENSION) {
-		return true;
-	}
-	// the test binary links the json extension, so only a build without it gets this far
-	// LCOV_EXCL_START
-	return ExtensionHelper::TryAutoLoadExtension(db, "json");
-	// LCOV_EXCL_STOP
-}
-
 //! The list aggregate of the server, a json array of objects whose json values nest as they are
 static string JsonAggregation(const vector<pair<string, string>> &fields, const string &order) {
 	auto fields_part = StringUtil::Join(fields, fields.size(), ", ", [](const pair<string, string> &entry) {
@@ -583,17 +567,12 @@ DuckLakeCatalogInfo PostgresMetadataManager::GetCatalogForSnapshot(DuckLakeSnaps
 	auto schema = SQLQuotedIdentifier::ToString(catalog.MetadataSchemaName());
 	CatalogLoadDialect dialect;
 	dialect.render_list_aggregation = JsonAggregation;
-	dialect.wrap_statement = [&](const string &statement, const vector<CatalogListColumn> &list_columns) {
+	dialect.wrap_statement = [&](const string &statement, const vector<CatalogLoadColumn> &columns) {
 		// the server runs the statement as a whole, so only the live rows cross the wire
 		auto remote = statement;
 		SubstituteTransactionPlaceholders(snapshot, remote);
 		SubstituteCatalogPlaceholders(remote, schema);
-		vector<string> casts;
-		for (auto &column : list_columns) {
-			casts.push_back(
-			    StringUtil::Format("CAST(%s::JSON AS %s) AS %s", column.name, column.type.ToString(), column.name));
-		}
-		return PostgresQuery(remote, casts.empty() ? string("*") : "* REPLACE (" + StringUtil::Join(casts, ", ") + ")");
+		return PostgresQuery(remote, ListColumnsFromJson(columns));
 	};
 	return BuildCatalogForSnapshot(
 	    snapshot, [this](DuckLakeSnapshot s, string q) { return Query(s, q); }, catalog.DataPath(), catalog.Separator(),

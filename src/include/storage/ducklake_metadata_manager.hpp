@@ -42,6 +42,7 @@ struct DuckLakeMetadataProfile;
 struct TransactionChangeInformation;
 class BoundAtClause;
 class Connection;
+class DatabaseInstance;
 class SQLStatement;
 class FileSystem;
 struct CreateTableInfo;
@@ -511,21 +512,30 @@ public:
 	//! Whether the result contains a column with the given name
 	static bool ResultHasColumn(QueryResult &result, const string &name);
 
-	//! A list aggregate column of a catalog load statement with the type the parser reads it as
-	struct CatalogListColumn {
+	//! A result column of a catalog load statement with the type the parser reads it as
+	struct CatalogLoadColumn {
 		string name;
 		LogicalType type;
 	};
 	//! The SQL of a catalog load, DuckDB SQL run as rendered unless a backend supplies its own
 	struct CatalogLoadDialect {
 		std::function<string(const vector<pair<string, string>> &, const string &)> render_list_aggregation;
-		std::function<string(const string &, const vector<CatalogListColumn> &)> wrap_statement;
+		std::function<string(const vector<pair<string, string>> &, const string &, const string &, const string &)>
+		    render_ordered_list_subquery;
+		std::function<string(const string &, const vector<CatalogLoadColumn> &)> wrap_statement;
 
 		//! The aggregate of the fields as a list of structs, in the order when one is given
 		string ListAggregation(const vector<pair<string, string>> &fields, const string &order = string()) const;
-		//! The statement the executor runs, which returns the list columns with the given types
-		string Statement(const string &statement, const vector<CatalogListColumn> &list_columns) const;
+		//! The scalar subquery aggregating the rows of the source that pass the filter, in the given order
+		string OrderedListSubquery(const vector<pair<string, string>> &fields, const string &order, const string &from,
+		                           const string &filter) const;
+		//! The statement the executor runs, which returns the columns with the given types
+		string Statement(const string &statement, const vector<CatalogLoadColumn> &columns) const;
 	};
+	//! The json extension casts the list aggregates of a native load back, a linked copy loads without autoloading
+	static bool JsonExtensionAvailable(DatabaseInstance &db);
+	//! The select list that casts the list columns of a native result back from their json text
+	static string ListColumnsFromJson(const vector<CatalogLoadColumn> &columns);
 	//! Get the catalog information for a specific snapshot
 	virtual DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot);
 	//! Transaction-free build of the catalog snapshot. Caller supplies a snapshot-aware query
@@ -627,8 +637,6 @@ public:
 	                        const string &read_snapshot, const string &branch_column = "branch_id");
 	//! The version rows of a kind born in the chain view at the read snapshot and not ended in it
 	static string RowVisibility(const DuckLakeBranchChain &chain, const string &alias, const RowVisibilityKind &kind,
-	                            const string &read_snapshot);
-	static string RowVisibility(const DuckLakeBranchChain &chain, const string &alias, const string &kind,
 	                            const string &read_snapshot);
 	//! The range predicate of the version rows before 2.0, which carry begin_snapshot and end_snapshot
 	static string RangeVisibility(const string &alias, const string &read_snapshot);

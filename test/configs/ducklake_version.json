@@ -269,7 +269,8 @@
         "test/sql/branches/branch_flush_direct_nested.test",
         "test/sql/branches/branch_flush_dual_end.test",
         "test/sql/quack/branch_read_during_main_flush.test",
-        "test/sql/quack/branch_read_across_main_flush.test"
+        "test/sql/quack/branch_read_across_main_flush.test",
+        "test/sql/alter/float_widening_live_rows_shape.test"
       ]
     },
     {
@@ -419,7 +420,8 @@
         "test/sql/data_inlining/inlined_data_flush_cleanup.test",
         "test/sql/data_inlining/inlined_data_table_leak.test",
         "test/sql/data_inlining/flush_drop_superseded_with_reader.test",
-        "test/sql/migration/dev1_inlined_heal_chunks.test"
+        "test/sql/migration/dev1_inlined_heal_chunks.test",
+        "test/sql/catalog/sqlite_native_catalog_load.test"
       ]
     },
     {

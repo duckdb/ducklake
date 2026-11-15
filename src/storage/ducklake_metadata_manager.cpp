@@ -24,8 +24,10 @@
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "metadata_manager/quack_metadata_manager.hpp"
 #include "metadata_manager/rest_metadata_manager.hpp"
+#include "metadata_manager/sqlite_metadata_manager.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/main/database.hpp"
+#include "duckdb/main/extension_helper.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "storage/ducklake_partition_data.hpp"
@@ -92,6 +94,10 @@ unique_ptr<DuckLakeMetadataManager> DuckLakeMetadataManager::Create(DuckLakeTran
 	if (metadata_manager_iter != metadata_managers.end()) {
 		auto create = metadata_manager_iter->second;
 		return create(transaction);
+	}
+	if (SQLiteMetadataManager::Manages(catalog_type)) {
+		// the manager stays out of the map, the sqlite extension registers its profile under the same name
+		return make_uniq<SQLiteMetadataManager>(transaction);
 	}
 	return make_uniq<DuckLakeMetadataManager>(transaction);
 }
@@ -2946,12 +2952,51 @@ string DuckLakeMetadataManager::CatalogLoadDialect::ListAggregation(const vector
 	return DuckLakeMetadataManager::ListAggregation(fields, order);
 }
 
+string DuckLakeMetadataManager::CatalogLoadDialect::OrderedListSubquery(const vector<pair<string, string>> &fields,
+                                                                        const string &order, const string &from,
+                                                                        const string &filter) const {
+	if (render_ordered_list_subquery) {
+		return render_ordered_list_subquery(fields, order, from, filter);
+	}
+	return StringUtil::Format(R"((
+		SELECT %s
+		FROM %s
+		WHERE %s
+		))",
+	                          ListAggregation(fields, order), from, filter);
+}
+
 string DuckLakeMetadataManager::CatalogLoadDialect::Statement(const string &statement,
-                                                              const vector<CatalogListColumn> &list_columns) const {
+                                                              const vector<CatalogLoadColumn> &columns) const {
 	if (wrap_statement) {
-		return wrap_statement(statement, list_columns);
+		return wrap_statement(statement, columns);
 	}
 	return statement;
+}
+
+bool DuckLakeMetadataManager::JsonExtensionAvailable(DatabaseInstance &db) {
+	if (db.ExtensionIsLoaded("json")) {
+		return true;
+	}
+	DuckDB wrapper(db);
+	if (ExtensionHelper::LoadExtension(wrapper, "json") == ExtensionLoadResult::LOADED_EXTENSION) {
+		return true;
+	}
+	// the test binary links the json extension, so only a build without it gets this far
+	// LCOV_EXCL_START
+	return ExtensionHelper::TryAutoLoadExtension(db, "json");
+	// LCOV_EXCL_STOP
+}
+
+string DuckLakeMetadataManager::ListColumnsFromJson(const vector<CatalogLoadColumn> &columns) {
+	vector<string> casts;
+	for (auto &column : columns) {
+		if (column.type.id() == LogicalTypeId::LIST) {
+			casts.push_back(
+			    StringUtil::Format("CAST(%s::JSON AS %s) AS %s", column.name, column.type.ToString(), column.name));
+		}
+	}
+	return casts.empty() ? string("*") : "* REPLACE (" + StringUtil::Join(casts, ", ") + ")";
 }
 
 DuckLakeCatalogInfo DuckLakeMetadataManager::BuildCatalogForSnapshot(
@@ -2959,20 +3004,28 @@ DuckLakeCatalogInfo DuckLakeMetadataManager::BuildCatalogForSnapshot(
     const string &base_data_path, const string &separator, bool supports_v1_1_metadata, bool supports_v2_0_metadata,
     const DuckLakeBranchChain &chain, const CatalogLoadDialect &dialect) {
 	DuckLakeCatalogInfo catalog;
-	// the statements go to the executor in the SQL of the dialect, with the list columns the parser reads
-	auto run = [&](const string &statement, const vector<CatalogListColumn> &list_columns) {
-		return query_executor(snapshot, dialect.Statement(statement, list_columns));
+	// the statements go to the executor in the SQL of the dialect, with the columns and types the parser reads
+	auto run = [&](const string &statement, const vector<CatalogLoadColumn> &columns) {
+		return query_executor(snapshot, dialect.Statement(statement, columns));
 	};
 	// load the schema information
 	string parent_schema_select = supports_v1_1_metadata ? ", parent_schema_id" : "";
+	vector<CatalogLoadColumn> schema_columns {{"schema_id", LogicalType::BIGINT},
+	                                          {"schema_uuid", LogicalType::VARCHAR},
+	                                          {"schema_name", LogicalType::VARCHAR},
+	                                          {"path", LogicalType::VARCHAR},
+	                                          {"path_is_relative", LogicalType::BOOLEAN}};
+	if (supports_v1_1_metadata) {
+		schema_columns.push_back({"parent_schema_id", LogicalType::BIGINT});
+	}
 	auto live_schemas = LiveRows(supports_v2_0_metadata, chain, "schema", "sch", "{SNAPSHOT_ID}");
 	auto result = run(StringUtil::Format(R"(
-SELECT sch.schema_id, schema_uuid::VARCHAR, schema_name, path, path_is_relative%s
+SELECT sch.schema_id, CAST(schema_uuid AS VARCHAR), schema_name, path, path_is_relative%s
 FROM %s
 WHERE %s
 )",
 	                                     parent_schema_select, live_schemas.from, live_schemas.filter),
-	                  {});
+	                  schema_columns);
 	result->ThrowIfError("Failed to get schema information from DuckLake: ");
 	map<SchemaIndex, idx_t> schema_map;
 	for (auto &row : *result) {
@@ -3023,9 +3076,26 @@ WHERE %s
 	auto column_tags_join = GroupedListJoin(
 	    "column_tags", dialect.ListAggregation(tag_fields("col_tag")), live_column_tags.from, live_column_tags.filter,
 	    {{"col_tag.table_id", "tbl.table_id"}, {"col_tag.column_id", "col.column_id"}});
+	const vector<CatalogLoadColumn> table_columns {{"schema_id", LogicalType::BIGINT},
+	                                               {"table_id", LogicalType::BIGINT},
+	                                               {"table_uuid", LogicalType::VARCHAR},
+	                                               {"table_name", LogicalType::VARCHAR},
+	                                               {"tag", TAG_TYPE},
+	                                               {"inlined_data_tables", INLINED_DATA_TABLES_TYPE},
+	                                               {"path", LogicalType::VARCHAR},
+	                                               {"path_is_relative", LogicalType::BOOLEAN},
+	                                               {"column_id", LogicalType::BIGINT},
+	                                               {"column_name", LogicalType::VARCHAR},
+	                                               {"column_type", LogicalType::VARCHAR},
+	                                               {"initial_default", LogicalType::VARCHAR},
+	                                               {"default_value", LogicalType::VARCHAR},
+	                                               {"nulls_allowed", LogicalType::BOOLEAN},
+	                                               {"parent_column", LogicalType::BIGINT},
+	                                               {"column_tags", TAG_TYPE},
+	                                               {"default_value_type", LogicalType::VARCHAR}};
 	result = run(StringUtil::Format(
 	                 R"(
-SELECT schema_id, tbl.table_id, table_uuid::VARCHAR, table_name, tag_agg.tag AS tag,
+SELECT schema_id, tbl.table_id, CAST(table_uuid AS VARCHAR), table_name, tag_agg.tag AS tag,
 	inlined_data_tables_agg.inlined_data_tables AS inlined_data_tables, path, path_is_relative,
 	col.column_id, column_name, column_type, initial_default, default_value, nulls_allowed, parent_column,
 	column_tags_agg.column_tags AS column_tags, default_value_type
@@ -3040,7 +3110,7 @@ ORDER BY tbl.table_id ASC, parent_column ASC NULLS FIRST, column_order ASC
 )",
 	                 live_tables.from, live_columns.from, live_columns.filter, tag_join, inlined_data_tables_join,
 	                 column_tags_join, live_tables.filter),
-	             {{"tag", TAG_TYPE}, {"inlined_data_tables", INLINED_DATA_TABLES_TYPE}, {"column_tags", TAG_TYPE}});
+	             table_columns);
 	result->ThrowIfError("Failed to get table information from DuckLake: ");
 	const idx_t COLUMN_INDEX_START = 8;
 	auto &tables = catalog.tables;
@@ -3129,14 +3199,19 @@ ORDER BY tbl.table_id ASC, parent_column ASC NULLS FIRST, column_order ASC
 	// load view information
 	string view_column_tags_select = "NULL AS view_column_tags";
 	string view_column_tags_join;
-	vector<CatalogListColumn> view_list_columns {{"tag", TAG_TYPE}};
+	vector<CatalogLoadColumn> view_columns {
+	    {"view_id", LogicalType::BIGINT},          {"view_uuid", LogicalType::VARCHAR},
+	    {"schema_id", LogicalType::BIGINT},        {"view_name", LogicalType::VARCHAR},
+	    {"dialect", LogicalType::VARCHAR},         {"sql", LogicalType::VARCHAR},
+	    {"column_aliases", LogicalType::VARCHAR},  {"tag", TAG_TYPE},
+	    {"view_column_tags", LogicalType::VARCHAR}};
 	if (supports_v1_1_metadata) {
 		auto live_view_column_tags = LiveRows(supports_v2_0_metadata, chain, "view_column_tag", "vct", "{SNAPSHOT_ID}");
 		view_column_tags_select = "view_column_tags_agg.view_column_tags AS view_column_tags";
 		view_column_tags_join = GroupedListJoin("view_column_tags", dialect.ListAggregation(VIEW_COLUMN_TAG_FIELDS),
 		                                        live_view_column_tags.from, live_view_column_tags.filter,
 		                                        {{"vct.view_id", "view.view_id"}});
-		view_list_columns.push_back({"view_column_tags", VIEW_COLUMN_TAG_TYPE});
+		view_columns.back().type = VIEW_COLUMN_TAG_TYPE;
 	}
 	auto view_tag_join = GroupedListJoin("tag", dialect.ListAggregation(tag_fields("tag")), live_tags.from,
 	                                     live_tags.filter, {{"tag.object_id", "view.view_id"}});
@@ -3148,7 +3223,7 @@ WHERE %s
 )",
 	                                view_column_tags_select, live_views.from, view_tag_join, view_column_tags_join,
 	                                live_views.filter),
-	             view_list_columns);
+	             view_columns);
 	result->ThrowIfError("Failed to get view information from DuckLake: ");
 	auto &views = catalog.views;
 	for (auto &row : *result) {
@@ -3176,15 +3251,10 @@ WHERE %s
 	                                                                {"parameter_type", "parameter_type"},
 	                                                                {"default_value", "default_value"},
 	                                                                {"default_value_type", "default_value_type"}};
-	auto macro_param_query = StringUtil::Format(R"(
-		(
-		SELECT %s
-		FROM {METADATA_CATALOG}.ducklake_macro_parameters
-		WHERE ducklake_macro_impl.macro_id = ducklake_macro_parameters.macro_id
-		AND ducklake_macro_impl.impl_id = ducklake_macro_parameters.impl_id
-		)
-	)",
-	                                            dialect.ListAggregation(MACRO_PARAM_FIELDS, "column_id ASC"));
+	auto macro_param_query =
+	    dialect.OrderedListSubquery(MACRO_PARAM_FIELDS, "column_id ASC", "{METADATA_CATALOG}.ducklake_macro_parameters",
+	                                "ducklake_macro_impl.macro_id = ducklake_macro_parameters.macro_id AND "
+	                                "ducklake_macro_impl.impl_id = ducklake_macro_parameters.impl_id");
 	const vector<pair<string, string>> MACRO_IMPL_FIELDS = {
 	    {"dialect", "dialect"}, {"sql", "sql"}, {"type", "type"}, {"params", macro_param_query}};
 	static const LogicalType MACRO_PARAM_TYPE =
@@ -3209,7 +3279,10 @@ FROM %s
 WHERE %s
 )",
 	                                dialect.ListAggregation(MACRO_IMPL_FIELDS), live_macros.from, live_macros.filter),
-	             {{"impl", MACRO_IMPL_TYPE}});
+	             {{"schema_id", LogicalType::BIGINT},
+	              {"macro_id", LogicalType::BIGINT},
+	              {"macro_name", LogicalType::VARCHAR},
+	              {"impl", MACRO_IMPL_TYPE}});
 	result->ThrowIfError("Failed to get macro information from DuckLake: ");
 	auto &macros = catalog.macros;
 	for (auto &row : *result) {
@@ -3232,7 +3305,11 @@ WHERE %s
 ORDER BY part.table_id ASC, part.partition_id ASC, partition_key_index ASC
 )",
 	                                live_partitions.from, live_partitions.filter),
-	             {});
+	             {{"partition_id", LogicalType::BIGINT},
+	              {"table_id", LogicalType::BIGINT},
+	              {"partition_key_index", LogicalType::BIGINT},
+	              {"column_id", LogicalType::BIGINT},
+	              {"transform", LogicalType::VARCHAR}});
 	result->ThrowIfError("Failed to get partition information from DuckLake: ");
 	auto &partitions = catalog.partitions;
 	for (auto &row : *result) {
@@ -3264,7 +3341,13 @@ WHERE %s
 ORDER BY sort.table_id ASC, sort.sort_id ASC, sort_expr.sort_key_index ASC
 )",
 	                                live_sorts.from, live_sorts.filter),
-	             {});
+	             {{"sort_id", LogicalType::BIGINT},
+	              {"table_id", LogicalType::BIGINT},
+	              {"sort_key_index", LogicalType::BIGINT},
+	              {"expression", LogicalType::VARCHAR},
+	              {"dialect", LogicalType::VARCHAR},
+	              {"sort_direction", LogicalType::VARCHAR},
+	              {"null_order", LogicalType::VARCHAR}});
 	result->ThrowIfError("Failed to get sort information from DuckLake: ");
 	auto &sorts = catalog.sorts;
 	for (auto &row : *result) {
@@ -5359,11 +5442,6 @@ string DuckLakeMetadataManager::RowVisibility(const DuckLakeBranchChain &chain, 
 	                          StringUtil::Join(CompanionKeyMatches(kind, "vis", "", alias), " AND "), alias,
 	                          kind.branch_column, alias, kind.begin_column,
 	                          ChainView(chain, "vis", "snapshot_id", read_snapshot));
-}
-
-string DuckLakeMetadataManager::RowVisibility(const DuckLakeBranchChain &chain, const string &alias, const string &kind,
-                                              const string &read_snapshot) {
-	return RowVisibility(chain, alias, RowKind(kind), read_snapshot);
 }
 
 string DuckLakeMetadataManager::RangeVisibility(const string &alias, const RowVisibilityKind &kind,

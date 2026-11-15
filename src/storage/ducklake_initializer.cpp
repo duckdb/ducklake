@@ -23,6 +23,7 @@
 #include "metadata_manager/ducklake_metadata_manager_v2_0.hpp"
 #include "metadata_manager/postgres_metadata_manager.hpp"
 #include "metadata_manager/quack_metadata_manager.hpp"
+#include "metadata_manager/sqlite_metadata_manager.hpp"
 
 namespace duckdb {
 
@@ -498,6 +499,9 @@ static unique_ptr<DuckLakeMetadataManager> MakeVersionedManager(DuckLakeTransact
 	}
 	if (dynamic_cast<PostgresMetadataManager *>(&current)) {
 		return make_uniq<MANAGER<PostgresMetadataManager>>(transaction);
+	}
+	if (dynamic_cast<SQLiteMetadataManager *>(&current)) {
+		return make_uniq<MANAGER<SQLiteMetadataManager>>(transaction);
 	}
 	return make_uniq<MANAGER<DuckLakeMetadataManager>>(transaction);
 }
