@@ -4492,7 +4492,7 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 		}
 		if (!listing) {
 			// repeated reads of unchanged heads share the parsed listing across transactions
-			listing = transaction.GetCatalog().TryGetCachedListing(cache_key, snapshot.snapshot_id, lineage_heads);
+			listing = transaction.GetCatalog().TryGetCachedListing(cache_key, lineage_heads);
 			if (listing) {
 				lock_guard<mutex> guard(listing_cache_lock);
 				file_list_cache.emplace(cache_key, listing);
@@ -4558,7 +4558,7 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 	}
 	if (cacheable) {
 		auto parsed = make_shared_ptr<vector<DuckLakeFileListEntry>>(files);
-		transaction.GetCatalog().StoreCachedListing(cache_key, snapshot.snapshot_id, lineage_heads, parsed);
+		transaction.GetCatalog().StoreCachedListing(cache_key, lineage_heads, parsed);
 		lock_guard<mutex> guard(listing_cache_lock);
 		file_list_cache.emplace(std::move(cache_key), std::move(parsed));
 	}

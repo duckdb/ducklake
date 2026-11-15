@@ -1,0 +1,205 @@
+# name: test/sql/time_travel/time_travel_listing_cache.test
+# description: time travel listings are served from the listing cache until a commit moves the head
+# group: [time_travel]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range(100)
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range(100, 200)
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range(200, 300)
+
+# two reads at one snapshot inside a transaction list the files once
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+statement ok
+BEGIN
+
+query I
+SELECT sum(i) FROM dl.t AT (VERSION => 2)
+----
+4950
+
+query I
+SELECT sum(i) FROM dl.t AT (VERSION => 2)
+----
+4950
+
+statement ok
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite', 'postgres') THEN
+    (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+     WHERE query LIKE '%data.partial^_max, data.mapping^_id%' ESCAPE '^')
+    ELSE 1 END
+----
+1
+
+# a later transaction reading the same snapshot under the same head is served from the cache
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+query I
+SELECT sum(i) FROM dl.t AT (VERSION => 3)
+----
+19900
+
+query I
+SELECT sum(i) FROM dl.t AT (VERSION => 3)
+----
+19900
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite', 'postgres') THEN
+    (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+     WHERE query LIKE '%data.partial^_max, data.mapping^_id%' ESCAPE '^')
+    ELSE 1 END
+----
+1
+
+# a filtered read lists the stats of its column, so it is an entry of its own next to the unfiltered read
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+query I
+SELECT sum(i) FROM dl.t AT (VERSION => 4) WHERE i < 150
+----
+11175
+
+query I
+SELECT sum(i) FROM dl.t AT (VERSION => 4) WHERE i < 150
+----
+11175
+
+query I
+SELECT sum(i) FROM dl.t AT (VERSION => 4)
+----
+44850
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite', 'postgres') THEN
+    (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+     WHERE query LIKE '%data.partial^_max, data.mapping^_id%' ESCAPE '^')
+    ELSE 2 END
+----
+2
+
+# a compaction committed through another attach of the lake moves the head, the next read lists the merged file
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS other (METADATA_CATALOG 'meta')
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 't', snapshot_version => 3)
+----
+2
+
+statement ok
+CALL ducklake_merge_adjacent_files('other')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+query I
+SELECT sum(i) FROM dl.t AT (VERSION => 3)
+----
+19900
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite', 'postgres') THEN
+    (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+     WHERE query LIKE '%data.partial^_max, data.mapping^_id%' ESCAPE '^')
+    ELSE 1 END
+----
+1
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 't', snapshot_version => 3)
+----
+1
+
+# a read of a surviving snapshot after the compaction caches its listing under the compacted head
+query I
+SELECT sum(i) FROM dl.t AT (VERSION => 4)
+----
+44850
+
+# an expiry of the snapshot read through the other attach refuses the next read of it
+statement ok
+CALL ducklake_expire_snapshots('other', versions => [3])
+
+statement error
+SELECT sum(i) FROM dl.t AT (VERSION => 3)
+----
+No snapshot found at version 3
+
+# a 2.0 expiry commits a snapshot that moves the head, so the next read of a surviving snapshot lists again
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+query I
+SELECT sum(i) FROM dl.t AT (VERSION => 4)
+----
+44850
+
+statement ok
+CALL disable_logging()
+
+# a 1.0 expiry commits no snapshot and changes no surviving file set, so the cached listing serves the read
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite', 'postgres') THEN
+    (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+     WHERE query LIKE '%data.partial^_max, data.mapping^_id%' ESCAPE '^')
+    ELSE 1 END = CASE WHEN (SELECT value FROM meta.ducklake_metadata WHERE key = 'version') = '1.0' THEN 0 ELSE 1 END
+----
+true
+
+query I
+SELECT max(snapshot_id) = CASE WHEN (SELECT value FROM meta.ducklake_metadata WHERE key = 'version') = '1.0'
+    THEN 5 ELSE 6 END FROM meta.ducklake_snapshot
+----
+true

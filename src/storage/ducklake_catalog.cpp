@@ -1871,35 +1871,34 @@ bool DuckLakeCatalog::UnregisterCatalog() {
 	return metadata_catalog_unused;
 }
 
-bool DuckLakeCatalog::ListingCacheMatches(idx_t snapshot_id, const vector<idx_t> &heads) const {
-	// a flush on a parent writes an add event dated before the cap that the branch inherits,
-	// so a commit on any branch of the chain drops the shared listings, which only reads at the head share
-	return !listing_cache_heads.empty() && listing_cache_heads == heads && heads.back() == snapshot_id;
+bool DuckLakeCatalog::ListingCacheMatches(const vector<idx_t> &heads) const {
+	// only a commit on a branch of the chain changes the files visible at or below its heads
+	return !listing_cache_heads.empty() && listing_cache_heads == heads;
 }
 
 void DuckLakeCatalog::ObserveListingHead(const vector<idx_t> &heads) {
 	lock_guard<mutex> guard(listing_cache_lock);
-	if (!heads.empty() && ListingCacheMatches(heads.back(), heads)) {
+	if (ListingCacheMatches(heads)) {
 		return;
 	}
 	listing_cache.clear();
 	listing_cache_heads = heads;
 }
 
-shared_ptr<vector<DuckLakeFileListEntry>> DuckLakeCatalog::TryGetCachedListing(const string &key, idx_t snapshot_id,
+shared_ptr<vector<DuckLakeFileListEntry>> DuckLakeCatalog::TryGetCachedListing(const string &key,
                                                                                const vector<idx_t> &heads) {
 	lock_guard<mutex> guard(listing_cache_lock);
-	if (!ListingCacheMatches(snapshot_id, heads)) {
+	if (!ListingCacheMatches(heads)) {
 		return nullptr;
 	}
 	auto entry = listing_cache.find(key);
 	return entry == listing_cache.end() ? nullptr : entry->second;
 }
 
-void DuckLakeCatalog::StoreCachedListing(const string &key, idx_t snapshot_id, const vector<idx_t> &heads,
+void DuckLakeCatalog::StoreCachedListing(const string &key, const vector<idx_t> &heads,
                                          shared_ptr<vector<DuckLakeFileListEntry>> entries) {
 	lock_guard<mutex> guard(listing_cache_lock);
-	if (!ListingCacheMatches(snapshot_id, heads)) {
+	if (!ListingCacheMatches(heads)) {
 		return;
 	}
 	if (listing_cache.size() >= 256) {

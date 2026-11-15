@@ -401,11 +401,10 @@ public:
 	}
 	//! Observes the heads of the chain a transaction loaded, a change of any of them drops the listings
 	void ObserveListingHead(const vector<idx_t> &heads);
-	//! Returns the cached parsed listing of a read at the head under the observed heads, nullptr otherwise
-	shared_ptr<vector<DuckLakeFileListEntry>> TryGetCachedListing(const string &key, idx_t snapshot_id,
-	                                                              const vector<idx_t> &heads);
-	//! Stores a parsed listing read at the head under the observed heads
-	void StoreCachedListing(const string &key, idx_t snapshot_id, const vector<idx_t> &heads,
+	//! Returns the cached parsed listing of a read under the observed heads, nullptr otherwise
+	shared_ptr<vector<DuckLakeFileListEntry>> TryGetCachedListing(const string &key, const vector<idx_t> &heads);
+	//! Stores a parsed listing read under the observed heads
+	void StoreCachedListing(const string &key, const vector<idx_t> &heads,
 	                        shared_ptr<vector<DuckLakeFileListEntry>> entries);
 	//! Drops the cached listings, called when a transaction writes metadata
 	void InvalidateListingCache();
@@ -594,11 +593,11 @@ private:
 	DuckLakeVersion ducklake_version = DuckLakeVersion::V1_0;
 	//! The chain of the branch the catalog is attached at, main by default
 	DuckLakeBranchChain attached_chain = DuckLakeBranchChain::Main();
-	//! Parsed listings shared across transactions at the observed heads of every branch of the chain
+	//! Parsed listings of reads at or below the observed heads of every branch of the chain, shared across transactions
 	mutex listing_cache_lock;
 	vector<idx_t> listing_cache_heads;
-	//! Whether the cached listings belong to a read at the head under these heads, with the lock held
-	bool ListingCacheMatches(idx_t snapshot_id, const vector<idx_t> &heads) const;
+	//! Whether the cached listings were read under these heads, with the lock held
+	bool ListingCacheMatches(const vector<idx_t> &heads) const;
 	unordered_map<string, shared_ptr<vector<DuckLakeFileListEntry>>> listing_cache;
 	bool branch_metadata_present = true;
 	//! A per-instance identifier used to scope ObjectCache keys.

@@ -270,7 +270,8 @@
         "test/sql/branches/branch_flush_dual_end.test",
         "test/sql/quack/branch_read_during_main_flush.test",
         "test/sql/quack/branch_read_across_main_flush.test",
-        "test/sql/alter/float_widening_live_rows_shape.test"
+        "test/sql/alter/float_widening_live_rows_shape.test",
+        "test/sql/branches/branch_time_travel_listing_cache.test"
       ]
     },
     {

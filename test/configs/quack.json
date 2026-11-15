@@ -361,6 +361,12 @@
         "test/sql/rest/rest_value_types.test",
         "test/sql/rest/rest_view_column_comment.test"
       ]
+    },
+    {
+      "reason": "Each metadata query runs in its own server-side transaction on quack, so a reader that began before a concurrent compaction already lists the merged file instead of its own view",
+      "paths": [
+        "test/sql/time_travel/time_travel_listing_cache_transaction.test"
+      ]
     }
   ]
 }
