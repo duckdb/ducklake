@@ -189,17 +189,17 @@ SELECT sum(i) FROM dl.t AT (VERSION => 4)
 statement ok
 CALL disable_logging()
 
-# a 1.0 expiry commits no snapshot and changes no surviving file set, so the cached listing serves the read
+# a 1.0 or 1.1 expiry commits no snapshot and changes no surviving file set, so the cached listing serves the read
 query I
 SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite', 'postgres') THEN
     (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
      WHERE query LIKE '%data.partial^_max, data.mapping^_id%' ESCAPE '^')
-    ELSE 1 END = CASE WHEN (SELECT value FROM meta.ducklake_metadata WHERE key = 'version') = '1.0' THEN 0 ELSE 1 END
+    ELSE 1 END = CASE WHEN (SELECT value FROM meta.ducklake_metadata WHERE key = 'version') IN ('1.0', '1.1') THEN 0 ELSE 1 END
 ----
 true
 
 query I
-SELECT max(snapshot_id) = CASE WHEN (SELECT value FROM meta.ducklake_metadata WHERE key = 'version') = '1.0'
+SELECT max(snapshot_id) = CASE WHEN (SELECT value FROM meta.ducklake_metadata WHERE key = 'version') IN ('1.0', '1.1')
     THEN 5 ELSE 6 END FROM meta.ducklake_snapshot
 ----
 true
