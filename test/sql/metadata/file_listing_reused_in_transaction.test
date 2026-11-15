@@ -89,9 +89,11 @@ CALL disable_logging()
 query I
 SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite', 'postgres') THEN
     (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-     WHERE query LIKE '%ducklake^_data^_file%' ESCAPE '^' AND query LIKE '%ORDER BY data.data^_file^_id%' ESCAPE '^') = 1
+     WHERE query LIKE '%ducklake^_data^_file%' ESCAPE '^'
+       AND query LIKE '%data.partial^_max, data.mapping^_id%' ESCAPE '^') = 1
     ELSE (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-     WHERE query LIKE '%ducklake^_data^_file%' ESCAPE '^' AND query LIKE '%ORDER BY data.data^_file^_id%' ESCAPE '^') = 2 END
+     WHERE query LIKE '%ducklake^_data^_file%' ESCAPE '^'
+       AND query LIKE '%data.partial^_max, data.mapping^_id%' ESCAPE '^') = 2 END
 ----
 true
 
@@ -132,7 +134,8 @@ CALL disable_logging()
 query I
 SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite', 'postgres') THEN
     (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-     WHERE query LIKE '%ducklake^_data^_file%' ESCAPE '^' AND query LIKE '%ORDER BY data.data^_file^_id%' ESCAPE '^')
+     WHERE query LIKE '%ducklake^_data^_file%' ESCAPE '^'
+       AND query LIKE '%data.partial^_max, data.mapping^_id%' ESCAPE '^')
     ELSE 1 END
 ----
 1

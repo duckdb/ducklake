@@ -380,6 +380,8 @@
         "test/sql/stats/table_stats_null_totals.test",
         "test/sql/stats/table_stats_null_totals_retry.test",
         "test/sql/transaction/transaction_conflicts_replaced_delete_file.test",
+        "test/sql/retry/retry_conflict_read_shapes.test",
+        "test/sql/list_files/list_files_id_order.test",
         "test/sql/deletion_inlining/inlined_file_delete_branch_column.test",
         "test/sql/deletion_inlining/inlined_file_deletes_concurrent_branch_column.test",
         "test/sql/migration/dev1_inlined_deletes_heal.test",

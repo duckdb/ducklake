@@ -295,7 +295,8 @@
     {
       "reason": "The conflict read of a server side quack commit runs in the sidecar, so the client log never shows it",
       "paths": [
-        "test/sql/deletion_inlining/inlined_file_deletes_concurrent_branch_column.test"
+        "test/sql/deletion_inlining/inlined_file_deletes_concurrent_branch_column.test",
+        "test/sql/retry/retry_conflict_read_shapes.test"
       ]
     },
     {

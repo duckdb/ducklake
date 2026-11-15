@@ -2750,12 +2750,34 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	return batch_queries;
 }
 
+//! The data files other commits of main covered with a delete file or ended after the snapshot
+static string FilesDeletedOrDroppedAfterSnapshotOnMain() {
+	// main holds one add event per file, so the add event of a delete file dates its arrival
+	return R"(
+	SELECT data_file_id
+	FROM {METADATA_CATALOG}.ducklake_delete_file
+	WHERE delete_file_id IN (
+		SELECT delete_file_id
+		FROM {METADATA_CATALOG}.ducklake_delete_file_visibility
+		WHERE branch_id = 0 AND NOT is_delete AND (snapshot_id > {SNAPSHOT_ID} OR delete_file_id >= {NEXT_FILE_ID})
+	)
+	UNION ALL
+	SELECT data_file_id
+	FROM {METADATA_CATALOG}.ducklake_file_visibility
+	WHERE branch_id = 0 AND is_delete AND snapshot_id > {SNAPSHOT_ID}
+	)";
+}
+
 SnapshotDeletedFromFiles DuckLakeTransactionState::GetFilesDeletedOrDroppedAfterSnapshot(
     const std::function<unique_ptr<QueryResult>(string)> &executor, bool branch_aware, const string &chain_predicate) {
-	// replacement delete files keep an older begin_snapshot, so also match on new file ids
-	// one scan of the delete files serves both filters, pushed into the metadata database
-	string sql = StringUtil::Format(
-	    R"(
+	string sql;
+	if (branch_aware && chain_predicate.empty()) {
+		sql = FilesDeletedOrDroppedAfterSnapshotOnMain();
+	} else {
+		// replacement delete files keep an older begin_snapshot, so also match on new file ids
+		// one scan of the delete files serves both filters, pushed into the metadata database
+		sql = StringUtil::Format(
+		    R"(
 	WITH deletes AS (
 		SELECT data_file_id, delete_file_id, begin_snapshot FROM %s
 	)
@@ -2771,8 +2793,9 @@ SnapshotDeletedFromFiles DuckLakeTransactionState::GetFilesDeletedOrDroppedAfter
 	FROM %s
 	WHERE end_snapshot IS NOT NULL AND end_snapshot > {SNAPSHOT_ID}
 	)",
-	    DuckLakeMetadataManager::DeleteFileSource(branch_aware, chain_predicate, "{METADATA_CATALOG}"),
-	    DuckLakeMetadataManager::DataFileSource(branch_aware, chain_predicate, "{METADATA_CATALOG}"));
+		    DuckLakeMetadataManager::DeleteFileSource(branch_aware, chain_predicate, "{METADATA_CATALOG}"),
+		    DuckLakeMetadataManager::DataFileSource(branch_aware, chain_predicate, "{METADATA_CATALOG}"));
+	}
 	auto result = executor(sql);
 	result->ThrowIfError(
 	    "Failed to commit DuckLake transaction - failed to get files with deletions for conflict resolution:");

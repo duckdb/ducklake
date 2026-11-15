@@ -4310,15 +4310,32 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot
 		)",
 	    select_list, DataFileSource(branch_aware, chain, metadata_table_prefix, table_id.index), stats_join_list,
 	    delete_files, table_id.index);
-	if (branch_aware && order_by_clause.empty()) {
-		// the join loses the insertion order a scan of the file table has
-		order_by_clause = "\nORDER BY data.data_file_id";
-	}
-
 	if (!filter_result.where_conditions.empty()) {
 		query += "\nAND " + filter_result.where_conditions;
 	}
 	return query + order_by_clause;
+}
+
+//! The join of the file events keeps the scan order of the file table, not the id order the readers expect
+static void RestoreFileIdOrder(vector<DuckLakeFileListEntry> &files) {
+	auto by_id = [](const DuckLakeFileListEntry &a, const DuckLakeFileListEntry &b) {
+		return a.file_id.index < b.file_id.index;
+	};
+	if (std::is_sorted(files.begin(), files.end(), by_id)) {
+		return;
+	}
+	// sort the positions so that every entry moves once
+	vector<idx_t> positions(files.size());
+	for (idx_t i = 0; i < files.size(); i++) {
+		positions[i] = i;
+	}
+	std::stable_sort(positions.begin(), positions.end(), [&](idx_t a, idx_t b) { return by_id(files[a], files[b]); });
+	vector<DuckLakeFileListEntry> ordered;
+	ordered.reserve(files.size());
+	for (auto position : positions) {
+		ordered.push_back(std::move(files[position]));
+	}
+	files = std::move(ordered);
 }
 
 vector<DuckLakeFileListEntry>
@@ -4441,6 +4458,9 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 			file_entry.snapshot_branch_id = chain.Segments()[begin_segment.GetIndex()].branch_id;
 		}
 		files.push_back(std::move(file_entry));
+	}
+	if (file_order.empty() && catalog.SupportsBranching()) {
+		RestoreFileIdOrder(files);
 	}
 	if (cacheable) {
 		auto parsed = make_shared_ptr<vector<DuckLakeFileListEntry>>(files);
