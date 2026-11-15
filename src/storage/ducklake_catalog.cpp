@@ -1051,29 +1051,42 @@ void DuckLakeCatalog::AddNameMaps(vector<DuckLakeColumnMappingInfo> column_mappi
 
 void DuckLakeCatalog::LoadNameMaps(DuckLakeTransaction &transaction) {
 	auto snapshot = transaction.GetSnapshot();
-	if (loaded_name_map_index.IsValid() && snapshot.next_file_id <= loaded_name_map_index.GetIndex()) {
-		// we have already loaded all name maps that could be relevant for this snapshot
-		return;
+	optional_idx start_from;
+	{
+		lock_guard<mutex> guard(name_maps_lock);
+		if (loaded_name_map_index.IsValid() && snapshot.next_file_id <= loaded_name_map_index.GetIndex()) {
+			// we have already loaded all name maps that could be relevant for this snapshot
+			return;
+		}
+		start_from = loaded_name_map_index;
 	}
-	// name map entry not found - try to load any new ones
-	auto &metadata_manager = transaction.GetMetadataManager();
-	auto new_name_maps = metadata_manager.GetColumnMappings(loaded_name_map_index);
+	// The query runs without name_maps_lock: on a remote catalog it reads its blocks through the async pool, whose
+	// threads open files and wait for the lock in TryGetMappingById, so a query under the lock could never finish.
+	auto new_name_maps = transaction.GetMetadataManager().GetColumnMappings(start_from);
+	lock_guard<mutex> guard(name_maps_lock);
 	for (auto &column_mapping : new_name_maps) {
-		name_maps.Add(DuckLakeNameMap::FromColumnMapping(std::move(column_mapping)));
+		if (name_maps.name_maps.find(column_mapping.mapping_id) == name_maps.name_maps.end()) {
+			name_maps.Add(DuckLakeNameMap::FromColumnMapping(std::move(column_mapping)));
+		}
 	}
-	loaded_name_map_index = snapshot.next_file_id;
+	if (!loaded_name_map_index.IsValid() || snapshot.next_file_id > loaded_name_map_index.GetIndex()) {
+		loaded_name_map_index = snapshot.next_file_id;
+	}
 }
 
 shared_ptr<const DuckLakeNameMap> DuckLakeCatalog::TryGetMappingById(DuckLakeTransaction &transaction,
                                                                      MappingIndex mapping_id) {
-	lock_guard<mutex> guard(name_maps_lock);
-	auto entry = name_maps.name_maps.find(mapping_id);
-	if (entry != name_maps.name_maps.end()) {
-		return entry->second;
+	{
+		lock_guard<mutex> guard(name_maps_lock);
+		auto entry = name_maps.name_maps.find(mapping_id);
+		if (entry != name_maps.name_maps.end()) {
+			return entry->second;
+		}
 	}
 	LoadNameMaps(transaction);
 	// try to fetch the name map again
-	entry = name_maps.name_maps.find(mapping_id);
+	lock_guard<mutex> guard(name_maps_lock);
+	auto entry = name_maps.name_maps.find(mapping_id);
 	if (entry != name_maps.name_maps.end()) {
 		return entry->second;
 	}
@@ -1083,8 +1096,8 @@ shared_ptr<const DuckLakeNameMap> DuckLakeCatalog::TryGetMappingById(DuckLakeTra
 
 MappingIndex DuckLakeCatalog::TryGetCompatibleNameMap(DuckLakeTransaction &transaction,
                                                       const DuckLakeNameMap &name_map) {
-	lock_guard<mutex> guard(name_maps_lock);
 	LoadNameMaps(transaction);
+	lock_guard<mutex> guard(name_maps_lock);
 	return name_maps.TryGetCompatibleNameMap(name_map);
 }
 
