@@ -3,6 +3,7 @@
 #include "duckdb/catalog/catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "common/ducklake_version.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 
@@ -103,6 +104,10 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 
 	// Global options
 	for (auto &tag : metadata.tags) {
+		if (tag.key == DUCKLAKE_HEAL_MARKER_KEY) {
+			// the heal marker is catalog bookkeeping, not an option
+			continue;
+		}
 		result->rows.push_back(GetOptionRow(tag, "GLOBAL", string()));
 	}
 

@@ -9,7 +9,23 @@ template <typename Base>
 string DuckLakeMetadataManagerV2_0<Base>::GetCreateTableStatements() {
 	auto result = DuckLakeMetadataManagerV1_1<Base>::GetCreateTableStatements();
 	result += DuckLakeMetadataManager::GetSnapshotTagTableStatement() + "\n";
+	result += DuckLakeMetadataManager::GetBranchTableStatement() + "\n";
+	result += DuckLakeMetadataManager::GetMainBranchRowStatement() + "\n";
+	// a fresh catalog has the healed layout, so it carries the marker of a completed heal
+	result += DuckLakeMetadataManager::HealMarkerSql();
 	return result;
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetSnapshotTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(" +
+	       DuckLakeMetadataManager::BranchedSnapshotTableColumns() + ");";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetSnapshotChangesTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_changes(" +
+	       DuckLakeMetadataManager::BranchedSnapshotChangesTableColumns() + ");";
 }
 
 template <typename Base>

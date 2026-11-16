@@ -13,10 +13,12 @@ load
 CALL lake.set_option('data_inlining_row_limit', 10);
 CREATE TABLE lake.t (id BIGINT, v VARCHAR);
 INSERT INTO __ducklake_metadata_lake.ducklake_snapshot
+(snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id)
 SELECT i, to_timestamp(i), schema_version, next_catalog_id, next_file_id
 FROM range(2, 20001) r(i), __ducklake_metadata_lake.ducklake_snapshot
 WHERE snapshot_id = 1;
 INSERT INTO __ducklake_metadata_lake.ducklake_snapshot_changes
+(snapshot_id, changes_made, author, commit_message, commit_extra_info)
 SELECT i,
 CASE i % 4
 WHEN 0 THEN 'inserted_into_table:' || ((i % 7) + 2)

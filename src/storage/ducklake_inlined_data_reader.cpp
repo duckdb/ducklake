@@ -1,5 +1,6 @@
 #include "storage/ducklake_inlined_data_reader.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
+#include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/storage/table/column_segment.hpp"
@@ -81,7 +82,9 @@ DuckLakeInlinedDataReader::ReadCommittedRows(DuckLakeFunctionInfo &read_info, co
 		result->columns.push_back(std::move(column));
 		types.push_back(std::move(type));
 	}
-	result->columns.push_back("(SELECT MAX(next_file_id) FROM {METADATA_CATALOG}.ducklake_snapshot)");
+	string main_filter = transaction->GetCatalog().SupportsBranching() ? " WHERE branch_id = 0" : "";
+	result->columns.push_back("(SELECT MAX(next_file_id) FROM {METADATA_CATALOG}.ducklake_snapshot" + main_filter +
+	                          ")");
 	types.push_back(LogicalType::BIGINT);
 	auto query_result = metadata_manager.ReadInlinedData(read_info.snapshot, table_name, result->columns);
 	result->rows = metadata_manager.TransformInlinedData(*query_result, types, table_name);

@@ -548,6 +548,7 @@
         "test/sql/types/timestamptz_ns_v10.test",
         "test/sql/migration/v11_to_v20_dev1.test",
         "test/sql/migration/v20_dev1_new_catalog.test",
+        "test/sql/catalog/snapshot_branch_key.test",
         "test/sql/migration/inlined_column_rename_batches.test",
         "test/sql/tags/tags_version_gate_time_travel.test",
         "test/sql/data_inlining/inlining_obstacle_log.test",

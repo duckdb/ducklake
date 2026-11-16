@@ -273,6 +273,8 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto metadata = metadata_manager.LoadDuckLake();
 	DuckLakeVersion resolved_version = DuckLakeVersion::UNSET;
+	// the migration to the dev version heals the catalog and writes the marker, which the loaded metadata predates
+	bool healed_by_migration = false;
 	for (auto &tag : metadata.tags) {
 		if (tag.key == "version" && metadata_manager.IsRemote()) {
 			// the server takes care of migrating the metadata
@@ -334,6 +336,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			if (catalog_version == DuckLakeVersion::V1_1 && catalog_version < target_version) {
 				metadata_manager.MigrateV11();
 				catalog_version = DuckLakeVersion::V2_0_DEV1;
+				healed_by_migration = true;
 			}
 			migrating = false;
 			if (catalog_version != target_version) {
@@ -343,6 +346,10 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				// LCOV_EXCL_STOP
 			}
 			resolved_version = catalog_version;
+		}
+		if (tag.key == DUCKLAKE_HEAL_MARKER_KEY) {
+			// the heal marker is catalog bookkeeping, not an option
+			continue;
 		}
 		if (tag.key == "data_path") {
 			if (options.data_path.empty()) {
@@ -384,6 +391,32 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	// set correct version metadata manager
 	if (resolved_version != DuckLakeVersion::UNSET) {
 		SetVersionedMetadataManager(transaction, resolved_version);
+	}
+	// the server heals the catalog it serves, a client never probes its shapes
+	if (resolved_version == DuckLakeVersion::V2_0_DEV1 && !healed_by_migration &&
+	    !transaction.GetMetadataManager().IsRemote() && !DuckLakeMetadataManager::HasHealMarker(metadata)) {
+		auto &manager = transaction.GetMetadataManager();
+		if (catalog.GetAttached().IsReadOnly()) {
+			// the snapshot tables are keyed by branch, which only a writable attach can rebuild
+			auto missing = manager.ProbeV2_0Dev1Additions();
+			if (missing.branch_table || missing.rebuild_snapshots || missing.rebuild_snapshot_changes) {
+				throw InvalidInputException("This DuckLake catalog has the snapshot tables of an older dev build, "
+				                            "attach it writable once to heal it");
+			}
+		} else {
+			// the additions change the metadata schema, which a kept cache would still miss
+			metadata_cache_stale = true;
+			try {
+				manager.AddV2_0Dev1Additions();
+				// commit now so a concurrent heal surfaces inside the attach retry scope
+				transaction.ReleaseMetadataTransaction();
+			} catch (std::exception &ex) {
+				// a concurrent attach may have healed it first
+				if (!manager.HasHealMarker()) {
+					throw;
+				}
+			}
+		}
 	}
 }
 
