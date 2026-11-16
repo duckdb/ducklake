@@ -119,12 +119,13 @@ vector<string> DuckLakeMetadataManager::SystemColumnNames() const {
 }
 
 bool DuckLakeMetadataManager::IsRetryableCommitError(const string &message) const {
-	auto rule = GetMetadataProfile().FindCommitErrorRule(message);
+	// the rules describe the error alone, not the query text a manager reports with it
+	auto rule = GetMetadataProfile().FindCommitErrorRule(CommitErrorWithoutQuery(message));
 	return rule && rule->retryable;
 }
 
 string DuckLakeMetadataManager::CommitErrorHint(const string &message) const {
-	auto rule = GetMetadataProfile().FindCommitErrorRule(message);
+	auto rule = GetMetadataProfile().FindCommitErrorRule(CommitErrorWithoutQuery(message));
 	if (!rule) {
 		return string();
 	}
