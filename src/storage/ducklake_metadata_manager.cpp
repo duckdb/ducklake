@@ -118,14 +118,24 @@ vector<string> DuckLakeMetadataManager::SystemColumnNames() const {
 	return GetMetadataProfile().system_column_names;
 }
 
-bool DuckLakeMetadataManager::IsRetryableCommitError(const string &message) const {
+bool DuckLakeMetadataManager::IsRetryableCommitError(const ErrorData &error) const {
 	// the rules describe the error alone, not the query text a manager reports with it
-	auto rule = GetMetadataProfile().FindCommitErrorRule(CommitErrorWithoutQuery(message));
+	auto rule = GetMetadataProfile().FindCommitErrorRule(CommitErrorWithoutQuery(error));
 	return rule && rule->retryable;
 }
 
-string DuckLakeMetadataManager::CommitErrorHint(const string &message) const {
-	auto rule = GetMetadataProfile().FindCommitErrorRule(CommitErrorWithoutQuery(message));
+string DuckLakeMetadataManager::CommitErrorWithoutQuery(const ErrorData &error) const {
+	// a manager that appends the statement to the error keeps the error alone under the key
+	auto &extra_info = error.ExtraInfo();
+	auto entry = extra_info.find(ERROR_WITHOUT_STATEMENT_KEY);
+	if (entry != extra_info.end()) {
+		return entry->second;
+	}
+	return CommitErrorWithoutQuery(error.RawMessage());
+}
+
+string DuckLakeMetadataManager::CommitErrorHint(const ErrorData &error) const {
+	auto rule = GetMetadataProfile().FindCommitErrorRule(CommitErrorWithoutQuery(error));
 	if (!rule) {
 		return string();
 	}

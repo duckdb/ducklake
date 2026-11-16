@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/set.hpp"
 #include "duckdb/common/unordered_set.hpp"
@@ -295,13 +296,18 @@ public:
 	bool ExecuteRetrialsServerSide() const;
 	//! Whether the client can skip the snapshot fetch and let the server read it.
 	virtual bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const;
-	virtual bool IsRetryableCommitError(const string &message) const;
+	//! Whether a rule of the profile retries the error of a failed commit
+	virtual bool IsRetryableCommitError(const ErrorData &error) const;
 	//! The error of a failed commit without the text of the failed query that it repeats
 	virtual string CommitErrorWithoutQuery(const string &message) const {
 		return message;
 	}
+	//! The same for an error object, exact where the object carries the error under ERROR_WITHOUT_STATEMENT_KEY
+	string CommitErrorWithoutQuery(const ErrorData &error) const;
 	//! Advice added to the error of a commit that failed for good
-	virtual string CommitErrorHint(const string &message) const;
+	virtual string CommitErrorHint(const ErrorData &error) const;
+	//! The key under which a manager that appends the statement to an error keeps the error alone
+	static constexpr const char *ERROR_WITHOUT_STATEMENT_KEY = "ducklake_error_without_statement";
 	//! Whether the catalog holds any branch besides main, memoized while metadata reads are repeatable
 	bool HasBranches();
 	//! Drops the cached file listings, called when the transaction writes metadata

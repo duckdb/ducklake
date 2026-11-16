@@ -53,15 +53,15 @@ struct DuckLakeCommitContext {
 	//! Executes the batched snapshot/changes SQL against the metadata DB.
 	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string &)> execute_commit_batch;
 	//! Classifies metadata-catalog errors that are safe to retry.
-	std::function<bool(const string &)> is_retryable_metadata_error = [](const string &) {
+	std::function<bool(const ErrorData &)> is_retryable_metadata_error = [](const ErrorData &) {
 		return false;
 	};
 	//! The commit error without the failed query text that it repeats.
-	std::function<string(const string &)> commit_error_without_query = [](const string &message) {
-		return message;
+	std::function<string(const ErrorData &)> commit_error_without_query = [](const ErrorData &error) {
+		return error.RawMessage();
 	};
 	//! Advice for a commit error that is not retried.
-	std::function<string(const string &)> commit_error_hint = [](const string &) {
+	std::function<string(const ErrorData &)> commit_error_hint = [](const ErrorData &) {
 		return string();
 	};
 	//! Optional hooks below default to a no-op/constant; callers override only the ones they need.

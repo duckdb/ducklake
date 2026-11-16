@@ -26,8 +26,6 @@ public:
 	//! A failing native statement reports the error of the read with the statement SQLite ran
 	using DuckLakeMetadataManager::Query;
 	unique_ptr<QueryResult> Query(string &query) override;
-	//! The error of a failing native statement without the statement that Query appends
-	string CommitErrorWithoutQuery(const string &message) const override;
 
 protected:
 	//! SQLite runs the head snapshot read and the table stats read as one statement each

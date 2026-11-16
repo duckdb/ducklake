@@ -376,7 +376,8 @@ string PostgresMetadataManager::CommitErrorWithoutQuery(const string &message) c
 	return server_error_start.IsValid() ? message.substr(server_error_start.GetIndex()) : message;
 }
 
-bool PostgresMetadataManager::IsRetryableCommitError(const string &message) const {
+bool PostgresMetadataManager::IsRetryableCommitError(const ErrorData &error) const {
+	auto &message = error.RawMessage();
 	auto batch_server_error_start = BatchServerErrorStart(message);
 	// for another failed query, the server error is guessed to follow the last quote and colon
 	auto server_error_start =

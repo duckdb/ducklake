@@ -934,7 +934,7 @@ void DuckLakeTransaction::Commit() {
 				}
 			} catch (std::exception &ex) {
 				ErrorData error(ex);
-				error.Throw(GetMetadataManager().CommitErrorHint(error.Message()));
+				error.Throw(GetMetadataManager().CommitErrorHint(error));
 			}
 		}
 	} catch (...) {
@@ -1741,23 +1741,23 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		}
 		return result;
 	};
-	context.is_retryable_metadata_error = [&](const string &message) {
-		return option_lock_failed || metadata_manager->IsRetryableCommitError(message);
+	context.is_retryable_metadata_error = [&](const ErrorData &error) {
+		return option_lock_failed || metadata_manager->IsRetryableCommitError(error);
 	};
 	// a retry rolls back what the statements wrote to the metadata
 	context.skip_retry = [&]() {
 		return option_lock_failed && metadata_written;
 	};
-	context.commit_error_without_query = [&](const string &message) {
-		return metadata_manager->CommitErrorWithoutQuery(message);
+	context.commit_error_without_query = [&](const ErrorData &error) {
+		return metadata_manager->CommitErrorWithoutQuery(error);
 	};
-	context.commit_error_hint = [&](const string &message) {
+	context.commit_error_hint = [&](const ErrorData &error) {
 		if (context.skip_retry()) {
 			return string("Another transaction changed options at the same time, and a retry would undo what the "
 			              "statements of this transaction wrote to the metadata, such as expired snapshots. Run the "
 			              "transaction again.\n");
 		}
-		return metadata_manager->CommitErrorHint(message);
+		return metadata_manager->CommitErrorHint(error);
 	};
 	context.flush_cache_if_pending = [&]() {
 		if (metadata_manager->TakePendingCacheClear()) {

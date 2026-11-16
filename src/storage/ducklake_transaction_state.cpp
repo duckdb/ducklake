@@ -3139,7 +3139,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				auto &commit_error = res->GetErrorObject();
-				retryable_metadata_error = context.is_retryable_metadata_error(commit_error.RawMessage());
+				retryable_metadata_error = context.is_retryable_metadata_error(commit_error);
 				commit_error.Throw("Failed to flush changes into DuckLake: ");
 			}
 			if (!expired_snapshots.empty()) {
@@ -3154,9 +3154,8 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
 			RollbackKeepingError(context);
-			retryable_metadata_error =
-			    retryable_metadata_error || context.is_retryable_metadata_error(error.RawMessage());
-			auto error_without_query = context.commit_error_without_query(error.RawMessage());
+			retryable_metadata_error = retryable_metadata_error || context.is_retryable_metadata_error(error);
+			auto error_without_query = context.commit_error_without_query(error);
 			// an internal error is a bug that a retry cannot fix
 			// a retryable metadata error in the conflict check is retried, a conflict that it finds is not
 			bool retry_on_error =
@@ -3190,7 +3189,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 					    "Consider increasing the value with: e.g., \"SET ducklake_max_retry_count = %d;\"\n",
 					    retry_config.max_retry_count, suggested_count);
 				}
-				error_message += context.commit_error_hint(error.Message());
+				error_message += context.commit_error_hint(error);
 				error.Throw(error_message);
 			}
 
