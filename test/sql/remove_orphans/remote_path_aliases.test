@@ -14,6 +14,10 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 test-env DATA_PATH s3://mybucket
 
+# The query-string alias below exercises deprecated S3 URL parameters.
+statement ok
+SET s3_enable_deprecated_url_parameters = true;
+
 statement ok
 DROP SECRET IF EXISTS __default_s3;
 

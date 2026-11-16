@@ -12,6 +12,15 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 test-env DATA_PATH {TEST_DIR}
 
+# DuckDB's test data, from a DuckDB build or from an extension build with a duckdb submodule
+statement ok
+SET VARIABLE parquet_testing = (
+	SELECT parse_dirpath(file) FROM glob('{BUILD_DIR}/../../data/parquet-testing/fixed.parquet')
+	UNION ALL
+	SELECT parse_dirpath(file) FROM glob('{BUILD_DIR}/../../duckdb/data/parquet-testing/fixed.parquet')
+	LIMIT 1
+)
+
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_files_legacy_parquet_types')
 
@@ -23,7 +32,7 @@ statement ok
 CREATE TABLE int96(id INTEGER, timestamp_col TIMESTAMP)
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'int96', 'duckdb/data/parquet-testing/arrow/alltypes_plain.parquet', ignore_extra_columns => true)
+CALL ducklake_add_data_files('ducklake', 'int96', getvariable('parquet_testing') || '/arrow/alltypes_plain.parquet', ignore_extra_columns => true)
 
 query II
 SELECT id, timestamp_col FROM int96 ORDER BY id
@@ -42,7 +51,7 @@ statement ok
 CREATE TABLE micros(BLOCK_NUMBER INTEGER, BLOCK_TIMESTAMP TIMESTAMP)
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'micros', 'duckdb/data/parquet-testing/json_convertedtype.parquet', ignore_extra_columns => true)
+CALL ducklake_add_data_files('ducklake', 'micros', getvariable('parquet_testing') || '/json_convertedtype.parquet', ignore_extra_columns => true)
 
 query III
 SELECT min(BLOCK_TIMESTAMP), max(BLOCK_TIMESTAMP), count(*) FROM micros
@@ -54,7 +63,7 @@ statement ok
 CREATE TABLE millis(bill_billing_period_start_date TIMESTAMP)
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'millis', 'duckdb/data/parquet-testing/aws1.snappy.parquet', ignore_extra_columns => true)
+CALL ducklake_add_data_files('ducklake', 'millis', getvariable('parquet_testing') || '/aws1.snappy.parquet', ignore_extra_columns => true)
 
 query III
 SELECT min(bill_billing_period_start_date), max(bill_billing_period_start_date), count(*) FROM millis
@@ -66,7 +75,7 @@ statement ok
 CREATE TABLE fixed(data BLOB)
 
 statement ok
-CALL ducklake_add_data_files('ducklake', 'fixed', 'duckdb/data/parquet-testing/fixed.parquet')
+CALL ducklake_add_data_files('ducklake', 'fixed', getvariable('parquet_testing') || '/fixed.parquet')
 
 query I
 SELECT data FROM fixed
@@ -94,7 +103,7 @@ statement ok
 CREATE TABLE times(col1 VARCHAR, col2 VARCHAR)
 
 statement error
-CALL ducklake_add_data_files('ducklake', 'times', 'duckdb/data/parquet-testing/timetz_4byte_stats.parquet')
+CALL ducklake_add_data_files('ducklake', 'times', getvariable('parquet_testing') || '/timetz_4byte_stats.parquet')
 ----
 Expected VARCHAR, found type TIME
 
