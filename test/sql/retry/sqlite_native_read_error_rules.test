@@ -8,6 +8,10 @@ require parquet
 
 require sqlite_scanner
 
+# the profile registration below names the scanner's profile, which autoloading would not have loaded yet
+statement ok
+LOAD sqlite_scanner
+
 test-env DATA_PATH {TEST_DIR}
 
 # the lock rule of the shipped profile ends at the message, which a named statement would follow
