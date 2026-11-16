@@ -23,7 +23,7 @@ static bool AcceptsOption(const TableFunctionCatalogEntry &entry, const Identifi
 	return options && options->Find(option);
 }
 
-bool SQLiteMetadataManager::NativeLoadAvailable() {
+bool SQLiteMetadataManager::NativeLoadAvailable() const {
 	if (!native_load_available.IsValid()) {
 		// an untyped sqlite_query returns every column as text, the parser needs the types of the scanner
 		auto &context = *transaction.GetConnection().context;
@@ -78,6 +78,39 @@ static string SQLiteResultType(const LogicalType &type) {
 	}
 }
 
+string SQLiteMetadataManager::NativeStatement(const string &statement, const vector<CatalogLoadColumn> &columns) const {
+	// SQLite runs the statement as a whole, so only its rows reach the scanner
+	auto remote = statement;
+	SubstituteCatalogPlaceholders(remote, SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
+	// the scanner path compares the companion keys in DuckDB, SQLite compares their bytes under its own name
+	remote = StringUtil::Replace(remote, "COLLATE \"C\"", "COLLATE BINARY");
+	vector<string> types;
+	vector<string> names;
+	for (auto &column : columns) {
+		types.push_back(SQLString::ToString(SQLiteResultType(column.type)));
+		names.push_back(SQLString::ToString(column.name));
+	}
+	return StringUtil::Format("SELECT %s FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, %s, column_types := "
+	                          "[%s], column_names := [%s])",
+	                          ListColumnsFromJson(columns), SQLString(remote), StringUtil::Join(types, ", "),
+	                          StringUtil::Join(names, ", "));
+}
+
+//! Whether the statement is one NativeStatement rendered, which SQLite runs as a whole
+static bool IsNativeStatement(const string &query) {
+	return StringUtil::StartsWith(query, "SELECT ") && StringUtil::Contains(query, " FROM sqlite_query(");
+}
+
+unique_ptr<QueryResult> SQLiteMetadataManager::Query(string &query) {
+	auto result = DuckLakeMetadataManager::Query(query);
+	if (result->HasError() && IsNativeStatement(query)) {
+		// SQLite names the failing column or table, the statement shows where it stands
+		auto &error = result->GetErrorObject();
+		result->SetError(ErrorData(error.Type(), StringUtil::Format("%s\nStatement: %s", error.RawMessage(), query)));
+	}
+	return result;
+}
+
 DuckLakeCatalogInfo SQLiteMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot snapshot) {
 	auto &catalog = transaction.GetCatalog();
 	if (!NativeLoadAvailable() || !JsonExtensionAvailable(catalog.GetDatabase())) {
@@ -85,40 +118,63 @@ DuckLakeCatalogInfo SQLiteMetadataManager::GetCatalogForSnapshot(DuckLakeSnapsho
 		return DuckLakeMetadataManager::GetCatalogForSnapshot(snapshot);
 		// LCOV_EXCL_STOP
 	}
-	auto schema = SQLQuotedIdentifier::ToString(catalog.MetadataSchemaName());
 	CatalogLoadDialect dialect;
 	dialect.render_list_aggregation = SQLiteJsonAggregation;
 	dialect.render_ordered_list_subquery = SQLiteOrderedListSubquery;
 	dialect.wrap_statement = [&](const string &statement, const vector<CatalogLoadColumn> &columns) {
-		// SQLite runs the statement as a whole, so only the live rows reach the scanner
+		// the snapshot of the load is rendered into the statement before SQLite runs it
 		auto remote = statement;
 		SubstituteTransactionPlaceholders(snapshot, remote);
-		SubstituteCatalogPlaceholders(remote, schema);
-		// the scanner path compares the companion keys in DuckDB, SQLite compares their bytes under its own name
-		remote = StringUtil::Replace(remote, "COLLATE \"C\"", "COLLATE BINARY");
-		vector<string> types;
-		vector<string> names;
-		for (auto &column : columns) {
-			types.push_back(SQLString::ToString(SQLiteResultType(column.type)));
-			names.push_back(SQLString::ToString(column.name));
-		}
-		return StringUtil::Format("SELECT %s FROM sqlite_query({METADATA_CATALOG_NAME_LITERAL}, %s, column_types := "
-		                          "[%s], column_names := [%s])",
-		                          ListColumnsFromJson(columns), SQLString(remote), StringUtil::Join(types, ", "),
-		                          StringUtil::Join(names, ", "));
+		return NativeStatement(remote, columns);
 	};
 	auto executor = [this](DuckLakeSnapshot s, string q) {
-		auto result = Query(s, q);
-		if (result->HasError()) {
-			// SQLite names the failing column or table, the statement shows where it stands
-			auto &error = result->GetErrorObject();
-			result->SetError(ErrorData(error.Type(), StringUtil::Format("%s\nStatement: %s", error.RawMessage(), q)));
-		}
-		return result;
+		return Query(s, q);
 	};
 	return BuildCatalogForSnapshot(snapshot, executor, catalog.DataPath(), catalog.Separator(),
 	                               catalog.SupportsV1_1Metadata(), catalog.SupportsBranching(), catalog.AttachedChain(),
 	                               dialect);
+}
+
+string SQLiteMetadataManager::GetLatestSnapshotQuery() const {
+	if (!NativeLoadAvailable()) {
+		// LCOV_EXCL_START
+		return DuckLakeMetadataManager::GetLatestSnapshotQuery();
+		// LCOV_EXCL_STOP
+	}
+	auto &catalog = transaction.GetCatalog();
+	vector<CatalogLoadColumn> columns {{"snapshot_id", LogicalType::BIGINT},
+	                                   {"schema_version", LogicalType::BIGINT},
+	                                   {"next_catalog_id", LogicalType::BIGINT},
+	                                   {"next_file_id", LogicalType::BIGINT},
+	                                   {"version", LogicalType::VARCHAR}};
+	if (catalog.SupportsBranching()) {
+		columns.push_back({"branch_id", LogicalType::BIGINT});
+		// the newest snapshot of every parent branch of the chain follows the head
+		auto &segments = catalog.AttachedChain().Segments();
+		for (idx_t position = 0; position + 1 < segments.size(); position++) {
+			columns.push_back({StringUtil::Format("parent_head_%llu", position), LogicalType::BIGINT});
+		}
+	}
+	return NativeStatement(DuckLakeMetadataManager::GetLatestSnapshotQuery(), columns);
+}
+
+string SQLiteMetadataManager::GetGlobalTableStatsQuery(const vector<TableIndex> &table_ids) const {
+	if (!NativeLoadAvailable()) {
+		// LCOV_EXCL_START
+		return DuckLakeMetadataManager::GetGlobalTableStatsQuery(table_ids);
+		// LCOV_EXCL_STOP
+	}
+	vector<CatalogLoadColumn> columns {
+	    {"table_id", LogicalType::BIGINT},        {"column_id", LogicalType::BIGINT},
+	    {"record_count", LogicalType::BIGINT},    {"next_row_id", LogicalType::BIGINT},
+	    {"file_size_bytes", LogicalType::BIGINT}, {"contains_null", LogicalType::BOOLEAN},
+	    {"contains_nan", LogicalType::BOOLEAN},   {"min_value", LogicalType::VARCHAR},
+	    {"max_value", LogicalType::VARCHAR},      {"extra_stats", LogicalType::VARCHAR}};
+	if (transaction.GetCatalog().SupportsV1_1Metadata()) {
+		columns.push_back({"min_is_exact", LogicalType::BOOLEAN});
+		columns.push_back({"max_is_exact", LogicalType::BOOLEAN});
+	}
+	return NativeStatement(DuckLakeMetadataManager::GetGlobalTableStatsQuery(table_ids), columns);
 }
 
 } // namespace duckdb

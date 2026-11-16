@@ -3501,9 +3501,13 @@ GROUP BY table_id;)",
 	}
 }
 
+string DuckLakeMetadataManager::GetGlobalTableStatsQuery(const vector<TableIndex> &table_ids) const {
+	return GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata(), table_ids);
+}
+
 vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot,
                                                                              const vector<TableIndex> &table_ids) {
-	auto result = Query(snapshot, GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata(), table_ids));
+	auto result = Query(snapshot, GetGlobalTableStatsQuery(table_ids));
 	auto global_stats = ParseGlobalTableStats(*result);
 	auto &catalog = transaction.GetCatalog();
 	FillMissingTableSizes(

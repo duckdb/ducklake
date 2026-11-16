@@ -1,0 +1,424 @@
+# name: test/sql/catalog/sqlite_native_head_and_stats.test
+# description: a SQLite catalog reads the head of its chain and its table stats in one statement each that SQLite runs, reading what a DuckDB catalog of the same lake reads
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET profiling_renderer_settings = MAP {'operator_casing': 'upper'}
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_native_head_and_stats.db' AS sl (DATA_PATH '{DATA_PATH}/sqlite_native_head_and_stats_sqlite', METADATA_CATALOG 'sl_meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/sqlite_native_head_and_stats_duckdb.db' AS dl (DATA_PATH '{DATA_PATH}/sqlite_native_head_and_stats_duckdb', METADATA_CATALOG 'dl_meta', DATA_INLINING_ROW_LIMIT 0)
+
+# the same lake in both catalogs
+foreach lake sl dl
+
+statement ok
+CREATE TABLE {lake}.t (i INTEGER, s VARCHAR, d DOUBLE)
+
+statement ok
+INSERT INTO {lake}.t VALUES (1, 'a', 1.5), (2, 'b', 2.5), (3, 'c', 3.5)
+
+# fork dev at the first insert
+statement ok
+INSERT INTO {lake}_meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+statement ok
+INSERT INTO {lake}.t VALUES (4, NULL, 4.5), (5, 'e', 5.5)
+
+statement ok
+DELETE FROM {lake}.t WHERE i = 2
+
+statement ok
+CREATE TABLE {lake}.u (k INTEGER)
+
+# the first own snapshot of dev
+statement ok
+INSERT INTO {lake}_meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 3, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM {lake}_meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok
+INSERT INTO {lake}_meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+DETACH {lake}
+
+endloop
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_native_head_and_stats.db' AS sl (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/sqlite_native_head_and_stats_duckdb.db' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+query III
+SELECT count(*), sum(i), count(s) FROM sl.t
+----
+4	13	3
+
+query III
+SELECT count(*), sum(i), count(s) FROM dl.t
+----
+4	13	3
+
+statement ok
+CALL disable_logging()
+
+# the read fetched the head of main through one typed sqlite_query, the version as text and the booleans as integers
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE catalog = 'sl' AND query LIKE 'SELECT * FROM sqlite_query(''__ducklake_metadata_sl'', ''SELECT snapshot_id, schema_version, next_catalog_id, next_file_id, (SELECT MAX(value) FROM "main".ducklake_metadata WHERE key = ''''version''''), branch_id%FROM "main".ducklake_snapshot%WHERE (branch_id = 0) AND snapshot_id = (SELECT MAX(snapshot_id) FROM "main".ducklake_snapshot WHERE branch_id = 0);'', column_types := [''BIGINT'', ''BIGINT'', ''BIGINT'', ''BIGINT'', ''VARCHAR'', ''BIGINT''], column_names := [''snapshot_id'', ''schema_version'', ''next_catalog_id'', ''next_file_id'', ''version'', ''branch_id''])'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE catalog = 'sl' AND query LIKE 'SELECT * FROM sqlite_query(''__ducklake_metadata_sl'', ''%SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value, extra_stats, min_is_exact, max_is_exact%FROM "main".ducklake_table_stats%LEFT JOIN "main".ducklake_table_column_stats USING (table_id)%ORDER BY table_id ASC%'', column_types := [''BIGINT'', ''BIGINT'', ''BIGINT'', ''BIGINT'', ''BIGINT'', ''BIGINT'', ''BIGINT'', ''VARCHAR'', ''VARCHAR'', ''VARCHAR'', ''BIGINT'', ''BIGINT''], column_names := [''table_id'', ''column_id'', ''record_count'', ''next_row_id'', ''file_size_bytes'', ''contains_null'', ''contains_nan'', ''min_value'', ''max_value'', ''extra_stats'', ''min_is_exact'', ''max_is_exact''])'
+----
+1
+
+# nothing read the snapshot or the stats tables through the scanner
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE catalog = 'sl' AND query NOT LIKE '%sqlite_query(%' AND (query LIKE '%ducklake_snapshot%' OR query LIKE '%ducklake_table_stats%')
+----
+0
+
+# the DuckDB catalog read both through its own SQL
+query II
+SELECT count(*) FILTER (query LIKE '%FROM "__ducklake_metadata_dl"."main".ducklake_snapshot%MAX(snapshot_id)%'),
+	count(*) FILTER (query LIKE '%FROM "__ducklake_metadata_dl"."main".ducklake_table_stats%')
+FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE catalog = 'dl'
+----
+1	1
+
+# both catalogs hold and read the same snapshots and stats
+foreach lake sl dl
+
+query IIIII
+SELECT snapshot_id, schema_version, next_catalog_id, next_file_id, branch_id FROM __ducklake_metadata_{lake}.ducklake_snapshot ORDER BY branch_id, snapshot_id
+----
+0	0	1	0	0
+1	1	2	0	0
+2	1	2	1	0
+3	1	2	2	0
+4	1	2	3	0
+5	2	3	3	0
+3	1	2	1	1
+
+query I
+SELECT id FROM {lake}.current_snapshot()
+----
+5
+
+query IIII
+SELECT table_id, record_count, next_row_id, file_size_bytes = (SELECT sum(data_file_size_bytes) FROM ducklake_list_files('{lake}', 't')) FROM __ducklake_metadata_{lake}.ducklake_table_stats
+----
+1	5	5	true
+
+query I
+SELECT stats(i) FROM {lake}.t LIMIT 1
+----
+<REGEX>:.*has_null.*false.*max.*5.*min.*1.*
+
+query I
+SELECT stats(s) FROM {lake}.t LIMIT 1
+----
+<REGEX>:.*has_null.*true.*max.*e.*min.*a.*
+
+# the optimizer reads the bounds of the stats
+query II
+EXPLAIN ANALYZE SELECT * FROM {lake}.t WHERE i = 9
+----
+analyzed_plan	<REGEX>:.*EMPTY_RESULT.*
+
+statement ok
+DETACH {lake}
+
+endloop
+
+# a branch attach reads the head of its chain with the newest snapshot of its parent next to it
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_native_head_and_stats.db' AS sl_dev (BRANCH 'dev')
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/sqlite_native_head_and_stats_duckdb.db' AS dl_dev (BRANCH 'dev')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+foreach lake sl_dev dl_dev
+
+query I
+SELECT id FROM {lake}.current_snapshot()
+----
+3
+
+query II
+SELECT snapshot_id, schema_version FROM ducklake_snapshots('{lake}') ORDER BY snapshot_id
+----
+0	0
+1	1
+2	1
+3	1
+
+# the read at the fork
+query III
+SELECT i, s, d FROM {lake}.t ORDER BY i
+----
+1	a	1.5
+2	b	2.5
+3	c	3.5
+
+query I
+SELECT count(*) FROM {lake}.t AT (VERSION => 2)
+----
+3
+
+endloop
+
+statement ok
+CALL disable_logging()
+
+# every statement of the branch read its head through the native statement, the chain predicate capping main at the fork
+query II
+SELECT count(*), count(DISTINCT query) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE catalog = 'sl_dev' AND query LIKE 'SELECT * FROM sqlite_query(''__ducklake_metadata_sl_dev'', ''SELECT snapshot_id, schema_version, next_catalog_id, next_file_id, (SELECT MAX(value) FROM "main".ducklake_metadata WHERE key = ''''version''''), branch_id, (SELECT MAX(snapshot_id) FROM "main".ducklake_snapshot WHERE branch_id = 0)%FROM "main".ducklake_snapshot%WHERE ((branch_id = 0 AND snapshot_id <= 2) OR branch_id = 1) AND snapshot_id = (SELECT MAX(snapshot_id) FROM "main".ducklake_snapshot WHERE (branch_id = 0 AND snapshot_id <= 2) OR branch_id = 1);'', column_types := [''BIGINT'', ''BIGINT'', ''BIGINT'', ''BIGINT'', ''VARCHAR'', ''BIGINT'', ''BIGINT''], column_names := [''snapshot_id'', ''schema_version'', ''next_catalog_id'', ''next_file_id'', ''version'', ''branch_id'', ''parent_head_0''])'
+----
+4	1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE catalog = 'sl_dev' AND query NOT LIKE '%sqlite_query(%' AND query LIKE '%MAX(snapshot_id)%'
+----
+0
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE catalog = 'dl_dev' AND query LIKE '%FROM "__ducklake_metadata_dl_dev"."main".ducklake_snapshot%WHERE ((branch_id = 0 AND snapshot_id <= 2) OR branch_id = 1) AND snapshot_id = (SELECT MAX(snapshot_id)%'
+----
+4
+
+# a 1.0 catalog has neither branches nor exactness columns, its head statement reads five columns and its stats statement ten
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_native_head_and_stats_10.db' AS sl10 (DATA_PATH '{DATA_PATH}/sqlite_native_head_and_stats_sqlite_10', DATA_INLINING_ROW_LIMIT 0, DUCKLAKE_VERSION '1.0')
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/sqlite_native_head_and_stats_duckdb_10.db' AS dl10 (DATA_PATH '{DATA_PATH}/sqlite_native_head_and_stats_duckdb_10', DATA_INLINING_ROW_LIMIT 0, DUCKLAKE_VERSION '1.0')
+
+foreach lake sl10 dl10
+
+statement ok
+CREATE TABLE {lake}.t (i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO {lake}.t VALUES (1, 'a'), (2, NULL), (3, 'c')
+
+statement ok
+DETACH {lake}
+
+endloop
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_native_head_and_stats_10.db' AS sl10 (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/sqlite_native_head_and_stats_duckdb_10.db' AS dl10 (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+query III
+SELECT count(*), sum(i), count(s) FROM sl10.t
+----
+3	6	2
+
+query III
+SELECT count(*), sum(i), count(s) FROM dl10.t
+----
+3	6	2
+
+statement ok
+CALL disable_logging()
+
+# the head statement carries the five columns of a catalog without branches, no branch or parent head among them
+query II
+SELECT count(*) FILTER (query LIKE 'SELECT * FROM sqlite_query(''__ducklake_metadata_sl10'', ''SELECT snapshot_id, schema_version, next_catalog_id, next_file_id,%(SELECT MAX(value) FROM "main".ducklake_metadata WHERE key = ''''version'''')%FROM "main".ducklake_snapshot%WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM "main".ducklake_snapshot);'', column_types := [''BIGINT'', ''BIGINT'', ''BIGINT'', ''BIGINT'', ''VARCHAR''], column_names := [''snapshot_id'', ''schema_version'', ''next_catalog_id'', ''next_file_id'', ''version''])'),
+	count(*) FILTER (query LIKE '%MAX(snapshot_id)%' AND (query LIKE '%branch_id%' OR query LIKE '%parent_head%'))
+FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE catalog = 'sl10'
+----
+1	0
+
+# the stats statement carries the ten columns of a 1.0 catalog
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE catalog = 'sl10' AND query LIKE 'SELECT * FROM sqlite_query(''__ducklake_metadata_sl10'', ''%SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value, extra_stats%FROM "main".ducklake_table_stats%LEFT JOIN "main".ducklake_table_column_stats USING (table_id)%ORDER BY table_id ASC%'', column_types := [''BIGINT'', ''BIGINT'', ''BIGINT'', ''BIGINT'', ''BIGINT'', ''BIGINT'', ''BIGINT'', ''VARCHAR'', ''VARCHAR'', ''VARCHAR''], column_names := [''table_id'', ''column_id'', ''record_count'', ''next_row_id'', ''file_size_bytes'', ''contains_null'', ''contains_nan'', ''min_value'', ''max_value'', ''extra_stats''])'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE catalog = 'sl10' AND query NOT LIKE '%sqlite_query(%' AND (query LIKE '%ducklake_snapshot%' OR query LIKE '%ducklake_table_stats%')
+----
+0
+
+# both catalogs hold and read the same snapshot and stats
+foreach lake sl10 dl10
+
+query I
+SELECT id FROM {lake}.current_snapshot()
+----
+2
+
+query IIII
+SELECT table_id, record_count, next_row_id, file_size_bytes = (SELECT sum(data_file_size_bytes) FROM ducklake_list_files('{lake}', 't')) FROM __ducklake_metadata_{lake}.ducklake_table_stats
+----
+1	3	3	true
+
+query IIII
+SELECT column_id, contains_null::BOOLEAN, min_value, max_value FROM __ducklake_metadata_{lake}.ducklake_table_column_stats ORDER BY column_id
+----
+1	false	1	3
+2	true	a	c
+
+statement ok
+DETACH {lake}
+
+endloop
+
+# a 1.1 catalog has no branches but the exactness columns, its stats statement reads twelve columns
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_native_head_and_stats_11.db' AS sl11 (DATA_PATH '{DATA_PATH}/sqlite_native_head_and_stats_sqlite_11', DATA_INLINING_ROW_LIMIT 0, DUCKLAKE_VERSION '1.1')
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/sqlite_native_head_and_stats_duckdb_11.db' AS dl11 (DATA_PATH '{DATA_PATH}/sqlite_native_head_and_stats_duckdb_11', DATA_INLINING_ROW_LIMIT 0, DUCKLAKE_VERSION '1.1')
+
+foreach lake sl11 dl11
+
+statement ok
+CREATE TABLE {lake}.t (i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO {lake}.t VALUES (1, 'a'), (2, NULL), (3, 'c')
+
+statement ok
+DETACH {lake}
+
+endloop
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_native_head_and_stats_11.db' AS sl11 (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/sqlite_native_head_and_stats_duckdb_11.db' AS dl11 (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+query III
+SELECT count(*), sum(i), count(s) FROM sl11.t
+----
+3	6	2
+
+query III
+SELECT count(*), sum(i), count(s) FROM dl11.t
+----
+3	6	2
+
+statement ok
+CALL disable_logging()
+
+query II
+SELECT count(*) FILTER (query LIKE 'SELECT * FROM sqlite_query(''__ducklake_metadata_sl11'', ''SELECT snapshot_id, schema_version, next_catalog_id, next_file_id,%(SELECT MAX(value) FROM "main".ducklake_metadata WHERE key = ''''version'''')%FROM "main".ducklake_snapshot%WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM "main".ducklake_snapshot);'', column_types := [''BIGINT'', ''BIGINT'', ''BIGINT'', ''BIGINT'', ''VARCHAR''], column_names := [''snapshot_id'', ''schema_version'', ''next_catalog_id'', ''next_file_id'', ''version''])'),
+	count(*) FILTER (query LIKE '%MAX(snapshot_id)%' AND (query LIKE '%branch_id%' OR query LIKE '%parent_head%'))
+FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE catalog = 'sl11'
+----
+1	0
+
+# the stats statement carries the twelve columns of a 1.1 catalog
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE catalog = 'sl11' AND query LIKE 'SELECT * FROM sqlite_query(''__ducklake_metadata_sl11'', ''%SELECT table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, max_value, extra_stats, min_is_exact, max_is_exact%FROM "main".ducklake_table_stats%LEFT JOIN "main".ducklake_table_column_stats USING (table_id)%ORDER BY table_id ASC%'', column_types := [''BIGINT'', ''BIGINT'', ''BIGINT'', ''BIGINT'', ''BIGINT'', ''BIGINT'', ''BIGINT'', ''VARCHAR'', ''VARCHAR'', ''VARCHAR'', ''BIGINT'', ''BIGINT''], column_names := [''table_id'', ''column_id'', ''record_count'', ''next_row_id'', ''file_size_bytes'', ''contains_null'', ''contains_nan'', ''min_value'', ''max_value'', ''extra_stats'', ''min_is_exact'', ''max_is_exact''])'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE catalog = 'sl11' AND query NOT LIKE '%sqlite_query(%' AND (query LIKE '%ducklake_snapshot%' OR query LIKE '%ducklake_table_stats%')
+----
+0
+
+foreach lake sl11 dl11
+
+query I
+SELECT id FROM {lake}.current_snapshot()
+----
+2
+
+query IIII
+SELECT table_id, record_count, next_row_id, file_size_bytes = (SELECT sum(data_file_size_bytes) FROM ducklake_list_files('{lake}', 't')) FROM __ducklake_metadata_{lake}.ducklake_table_stats
+----
+1	3	3	true
+
+query IIIIII
+SELECT column_id, contains_null::BOOLEAN, min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM __ducklake_metadata_{lake}.ducklake_table_column_stats ORDER BY column_id
+----
+1	false	1	3	true	true
+2	true	a	c	true	true
+
+statement ok
+DETACH {lake}
+
+endloop
+
+# a failing native read reports the error of the read with the statement SQLite ran
+statement ok
+ATTACH '{TEST_DIR}/sqlite_native_head_and_stats.db' AS raw (TYPE sqlite)
+
+statement ok
+DROP TABLE raw.ducklake_table_column_stats
+
+statement ok
+DETACH raw
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sqlite_native_head_and_stats.db' AS sl (DATA_INLINING_ROW_LIMIT 0)
+
+statement error
+SELECT count(*), sum(i), count(s) FROM sl.t
+----
+<REGEX>:.*Failed to get global stats information from DuckLake.*Statement: SELECT \* FROM sqlite_query\(.*ducklake_table_stats.*
+
+statement ok
+ATTACH '{TEST_DIR}/sqlite_native_head_and_stats.db' AS raw (TYPE sqlite)
+
+statement ok
+DROP TABLE raw.ducklake_snapshot
+
+statement ok
+DETACH raw
+
+statement error
+SELECT count(*), sum(i), count(s) FROM sl.t
+----
+<REGEX>:.*Failed to query most recent snapshot for DuckLake.*Statement: SELECT \* FROM sqlite_query\(.*ducklake_snapshot.*

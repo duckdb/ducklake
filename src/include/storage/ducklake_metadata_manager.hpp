@@ -1228,6 +1228,8 @@ protected:
 	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
 
 	virtual string GetLatestSnapshotQuery() const;
+	//! The statement of the global table stats read, of the given tables alone when ids are given
+	virtual string GetGlobalTableStatsQuery(const vector<TableIndex> &table_ids) const;
 	//! The changes of the snapshots from first_snapshot to last_snapshot that recorded a rewrite
 	virtual string GetRewriteSnapshotsQuery(idx_t first_snapshot, idx_t last_snapshot) const;
 

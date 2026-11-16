@@ -757,7 +757,8 @@
         "test/sql/metadata/postgres_read_committed_branch_memo.test",
         "test/sql/metadata/postgres_read_committed_listing_cache.test",
         "test/sql/data_inlining/postgres_inlined_shared_read_committed.test",
-        "test/sql/catalog/sqlite_native_catalog_load.test"
+        "test/sql/catalog/sqlite_native_catalog_load.test",
+        "test/sql/catalog/sqlite_native_head_and_stats.test"
       ]
     },
     {
