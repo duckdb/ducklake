@@ -32,10 +32,16 @@ SELECT comment FROM duckdb_tables() WHERE table_name = 'test'
 ----
 second
 
+# one version row, no end names it
 query II
-SELECT key, value FROM __ducklake_metadata_ducklake.ducklake_tag WHERE end_snapshot IS NULL AND object_id = 1
+SELECT key, value FROM __ducklake_metadata_ducklake.ducklake_tag t WHERE object_id = 1 AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_tag_visibility e WHERE e.object_id = t.object_id AND e.key = t.key AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)
 ----
 comment	second
+
+query II
+SELECT (SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_tag WHERE object_id = 1), (SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_tag_visibility)
+----
+1	0
 
 # Check column-wise comment.
 statement ok
@@ -56,9 +62,14 @@ SELECT column_name, comment FROM duckdb_columns() WHERE table_name = 'test' AND 
 a	col second
 
 query II
-SELECT key, value FROM __ducklake_metadata_ducklake.ducklake_column_tag WHERE end_snapshot IS NULL AND table_id = 1
+SELECT key, value FROM __ducklake_metadata_ducklake.ducklake_column_tag t WHERE table_id = 1 AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_column_tag_visibility e WHERE e.table_id = t.table_id AND e.column_id = t.column_id AND e.key = t.key AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)
 ----
 comment	col second
+
+query II
+SELECT (SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_column_tag WHERE table_id = 1), (SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_column_tag_visibility)
+----
+1	0
 
 # Check view-wise comment.
 statement ok

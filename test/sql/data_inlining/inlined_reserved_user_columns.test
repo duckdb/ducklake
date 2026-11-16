@@ -1,0 +1,88 @@
+# name: test/sql/data_inlining/inlined_reserved_user_columns.test
+# description: user columns named like the companion columns of the inlined rows stay regular columns through every inlined path
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (row_id INTEGER, snapshot_id INTEGER, branch_id INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 10, 100), (2, 20, 200), (3, 30, 300)
+
+query II
+SELECT table_name, file_count FROM ducklake_table_info('dl')
+----
+t	0
+
+statement ok
+DELETE FROM dl.t WHERE row_id = 2
+
+statement ok
+UPDATE dl.t SET snapshot_id = 11 WHERE row_id = 1
+
+query III
+SELECT * FROM dl.t ORDER BY row_id
+----
+1	11	100
+3	30	300
+
+query II
+SELECT rowid, row_id FROM dl.t ORDER BY rowid
+----
+0	1
+2	3
+
+query III
+SELECT * FROM dl.t AT (VERSION => 2) ORDER BY row_id
+----
+1	10	100
+2	20	200
+3	30	300
+
+query I
+SELECT count(*) FROM dl.t WHERE branch_id > 150
+----
+1
+
+query IIIIII
+FROM dl.table_changes('t', 3, 4) ORDER BY ALL
+----
+3	1	delete	2	20	200
+4	0	update_postimage	1	11	100
+4	0	update_preimage	1	10	100
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query III
+SELECT * FROM dl.t ORDER BY row_id
+----
+1	11	100
+3	30	300
+
+query III
+SELECT * FROM dl.t AT (VERSION => 2) ORDER BY row_id
+----
+1	10	100
+2	20	200
+3	30	300
+
+query IIIIII
+FROM dl.table_changes('t', 3, 4) ORDER BY ALL
+----
+3	1	delete	2	20	200
+4	0	update_postimage	1	11	100
+4	0	update_preimage	1	10	100
+
+statement ok
+DETACH dl

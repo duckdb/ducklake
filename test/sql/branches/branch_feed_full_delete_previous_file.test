@@ -1,0 +1,104 @@
+# name: test/sql/branches/branch_feed_full_delete_previous_file.test
+# description: a file delete on a branch reports every row the inherited delete file had not deleted up to the fork
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1), (2), (3), (4)
+
+statement ok
+DELETE FROM lake.t WHERE i = 1
+
+statement ok
+INSERT INTO lake.t VALUES (10)
+
+statement ok
+INSERT INTO lake.t VALUES (20)
+
+statement ok
+DELETE FROM lake.t WHERE i = 2
+
+query I
+SELECT id FROM lake.current_snapshot()
+----
+6
+
+# one cumulative delete file of main holds the dates 3 and 6
+query II
+SELECT COUNT(*), MAX(partial_max) FROM meta.ducklake_delete_file
+----
+1	6
+
+# dev forks main at 4 and deletes the first file at its 5
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 4)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 5, NOW(), schema_version, 1099511627776, 1099511627776, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 4
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (5, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility VALUES (1, 1, 0, 5, true)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT i FROM dev.t ORDER BY i
+----
+10
+
+query I
+SELECT i FROM dev.t AT (VERSION => 4) ORDER BY i
+----
+2
+3
+4
+10
+
+# the row main deleted after the fork was still a row of dev when dev deleted the file
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('dev', 'main', 't', 5, 5) ORDER BY rowid
+----
+1	5	2
+2	5	3
+3	5	4
+
+query IIII
+FROM dev.table_changes('t', 2, 5) ORDER BY ALL
+----
+2	0	insert	1
+2	1	insert	2
+2	2	insert	3
+2	3	insert	4
+3	0	delete	1
+4	4	insert	10
+5	1	delete	2
+5	2	delete	3
+5	3	delete	4
+
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('lake', 'main', 't', 5, 6) ORDER BY rowid
+----
+1	6	2
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH lake

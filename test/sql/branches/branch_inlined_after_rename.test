@@ -1,0 +1,108 @@
+# name: test/sql/branches/branch_inlined_after_rename.test
+# description: a branch reads only the inlined tables whose schema version is in its lineage
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_inlined_after_rename_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (42)
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+statement ok
+ALTER TABLE dl.t RENAME i TO j
+
+# the insert after the rename registers an inlined table for the new schema version
+statement ok
+INSERT INTO dl.t VALUES (100)
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_inlined_data_tables
+----
+2
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (DATA_PATH '{DATA_PATH}/branch_inlined_after_rename_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+# the inlined table of the later schema version is not in the lineage of the branch
+query I
+SELECT i FROM dev.t
+----
+42
+
+query I
+SELECT COUNT(*) FROM dev.t
+----
+1
+
+statement ok
+DETACH dev
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_inlined_after_rename_files', METADATA_CATALOG 'meta')
+
+query I
+SELECT j FROM dl.t ORDER BY j
+----
+42
+100
+
+# the inclusive version migration of a legacy catalog holds the version row of a rename boundary twice
+query IIII
+SELECT begin_snapshot, schema_version, table_id, branch_id FROM meta.ducklake_schema_versions ORDER BY begin_snapshot
+----
+1	1	1	0
+3	2	1	0
+
+statement ok
+INSERT INTO meta.ducklake_schema_versions VALUES (1, 1, 1, 0)
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (DATA_PATH '{DATA_PATH}/branch_inlined_after_rename_files',
+    METADATA_CATALOG 'meta', BRANCH 'dev')
+
+# the branch reads the registration of the duplicated version once
+query I
+SELECT i FROM dev.t
+----
+42
+
+query I
+SELECT COUNT(*) FROM dev.t
+----
+1
+
+statement ok
+DETACH dev
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_inlined_after_rename_files',
+    METADATA_CATALOG 'meta')
+
+query I
+SELECT j FROM dl.t ORDER BY j
+----
+42
+100
+
+statement ok
+DETACH dl

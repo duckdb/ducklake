@@ -1,0 +1,107 @@
+# name: test/sql/compaction/expire_snapshots_tag_rows.test
+# description: expiring the snapshots of a dropped table, a dropped view and a dropped snapshot tag removes their tag rows with their ends
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_expire_snapshots_tag_rows_files', METADATA_CATALOG 'metadata')
+
+# snapshot 1
+statement ok
+CREATE TABLE ducklake.kept(i INTEGER)
+
+# snapshot 2
+statement ok
+COMMENT ON TABLE ducklake.kept IS 'old'
+
+# snapshot 3
+statement ok
+CREATE TABLE ducklake.dropped(a INTEGER)
+
+# snapshot 4
+statement ok
+COMMENT ON TABLE ducklake.dropped IS 'gone table'
+
+# snapshot 5
+statement ok
+COMMENT ON COLUMN ducklake.dropped.a IS 'gone column'
+
+# snapshot 6
+statement ok
+CREATE VIEW ducklake.v AS SELECT 1 AS x
+
+# snapshot 7
+statement ok
+COMMENT ON COLUMN ducklake.v.x IS 'gone view column'
+
+# snapshot 8
+statement ok
+CALL ducklake_create_tag('ducklake', 'old', version => 2)
+
+# snapshot 9, the new comment ends the row of the old one
+statement ok
+COMMENT ON TABLE ducklake.kept IS 'new'
+
+# snapshot 10, the drop ends the tags of the table and of its column
+statement ok
+DROP TABLE ducklake.dropped
+
+# snapshot 11, the drop ends the tag of the view column
+statement ok
+DROP VIEW ducklake.v
+
+# snapshot 12
+statement ok
+CALL ducklake_drop_tag('ducklake', 'old')
+
+query IIII
+SELECT (SELECT COUNT(*) FROM metadata.ducklake_tag_visibility), (SELECT COUNT(*) FROM metadata.ducklake_column_tag_visibility), (SELECT COUNT(*) FROM metadata.ducklake_view_column_tag_visibility), (SELECT COUNT(*) FROM metadata.ducklake_snapshot_tag_visibility)
+----
+2	1	1	1
+
+# snapshot 2 stays, so the old comment of the kept table keeps its row and its end
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [3, 4, 5, 6, 7, 8, 9, 10, 11])
+
+query II
+SELECT object_id, value FROM metadata.ducklake_tag ORDER BY begin_snapshot
+----
+1	old
+1	new
+
+query III
+SELECT t.value, e.row_snapshot, e.snapshot_id FROM metadata.ducklake_tag_visibility e JOIN metadata.ducklake_tag t ON t.object_id = e.object_id AND t.key = e.key AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+----
+old	2	9
+
+query II
+SELECT (SELECT COUNT(*) FROM metadata.ducklake_column_tag), (SELECT COUNT(*) FROM metadata.ducklake_column_tag_visibility)
+----
+0	0
+
+query II
+SELECT (SELECT COUNT(*) FROM metadata.ducklake_view_column_tag), (SELECT COUNT(*) FROM metadata.ducklake_view_column_tag_visibility)
+----
+0	0
+
+query II
+SELECT (SELECT COUNT(*) FROM metadata.ducklake_snapshot_tag), (SELECT COUNT(*) FROM metadata.ducklake_snapshot_tag_visibility)
+----
+0	0
+
+query I
+SELECT comment FROM duckdb_tables() WHERE database_name = 'ducklake' AND table_name = 'kept'
+----
+new
+
+query I
+SELECT table_name FROM metadata.ducklake_table
+----
+kept

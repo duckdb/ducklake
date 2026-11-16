@@ -37,9 +37,9 @@ ALTER TABLE partitioned_tbl RENAME TO partitioned_tbl_renamed
 statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
-# check if rename causes partition info to get dropped
+# check if rename causes partition info to get dropped, an ended spec has a row in the companion table
 query I
-SELECT COUNT(*) FROM ducklake_metadata.ducklake_partition_info WHERE end_snapshot IS NOT NULL
+SELECT COUNT(*) FROM ducklake_metadata.ducklake_partition_visibility
 ----
 0
 

@@ -121,6 +121,6 @@ INSERT INTO lake.t SELECT 98, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + 
 INSERT INTO lake.t SELECT 99, i, i / 7.0, 'row-' || i, TIMESTAMP '2026-01-01' + to_seconds(i) FROM range(990, 1000) r(i);
 
 result_query II
-SELECT (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_data_file WHERE end_snapshot IS NULL), count(*) FROM lake.t
+SELECT (SELECT coalesce(sum(file_count), 0)::BIGINT FROM ducklake_table_info('lake')), count(*) FROM lake.t
 ----
 100	1000

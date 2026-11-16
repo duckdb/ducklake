@@ -1,0 +1,102 @@
+# name: test/sql/alter/create_table_drop_column_same_transaction.test
+# description: a column of a table created in the same transaction is dropped with the table, its row ends in its own snapshot
+# group: [alter]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+# the table, a file holding every column and the drops of a scalar, a struct and a nested field commit together
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE dl.t(a INTEGER, b INTEGER, s STRUCT(x INTEGER, y INTEGER), s2 STRUCT(p INTEGER, q INTEGER), c VARCHAR)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 2, {'x': 3, 'y': 4}, {'p': 5, 'q': 6}, 'e')
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN b
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN s
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN s2.q
+
+statement ok
+ALTER TABLE dl.t RENAME COLUMN c TO d
+
+statement ok
+COMMIT
+
+query II
+SELECT column_name, column_type FROM (DESCRIBE dl.t)
+----
+a	INTEGER
+s2	STRUCT(p INTEGER)
+d	VARCHAR
+
+query III
+SELECT * FROM dl.t
+----
+1	{'p': 5}	e
+
+# every column is born in the commit snapshot, the nested fields name their struct as parent
+query IIII
+SELECT c.column_name, c.begin_snapshot, c.branch_id, p.column_name FROM meta.ducklake_column c LEFT JOIN meta.ducklake_column p ON p.table_id = c.table_id AND p.column_id = c.parent_column ORDER BY c.column_id
+----
+a	1	0	NULL
+b	1	0	NULL
+s	1	0	NULL
+x	1	0	s
+y	1	0	s
+s2	1	0	NULL
+p	1	0	s2
+q	1	0	s2
+d	1	0	NULL
+
+# the dropped columns and the fields of the dropped struct end in the commit snapshot
+query III
+SELECT c.column_name, e.row_snapshot, e.snapshot_id FROM meta.ducklake_column_visibility e JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id AND c.branch_id = e.row_branch_id AND c.begin_snapshot = e.row_snapshot ORDER BY c.column_id
+----
+b	1	1
+s	1	1
+x	1	1
+y	1	1
+q	1	1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_column_visibility
+----
+5
+
+# the dropped columns were never visible
+query I
+SELECT column_name FROM (DESCRIBE FROM dl.t AT (VERSION => 1))
+----
+a
+s2
+d
+
+query III
+SELECT * FROM dl.t AT (VERSION => 1)
+----
+1	{'p': 5}	e
+
+# the field ids of the dropped columns stay taken, so a new column reads nothing from the file
+statement ok
+ALTER TABLE dl.t ADD COLUMN f INTEGER DEFAULT 0
+
+query IIII
+SELECT * FROM dl.t
+----
+1	{'p': 5}	e	0

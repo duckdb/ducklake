@@ -1,0 +1,288 @@
+# name: test/sql/branches/branch_catalog_rows.test
+# description: the version rows of schemas, tables and views end in companion tables, a branch attached at the fork keeps the fork state
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE SCHEMA dl.s
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+CREATE VIEW dl.v AS SELECT 1 AS x
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+# dev forks at the insert, every row so far is born on main
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 4)
+
+# main renames the table and the view, creates a table in the schema and drops all of them
+statement ok
+ALTER TABLE dl.t RENAME TO t2
+
+statement ok
+ALTER VIEW dl.v RENAME TO v2
+
+statement ok
+CREATE TABLE dl.s.u AS SELECT 2 AS j
+
+statement ok
+DROP TABLE dl.t2
+
+statement ok
+DROP VIEW dl.v2
+
+statement ok
+DROP SCHEMA dl.s CASCADE
+
+# a rename writes a new version row and ends the old one, a drop ends the live row
+query IIII
+SELECT table_name, begin_snapshot, branch_id, (SELECT e.snapshot_id FROM meta.ducklake_table_visibility e WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot) FROM meta.ducklake_table t ORDER BY begin_snapshot
+----
+t	2	0	5
+t2	5	0	8
+u	7	0	10
+
+query IIII
+SELECT view_name, begin_snapshot, branch_id, (SELECT e.snapshot_id FROM meta.ducklake_view_visibility e WHERE e.view_id = v.view_id AND e.row_branch_id = v.branch_id AND e.row_snapshot = v.begin_snapshot) FROM meta.ducklake_view v ORDER BY begin_snapshot
+----
+v	3	0	6
+v2	6	0	9
+
+query IIII
+SELECT schema_name, begin_snapshot, branch_id, (SELECT e.snapshot_id FROM meta.ducklake_schema_visibility e WHERE e.schema_id = s.schema_id AND e.row_branch_id = s.branch_id AND e.row_snapshot = s.begin_snapshot) FROM meta.ducklake_schema s ORDER BY begin_snapshot
+----
+main	0	0	NULL
+s	1	0	10
+
+# an end names the row by its birth and carries the branch that ended it
+query IIII
+SELECT e.branch_id, t.table_name, e.row_snapshot, e.snapshot_id FROM meta.ducklake_table_visibility e JOIN meta.ducklake_table t ON t.table_id = e.table_id AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot ORDER BY e.snapshot_id
+----
+0	t	2	5
+0	t2	5	8
+0	u	7	10
+
+# one end per row per branch
+statement error
+INSERT INTO meta.ducklake_table_visibility SELECT * FROM meta.ducklake_table_visibility WHERE snapshot_id = 5
+----
+constraint
+
+# main reads none of them at its head and the earlier states through time travel
+statement error
+SELECT * FROM dl.t
+----
+does not exist
+
+query I
+SELECT i FROM dl.t AT (VERSION => 4)
+----
+1
+
+query I
+SELECT i FROM dl.t2 AT (VERSION => 7)
+----
+1
+
+query I
+SELECT j FROM dl.s.u AT (VERSION => 7)
+----
+2
+
+statement ok
+DETACH dl
+
+# the branch forked before the renames and the drops and keeps the fork state
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+4
+
+query I
+SELECT i FROM dl.t
+----
+1
+
+query I
+SELECT x FROM dl.v
+----
+1
+
+statement error
+SELECT * FROM dl.t2
+----
+does not exist
+
+statement error
+SELECT * FROM dl.v2
+----
+does not exist
+
+# the schema is still there, the table main created in it after the fork is not
+query I
+SELECT COUNT(*) FROM duckdb_schemas() WHERE database_name = 'dl' AND schema_name = 's'
+----
+1
+
+statement error
+SELECT * FROM dl.s.u
+----
+does not exist
+
+query I
+SELECT table_name FROM ducklake_table_info('dl')
+----
+t
+
+query I
+SELECT i FROM dl.t AT (VERSION => 4)
+----
+1
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 2)
+----
+0
+
+statement ok
+DETACH dl
+
+# dev ends the table at its own snapshot 5, a schema change of its own with the next schema version
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS m (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 5, NOW(), schema_version + 1, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 4 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (5, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_table_visibility SELECT 1, table_id, branch_id, begin_snapshot, 5 FROM meta.ducklake_table WHERE table_name = 't'
+
+statement ok
+DETACH m
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+5
+
+statement error
+SELECT * FROM dl.t
+----
+does not exist
+
+query I
+SELECT i FROM dl.t AT (VERSION => 4)
+----
+1
+
+query I
+SELECT x FROM dl.v
+----
+1
+
+statement ok
+DETACH dl
+
+# the end of dev does not touch main, which reads t at the fork and t2 after its rename
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT i FROM dl.t AT (VERSION => 4)
+----
+1
+
+query I
+SELECT i FROM dl.t2 AT (VERSION => 5)
+----
+1
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+10
+
+statement ok
+DETACH dl
+
+# feature forks dev after its end of t, early forks dev at the fork itself, before that end
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS m (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (2, 'feature', 1, 5), (3, 'early', 1, 4)
+
+statement ok
+DETACH m
+
+# the end of dev sits on the middle segment of feature, its head reads the end and version 4 does not
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'feature')
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+5
+
+statement error
+SELECT * FROM dl.t
+----
+does not exist
+
+query I
+SELECT i FROM dl.t AT (VERSION => 4)
+----
+1
+
+query I
+SELECT x FROM dl.v
+----
+1
+
+statement ok
+DETACH dl
+
+# early caps dev at 4, so the end of dev at 5 is beyond its view and t is still readable
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'early')
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+4
+
+query I
+SELECT i FROM dl.t
+----
+1
+
+query I
+SELECT x FROM dl.v
+----
+1
+
+statement ok
+DETACH dl

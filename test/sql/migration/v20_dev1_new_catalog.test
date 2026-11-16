@@ -1,5 +1,5 @@
 # name: test/sql/migration/v20_dev1_new_catalog.test
-# description: a new catalog is created at 2.0-dev1 with the snapshot tag table and the catalog mutex row
+# description: a new catalog is created at 2.0-dev1 with the branch tables and the main branch row
 # group: [migration]
 
 require ducklake
@@ -18,20 +18,282 @@ SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
 2.0-dev1
 
+# a fresh catalog carries the marker of a completed heal of the development layout
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.4
+
 # SQLite reports the timestamp column as text
 query II
-SELECT column_name, CASE WHEN column_name = 'expires_at' AND data_type = 'VARCHAR' THEN 'TIMESTAMP WITH TIME ZONE' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_snapshot_tag') ORDER BY column_index
+SELECT column_name, CASE WHEN column_name = 'expires_at' AND data_type = 'VARCHAR' THEN 'TIMESTAMP WITH TIME ZONE' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_snapshot_tag') ORDER BY column_index
 ----
 tag_name	VARCHAR
 snapshot_id	BIGINT
 begin_snapshot	BIGINT
-end_snapshot	BIGINT
 expires_at	TIMESTAMP WITH TIME ZONE
+snapshot_branch_id	BIGINT
+branch_id	BIGINT
+
+query II
+SELECT column_name, CASE WHEN column_name = 'snapshot_time' AND data_type = 'VARCHAR' THEN 'TIMESTAMP WITH TIME ZONE' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_snapshot') ORDER BY column_index
+----
+snapshot_id	BIGINT
+snapshot_time	TIMESTAMP WITH TIME ZONE
+schema_version	BIGINT
+next_catalog_id	BIGINT
+next_file_id	BIGINT
+branch_id	BIGINT
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_snapshot_changes') ORDER BY column_index
+----
+snapshot_id	BIGINT
+changes_made	VARCHAR
+author	VARCHAR
+commit_message	VARCHAR
+commit_extra_info	VARCHAR
+branch_id	BIGINT
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_branch') ORDER BY column_index
+----
+branch_id	BIGINT
+branch_name	VARCHAR
+parent_id	BIGINT
+parent_branch_snapshot	BIGINT
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_snapshot_remap') ORDER BY column_index
+----
+branch_id	BIGINT
+merge_snapshot_id	BIGINT
+old_branch_id	BIGINT
+old_snapshot_id	BIGINT
+new_snapshot_id	BIGINT
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_schema_versions') ORDER BY column_index
+----
+begin_snapshot	BIGINT
+schema_version	BIGINT
+table_id	BIGINT
+branch_id	BIGINT
+
+# the version rows carry their birth branch and end in companion tables, like a migrated catalog
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_table') ORDER BY column_index
+----
+table_id
+table_uuid
+begin_snapshot
+schema_id
+table_name
+path
+path_is_relative
+branch_id
 
 query I
-SELECT COUNT(*) FROM meta.ducklake_snapshot_tag
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_schema') ORDER BY column_index
 ----
-0
+schema_id
+schema_uuid
+begin_snapshot
+schema_name
+path
+path_is_relative
+parent_schema_id
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_view') ORDER BY column_index
+----
+view_id
+view_uuid
+begin_snapshot
+schema_id
+view_name
+dialect
+sql
+column_aliases
+branch_id
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_table_visibility') ORDER BY column_index
+----
+branch_id	BIGINT
+table_id	BIGINT
+row_branch_id	BIGINT
+row_snapshot	BIGINT
+snapshot_id	BIGINT
+
+query III
+SELECT (SELECT COUNT(*) FROM meta.ducklake_schema_visibility), (SELECT COUNT(*) FROM meta.ducklake_table_visibility), (SELECT COUNT(*) FROM meta.ducklake_view_visibility)
+----
+0	0	0
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_column') ORDER BY column_index
+----
+column_id
+begin_snapshot
+table_id
+column_order
+column_name
+column_type
+initial_default
+default_value
+nulls_allowed
+parent_column
+default_value_type
+default_value_dialect
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_partition_info') ORDER BY column_index
+----
+partition_id
+table_id
+begin_snapshot
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_sort_info') ORDER BY column_index
+----
+sort_id
+table_id
+begin_snapshot
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_macro') ORDER BY column_index
+----
+schema_id
+macro_id
+macro_name
+begin_snapshot
+branch_id
+
+# the companion of the columns names a row by both key columns
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_column_visibility') ORDER BY column_index
+----
+branch_id	BIGINT
+table_id	BIGINT
+column_id	BIGINT
+row_branch_id	BIGINT
+row_snapshot	BIGINT
+snapshot_id	BIGINT
+
+query IIII
+SELECT (SELECT COUNT(*) FROM meta.ducklake_column_visibility), (SELECT COUNT(*) FROM meta.ducklake_partition_visibility), (SELECT COUNT(*) FROM meta.ducklake_sort_visibility), (SELECT COUNT(*) FROM meta.ducklake_macro_visibility)
+----
+0	0	0	0
+
+# the tag rows carry their birth branch and end in companions keyed by their text keys as well
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_tag') ORDER BY column_index
+----
+object_id
+begin_snapshot
+key
+value
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_column_tag') ORDER BY column_index
+----
+table_id
+column_id
+begin_snapshot
+key
+value
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_view_column_tag') ORDER BY column_index
+----
+view_id
+column_name
+begin_snapshot
+key
+value
+branch_id
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_tag_visibility') ORDER BY column_index
+----
+branch_id	BIGINT
+object_id	BIGINT
+key	VARCHAR
+row_branch_id	BIGINT
+row_snapshot	BIGINT
+snapshot_id	BIGINT
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_view_column_tag_visibility') ORDER BY column_index
+----
+branch_id	BIGINT
+view_id	BIGINT
+column_name	VARCHAR
+key	VARCHAR
+row_branch_id	BIGINT
+row_snapshot	BIGINT
+snapshot_id	BIGINT
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_snapshot_tag_visibility') ORDER BY column_index
+----
+branch_id	BIGINT
+tag_name	VARCHAR
+row_branch_id	BIGINT
+row_snapshot	BIGINT
+snapshot_id	BIGINT
+
+query IIII
+SELECT (SELECT COUNT(*) FROM meta.ducklake_tag_visibility), (SELECT COUNT(*) FROM meta.ducklake_column_tag_visibility), (SELECT COUNT(*) FROM meta.ducklake_view_column_tag_visibility), (SELECT COUNT(*) FROM meta.ducklake_snapshot_tag_visibility)
+----
+0	0	0	0
+
+query III
+SELECT schema_name, begin_snapshot, branch_id FROM meta.ducklake_schema
+----
+main	0	0
+
+# SQLite reports the boolean column as a number
+query II
+SELECT column_name, CASE WHEN column_name = 'is_delete' AND data_type = 'BIGINT' THEN 'BOOLEAN' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_file_visibility') ORDER BY column_index
+----
+branch_id	BIGINT
+table_id	BIGINT
+data_file_id	BIGINT
+snapshot_id	BIGINT
+is_delete	BOOLEAN
+
+query II
+SELECT column_name, CASE WHEN column_name = 'is_delete' AND data_type = 'BIGINT' THEN 'BOOLEAN' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_delete_file_visibility') ORDER BY column_index
+----
+branch_id	BIGINT
+table_id	BIGINT
+delete_file_id	BIGINT
+snapshot_id	BIGINT
+is_delete	BOOLEAN
+
+# the initial snapshot and its changes belong to main
+query IIII
+SELECT branch_id, branch_name, parent_id, parent_branch_snapshot FROM meta.ducklake_branch
+----
+0	main	NULL	NULL
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot
+----
+0	0
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes
+----
+0	0
 
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
@@ -40,6 +302,30 @@ query I
 SELECT * FROM dl.t
 ----
 42
+
+# commits keep landing on main
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
+----
+0	0
+1	0
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
+----
+0	0
+1	0
+
+query III
+SELECT begin_snapshot, schema_version, branch_id FROM meta.ducklake_schema_versions
+----
+1	1	0
+
+# the snapshot table is keyed by branch and snapshot
+statement error
+INSERT INTO meta.ducklake_snapshot SELECT snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id FROM meta.ducklake_snapshot WHERE snapshot_id = 1
+----
+constraint
 
 statement ok
 DETACH dl
@@ -57,3 +343,16 @@ query I
 SELECT * FROM dl.t
 ----
 42
+
+statement ok
+INSERT INTO dl.t VALUES (43)
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
+----
+0	0
+1	0
+2	0
+
+statement ok
+DETACH dl

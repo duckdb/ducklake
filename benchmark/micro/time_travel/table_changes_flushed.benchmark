@@ -17,6 +17,26 @@ SELECT 'all' AS w, change_type, v FROM lake.table_changes('t', 12, 41)
 UNION ALL SELECT 'updates', change_type, v FROM lake.table_changes('t', 12, 31)
 UNION ALL SELECT 'deletes', change_type, v FROM lake.table_changes('t', 32, 41)
 ) GROUP BY ALL ORDER BY ALL;
+SELECT w, change_type, count(*) AS cnt, sum(v) AS sum_v FROM (
+SELECT 'all' AS w, change_type, v FROM lake.table_changes('t', 12, 41)
+UNION ALL SELECT 'updates', change_type, v FROM lake.table_changes('t', 12, 31)
+UNION ALL SELECT 'deletes', change_type, v FROM lake.table_changes('t', 32, 41)
+) GROUP BY ALL ORDER BY ALL;
+SELECT w, change_type, count(*) AS cnt, sum(v) AS sum_v FROM (
+SELECT 'all' AS w, change_type, v FROM lake.table_changes('t', 12, 41)
+UNION ALL SELECT 'updates', change_type, v FROM lake.table_changes('t', 12, 31)
+UNION ALL SELECT 'deletes', change_type, v FROM lake.table_changes('t', 32, 41)
+) GROUP BY ALL ORDER BY ALL;
+SELECT w, change_type, count(*) AS cnt, sum(v) AS sum_v FROM (
+SELECT 'all' AS w, change_type, v FROM lake.table_changes('t', 12, 41)
+UNION ALL SELECT 'updates', change_type, v FROM lake.table_changes('t', 12, 31)
+UNION ALL SELECT 'deletes', change_type, v FROM lake.table_changes('t', 32, 41)
+) GROUP BY ALL ORDER BY ALL;
+SELECT w, change_type, count(*) AS cnt, sum(v) AS sum_v FROM (
+SELECT 'all' AS w, change_type, v FROM lake.table_changes('t', 12, 41)
+UNION ALL SELECT 'updates', change_type, v FROM lake.table_changes('t', 12, 31)
+UNION ALL SELECT 'deletes', change_type, v FROM lake.table_changes('t', 32, 41)
+) GROUP BY ALL ORDER BY ALL;
 
 result IIII
 all	delete	10000	500045000

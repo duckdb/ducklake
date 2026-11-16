@@ -20,6 +20,14 @@ run
 SELECT count(*) FROM lake.main.bg_@{t} WHERE c0 > @{t} AND c7 >= 'a';
 SELECT count(*) FROM lake.main.frag_@{t} WHERE id = 3150 AND v = 'v3150';
 @end
+@for t in range(10)
+SELECT count(*) FROM lake.main.bg_@{t} WHERE c0 > @{t} AND c7 >= 'a';
+SELECT count(*) FROM lake.main.frag_@{t} WHERE id = 3150 AND v = 'v3150';
+@end
+@for t in range(10)
+SELECT count(*) FROM lake.main.bg_@{t} WHERE c0 > @{t} AND c7 >= 'a';
+SELECT count(*) FROM lake.main.frag_@{t} WHERE id = 3150 AND v = 'v3150';
+@end
 
 result_query I
 SELECT * FROM __answer

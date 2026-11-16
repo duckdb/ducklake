@@ -1,0 +1,116 @@
+# name: test/sql/data_inlining/inlined_expire_payload_groups.test_slow
+# description: the expiry sweeps the inlined row ends of a table whose payload versions fill two groups of the sweep and one more
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER, j INTEGER)
+
+# every payload version holds the row inserted before the ALTER that supersedes it
+loop v 0 400
+
+statement ok
+INSERT INTO dl.t VALUES ({v}, {v})
+
+statement ok
+ALTER TABLE dl.t ALTER j SET DEFAULT {v}
+
+endloop
+
+statement ok
+INSERT INTO dl.t VALUES (400, 400)
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_tables WHERE table_id = 1
+----
+401
+
+# row 0 lives in the first payload, rows 199 and 200 in the last payload of the first group and the first of the second
+# row 400 lives in the only payload of the third group, every ALTER after the first moves the schema version by two
+statement ok
+DELETE FROM dl.t WHERE i = 0
+
+statement ok
+DELETE FROM dl.t WHERE i = 400
+
+statement ok
+DELETE FROM dl.t WHERE i IN (199, 200)
+
+query III
+SELECT row_id, row_snapshot, snapshot_id FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+0	2	803
+199	400	805
+200	402	805
+400	802	804
+
+# the snapshot after the first delete stays, it reads the versions the two later deletes ended
+statement ok
+SET VARIABLE t_keep = (SELECT snapshot_time FROM dl.snapshots() WHERE snapshot_id = 803)
+
+statement ok
+CALL ducklake_expire_snapshots('dl', older_than => getvariable('t_keep'))
+
+# the version of row 0 goes with its end, the sweep finds the other three versions in their payloads and keeps the ends
+query III
+SELECT row_id, row_snapshot, snapshot_id FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+199	400	805
+200	402	805
+400	802	804
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1
+----
+0
+
+query I
+SELECT i FROM dl.t AT (VERSION => 803) WHERE i IN (0, 199, 200, 400) ORDER BY i
+----
+199
+200
+400
+
+query III
+SELECT count(*), min(i), max(i) FROM dl.t
+----
+397	1	399
+
+# once no snapshot reads the three versions, they go with their ends
+statement ok
+CALL ducklake_expire_snapshots('dl', older_than => now())
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_398
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_400
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_800
+----
+0
+
+query III
+SELECT count(*), min(i), max(i) FROM dl.t
+----
+397	1	399

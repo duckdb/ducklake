@@ -1,0 +1,132 @@
+# name: test/sql/branches/branch_nested_inlined_shared.test
+# description: a branch of a branch reads the inherited ends of its tables from the shared companion through two caps, the end of another table on a row born alike hides nothing
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+CREATE TABLE dl.u (i INTEGER)
+
+# the rows of both tables are born in one commit, so a row id and its birth recur across the tables
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+statement ok
+INSERT INTO dl.u VALUES (10), (20), (30)
+
+statement ok
+COMMIT
+
+# dev forks from main at 3 and holds the snapshots 4 and 5
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 3)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 4, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 3 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 5, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 3 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (4, NULL, NULL, NULL, NULL, 1), (5, NULL, NULL, NULL, NULL, 1)
+
+# dev ends the second row of t at 4, the third at 5 and the first row of u at 4
+statement ok
+INSERT INTO meta.ducklake_inlined_data_visibility VALUES (1, 1, 0, 3, 1, 4), (1, 2, 0, 3, 1, 5), (2, 0, 0, 3, 1, 4)
+
+# nested forks from dev at 4 and holds the snapshot 5
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (2, 'nested', 1, 4)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 5, NOW(), schema_version, next_catalog_id, next_file_id, 2 FROM meta.ducklake_snapshot WHERE snapshot_id = 3 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (5, NULL, NULL, NULL, NULL, 2)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS nested (METADATA_CATALOG 'meta', BRANCH 'nested')
+
+query I
+SELECT i FROM dev.t ORDER BY i
+----
+1
+
+query I
+SELECT i FROM dev.u ORDER BY i
+----
+20
+30
+
+query I
+SELECT i FROM dev.t AT (VERSION => 4) ORDER BY i
+----
+1
+3
+
+# nested inherits the ends of dev at its cap, the end of u on the first row hides no row of t
+query I
+SELECT i FROM nested.t ORDER BY i
+----
+1
+3
+
+query I
+SELECT count(*) FROM nested.t
+----
+2
+
+query I
+SELECT i FROM nested.u ORDER BY i
+----
+20
+30
+
+query I
+SELECT i FROM nested.t AT (VERSION => 3) ORDER BY i
+----
+1
+2
+3
+
+# main reads none of the ends of its branches
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+3
+
+query I
+SELECT i FROM dl.u ORDER BY i
+----
+10
+20
+30
+
+statement ok
+DETACH nested
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH dl

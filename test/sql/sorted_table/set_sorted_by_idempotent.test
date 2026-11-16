@@ -93,7 +93,7 @@ FROM sort_metadata()
 
 # The surviving sort order is the last one that was actually set, then cleared
 query I
-SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_sort_info WHERE table_id = 1 AND end_snapshot IS NULL
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_sort_info si WHERE table_id = 1 AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_sort_visibility e WHERE e.sort_id = si.sort_id AND e.row_branch_id = si.branch_id AND e.row_snapshot = si.begin_snapshot)
 ----
 0
 

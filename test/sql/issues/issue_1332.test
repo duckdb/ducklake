@@ -521,6 +521,6 @@ statement ok
 ATTACH '{DUCKLAKE_CONNECTION}' AS meta
 
 query I
-SELECT count(*) FROM meta.ducklake_table WHERE end_snapshot IS NULL AND table_name IN ('t_add', 't_add2', 't_def', 't_def2', 't_col', 't_col2', 't_type', 't_type2', 't_rr', 't_rr_mid', 't_rr2', 't_rev', 't_rev2', 't_chain', 't_chain2', 't_chain3', 't_local', 't_local2', 't_data', 't_data2', 't_rb', 't_rb2', 't_same', 't_same_add', 't_case', 'T_CASE', 't_same_local')
+SELECT count(*) FROM meta.ducklake_table t WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_table_visibility e WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot) AND table_name IN ('t_add', 't_add2', 't_def', 't_def2', 't_col', 't_col2', 't_type', 't_type2', 't_rr', 't_rr_mid', 't_rr2', 't_rev', 't_rev2', 't_chain', 't_chain2', 't_chain3', 't_local', 't_local2', 't_data', 't_data2', 't_rb', 't_rb2', 't_same', 't_same_add', 't_case', 'T_CASE', 't_same_local')
 ----
 14

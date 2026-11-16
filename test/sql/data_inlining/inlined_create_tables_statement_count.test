@@ -1,0 +1,73 @@
+# name: test/sql/data_inlining/inlined_create_tables_statement_count.test
+# description: a commit creating many tables with inlining on creates one payload table per table and no companion
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+BEGIN
+
+loop i 0 50
+
+statement ok
+CREATE TABLE dl.tbl_${i} (id INTEGER, random_data VARCHAR)
+
+endloop
+
+statement ok
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+# the commit creates the fifty payload tables and nothing else
+query I
+SELECT sum(length(query) - length(replace(query, 'CREATE TABLE', ''))) / length('CREATE TABLE') FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+50
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%CREATE TABLE%' AND query LIKE '%visibility%'
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_tables
+----
+50
+
+statement ok
+INSERT INTO dl.tbl_7 VALUES (1, 'a'), (2, 'b')
+
+statement ok
+DELETE FROM dl.tbl_7 WHERE id = 1
+
+query IIIII
+SELECT row_id, row_branch_id, row_snapshot, branch_id, snapshot_id FROM meta.ducklake_inlined_data_visibility
+----
+0	0	2	0	3
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility v JOIN meta.ducklake_table t ON t.table_id = v.table_id WHERE t.table_name = 'tbl_7'
+----
+1
+
+query II
+SELECT id, random_data FROM dl.tbl_7
+----
+2	b
+
+statement ok
+DETACH dl

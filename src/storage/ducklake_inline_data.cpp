@@ -428,7 +428,10 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 		auto mutable_insert = insert.get_mutable();
 		lock_guard<mutex> lock(mutable_insert->lock);
 		if (!mutable_insert->sink_state) {
+			// LCOV_EXCL_START
+			// the sink of the insert is initialized by a task of its own, which this finalize rarely overtakes
 			mutable_insert->sink_state = insert->GetGlobalSinkState(context);
+			// LCOV_EXCL_STOP
 		}
 	}
 	auto &insert_gstate = insert->sink_state->Cast<DuckLakeInsertGlobalState>();

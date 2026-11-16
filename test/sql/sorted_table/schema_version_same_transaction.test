@@ -66,7 +66,7 @@ query III
 SELECT expression, sort_direction, null_order
 FROM __ducklake_metadata_ducklake.ducklake_sort_expression se
 JOIN __ducklake_metadata_ducklake.ducklake_sort_info si USING (sort_id)
-WHERE si.table_id = 1 AND si.end_snapshot IS NULL
+WHERE si.table_id = 1 AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_sort_visibility e WHERE e.sort_id = si.sort_id AND e.row_branch_id = si.branch_id AND e.row_snapshot = si.begin_snapshot)
 ORDER BY se.sort_key_index
 ----
 a	ASC	NULLS_LAST

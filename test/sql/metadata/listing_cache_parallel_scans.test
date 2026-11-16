@@ -1,0 +1,37 @@
+# name: test/sql/metadata/listing_cache_parallel_scans.test
+# description: the parallel scans of one statement share the listing cache of the transaction
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET threads = 8
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+loop i 0 16
+
+statement ok
+CREATE TABLE lake.t{i} AS SELECT range AS i FROM range(10)
+
+endloop
+
+# the pipelines of the union initialize their listings from several threads at once
+loop j 0 80
+
+query I
+SELECT sum(s) FROM (SELECT sum(i) s FROM lake.t0 UNION ALL SELECT sum(i) s FROM lake.t1 UNION ALL SELECT sum(i) s FROM lake.t2 UNION ALL SELECT sum(i) s FROM lake.t3 UNION ALL SELECT sum(i) s FROM lake.t4 UNION ALL SELECT sum(i) s FROM lake.t5 UNION ALL SELECT sum(i) s FROM lake.t6 UNION ALL SELECT sum(i) s FROM lake.t7 UNION ALL SELECT sum(i) s FROM lake.t8 UNION ALL SELECT sum(i) s FROM lake.t9 UNION ALL SELECT sum(i) s FROM lake.t10 UNION ALL SELECT sum(i) s FROM lake.t11 UNION ALL SELECT sum(i) s FROM lake.t12 UNION ALL SELECT sum(i) s FROM lake.t13 UNION ALL SELECT sum(i) s FROM lake.t14 UNION ALL SELECT sum(i) s FROM lake.t15)
+----
+720
+
+endloop
+
+statement ok
+DETACH lake

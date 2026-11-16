@@ -24,12 +24,13 @@ statement ok
 COMMENT ON COLUMN ducklake.vw.x IS 'second'
 
 query III
-SELECT column_name, key, value FROM __ducklake_metadata_ducklake.ducklake_view_column_tag WHERE end_snapshot IS NULL ORDER BY key
+SELECT column_name, key, value FROM __ducklake_metadata_ducklake.ducklake_view_column_tag t WHERE NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_view_column_tag_visibility e WHERE e.view_id = t.view_id AND e.column_name = t.column_name AND e.key = t.key AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot) ORDER BY key
 ----
 x	comment	second
 
-query IIII
-SELECT column_name, key, value, end_snapshot IS NOT NULL FROM __ducklake_metadata_ducklake.ducklake_view_column_tag ORDER BY begin_snapshot
+# the first row ends at the snapshot that wrote the second
+query IIIII
+SELECT t.column_name, t.key, t.value, t.begin_snapshot, e.snapshot_id FROM __ducklake_metadata_ducklake.ducklake_view_column_tag t LEFT JOIN __ducklake_metadata_ducklake.ducklake_view_column_tag_visibility e ON e.view_id = t.view_id AND e.column_name = t.column_name AND e.key = t.key AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot ORDER BY t.begin_snapshot
 ----
-x	comment	first	true
-x	comment	second	false
+x	comment	first	2	3
+x	comment	second	3	NULL

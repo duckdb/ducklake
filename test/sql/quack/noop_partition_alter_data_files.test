@@ -42,15 +42,15 @@ COMMIT;
 
 query I
 SELECT COUNT(*)
-FROM __ducklake_metadata_ducklake.ducklake_partition_info
+FROM __ducklake_metadata_ducklake.ducklake_partition_info p
 WHERE table_id = 1
-  AND end_snapshot IS NULL;
+  AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_partition_visibility e WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot);
 ----
 1
 
 query I
 SELECT COUNT(DISTINCT partition_id)
-FROM __ducklake_metadata_ducklake.ducklake_data_file
+FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM __ducklake_metadata_ducklake.ducklake_data_file f JOIN (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot, MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot FROM __ducklake_metadata_ducklake.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id) v ON v.data_file_id = f.data_file_id)
 WHERE table_id = 1
   AND end_snapshot IS NULL;
 ----

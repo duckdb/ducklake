@@ -165,7 +165,7 @@ statement ok
 INSERT INTO ducklake.t4 VALUES (1, 'aaa'), (2, 'zzz')
 
 query III
-SELECT column_id, min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 't4' AND end_snapshot IS NULL) ORDER BY column_id
+SELECT column_id, min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_file_column_stats WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 't4') ORDER BY column_id
 ----
 1	1	2
 2	aaa	zzz

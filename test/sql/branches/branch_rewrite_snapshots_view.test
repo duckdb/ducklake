@@ -1,0 +1,141 @@
+# name: test/sql/branches/branch_rewrite_snapshots_view.test
+# description: the rewrite snapshots a change feed skips are the ones of the lineage view of the branch
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1), (2), (3)
+
+statement ok
+DELETE FROM lake.t WHERE i = 1
+
+statement ok
+CALL ducklake_rewrite_data_files('lake', 't', delete_threshold => 0)
+
+query I
+SELECT id FROM lake.current_snapshot()
+----
+4
+
+query I
+SELECT changes_made FROM meta.ducklake_snapshot_changes WHERE snapshot_id = 4 AND branch_id = 0
+----
+rewrite_delete:1
+
+# dev forks main at 4, adds a file at its 5 as a rewrite and a file at its 6 as an insert
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 4)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 5, NOW(), schema_version, 1099511627776, 1099511627777, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 4
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 6, NOW(), schema_version, 1099511627776, 1099511627778, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 4
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (5, 'rewrite_delete:1', NULL, NULL, NULL, 1), (6, 'inserted_into_table:1', NULL, NULL, NULL, 1)
+
+statement ok
+COPY (SELECT 10::INTEGER AS i) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_rewrite.parquet' (FORMAT PARQUET, FIELD_IDS {i: 1})
+
+statement ok
+COPY (SELECT 20::INTEGER AS i) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_insert.parquet' (FORMAT PARQUET, FIELD_IDS {i: 1})
+
+statement ok
+INSERT INTO meta.ducklake_data_file (data_file_id, table_id, path, path_is_relative, file_format, record_count, file_size_bytes, row_id_start) SELECT 1099511627776, 1, '{TEST_DIR}/{BASE_TEST_NAME}_dev_rewrite.parquet', false, 'parquet', 1, file_size_bytes, 100 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_rewrite.parquet')
+
+statement ok
+INSERT INTO meta.ducklake_data_file (data_file_id, table_id, path, path_is_relative, file_format, record_count, file_size_bytes, row_id_start) SELECT 1099511627777, 1, '{TEST_DIR}/{BASE_TEST_NAME}_dev_insert.parquet', false, 'parquet', 1, file_size_bytes, 200 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_insert.parquet')
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility VALUES (1, 1, 1099511627776, 5, false), (1, 1, 1099511627777, 6, false)
+
+# main deletes, rewrites and inserts after the fork, its rewrite takes the id of the insert of dev
+statement ok
+DELETE FROM lake.t WHERE i = 2
+
+statement ok
+CALL ducklake_rewrite_data_files('lake', 't', delete_threshold => 0)
+
+statement ok
+INSERT INTO lake.t VALUES (4)
+
+query I
+SELECT changes_made FROM meta.ducklake_snapshot_changes WHERE snapshot_id = 6 AND branch_id = 0
+----
+rewrite_delete:1
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT i FROM dev.t ORDER BY i
+----
+2
+3
+10
+20
+
+# the rewrite of main below the fork changes no rows of dev either
+query IIII
+FROM lake.table_changes('t', 4, 4) ORDER BY ALL
+----
+
+query IIII
+FROM dev.table_changes('t', 4, 4) ORDER BY ALL
+----
+
+# the rewrite change of dev's own snapshot excludes the file dev added there
+query IIII
+FROM dev.table_changes('t', 5, 5) ORDER BY ALL
+----
+
+# the rewrite of main at 6 is no rewrite snapshot of the view of dev, whose insert of 6 is reported
+query IIII
+FROM dev.table_changes('t', 6, 6) ORDER BY ALL
+----
+6	200	insert	20
+
+query IIII
+FROM lake.table_changes('t', 6, 6) ORDER BY ALL
+----
+
+query IIII
+FROM dev.table_changes('t', 2, 6) ORDER BY ALL
+----
+2	0	insert	1
+2	1	insert	2
+2	2	insert	3
+3	0	delete	1
+6	200	insert	20
+
+# the snapshots main committed above the cap, its second rewrite among them, are not in the view of dev
+query I
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM dev.snapshots()
+----
+[0, 1, 2, 3, 4, 5, 6]
+
+query IIII
+FROM lake.table_changes('t', 5, 7) ORDER BY ALL
+----
+5	1	delete	2
+7	3	insert	4
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH lake

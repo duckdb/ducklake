@@ -1,0 +1,59 @@
+# name: test/sql/rest/rest_serve_refusal_keeps_registration.test
+# description: A refused replacement keeps the catalog served under the prefix registered
+# group: [rest]
+
+require ducklake
+
+require parquet
+
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS lake (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+
+statement ok rest_db:rest_server_con
+CREATE TABLE lake.t AS SELECT 42 AS i
+
+statement ok rest_db:rest_server_con
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 1)
+
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+statement ok rest_db:rest_server_con
+SET VARIABLE rest_listen_uri = (SELECT listen_uri FROM ducklake_rest_serve('lake', prefix := 'live'))
+
+statement ok rest_db:rest_server_con
+SET VARIABLE rest_port = regexp_extract(getvariable('rest_listen_uri'), ':([0-9]+)/', 1)::UBIGINT
+
+set variable rest_server <variable:rest_server_con:rest_listen_uri>
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', '')
+----
+200
+
+# a branch replacing main under the prefix is refused and main stays served
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('dev', port := getvariable('rest_port'), prefix := 'live')
+----
+Serving a branch of a DuckLake through REST is not supported yet
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', '')
+----
+200
+
+# so is a catalog that is no DuckLake
+statement ok rest_db:rest_server_con
+ATTACH ':memory:' AS plain
+
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('plain', port := getvariable('rest_port'), prefix := 'live')
+----
+catalog "plain" is not a DuckLake catalog
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', '')
+----
+200
+
+include test/template/rest_teardown.test_template

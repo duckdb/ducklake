@@ -1,0 +1,135 @@
+# name: test/sql/branches/branch_schema_versions_lineage.test
+# description: the schema versions of a branch are numbered per lineage, a version main minted above the fork is not one of them
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1)
+
+# dev forks main at 2
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+# main adds two columns after the fork
+statement ok
+ALTER TABLE lake.t ADD COLUMN j INTEGER
+
+statement ok
+ALTER TABLE lake.t ADD COLUMN k INTEGER
+
+query III
+SELECT begin_snapshot, schema_version, branch_id FROM meta.ducklake_schema_versions ORDER BY begin_snapshot
+----
+1	1	0
+3	2	0
+4	3	0
+
+# dev adds a column at each of its snapshots 3 and 4, minting the schema versions 2 and 3 of its own lineage
+# the column ids are parquet field ids and stay below 2^31
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 3, NOW(), 2, 101, next_file_id, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 2
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 4, NOW(), 3, 102, next_file_id, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 2
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, 'altered_table:1', NULL, NULL, NULL, 1), (4, 'altered_table:1', NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_column VALUES (100, 3, 1, 2, 'd', 'int32', NULL, NULL, true, NULL, 'literal', 'duckdb', 1), (101, 4, 1, 3, 'e', 'int32', NULL, NULL, true, NULL, 'literal', 'duckdb', 1)
+
+statement ok
+INSERT INTO meta.ducklake_schema_versions VALUES (3, 2, 1, 1), (4, 3, 1, 1)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+# the columns main added after the fork are absent on dev, which reads its own
+query I
+SELECT column_name FROM (DESCRIBE lake.t)
+----
+i
+j
+k
+
+query I
+SELECT column_name FROM (DESCRIBE dev.t)
+----
+i
+d
+e
+
+# each lineage numbers its schema versions from the fork on
+query II
+SELECT snapshot_id, schema_version FROM lake.snapshots() ORDER BY snapshot_id
+----
+0	0
+1	1
+2	1
+3	2
+4	3
+
+query II
+SELECT snapshot_id, schema_version FROM dev.snapshots() ORDER BY snapshot_id
+----
+0	0
+1	1
+2	1
+3	2
+4	3
+
+# both lineages hold a schema version 3 beginning at a snapshot 4, a version read resolves the one of its own view
+query III
+SELECT begin_snapshot, schema_version, branch_id FROM meta.ducklake_schema_versions WHERE schema_version = 3 ORDER BY branch_id
+----
+4	3	0
+4	3	1
+
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM lake.t AT (VERSION => 4))
+----
+i
+j
+k
+
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM dev.t AT (VERSION => 4))
+----
+i
+d
+e
+
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM dev.t AT (VERSION => 3))
+----
+i
+d
+
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM dev.t AT (VERSION => 2))
+----
+i
+
+query III
+SELECT * FROM dev.t AT (VERSION => 4)
+----
+1	NULL	NULL
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH lake

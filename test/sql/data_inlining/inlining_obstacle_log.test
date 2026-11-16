@@ -23,6 +23,10 @@ CREATE TABLE dl.t (id INTEGER, row_id BIGINT)
 statement ok
 CREATE TABLE dl.u (id INTEGER, val BIGINT)
 
+# a column named like a column the 2.0 readers derive from the companion of the inlined rows is an obstacle as well
+statement ok
+CREATE TABLE dl.w (id INTEGER, _ducklake_vis_row_id BIGINT)
+
 statement ok
 SET ducklake_default_data_inlining_row_limit = 100
 
@@ -35,13 +39,18 @@ INSERT INTO dl.t VALUES (1, 10)
 statement ok
 INSERT INTO dl.u VALUES (1, 10)
 
+statement ok
+INSERT INTO dl.w VALUES (1, 10)
+
 query II
 SELECT table_name, file_count FROM ducklake_table_info('dl') ORDER BY table_name
 ----
 t	1
 u	0
+w	1
 
 query I
-SELECT message FROM duckdb_logs WHERE message LIKE 'DuckLake writes the rows of table%'
+SELECT message FROM duckdb_logs WHERE message LIKE 'DuckLake writes the rows of table%' ORDER BY message
 ----
 DuckLake writes the rows of table "t" to files instead of inlining them, because column "row_id" has the name of an internal column of inlined data tables
+DuckLake writes the rows of table "w" to files instead of inlining them, because column "_ducklake_vis_row_id" has the name of an internal column of inlined data tables

@@ -69,6 +69,8 @@ protected:
 private:
 	void ApplyLocalChanges(DuckLakeTransaction &transaction) const;
 	void GetFilesForTable() const;
+	//! The inlined tables the scan reads, without those an earlier scan found without live rows at the snapshot
+	vector<DuckLakeInlinedTableInfo> ListInlinedDataTables(DuckLakeTransaction &transaction) const;
 	//! Read the committed files, and the committed inlined rows before them when each metadata query commits
 	vector<DuckLakeFileListEntry>
 	ReadCommittedFiles(DuckLakeTransaction &transaction,

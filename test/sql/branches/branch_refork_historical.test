@@ -1,0 +1,58 @@
+# name: test/sql/branches/branch_refork_historical.test
+# description: a branch add event for an inherited file keeps the file visible at the fork snapshot
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (42)
+
+# dev forks at 2 and adds the inherited file again at its own snapshot 3
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 3, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 2
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, 3, false FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND is_delete = false
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT i FROM dev.t
+----
+42
+
+# the file became visible to the lineage with the earliest add, the one of main
+query I
+SELECT i FROM dev.t AT (VERSION => 2)
+----
+42
+
+query I
+SELECT i FROM ducklake_table_insertions('dev', 'main', 't', 2, 2)
+----
+42
+
+statement ok
+DETACH dev

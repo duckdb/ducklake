@@ -1,0 +1,112 @@
+# name: test/sql/migration/v11_to_v20_dev1_inlined_deletes.test
+# description: the inlined deletion table of a 1.1 catalog gains the branch of its rows when the catalog migrates to 2.0-dev1
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t AS SELECT range AS i FROM range(20)
+
+statement ok
+DELETE FROM dl.t WHERE i IN (1, 2)
+
+query I
+SELECT count(*) FROM dl.t
+----
+18
+
+statement ok
+DETACH dl
+
+# a release catalog is attached at its own version, its deletion rows carry no branch
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+1.1
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_inlined_delete_1') ORDER BY column_index
+----
+file_id
+row_id
+begin_snapshot
+
+query I
+SELECT count(*) FROM dl.t
+----
+18
+
+statement ok
+DETACH dl
+
+# the migration appends the branch column and fills it with main
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_inlined_delete_1') ORDER BY column_index
+----
+file_id
+row_id
+begin_snapshot
+branch_id
+
+query IIII
+SELECT file_id, row_id, begin_snapshot, branch_id FROM meta.ducklake_inlined_delete_1 ORDER BY row_id
+----
+0	1	2	0
+0	2	2	0
+
+query I
+SELECT count(*) FROM dl.t
+----
+18
+
+query I
+SELECT count(*) FROM dl.t AT (VERSION => 1)
+----
+20
+
+# the migrated catalog writes the branch of new deletions and flushes them
+statement ok
+DELETE FROM dl.t WHERE i = 3
+
+query IIII
+SELECT file_id, row_id, begin_snapshot, branch_id FROM meta.ducklake_inlined_delete_1 ORDER BY row_id
+----
+0	1	2	0
+0	2	2	0
+0	3	3	0
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_delete_1
+----
+0
+
+query I
+SELECT count(*) FROM dl.t
+----
+17
+
+statement ok
+DETACH dl

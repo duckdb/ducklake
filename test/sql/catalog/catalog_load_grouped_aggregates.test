@@ -1,0 +1,130 @@
+# name: test/sql/catalog/catalog_load_grouped_aggregates.test
+# description: a catalog load keeps the tags, column tags, inlined data tables and view column tags with their owners
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/catalog_load_grouped_aggregates', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE lake.t1 (a INTEGER, b INTEGER)
+
+statement ok
+CREATE TABLE lake.t2 (a INTEGER, b INTEGER)
+
+statement ok
+CREATE TABLE lake.t3 (a INTEGER)
+
+statement ok
+COMMENT ON TABLE lake.t1 IS 'first table'
+
+statement ok
+COMMENT ON TABLE lake.t2 IS 'second table'
+
+statement ok
+COMMENT ON COLUMN lake.t1.a IS 't1 a'
+
+statement ok
+COMMENT ON COLUMN lake.t1.b IS 't1 b'
+
+statement ok
+COMMENT ON COLUMN lake.t2.b IS 't2 b'
+
+# two inlined data tables for t1, one for t2 and for t3
+statement ok
+INSERT INTO lake.t1 VALUES (1, 10), (2, 20)
+
+statement ok
+ALTER TABLE lake.t1 ADD COLUMN c INTEGER DEFAULT 7
+
+statement ok
+INSERT INTO lake.t1 VALUES (3, 30, 300)
+
+statement ok
+INSERT INTO lake.t2 VALUES (4, 40)
+
+statement ok
+INSERT INTO lake.t3 SELECT range FROM range(100)
+
+statement ok
+CREATE VIEW lake.v1 AS SELECT a, b FROM lake.t1
+
+statement ok
+CREATE VIEW lake.v2 AS SELECT a FROM lake.t2
+
+statement ok
+COMMENT ON VIEW lake.v1 IS 'first view'
+
+statement ok
+COMMENT ON COLUMN lake.v1.a IS 'v1 a'
+
+statement ok
+COMMENT ON COLUMN lake.v1.b IS 'v1 b'
+
+statement ok
+COMMENT ON COLUMN lake.v2.a IS 'v2 a'
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake
+
+query TT
+SELECT table_name, comment FROM duckdb_tables() WHERE database_name = 'lake' ORDER BY table_name
+----
+t1	first table
+t2	second table
+t3	NULL
+
+query TTT
+SELECT table_name, column_name, comment FROM duckdb_columns() WHERE database_name = 'lake' ORDER BY table_name, column_index
+----
+t1	a	t1 a
+t1	b	t1 b
+t1	c	NULL
+t2	a	NULL
+t2	b	t2 b
+t3	a	NULL
+v1	a	v1 a
+v1	b	v1 b
+v2	a	v2 a
+
+query TT
+SELECT view_name, comment FROM duckdb_views() WHERE database_name = 'lake' AND NOT internal ORDER BY view_name
+----
+v1	first view
+v2	NULL
+
+query II
+SELECT t.table_name, count(*) FROM __ducklake_metadata_lake.ducklake_inlined_data_tables i
+JOIN __ducklake_metadata_lake.ducklake_table t USING (table_id) GROUP BY ALL ORDER BY ALL
+----
+t1	2
+t2	1
+t3	1
+
+# the rows of every inlined data table of a table are read
+query III
+SELECT * FROM lake.t1 ORDER BY a
+----
+1	10	7
+2	20	7
+3	30	300
+
+query II
+SELECT * FROM lake.t2
+----
+4	40
+
+query I
+SELECT count(*) FROM lake.t3
+----
+100

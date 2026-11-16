@@ -50,7 +50,7 @@ statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
 query I
-SELECT transform FROM ducklake_gate_meta.ducklake_partition_column WHERE partition_id = (SELECT partition_id FROM ducklake_gate_meta.ducklake_partition_info WHERE end_snapshot IS NULL)
+SELECT transform FROM ducklake_gate_meta.ducklake_partition_column WHERE partition_id = (SELECT partition_id FROM ducklake_gate_meta.ducklake_partition_info p WHERE NOT EXISTS (SELECT 1 FROM ducklake_gate_meta.ducklake_partition_visibility e WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot))
 ----
 epoch_day
 

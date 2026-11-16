@@ -1,0 +1,82 @@
+# name: test/sql/metadata/listing_cache_limit.test
+# description: the shared listing cache starts over once it holds 256 listings of one head
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT range AS i FROM range(300)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+query I
+SELECT count(*) FROM dl.t WHERE i = 0
+----
+1
+
+query I
+SELECT count(*) FROM dl.t WHERE i = 0
+----
+1
+
+statement ok
+CALL disable_logging()
+
+# the second identical read shares the listing of the first where metadata reads share one snapshot
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite') THEN
+    (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%del^_src%' ESCAPE '^')
+    ELSE 1 END
+----
+1
+
+# each filter is its own listing, the 257th listing of the head starts the cache over
+loop i 1 257
+
+statement ok
+SELECT count(*) FROM dl.t WHERE i = {i}
+
+endloop
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+query I
+SELECT count(*) FROM dl.t WHERE i = 0
+----
+1
+
+query I
+SELECT count(*) FROM dl.t WHERE i = 256
+----
+1
+
+statement ok
+CALL disable_logging()
+
+# the first listing is gone and the last one is kept
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite') THEN
+    (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%del^_src%' ESCAPE '^')
+    ELSE 1 END
+----
+1
+
+statement ok
+DETACH dl

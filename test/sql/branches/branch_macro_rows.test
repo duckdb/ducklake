@@ -1,0 +1,83 @@
+# name: test/sql/branches/branch_macro_rows.test
+# description: the rows of macros end in a companion table, a branch attached at the fork keeps the macros of the fork
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE MACRO dl.add_one(x) AS x + 1
+
+statement ok
+CREATE MACRO dl.two() AS TABLE SELECT 2 AS v
+
+# dev forks after both macros
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+statement ok
+DROP MACRO dl.add_one
+
+statement ok
+CREATE MACRO dl.add_two(x) AS x + 2
+
+statement error
+SELECT dl.main.add_one(1)
+----
+does not exist
+
+query I
+SELECT dl.main.add_two(1)
+----
+3
+
+# the drop ends the row, the others are live
+query IIII
+SELECT m.macro_name, m.begin_snapshot, m.branch_id, (SELECT e.snapshot_id FROM meta.ducklake_macro_visibility e WHERE e.macro_id = m.macro_id AND e.row_branch_id = m.branch_id AND e.row_snapshot = m.begin_snapshot) FROM meta.ducklake_macro m ORDER BY m.begin_snapshot
+----
+add_one	1	0	3
+two	2	0	NULL
+add_two	4	0	NULL
+
+query III
+SELECT e.branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_macro_visibility e
+----
+0	1	3
+
+statement ok
+DETACH dl
+
+# the branch forked before the drop and keeps the macro, the one created after the fork is not there
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+2
+
+query I
+SELECT dl.main.add_one(1)
+----
+2
+
+query I
+SELECT v FROM dl.main.two()
+----
+2
+
+statement error
+SELECT dl.main.add_two(1)
+----
+does not exist
+
+statement ok
+DETACH dl

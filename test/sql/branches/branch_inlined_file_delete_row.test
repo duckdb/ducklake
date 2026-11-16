@@ -1,0 +1,125 @@
+# name: test/sql/branches/branch_inlined_file_delete_row.test
+# description: an inlined file deletion applies in the lineage of its branch, a branch inherits those of main up to its fork
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t AS SELECT range AS i FROM range(20)
+
+# the delete of one row of the file is inlined at snapshot 2
+statement ok
+DELETE FROM dl.t WHERE i = 0
+
+# dev forks at that snapshot and holds two snapshots of its own
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 3, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 4, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1), (4, NULL, NULL, NULL, NULL, 1)
+
+# main deletes another row of the file after the fork
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+# dev deletes the positions 5 and 6 of the file at its snapshots 3 and 4
+statement ok
+INSERT INTO meta.ducklake_inlined_delete_1 VALUES (0, 5, 3, 1), (0, 6, 4, 1)
+
+query IIII
+SELECT file_id, row_id, begin_snapshot, branch_id FROM meta.ducklake_inlined_delete_1 ORDER BY branch_id, begin_snapshot, row_id
+----
+0	0	2	0
+0	1	3	0
+0	5	3	1
+0	6	4	1
+
+# main applies the deletions of main alone
+query I
+SELECT list(i ORDER BY i) FROM dl.t WHERE i < 8
+----
+[2, 3, 4, 5, 6, 7]
+
+query I
+SELECT count(*) FROM dl.t
+----
+18
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+# dev inherits the deletion of main at its fork, not the later one, and applies its own
+query I
+SELECT list(i ORDER BY i) FROM dev.t WHERE i < 8
+----
+[1, 2, 3, 4, 7]
+
+query I
+SELECT count(*) FROM dev.t
+----
+17
+
+# below the fork dev reads the deletions of main alone
+query I
+SELECT count(*) FROM dev.t AT (VERSION => 2)
+----
+19
+
+# at its first snapshot dev reads its first deletion alone
+query I
+SELECT list(i ORDER BY i) FROM dev.t AT (VERSION => 3) WHERE i < 8
+----
+[1, 2, 3, 4, 6, 7]
+
+# a branch forked from dev at its first snapshot inherits the deletion of that snapshot alone
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (2, 'nested', 1, 3)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 4, NOW(), schema_version, next_catalog_id, next_file_id, 2 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (4, NULL, NULL, NULL, NULL, 2)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS nested (METADATA_CATALOG 'meta', BRANCH 'nested')
+
+query I
+SELECT list(i ORDER BY i) FROM nested.t WHERE i < 8
+----
+[1, 2, 3, 4, 6, 7]
+
+query I
+SELECT count(*) FROM nested.t
+----
+18
+
+# main still applies none of the deletions of its branches
+query I
+SELECT count(*) FROM dl.t
+----
+18
+
+statement ok
+DETACH nested
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH dl

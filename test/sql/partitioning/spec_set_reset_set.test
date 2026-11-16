@@ -32,7 +32,7 @@ statement ok
 COMMIT
 
 query I
-SELECT count(*) FROM meta.ducklake_sort_info WHERE end_snapshot IS NULL
+SELECT count(*) FROM meta.ducklake_sort_info si WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_sort_visibility e WHERE e.sort_id = si.sort_id AND e.row_branch_id = si.branch_id AND e.row_snapshot = si.begin_snapshot)
 ----
 1
 
@@ -66,7 +66,7 @@ statement ok
 COMMIT
 
 query I
-SELECT count(*) FROM meta.ducklake_partition_info WHERE end_snapshot IS NULL
+SELECT count(*) FROM meta.ducklake_partition_info p WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_visibility e WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot)
 ----
 1
 
@@ -74,7 +74,7 @@ statement ok
 INSERT INTO lake.u VALUES (2);
 
 query II
-SELECT count(*), bool_and(partition_id IN (SELECT partition_id FROM meta.ducklake_partition_info WHERE end_snapshot IS NULL)) FROM meta.ducklake_data_file WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'u')
+SELECT count(*), bool_and(partition_id IN (SELECT partition_id FROM meta.ducklake_partition_info p WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_visibility e WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot))) FROM meta.ducklake_data_file WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'u')
 ----
 2	true
 
@@ -106,6 +106,6 @@ statement ok
 COMMIT
 
 query II
-SELECT (SELECT count(*) FROM meta.ducklake_sort_info WHERE end_snapshot IS NULL), (SELECT count(*) FROM meta.ducklake_partition_info WHERE end_snapshot IS NULL)
+SELECT (SELECT count(*) FROM meta.ducklake_sort_info si WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_sort_visibility e WHERE e.sort_id = si.sort_id AND e.row_branch_id = si.branch_id AND e.row_snapshot = si.begin_snapshot)), (SELECT count(*) FROM meta.ducklake_partition_info p WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_visibility e WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot))
 ----
 1	1

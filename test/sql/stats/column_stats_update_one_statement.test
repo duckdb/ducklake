@@ -44,7 +44,7 @@ query IIII
 SELECT col.column_name, stats.contains_null::BOOLEAN, stats.min_value, stats.max_value
 FROM __ducklake_metadata_lk.ducklake_table_column_stats stats
 JOIN __ducklake_metadata_lk.ducklake_column col USING (table_id, column_id)
-WHERE col.column_name IN ('c0', 'c9', 's', 'n') AND col.end_snapshot IS NULL
+WHERE col.column_name IN ('c0', 'c9', 's', 'n')
 ORDER BY col.column_name
 ----
 c0	false	0	9

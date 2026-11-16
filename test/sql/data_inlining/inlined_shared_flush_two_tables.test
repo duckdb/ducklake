@@ -1,0 +1,163 @@
+# name: test/sql/data_inlining/inlined_shared_flush_two_tables.test
+# description: a flush dates the deletes of a table by the ends of that table alone, the shared companion holds the ends of a row born alike in another table
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+CREATE TABLE dl.u (i INTEGER)
+
+# the first rows of both tables are born in one commit
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+statement ok
+INSERT INTO dl.u VALUES (10), (20)
+
+statement ok
+COMMIT
+
+statement ok
+DELETE FROM dl.u WHERE i = 10
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility
+----
+2	0	0	3	0	4
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+# the end of the first row of u dates a delete of u alone, the first row of t stays at every snapshot
+query II
+SELECT table_id, delete_count FROM meta.ducklake_delete_file
+----
+2	1
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+
+query I
+SELECT i FROM dl.t AT (VERSION => 4) ORDER BY i
+----
+1
+2
+
+query I
+SELECT i FROM dl.t AT (VERSION => 3) ORDER BY i
+----
+1
+2
+
+query I
+SELECT i FROM dl.u ORDER BY i
+----
+20
+
+query I
+SELECT i FROM dl.u AT (VERSION => 3) ORDER BY i
+----
+10
+20
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility
+----
+0
+
+# the next rows of both tables are born in one commit again
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t VALUES (3), (4)
+
+statement ok
+INSERT INTO dl.u VALUES (30), (40)
+
+statement ok
+COMMIT
+
+# one transaction deletes a row of u and flushes t, its end of u is written before the flushed rows of t are deleted
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.u WHERE i = 30
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 't')
+
+statement ok
+COMMIT
+
+# the end of u at the commit snapshot keeps no row of t inlined, the deleted version of u stays inlined with its end
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1
+----
+0
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility
+----
+2	2	0	6	0	7
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_2_2
+----
+2
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+3
+4
+
+query I
+SELECT i FROM dl.t AT (VERSION => 6) ORDER BY i
+----
+1
+2
+3
+4
+
+query I
+SELECT i FROM dl.u ORDER BY i
+----
+20
+40
+
+query I
+SELECT i FROM dl.u AT (VERSION => 6) ORDER BY i
+----
+20
+30
+40
+
+query II
+SELECT table_id, delete_count FROM meta.ducklake_delete_file
+----
+2	1
+
+statement ok
+DETACH dl

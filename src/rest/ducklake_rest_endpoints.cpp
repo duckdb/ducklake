@@ -336,13 +336,11 @@ static void RemoveUnreadFields(Vector &column, idx_t count, const DuckLakeFieldI
 	}
 }
 
-//! Reads the inlined rows of a table, in the schema that the table has at the snapshot: the inlined rows of each schema
-//! version of the table are turned into rows of that schema. The rows have the row id, the begin and end snapshot and
-//! the columns of the table. Returns nothing if the table has no inlined rows.
+//! Reads the inlined rows of a table in the schema it has at the snapshot, nothing if the table has none
 static unique_ptr<RESTInlinedRows>
 ReadInlinedRows(DuckLakeRESTRequest &request, DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                 const std::function<unique_ptr<QueryResult>(const Identifier &, const vector<string> &)> &read_rows,
-                const RESTOptional<vector<RESTColumnIdentifier>> &projection) {
+                const RESTOptional<vector<RESTColumnIdentifier>> &projection, bool ended_rows) {
 	auto inlined_tables = table.GetInlinedDataTables(*request.transaction, snapshot);
 	if (inlined_tables.empty()) {
 		return nullptr;
@@ -388,7 +386,9 @@ ReadInlinedRows(DuckLakeRESTRequest &request, DuckLakeTableEntry &table, DuckLak
 		}
 		vector<string> columns;
 		for (idx_t i = 0; i < DuckLakeInlinedColNames::COLUMN_COUNT; i++) {
-			columns.push_back(SQLIdentifier::ToString(names[i]));
+			bool end_column = names[i] == col_names.end_snapshot.GetIdentifierName();
+			bool end_derived = ended_rows || !request.catalog->SupportsBranching();
+			columns.push_back(end_column && !end_derived ? "CAST(NULL AS BIGINT)" : SQLIdentifier::ToString(names[i]));
 		}
 		for (auto &field : fields) {
 			auto written = table_at_version->GetFieldData().GetByFieldIndex(field.get().GetFieldIndex());
@@ -614,7 +614,7 @@ RESTSelectResponse DuckLakeRESTEndpoints::Select(DuckLakeRESTRequest &request, c
 	    [&](const Identifier &inlined_table_name, const vector<string> &columns) {
 		    return metadata_manager.ReadInlinedData(snapshot, inlined_table_name, columns);
 	    },
-	    parameters.columns);
+	    parameters.columns, true);
 	return result;
 }
 
@@ -625,6 +625,8 @@ RESTListSnapshotsResponse DuckLakeRESTEndpoints::ListSnapshots(DuckLakeRESTReque
 	filter.older_than = parameters.older_than;
 	filter.has_snapshot_ids = parameters.snapshot_ids.has_value;
 	filter.snapshot_ids = parameters.snapshot_ids.value;
+	// the listing and its pages hold the lineage of the served catalog, as ducklake_snapshots does
+	filter.chain_only = true;
 	RESTListSnapshotsResponse result;
 	result.snapshots = request.GetMetadataManager().GetAllSnapshots(filter);
 	GetKeyPage(
@@ -681,7 +683,7 @@ RESTTableChangesResponse DuckLakeRESTEndpoints::TableChanges(DuckLakeRESTRequest
 		    }
 		    return metadata_manager.ReadInlinedDataInsertions(start_snapshot, snapshot, inlined_table_name, columns);
 	    },
-	    parameters.columns);
+	    parameters.columns, deletions);
 	return result;
 }
 

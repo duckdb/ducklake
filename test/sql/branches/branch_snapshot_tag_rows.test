@@ -1,0 +1,235 @@
+# name: test/sql/branches/branch_snapshot_tag_rows.test
+# description: snapshot tags name a snapshot of a branch and end in a companion table, a branch resolves the tags born in its view
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+CALL ducklake_create_tag('dl', 'early', version => 2)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+# dev forks at the second insert, the tag is born on main before it
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 4)
+
+# main moves the tag, creates one and changes its expiry after the fork
+statement ok
+CALL ducklake_replace_tag('dl', 'early', version => 4)
+
+statement ok
+CALL ducklake_create_tag('dl', 'late', version => 4, expires_at => TIMESTAMPTZ '2100-01-01 00:00:00+00')
+
+statement ok
+CALL ducklake_set_tag_expiry('dl', 'late', TIMESTAMPTZ '2200-01-01 00:00:00+00')
+
+# an expiring tag born before the fork, its time has passed and main ends it after the fork
+# ducklake_create_tag refuses a time that has passed, so the row and its end are written directly
+statement ok
+INSERT INTO meta.ducklake_snapshot_tag (tag_name, snapshot_id, snapshot_branch_id, branch_id, begin_snapshot,
+    expires_at) VALUES ('stale', 1, 0, 0, 3, TIMESTAMPTZ '2000-01-01 00:00:00+00')
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_tag_visibility VALUES (0, 'stale', 0, 3, 5)
+
+# a move or a new expiry writes a new row and ends the old one in the same commit, the new row is the visible one
+query IIIIIII
+SELECT t.tag_name, t.snapshot_id, t.snapshot_branch_id, t.branch_id, t.begin_snapshot, e.branch_id, e.snapshot_id
+    FROM meta.ducklake_snapshot_tag t
+    LEFT JOIN meta.ducklake_snapshot_tag_visibility e ON e.tag_name = t.tag_name AND e.row_branch_id = t.branch_id
+    AND e.row_snapshot = t.begin_snapshot
+    ORDER BY t.begin_snapshot, t.tag_name
+----
+early	2	0	0	3	0	5
+stale	1	0	0	3	0	5
+early	4	0	0	5	NULL	NULL
+late	4	0	0	6	0	7
+late	4	0	0	7	NULL	NULL
+
+query IIII
+SELECT tag_name, snapshot_id, created_snapshot_id, expires_at = TIMESTAMPTZ '2200-01-01 00:00:00+00' FROM ducklake_tags('dl') ORDER BY tag_name
+----
+early	4	5	NULL
+late	4	7	true
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'early')
+----
+2
+
+# one end per row per branch
+statement error
+INSERT INTO meta.ducklake_snapshot_tag_visibility SELECT * FROM meta.ducklake_snapshot_tag_visibility WHERE snapshot_id = 5
+----
+constraint
+
+statement ok
+DETACH dl
+
+# the branch reads the tag as it was at the fork, the tag born after the fork does not exist for it
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query III
+SELECT tag_name, snapshot_id, created_snapshot_id FROM ducklake_tags('dl') ORDER BY tag_name
+----
+early	2	3
+stale	1	3
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'early')
+----
+1
+
+statement error
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'late')
+----
+No snapshot tag with the name "late" exists
+
+statement ok
+DETACH dl
+
+# dev still reads the tag main moved after the fork, so the snapshot of main it names stays protected
+# dev also reads the tag whose time has passed, which keeps the first snapshot no longer
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [1, 2, 3], dry_run => true) ORDER BY snapshot_id
+----
+1
+3
+
+# dev drops the inherited tags at its own snapshot 5 and tags the first insert of main, feature forks from dev there
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 5, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 4 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (5, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_tag_visibility VALUES (1, 'early', 0, 3, 5)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_tag_visibility VALUES (1, 'stale', 0, 3, 5)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_tag (tag_name, snapshot_id, snapshot_branch_id, branch_id, begin_snapshot, expires_at) VALUES ('devtag', 2, 0, 1, 5, NULL)
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (2, 'feature', 1, 5)
+
+# main does not see the rows of dev, the tag of dev protects the snapshot of main it names
+query II
+SELECT tag_name, snapshot_id FROM ducklake_tags('dl') ORDER BY tag_name
+----
+early	4
+late	4
+
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [1, 2, 3], dry_run => true) ORDER BY snapshot_id
+----
+1
+3
+
+statement ok
+DETACH dl
+
+# feature reads through dev, where the end of the inherited tag and the birth of the tag of dev sit
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'feature')
+
+query IIII
+SELECT tag_name, snapshot_id, created_snapshot_id, snapshot_time IS NULL FROM ducklake_tags('dl')
+----
+devtag	2	5	false
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'devtag')
+----
+1
+
+statement error
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'early')
+----
+No snapshot tag with the name "early" exists
+
+statement ok
+DETACH dl
+
+# dev ends its tag at its snapshot 6, above the fork of feature, which still reads the tag
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 6, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 5 AND branch_id = 1
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (6, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_tag_visibility VALUES (1, 'devtag', 1, 5, 6)
+
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [1, 2, 3], dry_run => true) ORDER BY snapshot_id
+----
+1
+3
+
+# once feature ends the inherited tag as well no branch reads it and the snapshot of main is free to expire
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 6, NOW(), schema_version, next_catalog_id, next_file_id, 2 FROM meta.ducklake_snapshot WHERE snapshot_id = 5 AND branch_id = 1
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (6, NULL, NULL, NULL, NULL, 2)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_tag_visibility VALUES (2, 'devtag', 1, 5, 6)
+
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [1, 2, 3], dry_run => true) ORDER BY snapshot_id
+----
+1
+2
+3
+
+# a tag naming a snapshot of a branch outside the view does not resolve
+statement ok
+INSERT INTO meta.ducklake_snapshot_tag (tag_name, snapshot_id, snapshot_branch_id, branch_id, begin_snapshot, expires_at) VALUES ('alien', 1, 2, 0, 1, NULL)
+
+query III
+SELECT tag_name, snapshot_id, snapshot_time IS NULL FROM ducklake_tags('dl') ORDER BY tag_name
+----
+alien	1	true
+early	4	false
+late	4	false
+
+# a tag naming a snapshot of another branch protects nothing of main
+query I
+SELECT snapshot_id FROM ducklake_expire_snapshots('dl', versions => [1], dry_run => true)
+----
+1
+
+statement error
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'alien')
+----
+Snapshot tag "alien" names snapshot 1 of branch 2, which the attached branch does not read
+
+statement ok
+DETACH dl

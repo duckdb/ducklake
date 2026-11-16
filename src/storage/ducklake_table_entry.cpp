@@ -500,7 +500,8 @@ bool DuckLakeTableEntry::AddedColumn(FieldIndex field_index) {
 }
 
 bool DuckLakeTableEntry::CanUseGlobalStats(DuckLakeTransaction &transaction) const {
-	return !IsTransactionLocal() && !transaction.HasTransactionLocalInserts(GetTableId());
+	return !IsTransactionLocal() && !transaction.HasTransactionLocalInserts(GetTableId()) &&
+	       !transaction.GetCatalog().OnBranch();
 }
 
 shared_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(DuckLakeTransaction &transaction) {
@@ -531,9 +532,17 @@ vector<DuckLakeInlinedTableInfo> DuckLakeTableEntry::GetInlinedDataTables(DuckLa
 
 idx_t DuckLakeTableEntry::GetNetInlinedRowCount(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot) {
 	auto &metadata_manager = transaction.GetMetadataManager();
+	auto &catalog = transaction.GetCatalog();
 	idx_t total = 0;
 	for (auto &inlined_table : GetInlinedDataTables(transaction, snapshot)) {
-		total += metadata_manager.GetNetInlinedRowCount(inlined_table.table_name, snapshot);
+		if (catalog.InlinedTableIsEmpty(transaction, inlined_table.table_name, snapshot.snapshot_id)) {
+			continue;
+		}
+		auto count = metadata_manager.GetNetInlinedRowCount(inlined_table.table_name, snapshot);
+		if (count == 0) {
+			catalog.SetInlinedTableEmpty(transaction, inlined_table.table_name, snapshot.snapshot_id);
+		}
+		total += count;
 	}
 	return total;
 }

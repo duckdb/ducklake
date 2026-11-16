@@ -1,0 +1,301 @@
+# name: test/sql/migration/dev1_inlined_fold_companions.test
+# description: the per payload companions of an older dev build are refused read only and folded into the shared companion on a writable attach, which resumes after any of its statements
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+statement ok
+CREATE TABLE dl.u (i INTEGER)
+
+statement ok
+INSERT INTO dl.u VALUES (10), (20)
+
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+statement ok
+DELETE FROM dl.u WHERE i = 10
+
+statement ok
+UPDATE dl.t SET i = 30 WHERE i = 3
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+1	1	0	2	0	5
+1	2	0	2	0	7
+2	0	0	4	0	6
+
+# the older dev build kept the ends of each payload in a companion of its own and wrote no marker of this generation
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
+statement ok
+CREATE TABLE meta.ducklake_inlined_data_1_1_visibility(branch_id BIGINT, row_id BIGINT, row_branch_id BIGINT, row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, row_id, row_branch_id, row_snapshot))
+
+statement ok
+INSERT INTO meta.ducklake_inlined_data_1_1_visibility VALUES (0, 1, 0, 2, 5), (0, 2, 0, 2, 7)
+
+statement ok
+CREATE TABLE meta.ducklake_inlined_data_2_2_visibility(branch_id BIGINT, row_id BIGINT, row_branch_id BIGINT, row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, row_id, row_branch_id, row_snapshot))
+
+statement ok
+INSERT INTO meta.ducklake_inlined_data_2_2_visibility VALUES (0, 0, 0, 4, 6)
+
+statement ok
+DROP TABLE meta.ducklake_inlined_data_visibility
+
+statement ok
+DETACH dl
+
+# a read only attach cannot create the shared companion
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+attach it writable once
+
+# the writable attach creates the shared companion, folds both companions into it and drops them
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+1	1	0	2	0	5
+1	2	0	2	0	7
+2	0	0	4	0	6
+
+statement error
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
+----
+does not exist
+
+statement error
+SELECT count(*) FROM meta.ducklake_inlined_data_2_2_visibility
+----
+does not exist
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.4
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+30
+
+query I
+SELECT i FROM dl.t AT (VERSION => 2) ORDER BY i
+----
+1
+2
+3
+
+query I
+SELECT i FROM dl.t AT (VERSION => 6) ORDER BY i
+----
+1
+3
+
+query I
+SELECT i FROM dl.u ORDER BY i
+----
+20
+
+query I
+SELECT i FROM dl.u AT (VERSION => 5) ORDER BY i
+----
+10
+20
+
+# the healed catalog ends the versions it deletes in the shared companion
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+1	0	0	2	0	8
+1	1	0	2	0	5
+1	2	0	2	0	7
+2	0	0	4	0	6
+
+# an older binary healed backwards into both companions under its marker, this build's fold stopped after one INSERT
+statement ok
+UPDATE meta.ducklake_metadata SET value = '2.0-dev1.3' WHERE key = 'heal_complete'
+
+statement ok
+CREATE TABLE meta.ducklake_inlined_data_1_1_visibility(branch_id BIGINT, row_id BIGINT, row_branch_id BIGINT, row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, row_id, row_branch_id, row_snapshot))
+
+statement ok
+INSERT INTO meta.ducklake_inlined_data_1_1_visibility VALUES (0, 0, 0, 2, 8), (0, 1, 0, 2, 5), (0, 2, 0, 2, 7)
+
+statement ok
+CREATE TABLE meta.ducklake_inlined_data_2_2_visibility(branch_id BIGINT, row_id BIGINT, row_branch_id BIGINT, row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, row_id, row_branch_id, row_snapshot))
+
+statement ok
+INSERT INTO meta.ducklake_inlined_data_2_2_visibility VALUES (0, 0, 0, 4, 6)
+
+statement ok
+DELETE FROM meta.ducklake_inlined_data_visibility WHERE table_id = 2
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+attach it writable once
+
+# the resumed fold copies no end twice
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+1	0	0	2	0	8
+1	1	0	2	0	5
+1	2	0	2	0	7
+2	0	0	4	0	6
+
+statement error
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1_visibility
+----
+does not exist
+
+statement error
+SELECT count(*) FROM meta.ducklake_inlined_data_2_2_visibility
+----
+does not exist
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.4
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+30
+
+query I
+SELECT i FROM dl.t AT (VERSION => 7) ORDER BY i
+----
+1
+30
+
+query I
+SELECT i FROM dl.u ORDER BY i
+----
+20
+
+# a companion whose payload an interrupted drop left behind is dropped without a fold
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
+statement ok
+CREATE TABLE meta.ducklake_inlined_data_7_7_visibility(branch_id BIGINT, row_id BIGINT, row_branch_id BIGINT, row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, row_id, row_branch_id, row_snapshot))
+
+statement ok
+INSERT INTO meta.ducklake_inlined_data_7_7_visibility VALUES (0, 0, 0, 2, 3)
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+----
+attach it writable once
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement error
+SELECT count(*) FROM meta.ducklake_inlined_data_7_7_visibility
+----
+does not exist
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility WHERE table_id = 7
+----
+0
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.4
+
+statement ok
+DETACH dl
+
+# a healed catalog attaches read only
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+30
+
+statement ok
+DETACH dl
+
+# a catalog without inlined tables is told of the missing shared companion alone, not of tables it has none of
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_plain.db' AS plain (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_plain_files', METADATA_CATALOG 'meta2', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE plain.t AS SELECT range AS i FROM range(5)
+
+statement ok
+DELETE FROM meta2.ducklake_metadata WHERE key = 'heal_complete'
+
+statement ok
+DROP TABLE meta2.ducklake_inlined_data_visibility
+
+statement ok
+DETACH plain
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_plain.db' AS plain (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_plain_files', METADATA_CATALOG 'meta2', READ_ONLY)
+----
+This DuckLake catalog lacks the shared visibility table of its inlined rows, attach it writable once to heal it
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_plain.db' AS plain (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_plain_files', METADATA_CATALOG 'meta2', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT count(*) FROM meta2.ducklake_inlined_data_visibility
+----
+0
+
+query I
+SELECT value FROM meta2.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.4
+
+query I
+SELECT count(*) FROM plain.t
+----
+5
+
+statement ok
+DETACH plain

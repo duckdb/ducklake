@@ -298,23 +298,23 @@ COMMIT
 statement ok
 SET VARIABLE t_create_then_alter_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 't_create_then_alter')
 
-# two partition_info rows, the closed CREATE spec (begin = end) and the open ALTER spec
+# two partition_info rows, the closed CREATE spec (ended in its own snapshot) and the open ALTER spec
 query III
-SELECT count(*), count(*) FILTER (WHERE end_snapshot IS NULL), count(*) FILTER (WHERE begin_snapshot = end_snapshot)
-FROM ducklake_metadata.ducklake_partition_info WHERE table_id = getvariable('t_create_then_alter_id')
+SELECT count(*), count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM ducklake_metadata.ducklake_partition_visibility e WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot)), count(*) FILTER (WHERE EXISTS (SELECT 1 FROM ducklake_metadata.ducklake_partition_visibility e WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot AND e.snapshot_id = p.begin_snapshot))
+FROM ducklake_metadata.ducklake_partition_info p WHERE table_id = getvariable('t_create_then_alter_id')
 ----
 2	1	1
 
-# resolve the column_id of b separately to keep the check below simple
+# resolve the column_id of b separately, one metadata scan per statement for the Quack catalog
 statement ok
-SET VARIABLE t_create_then_alter_b_col = (SELECT column_id FROM ducklake_metadata.ducklake_column WHERE table_id = getvariable('t_create_then_alter_id') AND column_name = 'b' AND end_snapshot IS NULL)
+SET VARIABLE t_create_then_alter_b_col = (SELECT column_id FROM ducklake_metadata.ducklake_column WHERE table_id = getvariable('t_create_then_alter_id') AND column_name = 'b')
 
 # the open partition row references column b (the ALTER's choice), not a (the inline create table's).
 query III
 SELECT col.partition_key_index, col.column_id = getvariable('t_create_then_alter_b_col'), col.transform
 FROM ducklake_metadata.ducklake_partition_column col
 JOIN ducklake_metadata.ducklake_partition_info info ON info.partition_id = col.partition_id AND info.table_id = col.table_id
-WHERE col.table_id = getvariable('t_create_then_alter_id') AND info.end_snapshot IS NULL
+WHERE col.table_id = getvariable('t_create_then_alter_id') AND NOT EXISTS (SELECT 1 FROM ducklake_metadata.ducklake_partition_visibility e WHERE e.partition_id = info.partition_id AND e.row_branch_id = info.branch_id AND e.row_snapshot = info.begin_snapshot)
 ----
 0	true	identity
 

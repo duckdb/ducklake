@@ -1,0 +1,553 @@
+# name: test/sql/data_inlining/inlined_flush_statement_shapes.test
+# description: the flush reads the payload bare, deletes it without a companion probe and writes no own end delete unless the transaction deleted inlined rows or the table holds own ends
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+# plain holds inlined rows without ends, ended holds a dead version in its first payload and live rows in both
+statement ok
+CREATE TABLE dl.plain (i INTEGER)
+
+statement ok
+CREATE TABLE dl.ended (i INTEGER)
+
+statement ok
+INSERT INTO dl.plain VALUES (1), (2), (3)
+
+statement ok
+INSERT INTO dl.ended VALUES (1), (2)
+
+statement ok
+ALTER TABLE dl.ended ADD COLUMN j INTEGER
+
+statement ok
+INSERT INTO dl.ended VALUES (3, 30), (4, 40)
+
+statement ok
+DELETE FROM dl.ended WHERE i = 2
+
+query II
+SELECT table_id, table_name FROM meta.ducklake_table ORDER BY table_id
+----
+1	plain
+2	ended
+
+query II
+SELECT table_name, schema_version FROM meta.ducklake_inlined_data_tables ORDER BY table_name
+----
+ducklake_inlined_data_1_1	1
+ducklake_inlined_data_2_2	2
+ducklake_inlined_data_2_3	3
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# a flush of a table without inlined deletes of the transaction and without ends
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'plain')
+
+statement ok
+CALL disable_logging()
+
+# the payload is read bare, the companion is not joined
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_inlined_data_1_1 inlined_data%' AND query LIKE '%NULLS LAST%' AND query NOT LIKE '%ducklake_inlined_data_visibility%'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_inlined_data_1_1 inlined_data%' AND query LIKE '%NULLS LAST%' AND query LIKE '%ducklake_inlined_data_visibility%'
+----
+0
+
+# the commit deletes the payload rows by branch and begin without probing the companion
+query I
+SELECT sum(len(regexp_extract_all(query, 'DELETE FROM [^;]*ducklake_inlined_data_1_1[^;]*'))) FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1
+
+query I
+SELECT sum(len(regexp_extract_all(query, 'DELETE FROM [^;]*ducklake_inlined_data_1_1[^;]*NOT EXISTS[^;]*'))) FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+0
+
+# the table holds no own ends, so no own end delete runs
+query I
+SELECT sum(len(regexp_extract_all(query, 'DELETE FROM [^;]*ducklake_inlined_data_visibility WHERE table_id = 1 AND branch_id = 0 AND row_branch_id = 0[^;]*'))) FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+0
+
+query I
+SELECT i FROM dl.plain ORDER BY i
+----
+1
+2
+3
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# a transaction deletes a row of each payload of ended and flushes both payloads
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.ended WHERE i IN (1, 3)
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'ended')
+
+statement ok
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+# the flush reads both payloads through the companion, which names the live rows the transaction deleted
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_inlined_data_2_% inlined_data%' AND query LIKE '%NULLS LAST%' AND query LIKE '%ducklake_inlined_data_visibility%'
+----
+2
+
+# both payload deletes probe the companion for the ends this commit wrote
+query I
+SELECT sum(len(regexp_extract_all(query, 'DELETE FROM [^;]*ducklake_inlined_data_2_[23][^;]*NOT EXISTS[^;]*'))) FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+2
+
+# the own ends of the table are deleted once although two payload versions are flushed
+query I
+SELECT sum(len(regexp_extract_all(query, 'DELETE FROM [^;]*ducklake_inlined_data_visibility WHERE table_id = 2 AND branch_id = 0 AND row_branch_id = 0 AND snapshot_id <= [0-9]+'))) FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1
+
+# the deleted live rows stay inlined with their ends at the commit snapshot, the dead version went into the file
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+2	0	0	4	0	9
+2	2	0	6	0	9
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_2_2
+----
+1
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_2_3
+----
+1
+
+query II
+SELECT i, j FROM dl.ended ORDER BY i
+----
+4	40
+
+query II
+SELECT i, j FROM dl.ended AT (VERSION => 8) ORDER BY i
+----
+1	NULL
+3	30
+4	40
+
+query II
+SELECT i, j FROM dl.ended AT (VERSION => 7) ORDER BY i
+----
+1	NULL
+3	30
+4	40
+
+query I
+SELECT i FROM dl.ended AT (VERSION => 5) ORDER BY i
+----
+1
+2
+
+query II
+SELECT table_id, delete_count FROM meta.ducklake_delete_file ORDER BY table_id
+----
+2	1
+
+statement ok
+CALL truncate_duckdb_logs()
+
+# files holds a data file with a delete file, the next deletes are inlined and flushed into that file
+statement ok
+CREATE TABLE dl.files (id BIGINT, v INTEGER)
+
+statement ok
+INSERT INTO dl.files SELECT i, i FROM range(0, 20) t(i)
+
+statement ok
+DELETE FROM dl.files WHERE id < 5
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'files')
+
+query II
+SELECT table_id, delete_count FROM meta.ducklake_delete_file WHERE table_id = 3
+----
+3	5
+
+statement ok
+DELETE FROM dl.files WHERE id < 8
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_delete_3
+----
+3
+
+query I
+SELECT list(id ORDER BY id) FROM dl.files
+----
+[8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'files')
+
+statement ok
+CALL disable_logging()
+
+# one deletion read names the plain data file table for the path, not the lineage view of the data files
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_inlined_delete_3%' AND query LIKE '%ducklake_data_file data%'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_inlined_delete_3%' AND query LIKE '%ducklake_data_file f JOIN%'
+----
+0
+
+# the flushed delete file merged the earlier one and the rows are those before the flush
+query I
+SELECT list(id ORDER BY id) FROM dl.files
+----
+[8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+
+query II
+SELECT table_id, delete_count FROM meta.ducklake_delete_file WHERE table_id = 3
+----
+3	8
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_delete_3
+----
+0
+
+query I
+SELECT list(id ORDER BY id) FROM dl.files AT (VERSION => 13)
+----
+[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+
+statement ok
+CALL truncate_duckdb_logs()
+
+# dead holds a committed dead version, the flush outside a transaction deletes no inlined row itself
+statement ok
+CREATE TABLE dl.dead (i INTEGER)
+
+statement ok
+INSERT INTO dl.dead VALUES (1), (2)
+
+statement ok
+DELETE FROM dl.dead WHERE i = 2
+
+query II
+SELECT table_id, table_name FROM meta.ducklake_inlined_data_tables WHERE table_id = 4
+----
+4	ducklake_inlined_data_4_5
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility WHERE table_id = 4
+----
+4	1	0	17	0	18
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'dead')
+
+statement ok
+CALL disable_logging()
+
+# the payload is read bare although the table holds an end
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_inlined_data_4_5 inlined_data%' AND query LIKE '%NULLS LAST%' AND query NOT LIKE '%ducklake_inlined_data_visibility%'
+----
+1
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_inlined_data_4_5 inlined_data%' AND query LIKE '%NULLS LAST%' AND query LIKE '%ducklake_inlined_data_visibility%'
+----
+0
+
+# the payload delete does not probe the companion, this commit wrote no end
+query I
+SELECT sum(len(regexp_extract_all(query, 'DELETE FROM [^;]*ducklake_inlined_data_4_5[^;]*'))) FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1
+
+query I
+SELECT sum(len(regexp_extract_all(query, 'DELETE FROM [^;]*ducklake_inlined_data_4_5[^;]*NOT EXISTS[^;]*'))) FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+0
+
+# the own ends of the table up to the flush snapshot are deleted once
+query I
+SELECT sum(len(regexp_extract_all(query, 'DELETE FROM [^;]*ducklake_inlined_data_visibility WHERE table_id = 4 AND branch_id = 0 AND row_branch_id = 0 AND snapshot_id <= 18;'))) FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1
+
+# the dead version went into the file with its delete, the companion holds no end of the table
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility WHERE table_id = 4
+----
+0
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_4_5
+----
+0
+
+query II
+SELECT table_id, delete_count FROM meta.ducklake_delete_file WHERE table_id = 4
+----
+4	1
+
+query I
+SELECT i FROM dl.dead ORDER BY i
+----
+1
+
+query I
+SELECT i FROM dl.dead AT (VERSION => 17) ORDER BY i
+----
+1
+2
+
+statement ok
+CALL truncate_duckdb_logs()
+
+# mixed holds no end, the flushing transaction deletes one of its rows first
+statement ok
+CREATE TABLE dl.mixed (i INTEGER)
+
+statement ok
+INSERT INTO dl.mixed VALUES (1), (2), (3)
+
+query II
+SELECT table_id, table_name FROM meta.ducklake_inlined_data_tables WHERE table_id = 5
+----
+5	ducklake_inlined_data_5_6
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.mixed WHERE i = 2
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'mixed')
+
+statement ok
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+# the payload is read through the companion, which names the live row the transaction deleted
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%ducklake_inlined_data_5_6 inlined_data%' AND query LIKE '%NULLS LAST%' AND query LIKE '%ducklake_inlined_data_visibility%'
+----
+1
+
+# the payload delete probes the companion for the end this commit wrote
+query I
+SELECT sum(len(regexp_extract_all(query, 'DELETE FROM [^;]*ducklake_inlined_data_5_6[^;]*'))) FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1
+
+query I
+SELECT sum(len(regexp_extract_all(query, 'DELETE FROM [^;]*ducklake_inlined_data_5_6[^;]*NOT EXISTS[^;]*'))) FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1
+
+# the table held no own end at the flush, so no own end delete runs
+query I
+SELECT sum(len(regexp_extract_all(query, 'DELETE FROM [^;]*ducklake_inlined_data_visibility WHERE table_id = 5 AND branch_id = 0 AND row_branch_id = 0[^;]*'))) FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+0
+
+# the deleted row stays inlined with its end at the commit snapshot, the other rows went into the file
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility WHERE table_id = 5
+----
+5	1	0	21	0	22
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_5_6
+----
+1
+
+query I
+SELECT record_count FROM meta.ducklake_data_file WHERE table_id = 5
+----
+2
+
+query I
+SELECT i FROM dl.mixed ORDER BY i
+----
+1
+3
+
+query I
+SELECT i FROM dl.mixed AT (VERSION => 21) ORDER BY i
+----
+1
+2
+3
+
+statement ok
+CALL truncate_duckdb_logs()
+
+# split holds a dead version in its second payload, the flushing transaction deletes every row of the first
+statement ok
+CREATE TABLE dl.split (i INTEGER)
+
+statement ok
+INSERT INTO dl.split VALUES (1), (2)
+
+statement ok
+ALTER TABLE dl.split ADD COLUMN j INTEGER
+
+statement ok
+INSERT INTO dl.split VALUES (3, 30), (4, 40)
+
+statement ok
+DELETE FROM dl.split WHERE i = 4
+
+query II
+SELECT table_name, schema_version FROM meta.ducklake_inlined_data_tables WHERE table_id = 6 ORDER BY table_name
+----
+ducklake_inlined_data_6_7	7
+ducklake_inlined_data_6_8	8
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility WHERE table_id = 6
+----
+6	3	0	26	0	27
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.split WHERE i IN (1, 2)
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'split')
+
+statement ok
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+# the first payload has no row left to flush and is skipped, the second is flushed with its dead version
+query I
+SELECT sum(len(regexp_extract_all(query, 'DELETE FROM [^;]*ducklake_inlined_data_6_7[^;]*'))) FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+0
+
+query I
+SELECT sum(len(regexp_extract_all(query, 'DELETE FROM [^;]*ducklake_inlined_data_6_8[^;]*'))) FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1
+
+query I
+SELECT sum(len(regexp_extract_all(query, 'DELETE FROM [^;]*ducklake_inlined_data_6_8[^;]*NOT EXISTS[^;]*'))) FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1
+
+# the own ends of the table are deleted once, after the row delete of the payload that was flushed
+query I
+SELECT sum(len(regexp_extract_all(query, 'DELETE FROM [^;]*ducklake_inlined_data_visibility WHERE table_id = 6 AND branch_id = 0 AND row_branch_id = 0 AND snapshot_id <= 27;'))) FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1
+
+# the ends this commit wrote on the rows of the first payload stay, the dead version of the second went into the file
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility WHERE table_id = 6 ORDER BY ALL
+----
+6	0	0	24	0	28
+6	1	0	24	0	28
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_6_7
+----
+2
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_6_8
+----
+0
+
+query I
+SELECT record_count FROM meta.ducklake_data_file WHERE table_id = 6
+----
+2
+
+query I
+SELECT delete_count FROM meta.ducklake_delete_file WHERE table_id = 6
+----
+1
+
+query II
+SELECT i, j FROM dl.split ORDER BY i
+----
+3	30
+
+query II
+SELECT i, j FROM dl.split AT (VERSION => 27) ORDER BY i
+----
+1	NULL
+2	NULL
+3	30
+
+query II
+SELECT i, j FROM dl.split AT (VERSION => 26) ORDER BY i
+----
+1	NULL
+2	NULL
+3	30
+4	40
+
+statement ok
+DETACH dl

@@ -1,0 +1,92 @@
+# name: test/sql/quack/branch_read_during_main_flush.test
+# description: A branch scan on a Quack catalog returns the inlined rows once while main flushes them into a file the branch inherits
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION
+
+require quack
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+SET threads = 1
+
+statement ok
+CREATE TABLE dl.flush_0 (i INTEGER)
+
+statement ok
+CREATE TABLE dl.flush_1 (i INTEGER)
+
+statement ok
+INSERT INTO dl.flush_1 SELECT range FROM range(3000000)
+
+statement ok
+INSERT INTO dl.flush_1 VALUES (-1), (-2)
+
+# dev forks from main after the inlined insert and holds a snapshot of its own
+statement ok
+SET VARIABLE fork = (SELECT MAX(snapshot_id) FROM meta.ducklake_snapshot WHERE branch_id = 0)
+
+statement ok
+INSERT INTO meta.ducklake_branch SELECT 1, 'dev', 0, getvariable('fork')
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT getvariable('fork') + 1, NOW(), schema_version, 1099511627776, 1099511627776, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = getvariable('fork') AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes SELECT getvariable('fork') + 1, NULL, NULL, NULL, NULL, 1
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query II
+SELECT count(*), count(*) FILTER (WHERE i < 0) FROM dev.flush_1
+----
+3000002	2
+
+# the first connection scans the file of flush_1 on dev for seconds while the second flushes the inlined rows on main
+statement ok
+CREATE VIEW step_0 AS SELECT count(*) AS c FROM dev.flush_1 WHERE md5(md5(md5(md5(i::VARCHAR)))) <> 'x'
+
+# the second connection waits, then flushes the inlined rows of flush_1 while that scan runs
+statement ok
+CREATE VIEW step_1 AS SELECT 3000002 + count(*) - 2000000 AS c FROM range(2000000) WHERE md5(md5(range::VARCHAR)) <> 'x'
+
+concurrentloop t 0 2
+
+statement ok
+SELECT CASE WHEN c = 3000002 THEN true ELSE error('scan read ' || c || ' rows') END FROM step_{t}
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'flush_{t}')
+
+endloop
+
+# the flushed file is main's with an add event at the insert, which dev reads through its fork
+query II
+SELECT count(*), count(*) FILTER (WHERE i < 0) FROM dev.flush_1
+----
+3000002	2
+
+query II
+SELECT count(*), count(*) FILTER (WHERE i < 0) FROM dl.flush_1
+----
+3000002	2
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_2_2
+----
+0
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH dl

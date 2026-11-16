@@ -1,0 +1,189 @@
+# name: test/sql/branches/branch_flush_rehomes_branch_ends.test
+# description: a flush of main rehomes the ends other branches wrote on the moved inlined rows as deletion rows of those branches on the written file
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+CREATE TABLE dl.u (i INTEGER)
+
+query II
+SELECT table_id, table_name FROM meta.ducklake_table ORDER BY table_id
+----
+1	t
+2	u
+
+# the rows of both tables are born in one commit at 3
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+statement ok
+INSERT INTO dl.u VALUES (10), (20)
+
+statement ok
+COMMIT
+
+# dev forks from main at 3 and holds the snapshot 4
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 3)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 4, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot WHERE snapshot_id = 3 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (4, NULL, NULL, NULL, NULL, 1)
+
+# dev ends the second row of t and the first row of u at its 4
+statement ok
+INSERT INTO meta.ducklake_inlined_data_visibility VALUES (1, 1, 0, 3, 1, 4), (2, 0, 0, 3, 1, 4)
+
+# main deletes the third row of t at its 4
+statement ok
+DELETE FROM dl.t WHERE i = 3
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+
+query I
+SELECT i FROM dev.t ORDER BY i
+----
+1
+3
+
+query I
+SELECT i FROM dev.u ORDER BY i
+----
+20
+
+# the flushing transaction itself deletes the row of u that dev ended, so that row stays inlined
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM dl.u WHERE i = 10
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+COMMIT
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+
+# the end of dev on the second row of t is now a deletion row of dev on the flushed file, dated at its own 4
+query III
+SELECT row_id, begin_snapshot, branch_id FROM meta.ducklake_inlined_delete_1
+----
+1	4	1
+
+statement ok
+SET VARIABLE file_of_t = (SELECT data_file_id FROM meta.ducklake_data_file WHERE table_id = 1)
+
+query I
+SELECT file_id = getvariable('file_of_t') FROM meta.ducklake_inlined_delete_1
+----
+true
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1
+----
+0
+
+# the companion holds no end of t, the deleted row of u keeps the end of dev next to the end of main at its commit 5
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+2	0	0	3	0	5
+2	0	0	3	1	4
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_2_2
+----
+1
+
+query I
+SELECT i FROM dev.t ORDER BY i
+----
+1
+3
+
+query I
+SELECT i FROM dev.t AT (VERSION => 3) ORDER BY i
+----
+1
+2
+3
+
+query I
+SELECT i FROM dev.u ORDER BY i
+----
+20
+
+query I
+SELECT i FROM dl.u ORDER BY i
+----
+20
+
+# the deletions feed of dev reports the rehomed deletion at its own 4
+query III
+SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('dev', 'main', 't', 4, 4) ORDER BY rowid
+----
+1	4	2
+
+# a nested branch forked from dev at 4 inherits the rehomed deletion at its cap
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (2, 'nested', 1, 4)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, branch_id) SELECT 5, NOW(), schema_version, next_catalog_id, next_file_id, 2 FROM meta.ducklake_snapshot WHERE snapshot_id = 3 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (5, NULL, NULL, NULL, NULL, 2)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS nested (METADATA_CATALOG 'meta', BRANCH 'nested')
+
+query I
+SELECT i FROM nested.t ORDER BY i
+----
+1
+3
+
+query I
+SELECT i FROM nested.u ORDER BY i
+----
+20
+
+statement ok
+DETACH nested
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH dl

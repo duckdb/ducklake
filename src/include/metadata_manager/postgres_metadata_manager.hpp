@@ -42,9 +42,15 @@ public:
 
 	string GetColumnTypeInternal(const LogicalType &type) override;
 	string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const override;
+	//! The server runs the statements of the load, the list aggregates travel as json text
+	DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot) override;
 	bool InlinedDeletionTableExists(const Identifier &table_name) override;
+	//! The scanner lists the tables it cached, the server lists the ones a commit created since
+	bool ProbeMetadataColumns() override;
 	void MigrateInlinedDataTypes() override;
-	bool IsRetryableCommitError(const string &message) const override;
+	bool IsRetryableCommitError(const ErrorData &error) const override;
+	//! The error without the batch, the error object variant of the base stays visible beside it
+	using DuckLakeMetadataManager::CommitErrorWithoutQuery;
 	string CommitErrorWithoutQuery(const string &message) const override;
 	string ConfigOptionLockSql() const override;
 
@@ -59,6 +65,7 @@ public:
 
 protected:
 	string GetLatestSnapshotQuery() const override;
+	string ExpiryCompanionProbeQuery() const override;
 	string SnapshotTimeSql() const override {
 		// the server's clock, as NOW() is the start of the metadata transaction
 		return "clock_timestamp()";

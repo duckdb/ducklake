@@ -150,7 +150,7 @@ statement ok
 COMMIT
 
 query II
-SELECT s.min_value::DOUBLE, s.max_value::DOUBLE FROM __ducklake_metadata_dl.ducklake_table_column_stats s JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id) WHERE t.table_name = 'j' AND t.end_snapshot IS NULL
+SELECT s.min_value::DOUBLE, s.max_value::DOUBLE FROM __ducklake_metadata_dl.ducklake_table_column_stats s JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id) WHERE t.table_name = 'j'
 ----
 -0.10000000149011612	0.10000000149011612
 
@@ -189,7 +189,7 @@ SELECT count(*) FROM dl.k WHERE v > (SELECT max(v) FROM dl.k)
 0
 
 query II
-SELECT s.min_value, s.max_value FROM __ducklake_metadata_dl.ducklake_table_column_stats s JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id) WHERE t.table_name = 'k' AND t.end_snapshot IS NULL
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_dl.ducklake_table_column_stats s JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id) WHERE t.table_name = 'k'
 ----
 NULL	NULL
 
@@ -218,7 +218,7 @@ SELECT map_extract_value(m, 1) FROM dl.p
 0.10000000149011612
 
 query II
-SELECT s.min_value, s.max_value FROM __ducklake_metadata_dl.ducklake_table_column_stats s JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id) WHERE t.table_name = 'p' AND t.end_snapshot IS NULL AND s.column_id = 3
+SELECT s.min_value, s.max_value FROM __ducklake_metadata_dl.ducklake_table_column_stats s JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id) WHERE t.table_name = 'p' AND s.column_id = 3
 ----
 NULL	NULL
 
@@ -357,7 +357,7 @@ SELECT count(*) FROM dl.d WHERE b = 3.14
 2
 
 query III
-SELECT s.column_id, s.min_value::DOUBLE, s.max_value::DOUBLE FROM __ducklake_metadata_dl.ducklake_table_column_stats s JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id) WHERE t.table_name = 'd' AND t.end_snapshot IS NULL AND s.column_id > 1 ORDER BY s.column_id
+SELECT s.column_id, s.min_value::DOUBLE, s.max_value::DOUBLE FROM __ducklake_metadata_dl.ducklake_table_column_stats s JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id) WHERE t.table_name = 'd' AND s.column_id > 1 ORDER BY s.column_id
 ----
 2	NULL	NULL
 3	0.5	0.5

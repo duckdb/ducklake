@@ -35,9 +35,10 @@ statement ok
 DELETE FROM ducklake.events WHERE ts = TIMESTAMP '2026-01-03'
 
 # The current snapshot must honor the partial delete file.
+# A different bound keeps the logged listing below out of the cache.
 query T
 SELECT ts FROM ducklake.events
-WHERE ts >= TIMESTAMP '2026-01-02' AND bucket_key = 'bucket'
+WHERE ts >= TIMESTAMP '2026-01-01' AND bucket_key = 'bucket'
 ORDER BY ts DESC LIMIT 1
 ----
 2026-01-02 00:00:00
@@ -221,6 +222,10 @@ EXPLAIN ANALYZE SELECT p.score FROM runtime_probe p JOIN runtime_build b ON p.k 
 ORDER BY p.score DESC LIMIT 1
 ----
 analyzed_plan	<REGEX>:(?s).*PRF.*
+
+# The insert moves the head, so the logged read below cannot reuse the listing the explain cached.
+statement ok
+INSERT INTO runtime_probe VALUES (300, 0)
 
 statement ok
 CALL enable_logging('DuckLakeMetadata')

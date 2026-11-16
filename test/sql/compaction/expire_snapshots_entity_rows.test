@@ -1,0 +1,98 @@
+# name: test/sql/compaction/expire_snapshots_entity_rows.test
+# description: expiring the snapshots of a dropped table and a dropped macro removes their column, spec and macro rows with their ends
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/ducklake_expire_snapshots_entity_rows_files', METADATA_CATALOG 'metadata')
+
+# snapshot 1
+statement ok
+CREATE TABLE ducklake.kept(i INTEGER, j INTEGER)
+
+# snapshot 2
+statement ok
+CREATE MACRO ducklake.gone(x) AS x + 1
+
+# snapshot 3
+statement ok
+CREATE TABLE ducklake.dropped(a INTEGER, b INTEGER)
+
+# snapshot 4
+statement ok
+ALTER TABLE ducklake.dropped SET PARTITIONED BY (a)
+
+# snapshot 5
+statement ok
+ALTER TABLE ducklake.dropped SET SORTED BY (b)
+
+# snapshot 6, the rename ends the row of j and adds the row of j2
+statement ok
+ALTER TABLE ducklake.kept RENAME COLUMN j TO j2
+
+# snapshot 7
+statement ok
+DROP MACRO ducklake.gone
+
+# snapshot 8, the drop ends the table, its columns and its specs
+statement ok
+DROP TABLE ducklake.dropped
+
+query IIII
+SELECT (SELECT COUNT(*) FROM metadata.ducklake_column_visibility), (SELECT COUNT(*) FROM metadata.ducklake_partition_visibility), (SELECT COUNT(*) FROM metadata.ducklake_sort_visibility), (SELECT COUNT(*) FROM metadata.ducklake_macro_visibility)
+----
+3	1	1	1
+
+# no snapshot of main is left between the birth and the end of the dropped rows
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [2, 3, 4, 5, 6, 7])
+
+query I
+SELECT table_name FROM metadata.ducklake_table
+----
+kept
+
+query I
+SELECT list(column_name ORDER BY column_id) FROM metadata.ducklake_column
+----
+[i, j, j2]
+
+query IIII
+SELECT (SELECT COUNT(*) FROM metadata.ducklake_partition_info), (SELECT COUNT(*) FROM metadata.ducklake_partition_column), (SELECT COUNT(*) FROM metadata.ducklake_sort_info), (SELECT COUNT(*) FROM metadata.ducklake_sort_expression)
+----
+0	0	0	0
+
+query III
+SELECT (SELECT COUNT(*) FROM metadata.ducklake_macro), (SELECT COUNT(*) FROM metadata.ducklake_macro_impl), (SELECT COUNT(*) FROM metadata.ducklake_macro_parameters)
+----
+0	0	0
+
+# the old column of the live table keeps its end, which snapshot 1 still reads, the rest of the ends went with their rows
+query III
+SELECT c.column_name, e.row_snapshot, e.snapshot_id FROM metadata.ducklake_column_visibility e JOIN metadata.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id AND c.branch_id = e.row_branch_id AND c.begin_snapshot = e.row_snapshot
+----
+j	1	6
+
+query III
+SELECT (SELECT COUNT(*) FROM metadata.ducklake_partition_visibility), (SELECT COUNT(*) FROM metadata.ducklake_sort_visibility), (SELECT COUNT(*) FROM metadata.ducklake_macro_visibility)
+----
+0	0	0
+
+query I
+SELECT column_name FROM (DESCRIBE ducklake.kept)
+----
+i
+j2
+
+query I
+SELECT column_name FROM (DESCRIBE FROM ducklake.kept AT (VERSION => 1))
+----
+i
+j

@@ -35,15 +35,16 @@ WHERE table_name = 'v' AND column_name = 'col_a' AND schema_name = 'main' AND da
 statement ok
 COMMENT ON COLUMN ducklake.v.COL_A IS 'upper-case update'
 
-query I
-SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_view_column_tag WHERE end_snapshot IS NULL
-----
-1
-
+# the update ended the first row, the second has no end
 query II
-SELECT column_name, value FROM __ducklake_metadata_ducklake.ducklake_view_column_tag WHERE end_snapshot IS NULL
+SELECT column_name, value FROM __ducklake_metadata_ducklake.ducklake_view_column_tag t WHERE NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_view_column_tag_visibility e WHERE e.view_id = t.view_id AND e.column_name = t.column_name AND e.key = t.key AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)
 ----
 col_a	upper-case update
+
+query II
+SELECT (SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_view_column_tag), (SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_view_column_tag_visibility)
+----
+2	1
 
 statement ok
 CREATE VIEW ducklake.va(a1) AS SELECT 1 AS x

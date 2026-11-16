@@ -678,7 +678,7 @@ frank	6
 query I
 SELECT transform FROM ducklake_metadata.ducklake_partition_info part
 JOIN ducklake_metadata.ducklake_partition_column part_col USING (partition_id, table_id)
-WHERE part.end_snapshot IS NULL
+WHERE NOT EXISTS (SELECT 1 FROM ducklake_metadata.ducklake_partition_visibility e WHERE e.partition_id = part.partition_id AND e.row_branch_id = part.branch_id AND e.row_snapshot = part.begin_snapshot)
 AND part.table_id = (SELECT table_id FROM ducklake_metadata.ducklake_table WHERE table_name = 'bucket_repart_tbl')
 ----
 bucket(8)

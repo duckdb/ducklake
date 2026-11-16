@@ -29,7 +29,7 @@ CREATE MACRO test.xt(a,_name) as TABLE SELECT * FROM test.test_tbl WHERE(id>=a o
 
 # Check Macro Tables
 query IIIII
-FROM __ducklake_metadata_ducklake.ducklake_macro;
+SELECT m.schema_id, m.macro_id, m.macro_name, m.begin_snapshot, e.snapshot_id FROM __ducklake_metadata_ducklake.ducklake_macro m LEFT JOIN __ducklake_metadata_ducklake.ducklake_macro_visibility e ON e.macro_id = m.macro_id AND e.row_branch_id = m.branch_id AND e.row_snapshot = m.begin_snapshot ORDER BY m.macro_id;
 ----
 1	2	simple	2	NULL
 1	4	xt	4	NULL
@@ -38,8 +38,9 @@ statement ok
 DROP SCHEMA test CASCADE;
 
 # Check Macro Tables
+# dropping the schema ends the macro rows
 query IIIII
-FROM __ducklake_metadata_ducklake.ducklake_macro;
+SELECT m.schema_id, m.macro_id, m.macro_name, m.begin_snapshot, e.snapshot_id FROM __ducklake_metadata_ducklake.ducklake_macro m LEFT JOIN __ducklake_metadata_ducklake.ducklake_macro_visibility e ON e.macro_id = m.macro_id AND e.row_branch_id = m.branch_id AND e.row_snapshot = m.begin_snapshot ORDER BY m.macro_id;
 ----
 1	2	simple	2	5
 1	4	xt	4	5

@@ -1,0 +1,59 @@
+# name: test/sql/migration/v11_to_v20_dev1_missing_macro_table.test
+# description: a 1.1 catalog without the macro table migrates the tables it has, the macro reader reports the gap
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, j INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 2)
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN j
+
+# a catalog written by another implementation can lack the macro table
+statement ok
+DROP TABLE meta.ducklake_macro
+
+statement ok
+DETACH dl
+
+# the migration heals the tables it finds and emits nothing for the missing one
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+# the macro reader reports the missing table
+statement error
+SELECT * FROM dl.t
+----
+ducklake_macro
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
+----
+2.0-dev1
+
+# the dropped column ends in the companion and its end column is gone
+query II
+SELECT c.column_name, e.snapshot_id FROM meta.ducklake_column_visibility e JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id AND c.branch_id = e.row_branch_id AND c.begin_snapshot = e.row_snapshot
+----
+j	3
+
+query I
+SELECT column_name FROM (DESCRIBE meta.ducklake_column) WHERE column_name IN ('branch_id', 'end_snapshot')
+----
+branch_id
+
+statement ok
+DETACH dl

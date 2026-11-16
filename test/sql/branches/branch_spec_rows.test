@@ -1,0 +1,102 @@
+# name: test/sql/branches/branch_spec_rows.test
+# description: the partition and sort specs end in companion tables, a branch attached at the fork keeps the specs of the fork
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, j INTEGER)
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (bucket(4, i))
+
+statement ok
+ALTER TABLE dl.t SET SORTED BY (j)
+
+statement ok
+INSERT INTO dl.t SELECT i, i FROM range(100) t(i)
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_data_file
+----
+4
+
+# dev forks after the insert
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 4)
+
+# main drops the partitioning and replaces the sort after the fork
+statement ok
+ALTER TABLE dl.t RESET PARTITIONED BY
+
+statement ok
+ALTER TABLE dl.t SET SORTED BY (i DESC)
+
+# the replaced specs are ended, the new ones are live
+query III
+SELECT p.begin_snapshot, p.branch_id, (SELECT e.snapshot_id FROM meta.ducklake_partition_visibility e WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot) FROM meta.ducklake_partition_info p ORDER BY p.begin_snapshot
+----
+2	0	5
+5	0	NULL
+
+query III
+SELECT s.begin_snapshot, s.branch_id, (SELECT e.snapshot_id FROM meta.ducklake_sort_visibility e WHERE e.sort_id = s.sort_id AND e.row_branch_id = s.branch_id AND e.row_snapshot = s.begin_snapshot) FROM meta.ducklake_sort_info s ORDER BY s.begin_snapshot
+----
+3	0	6
+6	0	NULL
+
+query I
+SELECT expression FROM meta.ducklake_sort_expression se JOIN meta.ducklake_sort_info s USING (sort_id) WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_sort_visibility e WHERE e.sort_id = s.sort_id AND e.row_branch_id = s.branch_id AND e.row_snapshot = s.begin_snapshot)
+----
+i
+
+# without a partition spec main prunes no bucket file, only the file bounds skip some
+query II
+EXPLAIN ANALYZE SELECT * FROM dl.t WHERE i = 5
+----
+analyzed_plan	<REGEX>:.*Total Files Read: [234].*
+
+statement ok
+DETACH dl
+
+# the branch forked before the reset and prunes with the bucket spec of the fork
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+4
+
+query II
+SELECT i, j FROM dl.t WHERE i = 5
+----
+5	5
+
+query II
+EXPLAIN ANALYZE SELECT * FROM dl.t WHERE i = 5
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+SELECT COUNT(*) FROM dl.t
+----
+100
+
+# the view of dev caps main at the fork, so the sort of the fork is live there and the replacement is beyond it
+query I
+SELECT se.expression FROM meta.ducklake_sort_expression se JOIN meta.ducklake_sort_info s USING (sort_id) WHERE s.branch_id = 0 AND s.begin_snapshot <= 4 AND NOT EXISTS (SELECT 1 FROM meta.ducklake_sort_visibility e WHERE e.sort_id = s.sort_id AND e.row_branch_id = s.branch_id AND e.row_snapshot = s.begin_snapshot AND e.branch_id = 0 AND e.snapshot_id <= 4)
+----
+j
+
+statement ok
+DETACH dl

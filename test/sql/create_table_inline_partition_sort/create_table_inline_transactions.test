@@ -253,10 +253,10 @@ COMMIT
 statement ok
 SET VARIABLE chain_winner_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'chain_winner')
 
-# two partition_info rows, the closed CREATE spec (begin = end) and the open ALTER spec
+# two partition_info rows, the closed CREATE spec (ended in its own snapshot) and the open ALTER spec
 query III
-SELECT count(*), count(*) FILTER (WHERE end_snapshot IS NULL), count(*) FILTER (WHERE begin_snapshot = end_snapshot)
-FROM ducklake_meta.ducklake_partition_info
+SELECT count(*), count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM ducklake_meta.ducklake_partition_visibility e WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot)), count(*) FILTER (WHERE EXISTS (SELECT 1 FROM ducklake_meta.ducklake_partition_visibility e WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot AND e.snapshot_id = p.begin_snapshot))
+FROM ducklake_meta.ducklake_partition_info p
 WHERE table_id = getvariable('chain_winner_id')
 ----
 2	1	1

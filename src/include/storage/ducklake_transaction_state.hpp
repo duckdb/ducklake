@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "common/ducklake_branch_chain.hpp"
 #include "storage/ducklake_stats.hpp"
 #include "storage/ducklake_transaction.hpp"
 
@@ -34,6 +35,7 @@ struct DuckLakeCommitContext {
 	//! Returns the latest snapshot for the first commit attempt.
 	std::function<DuckLakeSnapshot()> get_snapshot;
 	//! What the expiries of the transaction delete in the commit attempt, read after the latest snapshot
+	//! whose id the attempt passes
 	std::function<DuckLakeExpiry(idx_t, idx_t)> get_expired_snapshots = [](idx_t, idx_t) {
 		return DuckLakeExpiry();
 	};
@@ -51,15 +53,15 @@ struct DuckLakeCommitContext {
 	//! Executes the batched snapshot/changes SQL against the metadata DB.
 	std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string &)> execute_commit_batch;
 	//! Classifies metadata-catalog errors that are safe to retry.
-	std::function<bool(const string &)> is_retryable_metadata_error = [](const string &) {
+	std::function<bool(const ErrorData &)> is_retryable_metadata_error = [](const ErrorData &) {
 		return false;
 	};
 	//! The commit error without the failed query text that it repeats.
-	std::function<string(const string &)> commit_error_without_query = [](const string &message) {
-		return message;
+	std::function<string(const ErrorData &)> commit_error_without_query = [](const ErrorData &error) {
+		return error.RawMessage();
 	};
 	//! Advice for a commit error that is not retried.
-	std::function<string(const string &)> commit_error_hint = [](const string &) {
+	std::function<string(const ErrorData &)> commit_error_hint = [](const ErrorData &) {
 		return string();
 	};
 	//! Optional hooks below default to a no-op/constant; callers override only the ones they need.
@@ -180,6 +182,10 @@ struct DuckLakeCommitContext {
 	bool skip_drop_empty_inlined = false;
 	//! Whether the metadata schema has the >= 1.1 additions.
 	bool supports_v1_1_metadata = false;
+	//! Whether the metadata schema has the 2.0 layout, visibility rows instead of inline ranges.
+	bool supports_v2_0_metadata = false;
+	//! The chain of the branch the commit continues, main on the server side
+	DuckLakeBranchChain commit_chain = DuckLakeBranchChain::Main();
 	//! Column names of the inlined data tables under this catalog version.
 	DuckLakeInlinedColNames InlinedColNames() const {
 		return DuckLakeInlinedColNames(supports_v1_1_metadata);
@@ -215,10 +221,11 @@ public:
 	                        const DuckLakeCommitContext &context) const;
 
 	static SnapshotDeletedFromFiles
-	GetFilesDeletedOrDroppedAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor);
+	GetFilesDeletedOrDroppedAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                                      bool branch_aware, const string &chain_predicate);
 
 	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes,
-	                            const DuckLakeSnapshotCommit &commit_info) const;
+	                            const DuckLakeSnapshotCommit &commit_info, bool write_branch_id) const;
 
 	string CommitChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &transaction_changes,
 	                     optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats, const DuckLakeCommitContext &context,

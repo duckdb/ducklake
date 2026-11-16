@@ -1,0 +1,80 @@
+# name: test/sql/rest/rest_serve_branch_refused.test
+# description: Serving a branch of a DuckLake through REST is refused, main of the same DuckLake is served
+# group: [rest]
+
+require ducklake
+
+require parquet
+
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok rest_db:rest_server_con
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok rest_db:rest_server_con
+INSERT INTO dl.t VALUES (1)
+
+# dev forks at the insert
+statement ok rest_db:rest_server_con
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+statement ok rest_db:rest_server_con
+DETACH dl
+
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dev (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+# a catalog attached at a branch is not served
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('dev')
+----
+Serving a branch of a DuckLake through REST is not supported yet
+
+statement ok rest_db:rest_server_con
+DETACH dev
+
+# nor is a branch the server attaches in a database of its own
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db', attach_options := 'BRANCH ''dev''')
+----
+Serving a branch of a DuckLake through REST is not supported yet
+
+# main of the same DuckLake is served
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+
+statement ok rest_db:rest_server_con
+SET VARIABLE rest_listen_uri = (SELECT listen_uri FROM ducklake_rest_serve('dl'))
+
+set variable rest_server <variable:rest_server_con:rest_listen_uri>
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS client
+
+query I
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM ducklake_snapshots('client')
+----
+[0, 1, 2]
+
+query I
+SELECT i FROM client.t
+----
+1
+
+# a served catalog swapped for an attach at the branch is refused by every request
+statement ok rest_db:rest_server_con
+DETACH dl
+
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query II
+SELECT status, response::VARCHAR LIKE '%Serving a branch of a DuckLake through REST is not supported yet%' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', '')
+----
+501	true
+
+statement ok
+DETACH client
+
+include test/template/rest_teardown.test_template

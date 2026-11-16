@@ -1,0 +1,140 @@
+# name: test/sql/branches/branch_tag_rows.test
+# description: the version rows of tags, column tags and view column tags end in companion tables, a branch attached at the fork keeps the tags of the fork
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, j INTEGER, k INTEGER)
+
+statement ok
+COMMENT ON TABLE dl.t IS 'first'
+
+statement ok
+COMMENT ON COLUMN dl.t.j IS 'col j'
+
+statement ok
+COMMENT ON COLUMN dl.t.k IS 'col k'
+
+statement ok
+CREATE VIEW dl.v AS SELECT 1 AS x
+
+statement ok
+COMMENT ON VIEW dl.v IS 'view first'
+
+statement ok
+COMMENT ON COLUMN dl.v.x IS 'view col first'
+
+# dev forks here, every tag so far is born on main
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 7)
+
+# main changes the table comment, clears the comment of j, drops k and replaces the view
+statement ok
+COMMENT ON TABLE dl.t IS 'second'
+
+statement ok
+COMMENT ON COLUMN dl.t.j IS NULL
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN k
+
+statement ok
+CREATE OR REPLACE VIEW dl.v AS SELECT 2 AS x
+
+# a changed value writes a new version row and ends the old one, a cleared comment is a row with a NULL value
+query IIIIII
+SELECT object_id, key, value, begin_snapshot, branch_id, (SELECT e.snapshot_id FROM meta.ducklake_tag_visibility e WHERE e.object_id = t.object_id AND e.key = t.key AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot) FROM meta.ducklake_tag t ORDER BY begin_snapshot
+----
+1	comment	first	2	0	8
+2	comment	view first	6	0	11
+1	comment	second	8	0	NULL
+
+query IIIIII
+SELECT column_id, key, value, begin_snapshot, branch_id, (SELECT e.snapshot_id FROM meta.ducklake_column_tag_visibility e WHERE e.table_id = t.table_id AND e.column_id = t.column_id AND e.key = t.key AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot) FROM meta.ducklake_column_tag t ORDER BY begin_snapshot
+----
+2	comment	col j	3	0	9
+3	comment	col k	4	0	10
+2	comment	NULL	9	0	NULL
+
+# the replaced view is a new view, the tags of the old one end with it
+query IIIIII
+SELECT view_id, column_name, value, begin_snapshot, branch_id, (SELECT e.snapshot_id FROM meta.ducklake_view_column_tag_visibility e WHERE e.view_id = t.view_id AND e.column_name = t.column_name AND e.key = t.key AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot) FROM meta.ducklake_view_column_tag t
+----
+2	x	view col first	7	0	11
+
+# an end names the row by its birth and carries the branch that ended it
+query IIII
+SELECT e.branch_id, t.value, e.row_snapshot, e.snapshot_id FROM meta.ducklake_tag_visibility e JOIN meta.ducklake_tag t ON t.object_id = e.object_id AND t.key = e.key AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot ORDER BY e.snapshot_id
+----
+0	first	2	8
+0	view first	6	11
+
+# one end per row per branch
+statement error
+INSERT INTO meta.ducklake_tag_visibility SELECT * FROM meta.ducklake_tag_visibility WHERE snapshot_id = 8
+----
+constraint
+
+# main reads the new values
+query I
+SELECT comment FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 't'
+----
+second
+
+query II
+SELECT column_name, comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 't' ORDER BY column_index
+----
+i	NULL
+j	NULL
+
+query II
+SELECT comment, (SELECT comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 'v') FROM duckdb_views() WHERE database_name = 'dl' AND view_name = 'v'
+----
+NULL	NULL
+
+query I
+SELECT x FROM dl.v
+----
+2
+
+statement ok
+DETACH dl
+
+# the branch reads the tags of the fork
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT comment FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 't'
+----
+first
+
+query II
+SELECT column_name, comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 't' ORDER BY column_index
+----
+i	NULL
+j	col j
+k	col k
+
+query II
+SELECT comment, (SELECT comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 'v') FROM duckdb_views() WHERE database_name = 'dl' AND view_name = 'v'
+----
+view first	view col first
+
+query I
+SELECT x FROM dl.v
+----
+1
+
+statement ok
+DETACH dl

@@ -19,7 +19,7 @@ class DuckLakeSchemaEntry;
 struct CreateTableInfo;
 struct CreateSchemaInfo;
 
-//! Communicates with a DuckLake REST server instead of a metadata database
+//! Reads the lineage of the served catalog through a DuckLake REST server
 class RESTMetadataManager : public DuckLakeMetadataManager {
 public:
 	explicit RESTMetadataManager(DuckLakeTransaction &transaction);
@@ -80,7 +80,7 @@ public:
 	unique_ptr<QueryResult> ReadInlinedData(DuckLakeSnapshot snapshot, const Identifier &inlined_table_name,
 	                                        const vector<string> &columns_to_read) override;
 	vector<DuckLakeSnapshotInfo> GetAllSnapshots(const DuckLakeSnapshotFilter &filter = {}) override;
-	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) override;
+	void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots, const DuckLakeSnapshot &head) override;
 	vector<DuckLakeSnapshotTagInfo> GetSnapshotTags(bool with_snapshot_time = true) override;
 	vector<DuckLakeFileForCleanup> GetOldFilesForCleanup(const string &older_than) override;
 	unique_ptr<QueryResult> ReadMetadataTable(const string &table_name) override;

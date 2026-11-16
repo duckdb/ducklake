@@ -72,6 +72,6 @@ SELECT id, n FROM t ORDER BY id
 2	NULL
 
 query I
-SELECT COUNT(*) FROM ducklake_null_gate_meta.ducklake_column WHERE column_type = 'null' AND end_snapshot IS NULL
+SELECT COUNT(*) FROM ducklake_null_gate_meta.ducklake_column c WHERE column_type = 'null' AND NOT EXISTS (SELECT 1 FROM ducklake_null_gate_meta.ducklake_column_visibility e WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id AND e.row_snapshot = c.begin_snapshot)
 ----
 2

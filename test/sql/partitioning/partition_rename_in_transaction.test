@@ -43,7 +43,7 @@ SELECT table_name, column_name, partition_key_index, transform
 FROM ducklake_metadata.ducklake_table
 JOIN ducklake_metadata.ducklake_column USING (table_id)
 JOIN ducklake_metadata.ducklake_partition_column USING (column_id)
-WHERE ducklake_table.end_snapshot IS NULL
+WHERE NOT EXISTS (SELECT 1 FROM ducklake_metadata.ducklake_table_visibility e WHERE e.table_id = ducklake_table.table_id AND e.row_branch_id = ducklake_table.branch_id AND e.row_snapshot = ducklake_table.begin_snapshot)
 ----
 auto_probe_after	dt	0	identity
 

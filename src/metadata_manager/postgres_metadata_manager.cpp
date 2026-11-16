@@ -376,7 +376,8 @@ string PostgresMetadataManager::CommitErrorWithoutQuery(const string &message) c
 	return server_error_start.IsValid() ? message.substr(server_error_start.GetIndex()) : message;
 }
 
-bool PostgresMetadataManager::IsRetryableCommitError(const string &message) const {
+bool PostgresMetadataManager::IsRetryableCommitError(const ErrorData &error) const {
+	auto &message = error.RawMessage();
 	auto batch_server_error_start = BatchServerErrorStart(message);
 	// for another failed query, the server error is guessed to follow the last quote and colon
 	auto server_error_start =
@@ -397,21 +398,21 @@ bool PostgresMetadataManager::IsRetryableCommitError(const string &message) cons
 }
 
 bool PostgresMetadataManager::InlinedDeletionTableExists(const Identifier &table_name) {
-	auto &catalog = transaction.GetCatalog();
+	// a probe per table costs a round trip each, so one listing of the schema serves every table of the snapshot
 	auto remote_query =
-	    StringUtil::Format("SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = %s AND tablename = %s LIMIT 1",
-	                       SQLString::ToString(catalog.MetadataSchemaName().GetIdentifierName()),
-	                       SQLString::ToString(table_name.GetIdentifierName()));
-	auto query =
-	    StringUtil::Format("SELECT 1 FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
-	                       SQLString::ToString(remote_query));
-	auto result = DuckLakeMetadataManager::Query(query);
-	result->ThrowIfError("Failed to probe for DuckLake inlined-deletion table: ");
-	return result->Fetch() != nullptr;
+	    StringUtil::Format("SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = %s "
+	                       "AND tablename LIKE 'ducklake^_inlined^_delete^_%%' ESCAPE '^'",
+	                       SQLString::ToString(transaction.GetCatalog().MetadataSchemaName().GetIdentifierName()));
+	auto query = StringUtil::Format(
+	    "SELECT tablename FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
+	    SQLString::ToString(remote_query));
+	return ListedInlinedDeletionTableExists(table_name, [&]() { return DuckLakeMetadataManager::Query(query); });
 }
 
 void PostgresMetadataManager::MigrateInlinedDataTypes() {
-	auto columns = DuckLakeMetadataManager::Query(GetInlinedTableColumnsSql());
+	// the migration runs before 2.0, so the rows carry no branch
+	auto columns =
+	    DuckLakeMetadataManager::Query(GetInlinedTableColumnsSql(optional_idx(), false, DuckLakeBranchChain::Main()));
 	columns->ThrowIfError("Failed to read the columns of inlined-data tables while migrating: ");
 	map<Identifier, identifier_map_t<string>> inlined_tables;
 	for (auto &row : *columns) {
@@ -467,7 +468,7 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 			continue;
 		}
 		auto migrated_name = Identifier(table_name + "_migrated");
-		auto migrate_query = InlinedTableDdlSql(migrated_name, column_defs, col_names);
+		auto migrate_query = InlinedTableDdlSql(migrated_name, column_defs, col_names, false);
 		migrate_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s SELECT %s FROM {METADATA_CATALOG}.%s;",
 		                                    migrated_name, StringUtil::Join(select_list, ", "), table_name);
 		migrate_query += StringUtil::Format("DROP TABLE {METADATA_CATALOG}.%s;", table_name);
@@ -529,13 +530,67 @@ void PostgresMetadataManager::ClearCache() {
 	result->ThrowIfError("Failed to clear the PostgreSQL metadata cache: ");
 }
 
-static string PostgresQuery(const string &remote_query) {
-	return StringUtil::Format("SELECT * FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)",
+static string PostgresQuery(const string &remote_query, const string &select_list = "*") {
+	return StringUtil::Format("SELECT %s FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s)", select_list,
 	                          SQLString(remote_query));
 }
 
+bool PostgresMetadataManager::ProbeMetadataColumns() {
+	// the scanner lists the tables it cached, so the server is asked for the ones a commit created since
+	auto schema = SQLString::ToString(transaction.GetCatalog().MetadataSchemaName().GetIdentifierName());
+	auto remote_query = StringUtil::Format(R"(
+SELECT c.relname, a.attname
+FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
+WHERE n.nspname = %s AND c.relkind IN ('r', 'v', 'm', 'f', 'p') AND a.attnum > 0 AND NOT a.attisdropped
+ORDER BY c.relname, a.attnum)",
+	                                       schema);
+	return ProbeMetadataColumnsFromListing(PostgresQuery(remote_query));
+}
+
+//! The list aggregate of the server, a json array of objects whose json values nest as they are
+static string JsonAggregation(const vector<pair<string, string>> &fields, const string &order) {
+	auto fields_part = StringUtil::Join(fields, fields.size(), ", ", [](const pair<string, string> &entry) {
+		return "'" + entry.first + "', " + entry.second;
+	});
+	auto order_part = order.empty() ? string() : " ORDER BY " + order;
+	return "json_agg(json_build_object(" + fields_part + ")" + order_part + ")";
+}
+
+DuckLakeCatalogInfo PostgresMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot snapshot) {
+	auto &catalog = transaction.GetCatalog();
+	if (!JsonExtensionAvailable(catalog.GetDatabase())) {
+		// LCOV_EXCL_START
+		return DuckLakeMetadataManager::GetCatalogForSnapshot(snapshot);
+		// LCOV_EXCL_STOP
+	}
+	auto schema = SQLQuotedIdentifier::ToString(catalog.MetadataSchemaName());
+	CatalogLoadDialect dialect;
+	dialect.render_list_aggregation = JsonAggregation;
+	dialect.wrap_statement = [&](const string &statement, const vector<CatalogLoadColumn> &columns) {
+		// the server runs the statement as a whole, so only the live rows cross the wire
+		auto remote = statement;
+		SubstituteTransactionPlaceholders(snapshot, remote);
+		SubstituteCatalogPlaceholders(remote, schema);
+		return PostgresQuery(remote, ListColumnsFromJson(columns));
+	};
+	return BuildCatalogForSnapshot(
+	    snapshot, [this](DuckLakeSnapshot s, string q) { return Query(s, q); }, catalog.DataPath(), catalog.Separator(),
+	    catalog.SupportsV1_1Metadata(), catalog.SupportsBranching(), catalog.AttachedChain(), dialect);
+}
+
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
-	auto remote_query = LatestSnapshotQuery();
+	// the chain head query is standard SQL, so the server runs it
+	auto remote_query = DuckLakeMetadataManager::GetLatestSnapshotQuery();
+	SubstituteCatalogPlaceholders(remote_query,
+	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
+	return PostgresQuery(remote_query);
+}
+
+string PostgresMetadataManager::ExpiryCompanionProbeQuery() const {
+	// the probe is standard SQL, so the server runs it in one round trip
+	auto remote_query = DuckLakeMetadataManager::ExpiryCompanionProbeQuery();
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	return PostgresQuery(remote_query);
@@ -544,7 +599,10 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot,
                                                                    bool include_exactness) const {
 	// one statement reads the latest snapshot and the table stats from the same state at any isolation level
-	auto remote_query = SnapshotAndStatsAndChangesQuery(include_exactness);
+	auto &catalog = transaction.GetCatalog();
+	auto remote_query =
+	    SnapshotAndStatsAndChangesQuery(include_exactness, catalog.SupportsBranching(),
+	                                    catalog.AttachedChain().Predicate(""), catalog.AttachedBranchId());
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	SubstituteSnapshotPlaceholders(snapshot, remote_query);

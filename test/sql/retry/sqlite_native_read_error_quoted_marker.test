@@ -1,0 +1,136 @@
+# name: test/sql/retry/sqlite_native_read_error_quoted_marker.test
+# description: The rules of a SQLite catalog match the error of a failing native read whose quoted catalog name holds the statement marker
+# group: [retry]
+
+require ducklake
+
+require parquet
+
+require sqlite_scanner
+
+# the profile registration below names the scanner's profile, which autoloading would not have loaded yet
+statement ok
+LOAD sqlite_scanner
+
+test-env DATA_PATH {TEST_DIR}
+
+# a rule for a dropped column stats table, end anchored like the lock rule of the shipped profile
+statement ok
+CALL ducklake_register_metadata_profile('sqlite', '{"base": "sqlite", "commit_errors": [{"pattern": "no such table: main\\.ducklake_table_column_stats\\s*$", "retryable": true, "hint": "Recreate the column stats table.\n"}]}')
+
+statement ok
+SET ducklake_retry_wait_ms = 0
+
+statement ok
+SET ducklake_max_retry_count = 0
+
+# the catalog name holds the marker that separates the error from the statement, followed by plain text
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/plain_marker.db' AS lake (DATA_PATH '{DATA_PATH}/plain_marker', DATA_INLINING_ROW_LIMIT 0, METADATA_CATALOG 'r42_meta
+Statement: plain marker')
+
+statement ok
+CREATE TABLE lake.items (id INTEGER)
+
+statement ok
+INSERT INTO lake.items VALUES (1)
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH '{TEST_DIR}/plain_marker.db' AS raw (TYPE sqlite)
+
+statement ok
+DROP TABLE raw.ducklake_table_column_stats
+
+statement ok
+DETACH raw
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/plain_marker.db' AS lake (DATA_INLINING_ROW_LIMIT 0, METADATA_CATALOG 'r42_meta
+Statement: plain marker')
+
+# the rule sees the error alone, the statement reported after it quotes the catalog name with the marker
+statement error
+INSERT INTO lake.items VALUES (2)
+----
+<REGEX>:.*Exceeded the maximum retry count of 0 set by the ducklake_max_retry_count setting\.\nConsider increasing the value with: e\.g\., "SET ducklake_max_retry_count = 10;"\nRecreate the column stats table\.\nFailed to get global stats information from DuckLake: .*no such table: main\.ducklake_table_column_stats\nStatement: SELECT \* FROM sqlite_query\('r42_meta\nStatement: plain marker', .*
+
+# with a retry allowed the loop goes on to the conflict check, whose read of the table fails in the scanner
+statement ok
+SET ducklake_max_retry_count = 1
+
+statement error
+INSERT INTO lake.items VALUES (2)
+----
+<REGEX>:.*Failed to commit DuckLake transaction\.\nFailed to commit DuckLake transaction - failed to get snapshot and snapshot changes for conflict resolution:Table with name ducklake_table_column_stats does not exist.*
+
+# neither commit wrote a snapshot
+query I
+SELECT max(snapshot_id) FROM ducklake_snapshots('lake')
+----
+2
+
+statement ok
+DETACH lake
+
+statement ok
+SET ducklake_max_retry_count = 0
+
+# the catalog name holds the marker followed by the start of a native statement, still a quoted value
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sql_marker.db' AS lake (DATA_PATH '{DATA_PATH}/sql_marker', DATA_INLINING_ROW_LIMIT 0, METADATA_CATALOG 'r42_meta
+Statement: SELECT * FROM sqlite_query(')
+
+statement ok
+CREATE TABLE lake.items (id INTEGER)
+
+statement ok
+INSERT INTO lake.items VALUES (1)
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH '{TEST_DIR}/sql_marker.db' AS raw (TYPE sqlite)
+
+statement ok
+DROP TABLE raw.ducklake_table_column_stats
+
+statement ok
+DETACH raw
+
+statement ok
+ATTACH 'ducklake:sqlite:{TEST_DIR}/sql_marker.db' AS lake (DATA_INLINING_ROW_LIMIT 0, METADATA_CATALOG 'r42_meta
+Statement: SELECT * FROM sqlite_query(')
+
+# the error object carries the error alone under its own key, the statement only follows the message
+statement ok
+SET errors_as_json = true
+
+statement error
+SELECT count(*), sum(id) FROM lake.items
+----
+<REGEX>:.*"exception_message":"Failed to get global stats information from DuckLake: [^"]*no such table: main\.ducklake_table_column_stats\\nStatement: SELECT \* FROM sqlite_query\('r42_meta\\nStatement: SELECT \* FROM sqlite_query\(', .*"ducklake_error_without_statement":"[^"]*no such table: main\.ducklake_table_column_stats".*
+
+statement ok
+SET errors_as_json = false
+
+statement error
+INSERT INTO lake.items VALUES (2)
+----
+<REGEX>:.*Exceeded the maximum retry count of 0 set by the ducklake_max_retry_count setting\.\nConsider increasing the value with: e\.g\., "SET ducklake_max_retry_count = 10;"\nRecreate the column stats table\.\nFailed to get global stats information from DuckLake: .*no such table: main\.ducklake_table_column_stats\nStatement: SELECT \* FROM sqlite_query\('r42_meta\nStatement: SELECT \* FROM sqlite_query\(', .*
+
+statement ok
+SET ducklake_max_retry_count = 1
+
+statement error
+INSERT INTO lake.items VALUES (2)
+----
+<REGEX>:.*Failed to commit DuckLake transaction\.\nFailed to commit DuckLake transaction - failed to get snapshot and snapshot changes for conflict resolution:Table with name ducklake_table_column_stats does not exist.*
+
+query I
+SELECT max(snapshot_id) FROM ducklake_snapshots('lake')
+----
+2

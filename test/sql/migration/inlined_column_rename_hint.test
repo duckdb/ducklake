@@ -74,12 +74,12 @@ INSERT INTO dl.t VALUES (5, 6)
 statement ok
 DETACH dl
 
-# the metadata columns were renamed
+# the metadata columns were renamed and the row versions took the layout of 2.0
 statement ok
 ATTACH '{TEST_DIR}/dev1_hint.db' AS meta;
 
 query I
-SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_inlined_data_1_1' AND column_name IN ('_ducklake_row_id', '_ducklake_begin_snapshot', '_ducklake_end_snapshot')
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_inlined_data_1_1' AND column_name IN ('_ducklake_row_id', '_ducklake_begin_snapshot', '_ducklake_branch_id')
 ----
 3
 

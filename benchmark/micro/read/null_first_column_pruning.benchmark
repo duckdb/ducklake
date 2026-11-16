@@ -26,6 +26,48 @@ SELECT (SELECT count(*) FROM lake.frag WHERE flag > 9) + (SELECT count(*) FROM l
 + (SELECT count(*) FROM lake.frag WHERE flag IN (11, 12)) + (SELECT count(*) FROM lake.frag WHERE flag > 1000)
 + (SELECT count(*) FROM lake.frag WHERE flag <= -5) + (SELECT count(*) FROM lake.frag WHERE flag = 99) AS outside,
 (SELECT count(*) FROM lake.frag) AS total;
+SELECT (SELECT count(*) FROM lake.frag WHERE flag > 9) + (SELECT count(*) FROM lake.frag WHERE flag < 0)
++ (SELECT count(*) FROM lake.frag WHERE flag = 10) + (SELECT count(*) FROM lake.frag WHERE flag >= 100)
++ (SELECT count(*) FROM lake.frag WHERE flag BETWEEN 20 AND 30) + (SELECT count(*) FROM lake.frag WHERE flag = -1)
++ (SELECT count(*) FROM lake.frag WHERE flag IN (11, 12)) + (SELECT count(*) FROM lake.frag WHERE flag > 1000)
++ (SELECT count(*) FROM lake.frag WHERE flag <= -5) + (SELECT count(*) FROM lake.frag WHERE flag = 99) AS outside,
+(SELECT count(*) FROM lake.frag) AS total;
+SELECT (SELECT count(*) FROM lake.frag WHERE flag > 9) + (SELECT count(*) FROM lake.frag WHERE flag < 0)
++ (SELECT count(*) FROM lake.frag WHERE flag = 10) + (SELECT count(*) FROM lake.frag WHERE flag >= 100)
++ (SELECT count(*) FROM lake.frag WHERE flag BETWEEN 20 AND 30) + (SELECT count(*) FROM lake.frag WHERE flag = -1)
++ (SELECT count(*) FROM lake.frag WHERE flag IN (11, 12)) + (SELECT count(*) FROM lake.frag WHERE flag > 1000)
++ (SELECT count(*) FROM lake.frag WHERE flag <= -5) + (SELECT count(*) FROM lake.frag WHERE flag = 99) AS outside,
+(SELECT count(*) FROM lake.frag) AS total;
+SELECT (SELECT count(*) FROM lake.frag WHERE flag > 9) + (SELECT count(*) FROM lake.frag WHERE flag < 0)
++ (SELECT count(*) FROM lake.frag WHERE flag = 10) + (SELECT count(*) FROM lake.frag WHERE flag >= 100)
++ (SELECT count(*) FROM lake.frag WHERE flag BETWEEN 20 AND 30) + (SELECT count(*) FROM lake.frag WHERE flag = -1)
++ (SELECT count(*) FROM lake.frag WHERE flag IN (11, 12)) + (SELECT count(*) FROM lake.frag WHERE flag > 1000)
++ (SELECT count(*) FROM lake.frag WHERE flag <= -5) + (SELECT count(*) FROM lake.frag WHERE flag = 99) AS outside,
+(SELECT count(*) FROM lake.frag) AS total;
+SELECT (SELECT count(*) FROM lake.frag WHERE flag > 9) + (SELECT count(*) FROM lake.frag WHERE flag < 0)
++ (SELECT count(*) FROM lake.frag WHERE flag = 10) + (SELECT count(*) FROM lake.frag WHERE flag >= 100)
++ (SELECT count(*) FROM lake.frag WHERE flag BETWEEN 20 AND 30) + (SELECT count(*) FROM lake.frag WHERE flag = -1)
++ (SELECT count(*) FROM lake.frag WHERE flag IN (11, 12)) + (SELECT count(*) FROM lake.frag WHERE flag > 1000)
++ (SELECT count(*) FROM lake.frag WHERE flag <= -5) + (SELECT count(*) FROM lake.frag WHERE flag = 99) AS outside,
+(SELECT count(*) FROM lake.frag) AS total;
+SELECT (SELECT count(*) FROM lake.frag WHERE flag > 9) + (SELECT count(*) FROM lake.frag WHERE flag < 0)
++ (SELECT count(*) FROM lake.frag WHERE flag = 10) + (SELECT count(*) FROM lake.frag WHERE flag >= 100)
++ (SELECT count(*) FROM lake.frag WHERE flag BETWEEN 20 AND 30) + (SELECT count(*) FROM lake.frag WHERE flag = -1)
++ (SELECT count(*) FROM lake.frag WHERE flag IN (11, 12)) + (SELECT count(*) FROM lake.frag WHERE flag > 1000)
++ (SELECT count(*) FROM lake.frag WHERE flag <= -5) + (SELECT count(*) FROM lake.frag WHERE flag = 99) AS outside,
+(SELECT count(*) FROM lake.frag) AS total;
+SELECT (SELECT count(*) FROM lake.frag WHERE flag > 9) + (SELECT count(*) FROM lake.frag WHERE flag < 0)
++ (SELECT count(*) FROM lake.frag WHERE flag = 10) + (SELECT count(*) FROM lake.frag WHERE flag >= 100)
++ (SELECT count(*) FROM lake.frag WHERE flag BETWEEN 20 AND 30) + (SELECT count(*) FROM lake.frag WHERE flag = -1)
++ (SELECT count(*) FROM lake.frag WHERE flag IN (11, 12)) + (SELECT count(*) FROM lake.frag WHERE flag > 1000)
++ (SELECT count(*) FROM lake.frag WHERE flag <= -5) + (SELECT count(*) FROM lake.frag WHERE flag = 99) AS outside,
+(SELECT count(*) FROM lake.frag) AS total;
+SELECT (SELECT count(*) FROM lake.frag WHERE flag > 9) + (SELECT count(*) FROM lake.frag WHERE flag < 0)
++ (SELECT count(*) FROM lake.frag WHERE flag = 10) + (SELECT count(*) FROM lake.frag WHERE flag >= 100)
++ (SELECT count(*) FROM lake.frag WHERE flag BETWEEN 20 AND 30) + (SELECT count(*) FROM lake.frag WHERE flag = -1)
++ (SELECT count(*) FROM lake.frag WHERE flag IN (11, 12)) + (SELECT count(*) FROM lake.frag WHERE flag > 1000)
++ (SELECT count(*) FROM lake.frag WHERE flag <= -5) + (SELECT count(*) FROM lake.frag WHERE flag = 99) AS outside,
+(SELECT count(*) FROM lake.frag) AS total;
 
 # A missed reset fails the ALTER because flag already exists
 result_query II

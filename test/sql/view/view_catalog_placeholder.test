@@ -21,7 +21,7 @@ CREATE VIEW dl.v AS SELECT 1 AS i
 
 # older versions replaced the name of the catalog with a placeholder when storing the view
 statement ok
-UPDATE dl_meta.ducklake_view SET sql = 'SELECT ''{DUCKLAKE_CATALOG}.x'' AS lit, i FROM {DUCKLAKE_CATALOG}.main.t' WHERE view_name = 'v' AND end_snapshot IS NULL
+UPDATE dl_meta.ducklake_view SET sql = 'SELECT ''{DUCKLAKE_CATALOG}.x'' AS lit, i FROM {DUCKLAKE_CATALOG}.main.t' WHERE view_name = 'v'
 
 statement ok
 DETACH dl

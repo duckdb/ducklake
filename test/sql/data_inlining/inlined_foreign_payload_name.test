@@ -1,0 +1,43 @@
+# name: test/sql/data_inlining/inlined_foreign_payload_name.test
+# description: an inlined data table registered under a name another writer chose is refused, the shared companion names its ends by the table id of the name
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+query I
+SELECT i FROM dl.t
+----
+1
+
+# another writer registered the payload of the table under a name of its own
+statement ok
+UPDATE meta.ducklake_inlined_data_tables SET table_name = 'ducklake_inlined_data_t1' WHERE table_id = 1
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement error
+SELECT i FROM dl.t
+----
+inlined data table ducklake_inlined_data_t1 is not named like DuckDB's, this build reads ducklake_inlined_data_<table>_<version> only
+
+statement ok
+DETACH dl

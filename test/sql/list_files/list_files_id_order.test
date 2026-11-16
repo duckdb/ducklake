@@ -1,0 +1,139 @@
+# name: test/sql/list_files/list_files_id_order.test
+# description: A listing of main without a stats order sends no ORDER BY and lists the files of a table by their ids
+# group: [list_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+# one file per row, written in the order of the values
+loop k 0 40
+
+statement ok
+INSERT INTO dl.t VALUES ({k})
+
+endloop
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 't')
+----
+40
+
+query I
+SELECT sum(i) FROM dl.t
+----
+780
+
+statement ok
+DELETE FROM dl.t WHERE i = 7
+
+statement ok
+CALL disable_logging()
+
+# the scan listings join the file events and carry no ORDER BY
+query II
+SELECT count(*) > 0, count(*) FILTER (WHERE query LIKE '%ORDER BY%')
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%data.partial^_max, data.mapping^_id%' ESCAPE '^'
+  AND query LIKE '%ducklake^_file^_visibility%' ESCAPE '^'
+----
+true	0
+
+# the extended listing of the delete carries none either
+query II
+SELECT count(*), count(*) FILTER (WHERE query LIKE '%ORDER BY%')
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%del.delete^_file^_id, data.record^_count%' ESCAPE '^'
+  AND query LIKE '%ducklake^_file^_visibility%' ESCAPE '^'
+----
+1	0
+
+# the file of the row 3 moves to the end of the file table, so the join of the file events lists it last
+statement ok
+SET VARIABLE moved_file = (SELECT data_file_id FROM meta.ducklake_data_file ORDER BY data_file_id LIMIT 1 OFFSET 3)
+
+statement ok
+CREATE TEMPORARY TABLE moved AS SELECT * FROM meta.ducklake_data_file WHERE data_file_id = getvariable('moved_file')
+
+statement ok
+DELETE FROM meta.ducklake_data_file WHERE data_file_id = getvariable('moved_file')
+
+statement ok
+INSERT INTO meta.ducklake_data_file SELECT * FROM moved
+
+# the live files are listed in the order of their ids, which is the order they were written in
+statement ok
+SET VARIABLE dropped_file = (SELECT data_file_id FROM meta.ducklake_file_visibility WHERE is_delete)
+
+statement ok
+SET VARIABLE paths_by_id = (
+	SELECT list(path ORDER BY data_file_id)
+	FROM meta.ducklake_data_file
+	WHERE data_file_id <> getvariable('dropped_file')
+)
+
+query II
+SELECT count(*), count(*) FILTER (WHERE ends_with(data_file, getvariable('paths_by_id')[pos]))
+FROM (SELECT data_file, row_number() OVER () AS pos FROM ducklake_list_files('dl', 't')) listed
+----
+39	39
+
+# the scan reads the files in that order too, the delete dropped the file of the deleted row
+query I
+SELECT i FROM dl.t
+----
+0
+1
+2
+3
+4
+5
+6
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+23
+24
+25
+26
+27
+28
+29
+30
+31
+32
+33
+34
+35
+36
+37
+38
+39
+
+statement ok
+DETACH dl

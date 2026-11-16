@@ -88,7 +88,10 @@
         "test/sql/issues/issue_1309.test",
         "test/sql/retry/sqlite_lock_retry_errors_as_json.test",
         "test/sql/issues/issue_sqlite_snapshot_time.test",
-        "test/sql/data_inlining/data_inlining_variant_sql_rollback.test"
+        "test/sql/data_inlining/data_inlining_variant_sql_rollback.test",
+        "test/sql/catalog/sqlite_native_catalog_load.test",
+        "test/sql/catalog/sqlite_native_head_and_stats.test",
+        "test/sql/retry/sqlite_native_read_error_rules.test"
       ]
     },
     {

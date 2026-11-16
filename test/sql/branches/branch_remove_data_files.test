@@ -1,0 +1,79 @@
+# name: test/sql/branches/branch_remove_data_files.test
+# description: removing a data file on main ends it with a delete event that a branch forked earlier does not see
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_remove_data_files_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range(10)
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range(10, 20)
+
+# a delete file against the second file
+statement ok
+DELETE FROM dl.t WHERE i = 15
+
+# fork dev at the snapshot of the delete
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 4)
+
+statement ok
+SET VARIABLE removed = (SELECT filename FROM dl.t WHERE i = 16)
+
+statement ok
+CALL ducklake_remove_data_files('dl', 't', getvariable('removed'))
+
+query III
+SELECT min(i), max(i), count(*) FROM dl.t
+----
+0	9	10
+
+# the deletes of the removed file leave with it, the remaining file is delete free so the stats stay exact
+query IIII
+SELECT min_value, max_value, min_is_exact::BOOLEAN, max_is_exact::BOOLEAN FROM meta.ducklake_table_column_stats
+----
+0	9	true	true
+
+query I
+SELECT record_count FROM meta.ducklake_table_stats
+----
+10
+
+# the file is ended by a delete event of main at the commit snapshot
+query II
+SELECT branch_id, snapshot_id FROM meta.ducklake_file_visibility WHERE is_delete
+----
+0	5
+
+statement ok
+DETACH dl
+
+# the branch forked before the removal still reads the file through the inherited add event
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_remove_data_files_files', METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT id FROM dl.current_snapshot()
+----
+4
+
+query III
+SELECT min(i), max(i), count(*) FROM dl.t
+----
+0	19	19
+
+statement ok
+DETACH dl

@@ -29,7 +29,7 @@ SELECT max(snapshot_id) FROM __ducklake_metadata_ducklake.ducklake_snapshot;
 # final ducklake_snapshot_changes insert. (A literal id is used because quack does not support
 # INSERT ... SELECT from the same catalog.)
 statement ok
-INSERT INTO __ducklake_metadata_ducklake.ducklake_snapshot_changes VALUES (3, 'orphan', NULL, NULL, NULL);
+INSERT INTO __ducklake_metadata_ducklake.ducklake_snapshot_changes (snapshot_id, changes_made, author, commit_message, commit_extra_info) VALUES (3, 'orphan', NULL, NULL, NULL);
 
 # The commit fails on the colliding final statement.
 statement error

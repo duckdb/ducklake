@@ -1,0 +1,77 @@
+# name: test/sql/deletion_inlining/inlined_file_delete_branch_column.test
+# description: the inlined file deletions of a 2.0 catalog carry the branch they were deleted on, a flush of main removes those of main alone
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t AS SELECT range AS i FROM range(20)
+
+statement ok
+DELETE FROM dl.t WHERE i IN (1, 2)
+
+statement ok
+DELETE FROM dl.t WHERE i = 3
+
+# the branch column comes last, so a healed table and a fresh one coincide and a positional read ends in the branch
+query IIII
+SELECT * FROM meta.ducklake_inlined_delete_1 ORDER BY row_id
+----
+0	1	2	0
+0	2	2	0
+0	3	3	0
+
+query I
+SELECT count(*) FROM dl.t
+----
+17
+
+# a deletion row of another branch does not apply on main
+statement ok
+INSERT INTO meta.ducklake_inlined_delete_1 VALUES (0, 4, 3, 1)
+
+query I
+SELECT list(i ORDER BY i) FROM dl.t WHERE i < 6
+----
+[0, 4, 5]
+
+query I
+SELECT count(*) FROM dl.t
+----
+17
+
+# the flush moves the deletions of main into a delete file and keeps those of the other branch inlined
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query IIII
+SELECT file_id, row_id, begin_snapshot, branch_id FROM meta.ducklake_inlined_delete_1
+----
+0	4	3	1
+
+query I
+SELECT count(*) FROM meta.ducklake_delete_file
+----
+1
+
+query I
+SELECT list(i ORDER BY i) FROM dl.t WHERE i < 6
+----
+[0, 4, 5]
+
+query I
+SELECT count(*) FROM dl.t
+----
+17
+
+statement ok
+DETACH dl
