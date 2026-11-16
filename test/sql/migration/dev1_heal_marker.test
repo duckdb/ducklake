@@ -1,0 +1,221 @@
+# name: test/sql/migration/dev1_heal_marker.test
+# description: the marker of a completed heal names the generation of the layout, another generation heals again
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+# a fresh catalog carries the marker of a completed heal
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.1
+
+# the marker of another generation of the layout
+statement ok
+UPDATE meta.ducklake_metadata SET value = '2.0-dev1.0' WHERE key = 'heal_complete'
+
+statement ok
+DETACH dl
+
+# every shape is present, so a read only attach reads the catalog and leaves the marker
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    READ_ONLY)
+
+query I
+SELECT * FROM dl.t
+----
+42
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.0
+
+statement ok
+DETACH dl
+
+# the writable attach heals again, the probes add no shape and the marker is rewritten
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage = 'memory')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+true
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+    WHERE query LIKE '%CREATE TABLE%' OR query LIKE '%_rebuild%'
+----
+0
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.1
+
+query I
+SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+1
+
+query IIII
+SELECT branch_id, branch_name, parent_id, parent_branch_snapshot FROM meta.ducklake_branch
+----
+0	main	NULL	NULL
+
+statement ok
+INSERT INTO dl.t VALUES (43)
+
+query I
+SELECT list(i ORDER BY i) FROM dl.t
+----
+[42, 43]
+
+statement ok
+DETACH dl
+
+# the marker of the current generation skips the heal
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage = 'memory')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+true
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+    WHERE query LIKE '%heal_complete%' OR query LIKE '%ducklake_branch%'
+----
+0
+
+query I
+SELECT list(i ORDER BY i) FROM dl.t
+----
+[42, 43]
+
+statement ok
+DETACH dl
+
+# an older dev build left main's layout, which a heal rebuilds through the renamed tables
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+
+statement ok
+DELETE FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+
+statement ok
+DROP TABLE meta.ducklake_branch
+
+statement ok
+CREATE TABLE meta.snapshot_backup(snapshot_id BIGINT, snapshot_time TIMESTAMPTZ, schema_version BIGINT,
+    next_catalog_id BIGINT, next_file_id BIGINT)
+
+statement ok
+INSERT INTO meta.snapshot_backup
+SELECT snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id FROM meta.ducklake_snapshot
+
+statement ok
+DROP TABLE meta.ducklake_snapshot
+
+statement ok
+CREATE TABLE meta.ducklake_snapshot(snapshot_id BIGINT PRIMARY KEY, snapshot_time TIMESTAMPTZ, schema_version BIGINT,
+    next_catalog_id BIGINT, next_file_id BIGINT)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT * FROM meta.snapshot_backup
+
+statement ok
+DROP TABLE meta.snapshot_backup
+
+statement ok
+CREATE TABLE meta.changes_backup(snapshot_id BIGINT, changes_made VARCHAR, author VARCHAR, commit_message VARCHAR,
+    commit_extra_info VARCHAR)
+
+statement ok
+INSERT INTO meta.changes_backup
+SELECT snapshot_id, changes_made, author, commit_message, commit_extra_info FROM meta.ducklake_snapshot_changes
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_changes
+
+statement ok
+CREATE TABLE meta.ducklake_snapshot_changes(snapshot_id BIGINT PRIMARY KEY, changes_made VARCHAR, author VARCHAR,
+    commit_message VARCHAR, commit_extra_info VARCHAR)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes SELECT * FROM meta.changes_backup
+
+statement ok
+DROP TABLE meta.changes_backup
+
+statement ok
+DETACH dl
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage = 'memory')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+
+statement ok
+CALL disable_logging()
+
+# the first batch is logged as one statement text, it deletes the marker before the first rename
+query I
+SELECT instr(query, 'heal_complete') > 0 AND instr(query, 'heal_complete') < instr(query, 'RENAME TO')
+FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%RENAME TO ducklake_snapshot_old%'
+----
+true
+
+# the second batch writes the marker after it renames the rebuilt tables into place
+query I
+SELECT instr(query, 'heal_complete') > instr(query, 'RENAME TO')
+FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%RENAME TO ducklake_snapshot;%'
+----
+true
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.1
+
+query I
+SELECT list(i ORDER BY i) FROM dl.t
+----
+[42, 43]
+
+statement ok
+DETACH dl

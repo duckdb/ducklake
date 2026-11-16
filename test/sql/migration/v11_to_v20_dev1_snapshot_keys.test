@@ -1,0 +1,206 @@
+# name: test/sql/migration/v11_to_v20_dev1_snapshot_keys.test
+# description: the migration of a 1.1 catalog rebuilds the snapshot tables with their branch key and keeps the rows
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+INSERT INTO dl.t VALUES (43)
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN j INTEGER
+
+statement ok
+INSERT INTO dl.t VALUES (44, 1)
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_snapshot
+----
+5
+
+statement ok
+DETACH dl
+
+# the migration rebuilds the snapshot tables with their branch key and adds the branch table
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+----
+2.0-dev1.1
+
+query IIII
+SELECT branch_id, branch_name, parent_id, parent_branch_snapshot FROM meta.ducklake_branch
+----
+0	main	NULL	NULL
+
+# the rows are kept and belong to main
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
+----
+0	0
+1	0
+2	0
+3	0
+4	0
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
+----
+0	0
+1	0
+2	0
+3	0
+4	0
+
+query I
+SELECT changes_made FROM meta.ducklake_snapshot_changes WHERE snapshot_id = 0
+----
+created_schema:"main"
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_snapshot')
+ORDER BY column_index
+----
+snapshot_id
+snapshot_time
+schema_version
+next_catalog_id
+next_file_id
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_snapshot_changes')
+ORDER BY column_index
+----
+snapshot_id
+changes_made
+author
+commit_message
+commit_extra_info
+branch_id
+
+# the rebuilt tables are keyed by branch and snapshot
+statement error
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id,
+    branch_id)
+SELECT snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id, 0
+FROM meta.ducklake_snapshot WHERE snapshot_id = 1
+----
+constraint
+
+statement error
+INSERT INTO meta.ducklake_snapshot_changes (snapshot_id, changes_made, author, commit_message, commit_extra_info,
+    branch_id)
+SELECT snapshot_id, changes_made, author, commit_message, commit_extra_info, 0
+FROM meta.ducklake_snapshot_changes WHERE snapshot_id = 1
+----
+constraint
+
+statement error
+SELECT * FROM meta.ducklake_snapshot_rebuild
+----
+does not exist
+
+statement error
+SELECT * FROM meta.ducklake_snapshot_old
+----
+does not exist
+
+statement error
+SELECT * FROM meta.ducklake_snapshot_changes_rebuild
+----
+does not exist
+
+statement error
+SELECT * FROM meta.ducklake_snapshot_changes_old
+----
+does not exist
+
+# time travel to a snapshot before the schema change
+query I
+SELECT i FROM dl.t AT (VERSION => 2) ORDER BY i
+----
+42
+43
+
+query II
+SELECT * FROM dl.t ORDER BY i
+----
+42	NULL
+43	NULL
+44	1
+
+# the migrated catalog commits the head of main plus one
+statement ok
+INSERT INTO dl.t VALUES (45, 2)
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot WHERE snapshot_id = 5
+----
+5	0
+
+query I
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
+----
+[0, 1, 2, 3, 4, 5]
+
+statement ok
+DETACH dl
+
+# a second attach adds nothing
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage = 'memory')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+true
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+    WHERE query LIKE '%ducklake_branch%' OR query LIKE '%heal_complete%' OR query LIKE '%_rebuild%'
+----
+0
+
+query III
+SELECT (SELECT count(*) FROM meta.ducklake_snapshot), (SELECT count(*) FROM meta.ducklake_branch),
+    (SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete')
+----
+6	1	1
+
+query I
+SELECT list(i ORDER BY i) FROM dl.t
+----
+[42, 43, 44, 45]
+
+statement ok
+DETACH dl
