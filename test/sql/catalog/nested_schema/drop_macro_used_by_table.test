@@ -45,12 +45,21 @@ DROP MACRO lake.a.b.f
 ----
 Cannot drop macro "f" because the default of column "c" of table "y" calls it
 
-# catalog.name in a table of a nested schema resolves through the name of its schema
+# catalog.name in a table of a nested schema resolves through the full path of its schema
 statement ok
 CREATE SCHEMA lake.b
 
 statement ok
-CREATE MACRO lake.b.k() AS 9
+CREATE MACRO lake.b.k() AS 1
+
+# the top-level schema b of the same name is not searched
+statement error
+CREATE TABLE lake.a.b.t (c INTEGER DEFAULT lake.k())
+----
+Scalar Function with name k does not exist
+
+statement ok
+CREATE MACRO lake.a.b.k() AS 9
 
 statement ok
 CREATE TABLE lake.a.b.t (c INTEGER DEFAULT lake.k())
@@ -63,7 +72,13 @@ SELECT c FROM lake.a.b.t
 ----
 9
 
+# a macro of the same name in another schema is held too
 statement error
 DROP MACRO lake.b.k
+----
+Cannot drop macro "k" because the default of column "c" of table "t" calls it
+
+statement error
+DROP MACRO lake.a.b.k
 ----
 Cannot drop macro "k" because the default of column "c" of table "t" calls it
