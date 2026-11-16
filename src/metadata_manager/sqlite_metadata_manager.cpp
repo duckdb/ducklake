@@ -116,8 +116,7 @@ unique_ptr<QueryResult> SQLiteMetadataManager::Query(string &query) {
 
 string SQLiteMetadataManager::CommitErrorWithoutQuery(const string &message) const {
 	// the end anchored rules of the profile match the error, which Query puts the statement after
-	// an echoed value or the statement itself may hold the marker text, the suffix starts at the last marker that a
-	// native statement follows
+	// the suffix starts at the last marker a native statement follows, a value or the statement may hold the text
 	const string marker = STATEMENT_MARKER;
 	auto statement = message.rfind(marker);
 	while (statement != string::npos) {
