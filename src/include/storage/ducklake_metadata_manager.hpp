@@ -782,6 +782,8 @@ public:
 
 	static string StorePath(string path, const string &separator);
 	static string LoadPath(string path, const string &separator);
+	//! An absolute path as the file system takes it: a remote path as stored, a local one with the separator
+	static string LoadAbsolutePath(const string &path, const string &separator);
 	static string FromRelativePath(const DuckLakePath &path, const string &base_path, const string &separator);
 	static DuckLakePath GetRelativePath(const string &path, const string &data_path, const string &separator);
 	static string GetPathForSchema(SchemaIndex schema_id, const vector<DuckLakeSchemaInfo> &new_schemas_result,

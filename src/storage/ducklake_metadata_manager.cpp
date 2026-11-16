@@ -4640,8 +4640,19 @@ string DuckLakeMetadataManager::LoadPath(string path) {
 	return LoadPath(std::move(path), separator);
 }
 
+string DuckLakeMetadataManager::LoadAbsolutePath(const string &path, const string &separator) {
+	// a URL stays as stored, whatever separator the data path uses; a local absolute path gets the local separator
+	if (FileSystem::IsRemoteFile(path)) {
+		return path;
+	}
+	return LoadPath(path, separator);
+}
+
 string DuckLakeMetadataManager::FromRelativePath(const DuckLakePath &path, const string &base_path) {
-	return LoadPath(path.path_is_relative ? base_path + path.path : path.path);
+	if (!path.path_is_relative) {
+		return LoadAbsolutePath(path.path, GetPathSeparator(path.path));
+	}
+	return LoadPath(base_path + path.path);
 }
 
 string DuckLakeMetadataManager::FromRelativePath(const DuckLakePath &path) {
@@ -4673,7 +4684,7 @@ string DuckLakeMetadataManager::LoadPath(string path, const string &separator) {
 string DuckLakeMetadataManager::FromRelativePath(const DuckLakePath &path, const string &base_path,
                                                  const string &separator) {
 	if (!path.path_is_relative) {
-		return LoadPath(path.path, separator);
+		return LoadAbsolutePath(path.path, separator);
 	}
 	return LoadPath(base_path + path.path, separator);
 }
