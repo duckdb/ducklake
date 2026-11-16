@@ -116,15 +116,20 @@ unique_ptr<QueryResult> SQLiteMetadataManager::Query(string &query) {
 
 string SQLiteMetadataManager::CommitErrorWithoutQuery(const string &message) const {
 	// the end anchored rules of the profile match the error, which Query puts the statement after
-	auto statement = message.rfind(STATEMENT_MARKER);
-	if (statement == string::npos) {
-		return message;
+	// an echoed value or the statement itself may hold the marker text, the suffix starts at the last marker that a
+	// native statement follows
+	const string marker = STATEMENT_MARKER;
+	auto statement = message.rfind(marker);
+	while (statement != string::npos) {
+		if (IsNativeStatement(message.substr(statement + marker.size()))) {
+			return message.substr(0, statement);
+		}
+		if (statement == 0) {
+			break;
+		}
+		statement = message.rfind(marker, statement - 1);
 	}
-	// an echoed value may hold the marker text, the suffix counts only where a native statement follows it
-	if (!IsNativeStatement(message.substr(statement + string(STATEMENT_MARKER).size()))) {
-		return message;
-	}
-	return message.substr(0, statement);
+	return message;
 }
 
 DuckLakeCatalogInfo SQLiteMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot snapshot) {
