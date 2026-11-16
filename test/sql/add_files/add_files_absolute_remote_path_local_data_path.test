@@ -12,8 +12,6 @@ require-env S3_TEST_SERVER_AVAILABLE 1
 
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
-test-env DATA_PATH {TEST_DIR}
-
 statement ok
 DROP SECRET IF EXISTS __default_s3;
 
@@ -35,9 +33,9 @@ SET s3_url_style='path';
 statement ok
 SET s3_use_ssl=false;
 
-# the data path is local, the added file is remote
+# the data path is local (the test directory, not the DATA_PATH of the S3 configuration), the added files are remote
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/absolute_remote_path/', METADATA_CATALOG 'metadata');
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{TEST_DIR}/absolute_remote_path/', METADATA_CATALOG 'metadata');
 
 statement ok
 CREATE TABLE ducklake.holdings(col1 INTEGER, col2 VARCHAR);
@@ -46,27 +44,37 @@ statement ok
 COPY (SELECT 200 col1, 'world' col2) TO 's3://mybucket/absolute_remote_path/external.parquet';
 
 statement ok
+COPY (SELECT 300 col1, 'upper' col2) TO 's3://mybucket/absolute_remote_path/external_upper.parquet';
+
+statement ok
 CALL ducklake_add_data_files('ducklake', 'holdings', 's3://mybucket/absolute_remote_path/external.parquet');
 
-# the path is stored absolute, with its own separators
+# a scheme spelled in upper case is remote as well
+statement ok
+CALL ducklake_add_data_files('ducklake', 'holdings', 'S3A://mybucket/absolute_remote_path/external_upper.parquet');
+
+# the paths are stored absolute, as they were given
 query II
-SELECT path, path_is_relative FROM metadata.ducklake_data_file WHERE end_snapshot IS NULL
+SELECT path, path_is_relative FROM metadata.ducklake_data_file WHERE end_snapshot IS NULL ORDER BY path
 ----
+S3A://mybucket/absolute_remote_path/external_upper.parquet	false
 s3://mybucket/absolute_remote_path/external.parquet	false
 
 query II
-FROM ducklake.holdings
+FROM ducklake.holdings ORDER BY col1
 ----
 200	world
+300	upper
 
-# a fresh attach reads the file through the path loaded from the catalog
+# a fresh attach reads the files through the paths loaded from the catalog
 statement ok
 DETACH ducklake;
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/absolute_remote_path/', METADATA_CATALOG 'metadata');
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{TEST_DIR}/absolute_remote_path/', METADATA_CATALOG 'metadata');
 
 query II
-FROM ducklake.holdings
+FROM ducklake.holdings ORDER BY col1
 ----
 200	world
+300	upper

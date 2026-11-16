@@ -4640,19 +4640,8 @@ string DuckLakeMetadataManager::LoadPath(string path) {
 	return LoadPath(std::move(path), separator);
 }
 
-string DuckLakeMetadataManager::LoadAbsolutePath(const string &path, const string &separator) {
-	// a URL stays as stored, whatever separator the data path uses; a local absolute path gets the local separator
-	if (FileSystem::IsRemoteFile(path)) {
-		return path;
-	}
-	return LoadPath(path, separator);
-}
-
 string DuckLakeMetadataManager::FromRelativePath(const DuckLakePath &path, const string &base_path) {
-	if (!path.path_is_relative) {
-		return LoadAbsolutePath(path.path, GetPathSeparator(path.path));
-	}
-	return LoadPath(base_path + path.path);
+	return LoadPath(path.path_is_relative ? base_path + path.path : path.path);
 }
 
 string DuckLakeMetadataManager::FromRelativePath(const DuckLakePath &path) {
@@ -4664,7 +4653,8 @@ string DuckLakeMetadataManager::FromRelativePath(TableIndex table_id, const Duck
 }
 
 string DuckLakeMetadataManager::StorePath(string path, const string &separator) {
-	if (separator.empty() || separator == "/") {
+	// a remote path is stored as it is, whatever separator the data path uses: its backslashes are part of the key
+	if (separator.empty() || separator == "/" || DuckLakeUtil::IsRemotePath(path)) {
 		return path;
 	}
 	// LCOV_EXCL_START
@@ -4673,7 +4663,8 @@ string DuckLakeMetadataManager::StorePath(string path, const string &separator) 
 }
 
 string DuckLakeMetadataManager::LoadPath(string path, const string &separator) {
-	if (separator.empty() || separator == "/") {
+	// a remote path, absolute or resolved against a remote parent, keeps its slashes whatever the data path uses
+	if (separator.empty() || separator == "/" || DuckLakeUtil::IsRemotePath(path)) {
 		return path;
 	}
 	// LCOV_EXCL_START
@@ -4684,7 +4675,7 @@ string DuckLakeMetadataManager::LoadPath(string path, const string &separator) {
 string DuckLakeMetadataManager::FromRelativePath(const DuckLakePath &path, const string &base_path,
                                                  const string &separator) {
 	if (!path.path_is_relative) {
-		return LoadAbsolutePath(path.path, separator);
+		return LoadPath(path.path, separator);
 	}
 	return LoadPath(base_path + path.path, separator);
 }
