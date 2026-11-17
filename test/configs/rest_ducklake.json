@@ -249,6 +249,8 @@
     {
       "reason": "Reads the metadata catalog of the DuckLake or configures it with attach options, but the REST server (in a database of its own) attaches the catalog and creates the DuckLake",
       "paths": [
+        "test/sql/deletion_inlining/flush_inlined_deletes_concurrent.test",
+        "test/sql/deletion_inlining/flush_inlined_deletes_at_execution.test",
         "test/sql/remove_files/remove_data_files_stats.test",
         "test/sql/add_files/add_file_epoch_partitioned.test",
         "test/sql/add_files/add_file_partitioned.test",
