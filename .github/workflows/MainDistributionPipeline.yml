@@ -12,31 +12,34 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}-${{ github.head_ref || '' }}-${{ github.base_ref || '' }}-${{ github.ref != 'refs/heads/main' || github.sha }}
   cancel-in-progress: true
 
-jobs:
-  get-duckdb-version:
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    name: Get DuckDB version
-    runs-on: ubuntu-latest
-    outputs:
-      duckdb_version: ${{ steps.version.outputs.duckdb_version }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          sparse-checkout: .github
-      - id: version
-        run: echo "duckdb_version=$(cat .github/duckdb-version)" >> $GITHUB_OUTPUT
+permissions:
+  actions: read
+  contents: read
+  packages: read
 
-  duckdb-next-build:
+jobs:
+  prepare:
+    name: Prepare
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    name: Build extension binaries
-    needs: get-duckdb-version
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_distribution.yml@v1.5-variegata
+    runs-on: ${{ github.repository_owner == 'duckdb' && 'namespace-profile-linux-slim' || 'ubuntu-slim' }}
+    outputs:
+      runners: ${{ steps.runners.outputs.runners }}
+    steps:
+      - name: Detect runners
+        id: runners
+        uses: duckdb/duckdb-ci/detect-runners@main
+
+  build:
+    name: Build extension
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    needs: prepare
+    uses: duckdb/extension-ci-tools/.github/workflows/build.yml@main
     with:
-      duckdb_version: ${{ needs.get-duckdb-version.outputs.duckdb_version }}
-      ci_tools_version: v1.5-variegata
-      # Temporary override; remove when extension-ci-tools updates its default.
-      vcpkg_commit: cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3 # Release 2026.06.24
-      extension_name: ducklake
+      groups: |
+        main:
+          config: extension_config.cmake
+          toolchain: main
+      runners: ${{ needs.prepare.outputs.runners }}
       opt_in_archs: 'linux_arm64_musl;linux_amd64_musl'
 
   # Regression test, see https://github.com/duckdb/ducklake/pull/1256 for more details.
@@ -82,16 +85,16 @@ jobs:
         run: |
           make release
 
-  duckdb-next-deploy:
+  deploy:
+    name: Deploy extension
     if: (github.event_name != 'pull_request' || github.event.pull_request.draft == false) && (github.ref != 'refs/heads/main')
-    name: Deploy extension binaries
-    needs: [get-duckdb-version, duckdb-next-build, gcc12-compatibility-build]
-    uses: duckdb/extension-ci-tools/.github/workflows/_extension_deploy.yml@main
+    needs: [build, gcc12-compatibility-build]
+    uses: duckdb/extension-ci-tools/.github/workflows/deploy.yml@main
     secrets: inherit
     with:
-      extension_name: ducklake
-      duckdb_version: ${{ needs.get-duckdb-version.outputs.duckdb_version }}
-      ci_tools_version: main
+      duckdb_version: ${{ needs.build.outputs.duckdb_version }}
+      duckdb_commit: ${{ needs.build.outputs.duckdb_commit }}
+      deploy_extensions: ducklake
       deploy_latest: ${{ startsWith(github.ref, 'refs/heads/v') }}
       deploy_versioned: ${{ startsWith(github.ref, 'refs/heads/v') }}
 

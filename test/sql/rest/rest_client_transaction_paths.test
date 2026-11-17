@@ -1,0 +1,192 @@
+# name: test/sql/rest/rest_client_transaction_paths.test
+# description: Less common client paths of a DuckLake REST catalog: options in a transaction, comments, dropped tables with changes
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, s STRUCT(x INTEGER, y VARCHAR))
+
+statement ok
+INSERT INTO dl.t VALUES (1, {'x': 10, 'y': 'a'}), (2, {'x': 20, 'y': 'b'})
+
+# options of a schema and of the DuckLake are seen in the transaction that sets them
+statement ok
+BEGIN
+
+statement ok
+CALL dl.set_option('parquet_compression', 'zstd', schema => 'main')
+
+statement ok
+CALL dl.set_option('parquet_row_group_size', '1000')
+
+query III
+SELECT option_name, value, scope FROM ducklake_options('dl') WHERE option_name IN ('parquet_compression', 'parquet_row_group_size') ORDER BY ALL
+----
+parquet_compression	zstd	SCHEMA
+parquet_row_group_size	1000	GLOBAL
+
+statement ok
+COMMIT
+
+# scans in one transaction that read other fields of the inlined rows
+statement ok
+BEGIN
+
+query I
+SELECT s.x FROM dl.t ORDER BY i
+----
+10
+20
+
+query I
+SELECT s.x FROM dl.t ORDER BY i
+----
+10
+20
+
+query I
+SELECT s.y FROM dl.t ORDER BY i
+----
+a
+b
+
+query II
+SELECT i, s FROM dl.t ORDER BY i
+----
+1	{'x': 10, 'y': a}
+2	{'x': 20, 'y': b}
+
+statement ok
+COMMIT
+
+# a table and a view that are commented in the transaction that creates them
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE dl.c(i INTEGER)
+
+statement ok
+COMMENT ON TABLE dl.c IS 'a table'
+
+statement ok
+COMMENT ON COLUMN dl.c.i IS 'a column'
+
+statement ok
+CREATE VIEW dl.cv AS SELECT 42 AS x
+
+statement ok
+COMMENT ON VIEW dl.cv IS 'a view'
+
+# a table that is created in the transaction has no committed files
+query I
+SELECT count(*) FROM dl.c
+----
+0
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 'c')
+----
+0
+
+statement ok
+COMMIT
+
+query I
+SELECT comment FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 'c'
+----
+a table
+
+query I
+SELECT comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 'c'
+----
+a column
+
+query I
+SELECT comment FROM duckdb_views() WHERE database_name = 'dl' AND view_name = 'cv'
+----
+a view
+
+# changes to a table that the transaction drops are not sent
+statement ok
+CREATE TABLE dl.d(i INTEGER)
+
+statement ok
+INSERT INTO dl.d VALUES (1)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.d VALUES (2)
+
+statement ok
+DELETE FROM dl.d WHERE i = 1
+
+statement ok
+DROP TABLE dl.d
+
+statement ok
+COMMIT
+
+# an option of the schema that the transaction changes again
+statement ok
+BEGIN
+
+statement ok
+CALL dl.set_option('parquet_compression', 'snappy', schema => 'main')
+
+query II
+SELECT value, scope FROM ducklake_options('dl') WHERE option_name = 'parquet_compression'
+----
+snappy	SCHEMA
+
+statement ok
+COMMIT
+
+# tables and views copied from another database keep their comments
+statement ok
+ATTACH ':memory:' AS mem
+
+statement ok
+CREATE TABLE mem.copied(i INTEGER, k VARCHAR DEFAULT 'x')
+
+statement ok
+COMMENT ON TABLE mem.copied IS 'tc'
+
+statement ok
+COMMENT ON COLUMN mem.copied.i IS 'cc'
+
+statement ok
+CREATE VIEW mem.copied_view AS SELECT 1 AS a
+
+statement ok
+COMMENT ON VIEW mem.copied_view IS 'vc'
+
+statement ok
+COPY FROM DATABASE mem TO dl (SCHEMA)
+
+query I
+SELECT comment FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 'copied'
+----
+tc
+
+query II
+SELECT column_name, comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 'copied' ORDER BY column_index
+----
+i	cc
+k	NULL
+
+query I
+SELECT comment FROM duckdb_views() WHERE database_name = 'dl' AND view_name = 'copied_view'
+----
+vc
+
+statement ok
+DETACH mem

@@ -46,6 +46,15 @@ struct FieldIndex : public TypedIndex<FieldIndex> {
 	using TypedIndex::TypedIndex;
 };
 
+//! A column that a scan reads, with the fields of a struct that it reads: all fields if there are none
+struct DuckLakeProjectedColumn {
+	explicit DuckLakeProjectedColumn(FieldIndex field_index_p) : field_index(field_index_p) {
+	}
+
+	FieldIndex field_index;
+	vector<DuckLakeProjectedColumn> children;
+};
+
 struct DataFileIndex : public TypedIndex<DataFileIndex> {
 	using TypedIndex::TypedIndex;
 };

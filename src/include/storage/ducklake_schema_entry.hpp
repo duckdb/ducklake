@@ -50,7 +50,8 @@ public:
 	                                               string table_uuid, string table_data_path,
 	                                               unique_ptr<DuckLakePartition> prebuilt_partition_data = nullptr,
 	                                               unique_ptr<DuckLakeSort> prebuilt_sort_data = nullptr,
-	                                               map<string, string> prebuilt_table_options = {});
+	                                               map<string, string> prebuilt_table_options = {},
+	                                               vector<Value> initial_defaults = {});
 	//! Data path for a new table in this schema, derived from the schema path, table name and uuid
 	string GenerateTableDataPath(const string &table_uuid, const string &table_name) const;
 	unique_ptr<CreateInfo> GetInfo() const override;
@@ -59,6 +60,9 @@ public:
 	optional_ptr<CatalogEntry> CreateIndex(CatalogTransaction transaction, CreateIndexInfo &info,
 	                                       TableCatalogEntry &table) override;
 	optional_ptr<CatalogEntry> CreateView(CatalogTransaction transaction, CreateViewInfo &info) override;
+	//! Creates a view with the given uuid, a new one if it is empty
+	optional_ptr<CatalogEntry> CreateViewExtended(CatalogTransaction transaction, CreateViewInfo &info,
+	                                              string view_uuid);
 	optional_ptr<CatalogEntry> CreateSequence(CatalogTransaction transaction, CreateSequenceInfo &info) override;
 	optional_ptr<CatalogEntry> CreateType(CatalogTransaction transaction, CreateTypeInfo &info) override;
 	void Alter(CatalogTransaction transaction, AlterInfo &info) override;
@@ -67,6 +71,8 @@ public:
 	void DropEntry(ClientContext &context, DropInfo &info) override;
 	//! Drops an entry, a replaced one without checking for tables that call it
 	void DropEntry(ClientContext &context, DropInfo &info, bool replacing);
+	//! Throws if a table calls one of the macros in its defaults or sort key
+	static void ThrowIfTablesCallMacros(ClientContext &context, Catalog &catalog, const identifier_set_t &macro_names);
 	optional_ptr<CatalogEntry> LookupEntry(CatalogTransaction transaction, const EntryLookupInfo &lookup_info) override;
 
 	void AddEntry(CatalogType type, unique_ptr<CatalogEntry> entry);

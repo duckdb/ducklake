@@ -84,7 +84,16 @@ optional_ptr<CatalogEntry> DuckLakeCatalogSet::GetEntryById(TableIndex index) {
 	if (entry == table_entry_map.end()) {
 		return nullptr;
 	}
-	D_ASSERT(entry->second.get().type == CatalogType::TABLE_ENTRY);
+	D_ASSERT(entry->second.get().type == CatalogType::TABLE_ENTRY ||
+	         entry->second.get().type == CatalogType::VIEW_ENTRY);
+	return entry->second.get();
+}
+
+optional_ptr<CatalogEntry> DuckLakeCatalogSet::GetEntryById(MacroIndex index) {
+	auto entry = macro_entry_map.find(index);
+	if (entry == macro_entry_map.end()) {
+		return nullptr;
+	}
 	return entry->second.get();
 }
 

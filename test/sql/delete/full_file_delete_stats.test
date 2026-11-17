@@ -86,10 +86,11 @@ SELECT record_count, next_row_id FROM __ducklake_metadata_ducklake.ducklake_tabl
 ----
 200	400
 
-query I
-SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id = getvariable('partial_id')
+# the column stats are recomputed from the per-file stats of the remaining file
+query TT
+SELECT min_value, max_value FROM __ducklake_metadata_ducklake.ducklake_table_column_stats WHERE table_id = getvariable('partial_id')
 ----
-0
+1000	1199
 
 # Re-insert after the drop in the same connection: the stats cache was invalidated, so the insert
 # starts from the decremented base (record_count 0), not the stale pre-delete value.

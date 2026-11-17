@@ -1,0 +1,105 @@
+# name: test/sql/rest/rest_conflicts.test
+# description: Conflicts between concurrent transactions are detected by the DuckLake REST server
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+# two clients that insert into the same table do not conflict
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (4)
+
+statement ok con2
+INSERT INTO dl.t VALUES (5)
+
+statement ok con1
+COMMIT
+
+query I
+SELECT count(*) FROM dl.t
+----
+5
+
+# a delete conflicts with a concurrent delete of the same rows
+statement ok con1
+BEGIN
+
+statement ok con1
+DELETE FROM dl.t WHERE i = 1
+
+statement ok con2
+DELETE FROM dl.t WHERE i = 1
+
+statement error con1
+COMMIT
+----
+conflict
+
+# an insert conflicts with a concurrent drop of the table
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (6)
+
+statement ok con2
+DROP TABLE dl.t
+
+statement error con1
+COMMIT
+----
+conflict
+
+# creating the same table concurrently conflicts
+statement ok con1
+BEGIN
+
+statement ok con1
+CREATE TABLE dl.t2(i INTEGER)
+
+statement ok con2
+CREATE TABLE dl.t2(j VARCHAR)
+
+statement error con1
+COMMIT
+----
+conflict
+
+# clients on different servers of the same DuckLake see each other's changes
+statement ok rest_db:rest_server_con
+SET VARIABLE second_listen_uri = (SELECT listen_uri FROM ducklake_rest_serve('rest_lake'))
+
+set variable second_server <variable:rest_server_con:second_listen_uri>
+
+statement ok
+ATTACH 'ducklake:rest:{second_server}' AS dl2
+
+statement ok
+INSERT INTO dl2.t2 VALUES ('second')
+
+query I
+FROM dl.t2
+----
+second
+
+statement ok
+DETACH dl
+
+statement ok
+DETACH dl2
+
+statement ok rest_db:rest_server_con
+SELECT * FROM ducklake_rest_stop(getvariable('second_listen_uri'))
+
+include test/template/rest_teardown.test_template

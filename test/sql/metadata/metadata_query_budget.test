@@ -392,3 +392,94 @@ getvariable('alter_0') > 0 AND getvariable('alter_0') = getvariable('alter_1'),
 getvariable('expire_0') > 0 AND getvariable('expire_0') = getvariable('expire_1')
 ----
 true	true	true	true	true
+
+# expiring the snapshot before a transaction that replaced 2 and 12 tables
+# on a Postgres catalog the statements that postgres_scanner sends count too, at debug level
+loop i 0 12
+
+statement ok
+CREATE TABLE ducklake.replaced_{i} AS SELECT {i} AS a
+
+endloop
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+statement ok
+BEGIN
+
+loop i 0 2
+
+statement ok
+CREATE OR REPLACE TABLE ducklake.replaced_{i} AS SELECT {i} + 1 AS a
+
+endloop
+
+statement ok
+COMMIT
+
+statement ok
+FROM warm_up()
+
+statement ok
+CALL enable_logging(level = 'debug')
+
+statement ok
+SET VARIABLE expired_2 = (SELECT count(*) FROM ducklake_expire_snapshots('ducklake', older_than => now()))
+
+statement ok
+SET VARIABLE expire_replaced_2 = metadata_queries()
+
+statement ok
+SET VARIABLE postgres_replaced_2 = (SELECT count(*) FROM duckdb_logs WHERE type = 'PostgresQueryLog')
+
+statement ok
+CALL disable_logging()
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+statement ok
+BEGIN
+
+loop i 0 12
+
+statement ok
+CREATE OR REPLACE TABLE ducklake.replaced_{i} AS SELECT {i} + 1 AS a
+
+endloop
+
+statement ok
+COMMIT
+
+statement ok
+FROM warm_up()
+
+statement ok
+CALL enable_logging(level = 'debug')
+
+statement ok
+SET VARIABLE expired_12 = (SELECT count(*) FROM ducklake_expire_snapshots('ducklake', older_than => now()))
+
+statement ok
+SET VARIABLE expire_replaced_12 = metadata_queries()
+
+statement ok
+SET VARIABLE postgres_replaced_12 = (SELECT count(*) FROM duckdb_logs WHERE type = 'PostgresQueryLog')
+
+statement ok
+CALL disable_logging()
+
+statement ok
+CALL truncate_duckdb_logs()
+
+query IIII
+SELECT getvariable('expired_2') > 0 AND getvariable('expired_2') = getvariable('expired_12'),
+getvariable('expire_replaced_2') > 0 AND getvariable('expire_replaced_2') = getvariable('expire_replaced_12'),
+getvariable('postgres_replaced_2') = getvariable('postgres_replaced_12'),
+(SELECT count(*) FROM ducklake_list_files('ducklake', 'replaced_11'))
+----
+true	true	true	1

@@ -1,0 +1,157 @@
+# name: test/sql/rest/rest_functions.test
+# description: DuckLake functions (options, table info, change feeds, adding files) through the DuckLake REST API
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+# options
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'data_inlining_row_limit'
+----
+0
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 'one')
+
+# the row is written to a file since inlining is disabled
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 't')
+----
+1
+
+query II rest_db:rest_server_con
+SELECT option_name, value FROM rest_lake.options() WHERE option_name = 'data_inlining_row_limit'
+----
+data_inlining_row_limit	0
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10, table_name => 't')
+
+statement ok
+INSERT INTO dl.t VALUES (2, 'two')
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 't')
+----
+1
+
+# table info
+query III
+SELECT table_name, file_count, delete_file_count FROM ducklake_table_info('dl')
+----
+t	1	0
+
+# change feeds
+statement ok
+UPDATE dl.t SET s = 'TWO' WHERE i = 2
+
+statement ok
+DELETE FROM dl.t WHERE i = 1
+
+statement ok
+SET VARIABLE latest = (SELECT max(snapshot_id) FROM dl.snapshots())
+
+query III
+SELECT change_type, i, s FROM dl.table_changes('t', 0, getvariable('latest')) ORDER BY snapshot_id, change_type, i
+----
+insert	1	one
+insert	2	two
+update_postimage	2	TWO
+update_preimage	2	two
+delete	1	one
+
+query II
+SELECT i, s FROM dl.table_insertions('t', 0, getvariable('latest')) ORDER BY ALL
+----
+1	one
+2	TWO
+2	two
+
+query II
+SELECT i, s FROM dl.table_deletions('t', 0, getvariable('latest')) ORDER BY ALL
+----
+1	one
+2	two
+
+# adding existing files
+statement ok
+COPY (SELECT 42 AS i, 'added' AS s) TO '{TEST_DIR}/{BASE_TEST_NAME}_rest_added.parquet'
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{TEST_DIR}/{BASE_TEST_NAME}_rest_added.parquet')
+
+query II
+FROM dl.t ORDER BY i
+----
+2	TWO
+42	added
+
+# files with different column names use a name map
+statement ok
+COPY (SELECT 84 AS j, 'renamed' AS s) TO '{TEST_DIR}/{BASE_TEST_NAME}_rest_renamed.parquet'
+
+statement ok
+ALTER TABLE dl.t RENAME COLUMN i TO j
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{TEST_DIR}/{BASE_TEST_NAME}_rest_renamed.parquet')
+
+statement ok
+ALTER TABLE dl.t RENAME COLUMN j TO i
+
+query II
+FROM dl.t ORDER BY i
+----
+2	TWO
+42	added
+84	renamed
+
+query II rest_db:rest_server_con
+FROM rest_lake.t ORDER BY i
+----
+2	TWO
+42	added
+84	renamed
+
+# commit messages
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t VALUES (100, 'commit')
+
+statement ok
+CALL dl.set_commit_message('author', 'message', extra_info => 'extra')
+
+statement ok
+COMMIT
+
+query III
+SELECT author, commit_message, commit_extra_info FROM dl.snapshots() ORDER BY snapshot_id DESC LIMIT 1
+----
+author	message	extra
+
+query I
+SELECT (SELECT id FROM dl.current_snapshot()) = max(snapshot_id) FROM dl.snapshots()
+----
+true
+
+# the tables of the metadata catalog are not part of the API
+statement error
+SELECT count(*) FROM ducklake_metadata_table('dl', 'ducklake_snapshot')
+----
+do not have metadata tables to read
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

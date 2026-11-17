@@ -1,0 +1,159 @@
+# name: test/sql/rest/rest_ddl.test
+# description: Schemas, drops, views and macros through the DuckLake REST API
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+statement ok
+CREATE SCHEMA dl.s1
+
+statement ok
+CREATE TABLE dl.s1.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.s1.t VALUES (1), (2)
+
+query I
+FROM dl.s1.t ORDER BY i
+----
+1
+2
+
+statement ok
+CREATE VIEW dl.s1.v AS SELECT i * 2 AS j FROM dl.s1.t
+
+query I
+FROM dl.s1.v ORDER BY j
+----
+2
+4
+
+statement ok
+CREATE MACRO dl.s1.add_one(x) AS x + 1
+
+query I
+SELECT dl.s1.add_one(41)
+----
+42
+
+statement ok
+CREATE MACRO dl.range_macro(n) AS TABLE SELECT * FROM range(n)
+
+query I
+SELECT count(*) FROM dl.range_macro(10)
+----
+10
+
+# the entries are visible to the server
+query I rest_db:rest_server_con
+SELECT j FROM rest_lake.s1.v ORDER BY j
+----
+2
+4
+
+# drops
+statement ok
+DROP VIEW dl.s1.v
+
+statement ok
+DROP MACRO dl.s1.add_one
+
+statement ok
+USE dl
+
+statement ok
+DROP MACRO TABLE range_macro
+
+statement error
+SELECT dl.s1.add_one(41)
+----
+does not exist
+
+statement error
+DROP SCHEMA dl.s1
+----
+depend
+
+statement ok
+DROP TABLE dl.s1.t
+
+statement ok
+DROP SCHEMA dl.s1
+
+statement error
+FROM dl.s1.t
+----
+does not exist
+
+# replace entries
+statement ok
+CREATE TABLE dl.t AS SELECT 1 i
+
+statement ok
+CREATE OR REPLACE TABLE dl.t AS SELECT 'hello' s
+
+query I
+FROM dl.t
+----
+hello
+
+statement ok
+CREATE VIEW dl.v AS SELECT 42 x
+
+statement ok
+CREATE OR REPLACE VIEW dl.v AS SELECT 84 x
+
+query I
+FROM dl.v
+----
+84
+
+# create and drop in one transaction
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE dl.tmp(i INTEGER)
+
+statement ok
+INSERT INTO dl.tmp VALUES (1)
+
+statement ok
+DROP TABLE dl.tmp
+
+statement ok
+COMMIT
+
+statement error
+FROM dl.tmp
+----
+does not exist
+
+# nested schemas
+statement ok
+CREATE SCHEMA dl.parent
+
+statement ok
+CREATE SCHEMA dl.parent.child
+
+statement ok
+CREATE TABLE dl.parent.child.nested(i INTEGER)
+
+statement ok
+INSERT INTO dl.parent.child.nested VALUES (42)
+
+query I
+FROM dl.parent.child.nested
+----
+42
+
+statement ok
+USE memory
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

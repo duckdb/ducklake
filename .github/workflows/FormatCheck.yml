@@ -47,3 +47,14 @@ jobs:
           .cache/format-venv/bin/clang-format --dump-config
           .cache/format-venv/bin/black --version
           .cache/format-venv/bin/python duckdb/scripts/format.py --all --check --directories src test
+
+      - name: Install Smithy CLI
+        run: |
+          curl -sL -o smithy-cli.zip https://github.com/smithy-lang/smithy/releases/download/1.74.0/smithy-cli-linux-x86_64.zip
+          mkdir -p .cache/smithy
+          unzip -qo smithy-cli.zip -d .cache/smithy
+          .cache/smithy/smithy-cli-linux-x86_64/bin/smithy --version
+
+      - name: Check generated REST API
+        run: |
+          PATH="$PWD/.cache/smithy/smithy-cli-linux-x86_64/bin:$PWD/.cache/format-venv/bin:$PATH" python scripts/generate_rest_api.py --check

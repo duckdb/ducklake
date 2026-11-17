@@ -1,0 +1,187 @@
+# name: test/sql/rest/rest_alter.test
+# description: Alter tables and views through the DuckLake REST API
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, j VARCHAR)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 'a')
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN k INTEGER DEFAULT 42
+
+statement ok
+INSERT INTO dl.t VALUES (2, 'b', 3)
+
+query III
+FROM dl.t ORDER BY i
+----
+1	a	42
+2	b	3
+
+statement ok
+ALTER TABLE dl.t RENAME COLUMN j TO jj
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN k
+
+query II
+SELECT i, jj FROM dl.t ORDER BY i
+----
+1	a
+2	b
+
+statement ok
+ALTER TABLE dl.t ALTER COLUMN i TYPE BIGINT
+
+query I
+SELECT typeof(i) FROM dl.t LIMIT 1
+----
+BIGINT
+
+statement ok
+ALTER TABLE dl.t ALTER COLUMN jj SET DEFAULT 'default'
+
+statement ok
+INSERT INTO dl.t (i) VALUES (3)
+
+query II
+FROM dl.t ORDER BY i
+----
+1	a
+2	b
+3	default
+
+statement ok
+ALTER TABLE dl.t ALTER COLUMN i SET NOT NULL
+
+statement error
+INSERT INTO dl.t VALUES (NULL, 'x')
+----
+NOT NULL
+
+statement ok
+ALTER TABLE dl.t ALTER COLUMN i DROP NOT NULL
+
+statement ok
+ALTER TABLE dl.t RENAME TO t2
+
+query I
+SELECT count(*) FROM dl.t2
+----
+3
+
+statement ok
+COMMENT ON TABLE dl.t2 IS 'a table'
+
+statement ok
+COMMENT ON COLUMN dl.t2.i IS 'a column'
+
+query I
+SELECT comment FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 't2'
+----
+a table
+
+query I
+SELECT comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 't2' AND column_name = 'i'
+----
+a column
+
+# nested types
+statement ok
+CREATE TABLE dl.nested(s STRUCT(a INTEGER, b VARCHAR))
+
+statement ok
+INSERT INTO dl.nested VALUES ({'a': 1, 'b': 'x'})
+
+statement ok
+ALTER TABLE dl.nested ADD COLUMN s.c INTEGER
+
+statement ok
+ALTER TABLE dl.nested RENAME COLUMN s.b TO bb
+
+statement ok
+ALTER TABLE dl.nested DROP COLUMN s.a
+
+query I
+FROM dl.nested
+----
+{'bb': x, 'c': NULL}
+
+# partitioning and sorting
+statement ok
+CREATE TABLE dl.part(i INTEGER, j INTEGER)
+
+statement ok
+ALTER TABLE dl.part SET PARTITIONED BY (i)
+
+statement ok
+INSERT INTO dl.part SELECT range % 3, range FROM range(10)
+
+query II
+SELECT i, count(*) FROM dl.part GROUP BY i ORDER BY i
+----
+0	4
+1	3
+2	3
+
+statement ok
+ALTER TABLE dl.part SET SORTED BY (j DESC)
+
+statement ok
+ALTER TABLE dl.part RESET PARTITIONED BY
+
+# views
+statement ok
+CREATE VIEW dl.v AS SELECT 1 x
+
+statement ok
+ALTER VIEW dl.v RENAME TO v2
+
+statement ok
+COMMENT ON VIEW dl.v2 IS 'a view'
+
+query I
+FROM dl.v2
+----
+1
+
+# several alters in one transaction
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE dl.tx(a INTEGER)
+
+statement ok
+ALTER TABLE dl.tx ADD COLUMN b INTEGER
+
+statement ok
+INSERT INTO dl.tx VALUES (1, 2)
+
+statement ok
+ALTER TABLE dl.tx RENAME TO tx2
+
+statement ok
+COMMIT
+
+query II
+FROM dl.tx2
+----
+1	2
+
+query II rest_db:rest_server_con
+FROM rest_lake.tx2
+----
+1	2
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template
