@@ -147,7 +147,7 @@ SELECT i, v FROM ducklake.local_delete ORDER BY i
 1	5
 3	hello
 
-# the null count of an inlined VARIANT still enforces NOT NULL
+# an inlined VARIANT still enforces NOT NULL
 statement ok
 CREATE TABLE ducklake.not_null(i INTEGER, v VARIANT NOT NULL)
 
