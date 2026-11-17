@@ -49,7 +49,7 @@ SELECT (SELECT count(*) FROM ducklake.t WHERE v IS NULL), (SELECT count(*) FROM 
 ----
 1	4
 
-# the table stats no longer say that the VARIANT has no NULL values
+# the table stats do not keep the null count of a nested column across commits, with or without the NULL
 query IIII
 SELECT c.column_name, s.contains_null::BOOLEAN, s.min_value, s.max_value FROM ducklake_meta.ducklake_table_column_stats s
 JOIN ducklake_meta.ducklake_column c USING (table_id, column_id)
@@ -59,7 +59,7 @@ WHERE t.table_name = 't' AND c.end_snapshot IS NULL ORDER BY c.column_name
 i	false	1	5
 v	NULL	NULL	NULL
 
-# a delete computes the stats of the remaining inlined rows again
+# a delete of committed inlined rows
 statement ok
 DELETE FROM ducklake.t WHERE i = 4
 
@@ -94,6 +94,58 @@ SELECT i, v, variant_typeof(v) FROM ducklake.t ORDER BY i
 3	hello	VARCHAR
 5	{'a': [{'b': [1, 2], 'c': {'d': x}}]}	OBJECT(a)
 6	NULL	VARIANT_NULL
+
+# the NULL values of the first commit are counted
+statement ok
+CREATE TABLE ducklake.with_null(i INTEGER, v VARIANT)
+
+statement ok
+INSERT INTO ducklake.with_null VALUES (1, 5), (2, NULL)
+
+query IIII
+SELECT c.column_name, s.contains_null::BOOLEAN, s.min_value, s.max_value FROM ducklake_meta.ducklake_table_column_stats s
+JOIN ducklake_meta.ducklake_column c USING (table_id, column_id)
+JOIN ducklake_meta.ducklake_table t USING (table_id)
+WHERE t.table_name = 'with_null' AND c.end_snapshot IS NULL ORDER BY c.column_name
+----
+i	false	1	2
+v	true	NULL	NULL
+
+# a delete of rows that the transaction inlined computes the stats of the remaining rows again
+statement ok
+CREATE TABLE ducklake.local_delete(i INTEGER, v VARIANT)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.local_delete VALUES (1, 5), (2, {'k': [1, 2]}), (3, 'hello'), (4, NULL)
+
+statement ok
+DELETE FROM ducklake.local_delete WHERE i IN (2, 4)
+
+query II
+SELECT (SELECT count(*) FROM ducklake.local_delete WHERE v IS NULL), (SELECT count(*) FROM ducklake.local_delete WHERE v IS NOT NULL)
+----
+0	2
+
+statement ok
+COMMIT
+
+query IIII
+SELECT c.column_name, s.contains_null::BOOLEAN, s.min_value, s.max_value FROM ducklake_meta.ducklake_table_column_stats s
+JOIN ducklake_meta.ducklake_column c USING (table_id, column_id)
+JOIN ducklake_meta.ducklake_table t USING (table_id)
+WHERE t.table_name = 'local_delete' AND c.end_snapshot IS NULL ORDER BY c.column_name
+----
+i	false	1	3
+v	false	NULL	NULL
+
+query II
+SELECT i, v FROM ducklake.local_delete ORDER BY i
+----
+1	5
+3	hello
 
 # the null count of an inlined VARIANT still enforces NOT NULL
 statement ok
