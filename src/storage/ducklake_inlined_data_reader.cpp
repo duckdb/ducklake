@@ -1,6 +1,5 @@
 #include "storage/ducklake_inlined_data_reader.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
-#include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
 #include "duckdb/storage/table/column_segment.hpp"

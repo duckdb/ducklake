@@ -645,6 +645,8 @@ public:
 	virtual string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const;
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
+	//! Whether the metadata statements run on DuckDB itself, rather than through the scanner of another database
+	static bool IsDuckDBMetadataType(const string &metadata_type);
 	//! Whether a lookup on snapshot_id names the branch of main, where the metadata engine serves it from the key
 	bool BranchKeyedLookups() const;
 	//! Throws when the newest expired snapshot a time travel by timestamp could see is its resolved snapshot or newer

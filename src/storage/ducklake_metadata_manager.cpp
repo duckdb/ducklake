@@ -3791,10 +3791,9 @@ string DuckLakeMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	return column_type.ToString();
 }
 
-//! Whether the metadata statements run on DuckDB itself, rather than through the scanner of another database
-static bool IsDuckDBMetadataType(const string &metadata_type) {
-	return metadata_type.empty() || metadata_type == "duckdb" || metadata_type == "quack" ||
-	       metadata_type == "quack_scanner";
+bool DuckLakeMetadataManager::IsDuckDBMetadataType(const string &metadata_type) {
+	auto type = StringUtil::Lower(metadata_type);
+	return type.empty() || type == "duckdb" || type == "quack" || type == "quack_scanner";
 }
 
 string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const LogicalType &type) {
@@ -6593,13 +6592,12 @@ SELECT tag_name, snapshot_id, NULL, begin_snapshot, expires_at
 FROM {METADATA_CATALOG}.ducklake_snapshot_tag
 WHERE end_snapshot IS NULL;)";
 	if (with_snapshot_time) {
-		query = StringUtil::Format(R"(
+		query = R"(
 SELECT tag_name, tag.snapshot_id, snap.snapshot_time, tag.begin_snapshot, tag.expires_at
 FROM {METADATA_CATALOG}.ducklake_snapshot_tag tag
-LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot snap ON snap.snapshot_id = tag.snapshot_id%s
+LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot snap ON snap.snapshot_id = tag.snapshot_id
 WHERE tag.end_snapshot IS NULL
-ORDER BY tag.begin_snapshot ASC, tag_name ASC;)",
-		                           MainSnapshotFilter());
+ORDER BY tag.begin_snapshot ASC, tag_name ASC;)";
 	}
 	auto result = Query(query);
 	result->ThrowIfError("Failed to get snapshot tags from DuckLake: ");
