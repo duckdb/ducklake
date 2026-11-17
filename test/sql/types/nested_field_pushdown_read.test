@@ -24,9 +24,6 @@ statement ok
 SET VARIABLE data_file = (SELECT data_file FROM ducklake_list_files('ducklake', 't'));
 
 statement ok
-SET VARIABLE file_bytes = (SELECT sum(total_compressed_size) FROM parquet_metadata(getvariable('data_file')));
-
-statement ok
 SET enable_external_file_cache = false;
 
 statement ok
@@ -66,12 +63,23 @@ statement ok
 CALL truncate_duckdb_logs();
 
 query I
+SELECT sum(v.n::BIGINT) FROM read_parquet(getvariable('data_file'));
+----
+199990000
+
+statement ok
+SET VARIABLE read_parquet_bytes = parquet_bytes_read();
+
+statement ok
+CALL truncate_duckdb_logs();
+
+query I
 SELECT sum(v.n::BIGINT) FROM ducklake.t;
 ----
 199990000
 
 query I
-SELECT parquet_bytes_read() < getvariable('file_bytes') / 4;
+SELECT parquet_bytes_read() <= getvariable('read_parquet_bytes') + 65536;
 ----
 true
 
