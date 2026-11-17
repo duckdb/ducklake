@@ -392,10 +392,9 @@ void DuckLakeTransactionState::CheckTaggedSnapshotsExist(const DuckLakeCommitCon
 	if (new_snapshot_tags.empty()) {
 		return;
 	}
-	auto result = context.conflict_query_executor(
-	    StringUtil::Format("SELECT snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id IN (%s) "
-	                       "AND branch_id = 0",
-	                       TaggedSnapshotIdList(new_snapshot_tags)));
+	auto result = context.conflict_query_executor(StringUtil::Format(
+	    "SELECT snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id IN (%s)%s",
+	    TaggedSnapshotIdList(new_snapshot_tags), context.branch_keyed_lookups ? " AND branch_id = 0" : ""));
 	set<idx_t> existing;
 	for (auto &row : *result) {
 		existing.insert(row.GetValue<idx_t>(0));
@@ -2839,12 +2838,8 @@ WHERE idt.schema_version < (
 	}
 	if (dropped) {
 		// We also need to invalidate the existing schema versions in our catalog
-		string snapshot_versions_sql = "SELECT DISTINCT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot;";
-		if (context.supports_v2_0_metadata) {
-			snapshot_versions_sql =
-			    "SELECT DISTINCT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = 0;";
-		}
-		auto snapshot_versions = context.query_metadata(snapshot_versions_sql);
+		auto snapshot_versions =
+		    context.query_metadata("SELECT DISTINCT schema_version FROM {METADATA_CATALOG}.ducklake_snapshot;");
 		snapshot_versions->ThrowIfError("Failed to list schema versions for cache invalidation: ");
 		for (auto &row : *snapshot_versions) {
 			context.invalidate_schema_cache(row.GetValue<idx_t>(0));
@@ -2967,7 +2962,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				batch_queries = DuckLakeMetadataManager::InsertSnapshotSql(context.supports_v2_0_metadata);
 				if (!expired_snapshots.empty()) {
 					batch_queries +=
-					    DuckLakeMetadataManager::DeleteSnapshotsSql(expired_snapshots, context.supports_v2_0_metadata);
+					    DuckLakeMetadataManager::DeleteSnapshotsSql(expired_snapshots, context.branch_keyed_lookups);
 				}
 				for (auto &tag : expiry.tags) {
 					batch_queries += DuckLakeMetadataManager::EndSnapshotTagSql(tag);

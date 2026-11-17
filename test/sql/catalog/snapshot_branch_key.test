@@ -74,7 +74,7 @@ FROM meta.ducklake_snapshot_changes WHERE snapshot_id = 1
 ----
 constraint
 
-# rows of another branch share a snapshot id of main and sit beyond its head
+# the key admits the snapshot id of main on another branch, which nothing writes before branches exist
 statement ok
 INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id,
     branch_id)
@@ -82,24 +82,34 @@ SELECT snapshot_id, snapshot_time, 7, next_catalog_id, next_file_id, 1
 FROM meta.ducklake_snapshot WHERE snapshot_id = 1
 
 statement ok
-INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id,
-    branch_id)
-SELECT 9, snapshot_time, 7, next_catalog_id, next_file_id, 1
-FROM meta.ducklake_snapshot WHERE snapshot_id = 2
-
-statement ok
 INSERT INTO meta.ducklake_snapshot_changes (snapshot_id, changes_made, author, commit_message, commit_extra_info,
     branch_id)
 SELECT snapshot_id, changes_made, 'dev', 'on a branch', commit_extra_info, 1
 FROM meta.ducklake_snapshot_changes WHERE snapshot_id = 1
 
-statement ok
-INSERT INTO meta.ducklake_snapshot_changes (snapshot_id, changes_made, author, commit_message, commit_extra_info,
-    branch_id)
-SELECT 9, changes_made, 'dev', 'on a branch', commit_extra_info, 1
-FROM meta.ducklake_snapshot_changes WHERE snapshot_id = 2
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY branch_id, snapshot_id
+----
+0	0
+1	0
+2	0
+1	1
 
-# the readers only see the rows of main
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY branch_id, snapshot_id
+----
+0	0
+1	0
+2	0
+1	1
+
+# the readers of this version take every row for main, so the rows of the branch are removed again
+statement ok
+DELETE FROM meta.ducklake_snapshot WHERE branch_id = 1
+
+statement ok
+DELETE FROM meta.ducklake_snapshot_changes WHERE branch_id = 1
+
 query IIII
 SELECT snapshot_id, schema_version, author, commit_message FROM dl.snapshots() ORDER BY snapshot_id
 ----
@@ -118,19 +128,17 @@ SELECT i FROM dl.t AT (VERSION => 2) ORDER BY i
 42
 43
 
-# a commit takes the head of main plus one, not the head of the other branch
+# a commit takes the head of main plus one
 statement ok
 INSERT INTO dl.t VALUES (44)
 
 query II
-SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY branch_id, snapshot_id
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
 ----
 0	0
 1	0
 2	0
 3	0
-1	1
-9	1
 
 query I
 SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
@@ -156,12 +164,6 @@ query I
 SELECT list(i ORDER BY i) FROM dl.t
 ----
 [42, 43, 44, 45]
-
-query II
-SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes WHERE branch_id = 1 ORDER BY snapshot_id
-----
-1	1
-9	1
 
 statement ok
 DETACH dl

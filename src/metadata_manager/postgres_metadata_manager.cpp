@@ -549,7 +549,9 @@ ORDER BY c.relname, a.attnum)",
 }
 
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
-	auto remote_query = LatestSnapshotQuery(transaction.GetCatalog().SupportsBranching());
+	// the server plans both conjuncts from the composite key
+	bool branch_keyed = transaction.GetCatalog().SupportsBranching();
+	auto remote_query = LatestSnapshotQuery(branch_keyed, branch_keyed);
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	return PostgresQuery(remote_query);
@@ -558,8 +560,8 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot,
                                                                    bool include_exactness) const {
 	// one statement reads the latest snapshot and the table stats from the same state at any isolation level
-	auto remote_query =
-	    SnapshotAndStatsAndChangesQuery(include_exactness, transaction.GetCatalog().SupportsBranching());
+	bool branch_keyed = transaction.GetCatalog().SupportsBranching();
+	auto remote_query = SnapshotAndStatsAndChangesQuery(include_exactness, branch_keyed, branch_keyed);
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	SubstituteSnapshotPlaceholders(snapshot, remote_query);

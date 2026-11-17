@@ -82,9 +82,7 @@ DuckLakeInlinedDataReader::ReadCommittedRows(DuckLakeFunctionInfo &read_info, co
 		result->columns.push_back(std::move(column));
 		types.push_back(std::move(type));
 	}
-	string main_filter = transaction->GetCatalog().SupportsBranching() ? " WHERE branch_id = 0" : "";
-	result->columns.push_back("(SELECT MAX(next_file_id) FROM {METADATA_CATALOG}.ducklake_snapshot" + main_filter +
-	                          ")");
+	result->columns.push_back("(SELECT MAX(next_file_id) FROM {METADATA_CATALOG}.ducklake_snapshot)");
 	types.push_back(LogicalType::BIGINT);
 	auto query_result = metadata_manager.ReadInlinedData(read_info.snapshot, table_name, result->columns);
 	result->rows = metadata_manager.TransformInlinedData(*query_result, types, table_name);

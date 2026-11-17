@@ -393,7 +393,8 @@ public:
 	//! Pure SQL templates (use `{METADATA_CATALOG}` placeholder) — caller substitutes + executes.
 	//! Both used by the regular metadata-manager methods and by server-side commit, which runs the
 	//! SQL on a fresh Connection without going through the metadata-manager wrapper.
-	static string LatestSnapshotQuery(bool branch_keyed);
+	//! keyed_lookups puts branch_id = 0 beside the predicates on snapshot_id, keyed_scans on a MAX over the table
+	static string LatestSnapshotQuery(bool keyed_lookups, bool keyed_scans);
 	//! With table ids only those tables' stats are read
 	static string GlobalTableStatsQuery(bool include_exactness, const vector<TableIndex> &table_ids = {});
 	//! Pure parsers for the results of the above queries.
@@ -639,11 +640,13 @@ public:
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor, const string &query);
-	static string SnapshotAndStatsAndChangesQuery(bool include_exactness, bool branch_keyed);
+	static string SnapshotAndStatsAndChangesQuery(bool include_exactness, bool keyed_lookups, bool keyed_scans);
 	//! The query of the conflict check, which must read the latest snapshot and the table stats consistently
 	virtual string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const;
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
+	//! Whether a lookup on snapshot_id names the branch of main, where the metadata engine serves it from the key
+	bool BranchKeyedLookups() const;
 	//! Throws when the newest expired snapshot a time travel by timestamp could see is its resolved snapshot or newer
 	void CheckSnapshotAfterExpiredGap(const DuckLakeSnapshot &snapshot, const Value &timestamp,
 	                                  idx_t newest_snapshot_id, const set<idx_t> &expired_in_transaction);
@@ -794,7 +797,7 @@ protected:
 	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
 
 	virtual string GetLatestSnapshotQuery() const;
-	//! Selects the snapshots of main, preceded by AND, empty before 2.0
+	//! The branch conjunct of a lookup on snapshot_id, preceded by AND, empty where the engine would not use it
 	string MainSnapshotFilter() const;
 	//! The changes of the snapshots from first_snapshot to last_snapshot that recorded a rewrite
 	virtual string GetRewriteSnapshotsQuery(idx_t first_snapshot, idx_t last_snapshot) const;

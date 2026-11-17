@@ -572,8 +572,9 @@ DuckLakeVersion DuckLakeServerSideCommit::ReadCatalogVersion() {
 }
 
 DuckLakeSnapshot DuckLakeServerSideCommit::ReadLatestSnapshot() {
-	string sql = StringUtil::Replace(DuckLakeMetadataManager::LatestSnapshotQuery(supports_v2_0_metadata),
-	                                 "{METADATA_CATALOG}", schema_id);
+	string sql = StringUtil::Replace(
+	    DuckLakeMetadataManager::LatestSnapshotQuery(supports_v2_0_metadata, supports_v2_0_metadata),
+	    "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read latest snapshot");
 	auto snapshot = DuckLakeMetadataManager::ParseSnapshot(*result);
 	if (!snapshot) {
@@ -654,8 +655,9 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.skip_drop_empty_inlined = true;
 	ctx.supports_v1_1_metadata = supports_v1_1_metadata;
 	ctx.supports_v2_0_metadata = supports_v2_0_metadata;
-	ctx.snapshot_and_stats_query =
-	    DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(supports_v1_1_metadata, supports_v2_0_metadata);
+	ctx.branch_keyed_lookups = supports_v2_0_metadata;
+	ctx.snapshot_and_stats_query = DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(
+	    supports_v1_1_metadata, supports_v2_0_metadata, supports_v2_0_metadata);
 	ctx.conflict_query_executor = [this](string q) -> unique_ptr<QueryResult> {
 		auto sql = SubstitutePlaceholders(std::move(q), transaction_snapshot);
 		return fresh_conn.Query(sql);

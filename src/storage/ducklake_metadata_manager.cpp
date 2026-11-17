@@ -3791,13 +3791,18 @@ string DuckLakeMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	return column_type.ToString();
 }
 
+//! Whether the metadata statements run on DuckDB itself, rather than through the scanner of another database
+static bool IsDuckDBMetadataType(const string &metadata_type) {
+	return metadata_type.empty() || metadata_type == "duckdb" || metadata_type == "quack" ||
+	       metadata_type == "quack_scanner";
+}
+
 string DuckLakeMetadataManager::CastColumnToTarget(const string &column, const LogicalType &type) {
 	auto &metadata_type = transaction.GetCatalog().MetadataType();
 	// a column created with an overridden type is cast back like on any other database
 	auto storage_type = DuckLakeUtil::GetInlinedStorageType(*this, type);
 	bool type_overridden = GetMetadataProfile().column_type_overrides.count(storage_type.id());
-	if (!type_overridden && (metadata_type.empty() || metadata_type == "duckdb" || metadata_type == "quack" ||
-	                         metadata_type == "quack_scanner")) {
+	if (!type_overridden && IsDuckDBMetadataType(metadata_type)) {
 		// older versions stored struct fields in the order of an ALTER, which a cast by field name restores
 		return DuckLakeTypes::IsNested(type) ? "CAST(" + column + " AS " + type.ToString() + ")" : column;
 	}
@@ -5593,7 +5598,8 @@ string DuckLakeMetadataManager::WriteSnapshotChangesSql(const SnapshotChangeInfo
 	                          DuckLakeUtil::TextLiteralOrNull(commit_info.commit_extra_info));
 }
 
-string DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(bool include_exactness, bool branch_keyed) {
+string DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(bool include_exactness, bool keyed_lookups,
+                                                                bool keyed_scans) {
 	// both UNION arms must stay column-aligned - extend them together
 	string snapshot_arm_padding;
 	string stats_arm_columns;
@@ -5601,10 +5607,10 @@ string DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(bool include_exa
 		snapshot_arm_padding = ",\n    NULL AS min_is_exact,\n    NULL AS max_is_exact";
 		stats_arm_columns = ",\n    min_is_exact,\n    max_is_exact";
 	}
-	// the composite key of 2.0 serves the predicates on snapshot_id when they name the branch of main
-	string changes_filter = branch_keyed ? " AND c.branch_id = 0" : "";
-	string head_filter = branch_keyed ? " WHERE branch_id = 0" : "";
-	string main_filter = branch_keyed ? " AND branch_id = 0" : "";
+	// the branch conjuncts of 2.0, on the lookups where the engine serves them from the key and on the MAX scan
+	string changes_filter = keyed_lookups ? " AND c.branch_id = 0" : "";
+	string head_filter = keyed_scans ? " WHERE branch_id = 0" : "";
+	string main_filter = keyed_lookups ? " AND branch_id = 0" : "";
 	return R"(
 SELECT
     snapshot_id,
@@ -5679,7 +5685,7 @@ SnapshotChangeInfo DuckLakeMetadataManager::ParseSnapshotAndStatsAndChanges(Quer
 }
 
 string DuckLakeMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot, bool include_exactness) const {
-	return SnapshotAndStatsAndChangesQuery(include_exactness, transaction.GetCatalog().SupportsBranching());
+	return SnapshotAndStatsAndChangesQuery(include_exactness, BranchKeyedLookups(), false);
 }
 
 SnapshotChangeInfo
@@ -5711,20 +5717,26 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult 
 	return snapshot;
 }
 
-string DuckLakeMetadataManager::LatestSnapshotQuery(bool branch_keyed) {
+string DuckLakeMetadataManager::LatestSnapshotQuery(bool keyed_lookups, bool keyed_scans) {
 	return StringUtil::Format(R"(SELECT snapshot_id, schema_version, next_catalog_id, next_file_id,
 (SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version')
 FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot%s)%s;)",
-	                          branch_keyed ? " WHERE branch_id = 0" : "", branch_keyed ? " AND branch_id = 0" : "");
+	                          keyed_scans ? " WHERE branch_id = 0" : "", keyed_lookups ? " AND branch_id = 0" : "");
 }
 
 string DuckLakeMetadataManager::GetLatestSnapshotQuery() const {
-	return LatestSnapshotQuery(transaction.GetCatalog().SupportsBranching());
+	return LatestSnapshotQuery(BranchKeyedLookups(), false);
+}
+
+bool DuckLakeMetadataManager::BranchKeyedLookups() const {
+	// DuckDB folds the conjunct away, the scanners push it into a lookup of the composite key
+	auto &catalog = transaction.GetCatalog();
+	return catalog.SupportsBranching() && !IsDuckDBMetadataType(catalog.MetadataType());
 }
 
 string DuckLakeMetadataManager::MainSnapshotFilter() const {
-	return transaction.GetCatalog().SupportsBranching() ? " AND branch_id = 0" : string();
+	return BranchKeyedLookups() ? " AND branch_id = 0" : string();
 }
 
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
@@ -6205,12 +6217,10 @@ UPDATE {METADATA_CATALOG}.ducklake_table_stats SET file_size_bytes = (
 	return batch_query;
 }
 
-static string SnapshotFilterSQL(const DuckLakeSnapshotFilter &filter, bool branch_keyed) {
+static string SnapshotFilterSQL(const DuckLakeSnapshotFilter &filter) {
 	vector<string> conditions;
 	if (filter.exclude_latest) {
-		conditions.push_back(
-		    StringUtil::Format("snapshot_id != (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot%s)",
-		                       branch_keyed ? " WHERE branch_id = 0" : ""));
+		conditions.push_back("snapshot_id != (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot)");
 	}
 	if (!filter.older_than.empty()) {
 		conditions.push_back(
@@ -6225,30 +6235,20 @@ static string SnapshotFilterSQL(const DuckLakeSnapshotFilter &filter, bool branc
 }
 
 unique_ptr<QueryResult> DuckLakeMetadataManager::ReadSnapshots(const string &filter) {
-	// from 2.0 on the tables join on their key and the rows of main are read
-	bool branch_keyed = transaction.GetCatalog().SupportsBranching();
-	vector<string> conditions;
-	if (branch_keyed) {
-		conditions.push_back("branch_id = 0");
-	}
-	if (!filter.empty()) {
-		conditions.push_back(filter);
-	}
 	auto res = Query(StringUtil::Format(R"(
 SELECT snapshot_id, snapshot_time, schema_version, changes_made, author, commit_message, commit_extra_info, next_file_id
 FROM {METADATA_CATALOG}.ducklake_snapshot
-LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot_changes USING (snapshot_id%s)
+LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot_changes USING (snapshot_id)
 %s %s
 ORDER BY snapshot_id ASC
 )",
-	                                    branch_keyed ? ", branch_id" : "", conditions.empty() ? "" : "WHERE",
-	                                    StringUtil::Join(conditions, " AND ")));
+	                                    filter.empty() ? "" : "WHERE", filter));
 	res->ThrowIfError("Failed to get snapshot information from DuckLake: ");
 	return res;
 }
 
 vector<DuckLakeSnapshotInfo> DuckLakeMetadataManager::GetAllSnapshots(const DuckLakeSnapshotFilter &filter) {
-	auto res = ReadSnapshots(SnapshotFilterSQL(filter, transaction.GetCatalog().SupportsBranching()));
+	auto res = ReadSnapshots(SnapshotFilterSQL(filter));
 	auto context = transaction.context.lock();
 	vector<DuckLakeSnapshotInfo> snapshots;
 
@@ -6574,18 +6574,14 @@ string DuckLakeMetadataManager::WriteCompactions(const vector<DuckLakeCompactedF
 }
 
 //! Selects the files that the filter matches or whose range no remaining snapshot lies in
-static string UnusedFilesQuery(const string &file_table, const string &file_id_column, const string &filter,
-                               bool branch_keyed) {
-	// only the first remaining snapshot of main at or after begin_snapshot matters
-	string snapshots = branch_keyed
-	                       ? "(SELECT snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE branch_id = 0)"
-	                       : "{METADATA_CATALOG}.ducklake_snapshot";
+static string UnusedFilesQuery(const string &file_table, const string &file_id_column, const string &filter) {
+	// only the first remaining snapshot at or after begin_snapshot matters
 	return StringUtil::Format(R"(
 SELECT f.%s, f.table_id, f.path, f.path_is_relative
 FROM {METADATA_CATALOG}.%s f
-ASOF LEFT JOIN %s s ON f.begin_snapshot <= s.snapshot_id
+ASOF LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot s ON f.begin_snapshot <= s.snapshot_id
 WHERE %s(f.end_snapshot IS NOT NULL AND (s.snapshot_id IS NULL OR s.snapshot_id >= f.end_snapshot));)",
-	                          file_id_column, file_table, snapshots, filter);
+	                          file_id_column, file_table, filter);
 }
 
 vector<DuckLakeSnapshotTagInfo> DuckLakeMetadataManager::GetSnapshotTags(bool with_snapshot_time) {
@@ -6597,12 +6593,13 @@ SELECT tag_name, snapshot_id, NULL, begin_snapshot, expires_at
 FROM {METADATA_CATALOG}.ducklake_snapshot_tag
 WHERE end_snapshot IS NULL;)";
 	if (with_snapshot_time) {
-		query = R"(
+		query = StringUtil::Format(R"(
 SELECT tag_name, tag.snapshot_id, snap.snapshot_time, tag.begin_snapshot, tag.expires_at
 FROM {METADATA_CATALOG}.ducklake_snapshot_tag tag
-LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot snap ON snap.snapshot_id = tag.snapshot_id AND snap.branch_id = 0
+LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot snap ON snap.snapshot_id = tag.snapshot_id%s
 WHERE tag.end_snapshot IS NULL
-ORDER BY tag.begin_snapshot ASC, tag_name ASC;)";
+ORDER BY tag.begin_snapshot ASC, tag_name ASC;)",
+		                           MainSnapshotFilter());
 	}
 	auto result = Query(query);
 	result->ThrowIfError("Failed to get snapshot tags from DuckLake: ");
@@ -6687,7 +6684,7 @@ string DuckLakeMetadataManager::DeleteSnapshotsSql(const vector<DuckLakeSnapshot
 }
 
 void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
-	auto result = Execute(DeleteSnapshotsSql(snapshots, transaction.GetCatalog().SupportsBranching()));
+	auto result = Execute(DeleteSnapshotsSql(snapshots, BranchKeyedLookups()));
 	result->ThrowIfError("Failed to delete snapshots in DuckLake: ");
 	CleanupExpiredSnapshots(snapshots);
 }
@@ -6696,13 +6693,13 @@ void DuckLakeMetadataManager::CleanupExpiredSnapshots(const vector<DuckLakeSnaps
 	unique_ptr<QueryResult> result;
 
 	// get a list of tables that are no longer required after these deletions
-	result = Query(StringUtil::Format(R"(
+	result = Query(R"(
 SELECT table_id
 FROM {METADATA_CATALOG}.ducklake_table t
 WHERE end_snapshot IS NOT NULL AND NOT EXISTS (
     SELECT snapshot_id
     FROM {METADATA_CATALOG}.ducklake_snapshot
-    WHERE snapshot_id >= begin_snapshot AND snapshot_id < end_snapshot%s
+    WHERE snapshot_id >= begin_snapshot AND snapshot_id < end_snapshot
 )
 AND NOT EXISTS (
     SELECT 1
@@ -6710,9 +6707,8 @@ AND NOT EXISTS (
     WHERE t2.table_id = t.table_id
       AND (t2.end_snapshot IS NULL OR  EXISTS (SELECT snapshot_id
     FROM {METADATA_CATALOG}.ducklake_snapshot
-    WHERE  snapshot_id >= begin_snapshot AND snapshot_id < t2.end_snapshot%s))
-  );)",
-	                                  MainSnapshotFilter(), MainSnapshotFilter()));
+    WHERE  snapshot_id >= begin_snapshot AND snapshot_id < t2.end_snapshot))
+  );)");
 
 	vector<TableIndex> cleanup_tables;
 	for (auto &row : *result) {
@@ -6752,8 +6748,7 @@ AND NOT EXISTS (
 		table_id_filter = StringUtil::Format("f.table_id IN (%s) OR ", deleted_table_ids);
 	}
 
-	bool branch_keyed = transaction.GetCatalog().SupportsBranching();
-	result = Query(UnusedFilesQuery("ducklake_data_file", "data_file_id", table_id_filter, branch_keyed));
+	result = Query(UnusedFilesQuery("ducklake_data_file", "data_file_id", table_id_filter));
 	auto cleanup_files = read_cleanup_files(*result);
 	auto deleted_file_ids = CleanupFileIdList(cleanup_files);
 	vector<string> tables_to_delete_from;
@@ -6778,8 +6773,7 @@ WHERE data_file_id IN (%s);
 		file_id_filter = StringUtil::Format("f.data_file_id IN (%s) OR ", deleted_file_ids);
 	}
 
-	result = Query(
-	    UnusedFilesQuery("ducklake_delete_file", "delete_file_id", table_id_filter + file_id_filter, branch_keyed));
+	result = Query(UnusedFilesQuery("ducklake_delete_file", "delete_file_id", table_id_filter + file_id_filter));
 	auto cleanup_deletes = read_cleanup_files(*result);
 	if (!cleanup_deletes.empty()) {
 		// delete the delete files
@@ -6857,9 +6851,9 @@ DELETE FROM {METADATA_CATALOG}.%s
 WHERE end_snapshot IS NOT NULL AND NOT EXISTS(
     SELECT snapshot_id
     FROM {METADATA_CATALOG}.ducklake_snapshot
-    WHERE snapshot_id >= begin_snapshot AND snapshot_id < end_snapshot%s
+    WHERE snapshot_id >= begin_snapshot AND snapshot_id < end_snapshot
 );)",
-		                                         delete_tbl, MainSnapshotFilter()));
+		                                         delete_tbl));
 		result->ThrowIfError("Failed to delete from " + delete_tbl + " in DuckLake: ");
 		if (delete_tbl == "ducklake_schema") {
 			// a result without a row count is treated as a deletion
@@ -6889,16 +6883,15 @@ WHERE scope = 'schema' AND NOT EXISTS(
 		auto col_names = InlinedColNames();
 		for (auto &row : *inlined) {
 			auto inlined_table_name = row.GetValue<Identifier>(0);
-			auto result =
-			    Execute(StringUtil::Format(R"(
+			auto result = Execute(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
 WHERE %s IS NOT NULL AND NOT EXISTS(
     SELECT snapshot_id
     FROM {METADATA_CATALOG}.ducklake_snapshot
-    WHERE snapshot_id >= %s AND snapshot_id < %s%s
+    WHERE snapshot_id >= %s AND snapshot_id < %s
 );)",
-			                               inlined_table_name, col_names.end_snapshot, col_names.begin_snapshot,
-			                               col_names.end_snapshot, MainSnapshotFilter()));
+			                                         inlined_table_name, col_names.end_snapshot,
+			                                         col_names.begin_snapshot, col_names.end_snapshot));
 			result->ThrowIfError(StringUtil::Format("Failed to delete from %s in DuckLake: ", inlined_table_name));
 		}
 	}
