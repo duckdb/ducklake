@@ -1,0 +1,116 @@
+# name: test/sql/rest/rest_aggregates.test
+# description: A scan answers count and min/max aggregates from statistics through the DuckLake REST API
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, s VARCHAR, d DOUBLE, n INTEGER, st STRUCT(a INTEGER))
+
+statement ok
+INSERT INTO dl.t VALUES (5, 'b', 1.5, NULL, {'a': 1}), (3, 'a', 2.5, 7, {'a': 2})
+
+statement ok
+INSERT INTO dl.t VALUES (9, 'z', -1.5, 8, {'a': 3}), (4, 'm', 0.0, NULL, {'a': 4})
+
+# the server answers the aggregates and has no files to scan then
+query IIIIIIII
+SELECT status, response->>'$.aggregate_results[0].value', response->>'$.aggregate_results[1].value',
+       response->>'$.aggregate_results[2].value', response->>'$.aggregate_results[3].value',
+       response->>'$.aggregate_results[4].value', response->>'$.aggregate_results[5].value',
+       json_array_length(response->'$.files') = 0
+FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"aggregates": [
+  {"function": "count_star"}, {"function": "count", "column_id": 1}, {"function": "min", "column_id": 1},
+  {"function": "max", "column_id": 1}, {"function": "min", "column_id": 2}, {"function": "max", "column_id": 2}]}')
+----
+200	4	4	3	9	a	z	true
+
+# these are the answers of the query
+query IIIIII
+SELECT count(*), count(i), min(i), max(i), min(s), max(s) FROM dl.t
+----
+4	4	3	9	a	z
+
+query II
+SELECT min(d), max(d) FROM dl.t
+----
+-1.5	2.5
+
+# the client answers aggregates over the table without reading the files
+query II
+EXPLAIN SELECT count(*), min(i), max(i) FROM dl.t
+----
+physical_plan	<REGEX>:.*Column Data Scan.*
+
+# the number of non-NULL values is only known for columns without NULLs
+query II
+SELECT status, response->>'$.aggregate_results[0].answered' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan',
+'{"aggregates": [{"function": "count", "column_id": 4}]}')
+----
+200	false
+
+# an unknown column is rejected
+query III
+SELECT status, response->>'$.error.type', (response->>'$.error.message') LIKE '%top-level%'
+FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"aggregates": [{"function": "min", "column_id": 99}]}')
+----
+400	Invalid Input	true
+
+query II
+SELECT status, response->>'$.error.type' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"aggregates": [{"function": "min"}]}')
+----
+400	Invalid Input
+
+# aggregates are for the whole table
+query II
+SELECT status, response->>'$.error.type' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan',
+'{"aggregates": [{"function": "count_star"}], "filters": {"expressions": []}}')
+----
+400	Invalid Input
+
+# deleted rows are not counted, but the bounds of the statistics are not exact anymore: the files have to be read
+statement ok
+DELETE FROM dl.t WHERE i = 9
+
+query IIIII
+SELECT status, response->>'$.aggregate_results[0].value', response->>'$.aggregate_results[1].answered',
+       response->>'$.aggregate_results[2].answered', json_array_length(response->'$.files') > 0
+FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"aggregates": [
+  {"function": "count_star"}, {"function": "max", "column_id": 1}, {"function": "count", "column_id": 4}]}')
+----
+200	3	false	false	true
+
+query IIII
+SELECT count(*), max(i), min(i), count(n) FROM dl.t
+----
+3	5	3	1
+
+# inlined rows are counted as well
+statement ok
+CREATE TABLE dl.u(i INTEGER)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10, table_name => 'u')
+
+statement ok
+INSERT INTO dl.u VALUES (1), (2), (3)
+
+query II
+SELECT status, response->>'$.aggregate_results[0].value' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/2/scan', '{"aggregates": [{"function": "count_star"}]}')
+----
+200	3
+
+query I
+SELECT count(*) FROM dl.u
+----
+3
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

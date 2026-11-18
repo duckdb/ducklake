@@ -24,6 +24,9 @@ endif
 # Include the Makefile from extension-ci-tools
 include extension-ci-tools/makefiles/duckdb_extension.Makefile
 
+generate-rest-api:
+	python3 scripts/generate_rest_api.py
+
 # Release build with clang source-based coverage of the DuckLake sources only, like `make codecov` in DuckDB
 .PHONY: codecov
 codecov: ${EXTENSION_CONFIG_STEP}

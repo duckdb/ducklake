@@ -1,0 +1,40 @@
+# name: test/sql/rest/rest_timestamptz_promotion.test
+# description: Inlined timestamps of a column promoted to TIMESTAMPTZ are in UTC, whatever the time zone is
+# group: [rest]
+
+require icu
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(ts TIMESTAMP)
+
+statement ok
+INSERT INTO dl.t VALUES ('2025-01-15 12:30:45')
+
+statement ok
+ALTER TABLE dl.t ALTER COLUMN ts TYPE TIMESTAMPTZ
+
+statement ok
+SET TimeZone = 'America/New_York'
+
+query I
+SELECT ts::VARCHAR FROM dl.t
+----
+2025-01-15 07:30:45-05
+
+statement ok
+SET TimeZone = 'Asia/Tokyo'
+
+query I
+SELECT ts::VARCHAR FROM dl.t
+----
+2025-01-15 21:30:45+09
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

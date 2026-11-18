@@ -1,0 +1,82 @@
+# name: test/sql/rest/rest_time_travel.test
+# description: Time travel through the DuckLake REST API
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range(3, 1000)
+
+query I
+SELECT snapshot_id FROM dl.snapshots() ORDER BY ALL
+----
+0
+1
+2
+3
+4
+
+query II
+SELECT count(*), sum(i) FROM dl.t AT (VERSION => 2)
+----
+1	1
+
+query II
+SELECT count(*), sum(i) FROM dl.t AT (VERSION => 3)
+----
+2	3
+
+query II
+SELECT count(*), sum(i) FROM dl.t AT (VERSION => 4)
+----
+999	499500
+
+statement error
+SELECT * FROM dl.t AT (VERSION => 1000)
+----
+No snapshot found at version 1000
+
+statement error
+SELECT * FROM dl.t AT (VERSION => 0)
+----
+does not exist
+
+query I
+SELECT count(*) FROM dl.t AT (TIMESTAMP => now())
+----
+999
+
+statement error
+SELECT * FROM dl.t AT (TIMESTAMP => TIMESTAMPTZ '2100-01-01 00:00:00+00')
+----
+Cannot time travel to a future timestamp
+
+# attach at a specific snapshot
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl_old (SNAPSHOT_VERSION 3)
+
+query I
+FROM dl_old.t ORDER BY ALL
+----
+1
+2
+
+statement ok
+DETACH dl
+
+statement ok
+DETACH dl_old
+
+include test/template/rest_teardown.test_template

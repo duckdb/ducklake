@@ -1,0 +1,89 @@
+# name: test/sql/rest/rest_partition_values.test
+# description: The files of a scan have the partitioning and the partition values they were written with
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.p(ts TIMESTAMP, v INTEGER, c VARCHAR)
+
+statement ok
+ALTER TABLE dl.p SET PARTITIONED BY (year(ts), c)
+
+statement ok
+INSERT INTO dl.p VALUES (TIMESTAMP '2020-05-01', 1, 'a'), (TIMESTAMP '2021-05-01', 2, 'a'), (TIMESTAMP '2021-06-01', 3, 'b'), (TIMESTAMP '2021-07-01', 4, NULL)
+
+# a file for each combination of the values of the partition keys
+query II
+SELECT list_transform(partition_values, lambda x: x.partition_key_index) AS keys,
+       list_transform(partition_values, lambda x: x.partition_value) AS values
+FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan', '{}', part := 'files') ORDER BY values
+----
+[0, 1]	[2020, a]
+[0, 1]	[2021, a]
+[0, 1]	[2021, b]
+[0, 1]	[2021, NULL]
+
+query I
+SELECT count(DISTINCT partition_id) FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan', '{}', part := 'files')
+----
+1
+
+# the partitioning of older files stays when the table is partitioned differently
+statement ok
+ALTER TABLE dl.p SET PARTITIONED BY (v)
+
+statement ok
+INSERT INTO dl.p VALUES (TIMESTAMP '2022-01-01', 10, 'a'), (TIMESTAMP '2022-01-01', 20, 'a')
+
+query II
+SELECT count(DISTINCT partition_id), count(*) FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan', '{}', part := 'files')
+----
+2	6
+
+query I
+SELECT list_transform(partition_values, lambda x: x.partition_value) AS values
+FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan', '{}', part := 'files') WHERE len(partition_values) = 1 ORDER BY values
+----
+[10]
+[20]
+
+# the files that the scan selects
+query I
+SELECT count(*) FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan', '{"filters": {"expressions": ["c = ''b''"]}}', part := 'files')
+----
+1
+
+# the values are in the JSON of the files as well
+query II
+SELECT json_array_length(response->'$.files'), response->>'$.files[0].partition_values[0].partition_key_index'
+FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"filters": {"expressions": ["c = ''b''"]}}')
+----
+1	0
+
+# tables that are not partitioned have no partition values
+statement ok
+CREATE TABLE dl.u(i INTEGER)
+
+statement ok
+INSERT INTO dl.u VALUES (1)
+
+statement ok
+SET VARIABLE u_id = (SELECT j->>'$.table_id' FROM (
+  SELECT unnest(from_json(response->'$.catalog.tables', '["JSON"]')) AS j
+  FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest?include_catalog=true', '')) WHERE j->>'$.table_name' = 'u')
+
+query II
+SELECT partition_id IS NULL, partition_values IS NULL FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/' || getvariable('u_id') || '/scan', '{}', part := 'files')
+----
+true	true
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

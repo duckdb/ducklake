@@ -1,0 +1,89 @@
+# name: test/sql/rest/rest_insert_rows.test
+# description: Create a table and insert rows through the DuckLake REST API
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 'hello'), (2, NULL)
+
+query II
+FROM dl.t ORDER BY i
+----
+1	hello
+2	NULL
+
+# the rows are visible to the server
+query II rest_db:rest_server_con
+FROM rest_lake.t ORDER BY i
+----
+1	hello
+2	NULL
+
+# rows inserted by the server are visible to the client
+statement ok rest_db:rest_server_con
+INSERT INTO rest_lake.t VALUES (3, 'server')
+
+query II
+FROM dl.t ORDER BY i
+----
+1	hello
+2	NULL
+3	server
+
+# multiple statements in one transaction
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE dl.t2(j BIGINT)
+
+statement ok
+INSERT INTO dl.t2 VALUES (42)
+
+statement ok
+INSERT INTO dl.t VALUES (4, 'tx')
+
+query I
+FROM dl.t2
+----
+42
+
+statement ok
+COMMIT
+
+query I
+FROM dl.t2
+----
+42
+
+query I
+SELECT count(*) FROM dl.t
+----
+4
+
+# a rolled back transaction is not sent to the server
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t VALUES (5, 'rollback')
+
+statement ok
+ROLLBACK
+
+query I
+SELECT count(*) FROM dl.t
+----
+4
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

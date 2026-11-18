@@ -1,0 +1,36 @@
+# name: test/sql/rest/rest_commit_request_fields.test
+# description: The REST server keeps the uuids and paths of created entries and rejects options of created tables
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+# the options of a table that the transaction creates are part of create_table
+query II
+SELECT status, response->>'$.error.message' LIKE '%options are part of create_table%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests":[{"create_table":{"placeholder_id":-1,"schema_id":0,"table_name":"t","columns":[{"column_name":"i","column_type":{"id":"int32"}}]}},{"set_option":{"option":{"key":"data_inlining_row_limit","value":"0","table_id":-1}}}]}')
+----
+400	true
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests":[{"create_table":{"placeholder_id":-1,"schema_id":0,"table_name":"t","columns":[{"column_name":"i","column_type":{"id":"int32"}}],"options":{"data_inlining_row_limit":"0"}}}]}')
+----
+200
+
+# create_schema and create_view keep the uuids and the path of the request
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests":[{"create_schema":{"placeholder_id":-1,"schema_name":"s","schema_uuid":"11111111-1111-4111-8111-111111111111","path":' || to_json('{TEST_DIR}/chosen/') || '}},{"create_view":{"placeholder_id":-2,"schema_id":-1,"view_name":"v","view_uuid":"22222222-2222-4222-8222-222222222222","sql":"SELECT 42 AS x"}}]}')
+----
+200
+
+query II
+SELECT j->>'$.schema_uuid' = '11111111-1111-4111-8111-111111111111', regexp_matches(j->>'$.path', '[/\\]chosen[/\\]$') FROM (SELECT unnest(from_json(response->'$.catalog.schemas', '["JSON"]')) AS j FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest?include_catalog=true', '')) WHERE j->>'$.schema_name' = 's'
+----
+true	true
+
+query I
+SELECT bool_or(j->>'$.view_uuid' = '22222222-2222-4222-8222-222222222222') FROM (SELECT unnest(from_json(response->'$.catalog.views', '["JSON"]')) AS j FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest?include_catalog=true', ''))
+----
+true
+
+include test/template/rest_teardown.test_template
