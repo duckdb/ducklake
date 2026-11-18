@@ -214,10 +214,10 @@ public:
 	Connection &GetConnection();
 	//! Releases the metadata transaction until the next metadata access
 	void ReleaseMetadataTransaction();
-	//! Whether the metadata transaction was released or begun again, so that later metadata reads can see commits
-	//! made after the snapshot of this transaction
-	bool MetadataTransactionRestarted() const {
-		return metadata_transaction_restarted;
+	//! Whether the metadata reads of this transaction can see another state than its snapshot: the metadata
+	//! transaction was released or begun again, or the snapshot was set from outside
+	bool MetadataViewDiffers() const {
+		return metadata_view_differs;
 	}
 
 	//! Keep a schema cache entry alive for as long as this transaction lives. Transaction-local catalog entries hold
@@ -479,7 +479,7 @@ private:
 	unique_ptr<DuckLakeMetadataManager> metadata_manager;
 	mutex connection_lock;
 	bool metadata_transaction_released = false;
-	atomic<bool> metadata_transaction_restarted {false};
+	atomic<bool> metadata_view_differs {false};
 	unique_ptr<Connection> connection;
 	//! Flushes of several tables finalize in parallel while scans check the flushed tables
 	mutex flushed_inlined_lock;

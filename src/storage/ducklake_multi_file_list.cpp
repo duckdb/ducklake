@@ -698,8 +698,7 @@ bool DuckLakeMultiFileList::UseFileListCache(DuckLakeTransaction &transaction) c
 	}
 	auto &metadata_manager = transaction.GetMetadataManager();
 	// every reader of a snapshot must read the same metadata
-	if (metadata_manager.IsRemote() || metadata_manager.ShowsConcurrentCommits() ||
-	    transaction.MetadataTransactionRestarted()) {
+	if (metadata_manager.IsRemote() || metadata_manager.ShowsConcurrentCommits() || transaction.MetadataViewDiffers()) {
 		return false;
 	}
 	// a flush or a rewrite can change what an earlier snapshot reads, but not the latest one

@@ -1209,8 +1209,8 @@ shared_ptr<const vector<DuckLakeFileListEntry>> DuckLakeCatalog::GetCommittedFil
 	    transaction.GetMetadataManager().GetFilesForTable(table, snapshot, nullptr, false));
 	// a read at an older snapshot leaves the entry of a newer one alone
 	bool newer = !cached || cached->snapshot_id < snapshot.snapshot_id;
-	// a metadata transaction begun after the snapshot can have read commits made since
-	if (newer && !transaction.MetadataTransactionRestarted()) {
+	// metadata read outside the view of the snapshot can hold commits made since
+	if (newer && !transaction.MetadataViewDiffers()) {
 		PutCacheEntry(std::move(key), make_shared_ptr<DuckLakeFileListCacheEntry>(snapshot.snapshot_id, files));
 	}
 	return files;
@@ -1692,11 +1692,16 @@ string DuckLakeCatalog::FileListCacheKey(TableIndex table_id) const {
 	return StringUtil::Format("ducklake:%s:file_list:table:%llu", instance_id, table_id.index);
 }
 
+//! A node of a std::set<idx_t>: the value, three pointers and the color
+static constexpr idx_t SET_NODE_BYTES = 48;
+
 optional_idx DuckLakeFileListCacheEntry::GetEstimatedCacheMemory() const {
 	idx_t size = sizeof(DuckLakeFileListCacheEntry) + sizeof(vector<DuckLakeFileListEntry>);
 	for (auto &file : *files) {
-		size += sizeof(DuckLakeFileListEntry) + file.file.path.size() + file.delete_file.path.size() +
-		        file.inlined_file_deletions.size() * sizeof(idx_t) * 4;
+		size += sizeof(DuckLakeFileListEntry) + file.file.path.size() + file.file.encryption_key.size() +
+		        file.delete_file.path.size() + file.delete_file.encryption_key.size() +
+		        file.snapshot_filter_excluded.size() * sizeof(idx_t) +
+		        file.inlined_file_deletions.size() * SET_NODE_BYTES;
 	}
 	return size;
 }
