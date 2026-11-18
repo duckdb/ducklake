@@ -227,9 +227,7 @@ public:
 	virtual bool CanInlineValues(DataChunk &chunk);
 	//! Check if this metadata manager supports the DuckDB Appender API for fast inserts
 	//! Returns true for DuckDB and SQLite metadata, false for Postgres and Quack
-	virtual bool SupportsAppender() const {
-		return true;
-	}
+	virtual bool SupportsAppender() const;
 
 	//! Whether the metadata catalog commits each statement on its own, so a rollback cannot undo them
 	virtual bool CommitsEachStatement() const {
@@ -268,15 +266,11 @@ public:
 	                        idx_t file_size_bytes) {
 	}
 	//! Whether metadata reads inside a transaction can show commits of other transactions
-	virtual bool ShowsConcurrentCommits() const {
-		return CommitsEachStatement();
-	}
+	virtual bool ShowsConcurrentCommits() const;
 	//! Whether transactions that started before a metadata table was dropped still read it
 	virtual bool DroppedTablesStayReadable() const;
 	//! Whether a commit inserts inlined rows after its batch instead of sending them as VALUES text in it
-	virtual bool InsertsInlinedRowsAfterBatch(idx_t row_count) const {
-		return !CommitsEachStatement();
-	}
+	virtual bool InsertsInlinedRowsAfterBatch(idx_t row_count) const;
 	//! Probe the metadata server for optional capabilities, for now we only check for server-side retries
 	virtual void ProbeServerCapabilities() {
 	}
@@ -292,9 +286,7 @@ public:
 	//! Advice added to the error of a commit that failed for good
 	virtual string CommitErrorHint(const string &message) const;
 	//! SQL that the commit of a transaction that changed options runs, so two commits cannot both insert an option
-	virtual string ConfigOptionLockSql() const {
-		return string();
-	}
+	virtual string ConfigOptionLockSql() const;
 
 	//! Run the commit retry loop with the metadata server handling retries.
 	virtual void FlushChangesServerSide(DuckLakeTransaction &transaction, DuckLakeSnapshot transaction_snapshot,
@@ -304,9 +296,7 @@ public:
 	virtual void ClearCache() {
 	}
 	//! Whether a table that a commit creates is only found once the cache is cleared
-	virtual bool NewTablesRequireCacheClear() const {
-		return true;
-	}
+	virtual bool NewTablesRequireCacheClear() const;
 
 	void MarkPendingCacheClear() {
 		if (NewTablesRequireCacheClear()) {
@@ -319,9 +309,7 @@ public:
 		return pending;
 	}
 	//! Maximum identifier length in bytes supported by this backend
-	virtual idx_t MaxIdentifierLength() const {
-		return NumericLimits<idx_t>::Maximum();
-	}
+	virtual idx_t MaxIdentifierLength() const;
 	//! Maximum number of columns of a table supported by this backend
 	virtual idx_t MaxColumnCount() const;
 	//! Names of the system columns that the tables of this backend have
