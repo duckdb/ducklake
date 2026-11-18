@@ -230,51 +230,6 @@ PostgresMetadataManager::PostgresMetadataManager(DuckLakeTransaction &transactio
     : DuckLakeMetadataManager(transaction) {
 }
 
-bool PostgresMetadataManager::ShowsConcurrentCommits() const {
-	// READ COMMITTED metadata reads see the commits of other transactions
-	auto &parameters = transaction.GetCatalog().MetadataParameters();
-	auto isolation_level = parameters.find("isolation_level");
-	return isolation_level != parameters.end() &&
-	       StringUtil::CIEquals(isolation_level->second.ToString(), "READ COMMITTED");
-}
-
-bool PostgresMetadataManager::InsertsInlinedRowsAfterBatch(idx_t row_count) const {
-	// the copy of a separate insert costs more round trips than parsing the VALUES text of a few rows
-	static constexpr idx_t MAX_INLINED_ROWS_IN_BATCH = 100;
-	return row_count > MAX_INLINED_ROWS_IN_BATCH;
-}
-
-bool PostgresMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
-	switch (type.id()) {
-	// Unnamed composite types are not supported.
-	case LogicalTypeId::STRUCT:
-	case LogicalTypeId::MAP:
-	case LogicalTypeId::LIST:
-	case LogicalTypeId::UBIGINT:
-	case LogicalTypeId::HUGEINT:
-	case LogicalTypeId::UHUGEINT:
-	// Postgres timestamp/date ranges are narrower than DuckDB's, and its TIME keeps only microseconds
-	case LogicalTypeId::TIME_NS:
-	case LogicalTypeId::DATE:
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
-	// Postgres bytea input format differs from DuckDB's blob text format
-	case LogicalTypeId::BLOB:
-	// Postgres cannot store null bytes in VARCHAR/TEXT columns
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::VARIANT:
-	// If we knew that the Postgres installation has PostGIS installed, we could support GEOMETRY in the future.
-	case LogicalTypeId::GEOMETRY:
-		return false;
-	default:
-		return true;
-	}
-}
-
 static bool ContainsNulByte(Vector &vector, idx_t offset, idx_t count) {
 	vector.Flatten();
 	auto &validity = FlatVector::Validity(vector);
@@ -321,40 +276,6 @@ bool PostgresMetadataManager::CanInlineValues(DataChunk &chunk) {
 		}
 	}
 	return true;
-}
-
-string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_type) {
-	switch (column_type.id()) {
-	case LogicalTypeId::DOUBLE:
-		return "DOUBLE PRECISION";
-	case LogicalTypeId::TINYINT:
-		return "SMALLINT";
-	case LogicalTypeId::UTINYINT:
-	case LogicalTypeId::USMALLINT:
-	case LogicalTypeId::SQLNULL:
-		return "INTEGER";
-	case LogicalTypeId::UINTEGER:
-		return "BIGINT";
-	case LogicalTypeId::FLOAT:
-		return "REAL";
-	case LogicalTypeId::BLOB:
-	case LogicalTypeId::VARCHAR:
-		return "BYTEA";
-	case LogicalTypeId::UBIGINT:
-	case LogicalTypeId::HUGEINT:
-	case LogicalTypeId::UHUGEINT:
-	case LogicalTypeId::TIME_NS:
-	case LogicalTypeId::DATE:
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_TZ:
-	case LogicalTypeId::TIMESTAMP_TZ_NS:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
-		return "VARCHAR";
-	default:
-		return column_type.ToString();
-	}
 }
 
 optional_idx PostgresMetadataManager::BatchServerErrorStart(const string &message) const {
@@ -479,11 +400,6 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 	}
 }
 
-string PostgresMetadataManager::ConfigOptionLockSql() const {
-	// every such commit updates the version row, so of two concurrent ones the later fails or waits for the other
-	return "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = value WHERE key = 'version' AND scope IS NULL;\n";
-}
-
 unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {
 	SubstituteTransactionPlaceholders(snapshot, query);
 	auto &ducklake_catalog = transaction.GetCatalog();
@@ -549,11 +465,6 @@ string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnaps
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	SubstituteSnapshotPlaceholders(snapshot, remote_query);
 	return PostgresQuery(remote_query);
-}
-
-bool PostgresMetadataManager::MaterializeStatsCTEs() const {
-	// Postgres misplans several inlined stats joins and rescans the stats for every surviving file
-	return true;
 }
 
 string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,

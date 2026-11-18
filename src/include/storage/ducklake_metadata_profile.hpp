@@ -38,11 +38,27 @@ struct DuckLakeMetadataProfile {
 	set<LogicalTypeId> natively_unsupported_types;
 	//! The type a column of the metadata tables is created with
 	map<LogicalTypeId, string> column_type_overrides;
+	//! The longest name in bytes that the metadata database keeps without truncating it
+	idx_t max_identifier_length = NumericLimits<idx_t>::Maximum();
 	idx_t max_column_count = NumericLimits<idx_t>::Maximum();
 	vector<string> system_column_names;
 	bool dropped_tables_stay_readable = true;
 	//! Rename the columns of inlined data tables by copying the tables instead of with ALTER TABLE
 	bool rename_inlined_columns_by_copy = false;
+	//! Insert the metadata rows of new data files (ducklake_data_file and file stats) with the DuckDB Appender
+	bool supports_appender = true;
+	//! Whether a table that a commit creates is only found once the cache of the metadata catalog is cleared
+	bool new_tables_require_cache_clear = true;
+	//! Materialize the stats CTEs of the file list query, for a database that plans the query itself
+	bool materialize_stats_ctes = false;
+	//! Inlined inserts of at most this many rows go into the commit batch as VALUES text, with 0 none do
+	idx_t max_inlined_rows_in_batch = 0;
+	//! The SQL of the snapshot time of a commit, by default the time of the client when the commit starts
+	string snapshot_time_sql;
+	//! SQL that a commit that changes options runs, so that two such commits cannot both insert an option
+	string config_option_lock_sql;
+	//! Metadata parameters with which reads inside a transaction show the commits of other transactions
+	case_insensitive_map_t<string> shows_concurrent_commits_with_parameters;
 	//! The first rule whose pattern is found in the message of a commit error applies
 	vector<DuckLakeCommitErrorRule> commit_errors;
 	//! Extension settings that DuckLake's connections to the metadata database keep at their defaults
@@ -59,11 +75,16 @@ struct DuckLakeMetadataProfile {
 //! The profiles registered in a database, by the catalog type of the metadata database they describe
 class DuckLakeMetadataProfiles {
 public:
+	DuckLakeMetadataProfiles();
+
 	static DuckLakeMetadataProfiles &Get(DatabaseInstance &db);
 
 	//! Registers a profile from its JSON over its "base" profile. Without replace, a registered profile is kept
 	void Register(const string &name, const string &json, bool replace = true);
 	shared_ptr<const DuckLakeMetadataProfile> Find(const string &name);
+
+private:
+	void RegisterProfile(const string &name, const string &json, bool replace);
 
 private:
 	mutex lock;

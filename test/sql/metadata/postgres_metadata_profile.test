@@ -1,0 +1,64 @@
+# name: test/sql/metadata/postgres_metadata_profile.test
+# description: The Postgres profile puts up to 100 inlined rows into the commit batch, takes the snapshot time from clock_timestamp() and does not clear the cache for new tables
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/postgres_metadata_profile', DATA_INLINING_ROW_LIMIT 1000)
+
+statement ok
+CALL enable_logging(['DuckLakeMetadata', 'QueryLog'], storage = 'memory')
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+# 100 rows go into the commit batch as VALUES text
+statement ok
+INSERT INTO dl.t SELECT i FROM range(100) r(i)
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%FROM inlined_data%'
+----
+0
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE contains(query, 'clock_timestamp()')
+----
+true
+
+# creating the inlined data table does not clear the cache
+query I
+SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND (message LIKE '%clear_catalog_cache = true%' OR message LIKE '%postgres_clear_cache%')
+----
+0
+
+statement ok
+CALL truncate_duckdb_logs()
+
+# 101 rows are inserted after the batch
+statement ok
+INSERT INTO dl.t SELECT i FROM range(100, 201) r(i)
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%FROM inlined_data /* 101 rows */%'
+----
+1
+
+query II
+SELECT count(*), sum(i) FROM dl.t
+----
+201	20100
