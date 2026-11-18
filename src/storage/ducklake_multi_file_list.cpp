@@ -1,6 +1,7 @@
 #include "common/ducklake_util.hpp"
 #include "storage/ducklake_scan.hpp"
 #include "storage/ducklake_multi_file_list.hpp"
+#include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_multi_file_reader.hpp"
 #include "storage/ducklake_inlined_data_reader.hpp"
 #include "storage/ducklake_metadata_manager.hpp"
@@ -690,10 +691,38 @@ void DuckLakeMultiFileList::SetScanColumns(const vector<MultiFileColumnDefinitio
 	}
 }
 
+bool DuckLakeMultiFileList::UseFileListCache(DuckLakeTransaction &transaction) const {
+	if (filter_info &&
+	    (!filter_info->Empty() || !filter_info->runtime_filter_columns.empty() || !filter_info->file_order.empty())) {
+		return false;
+	}
+	auto &metadata_manager = transaction.GetMetadataManager();
+	// every reader of a snapshot must read the same metadata
+	if (metadata_manager.IsRemote() || metadata_manager.ShowsConcurrentCommits() ||
+	    transaction.MetadataTransactionRestarted()) {
+		return false;
+	}
+	// a flush or a rewrite can change what an earlier snapshot reads, but not the latest one
+	if (transaction.ChangesMade() || transaction.GetCatalog().CatalogSnapshot() ||
+	    read_info.snapshot.snapshot_id != transaction.GetSnapshot().snapshot_id) {
+		return false;
+	}
+	auto context = transaction.context.lock();
+	Value enabled;
+	if (context && context->TryGetCurrentSetting("ducklake_cache_file_lists", enabled) && !enabled.IsNull() &&
+	    !BooleanValue::Get(enabled)) {
+		return false;
+	}
+	return true;
+}
+
 vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
     DuckLakeTransaction &transaction, identifier_map_t<shared_ptr<DuckLakeCommittedInlinedRows>> &inlined_rows) const {
 	static constexpr idx_t MAX_ATTEMPTS = 10;
 	auto &metadata_manager = transaction.GetMetadataManager();
+	if (UseFileListCache(transaction)) {
+		return *transaction.GetCatalog().GetCommittedFileList(transaction, read_info.table, read_info.snapshot);
+	}
 	auto scan_projection = has_projection ? optional_ptr<const vector<DuckLakeProjectedColumn>>(projection) : nullptr;
 	// a remote metadata manager reads the files and the inlined rows of the same snapshot
 	if (!metadata_manager.CommitsEachStatement() || metadata_manager.IsRemote() || inlined_data_tables.empty()) {

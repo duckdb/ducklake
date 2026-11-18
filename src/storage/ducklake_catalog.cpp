@@ -1197,6 +1197,25 @@ optional_idx DuckLakeCatalog::GetTableNetRowCount(DuckLakeTransaction &transacti
 	return row_count;
 }
 
+shared_ptr<const vector<DuckLakeFileListEntry>> DuckLakeCatalog::GetCommittedFileList(DuckLakeTransaction &transaction,
+                                                                                      DuckLakeTableEntry &table,
+                                                                                      DuckLakeSnapshot snapshot) {
+	auto key = FileListCacheKey(table.GetTableId());
+	auto cached = GetObjectCacheInstance().Get<DuckLakeFileListCacheEntry>(key);
+	if (cached && cached->snapshot_id == snapshot.snapshot_id) {
+		return cached->files;
+	}
+	auto files = make_shared_ptr<const vector<DuckLakeFileListEntry>>(
+	    transaction.GetMetadataManager().GetFilesForTable(table, snapshot, nullptr, false));
+	// a read at an older snapshot leaves the entry of a newer one alone
+	bool newer = !cached || cached->snapshot_id < snapshot.snapshot_id;
+	// a metadata transaction begun after the snapshot can have read commits made since
+	if (newer && !transaction.MetadataTransactionRestarted()) {
+		PutCacheEntry(std::move(key), make_shared_ptr<DuckLakeFileListCacheEntry>(snapshot.snapshot_id, files));
+	}
+	return files;
+}
+
 idx_t DuckLakeCatalog::GetTableRecordCount(DuckLakeTransaction &transaction, TableIndex table_id) {
 	auto snapshot = transaction.GetSnapshot();
 	auto &cache = GetObjectCacheInstance();
@@ -1667,6 +1686,19 @@ string DuckLakeCatalog::RecordCountCacheKey(idx_t snapshot_id) const {
 
 string DuckLakeCatalog::NetRowCountCacheKey(TableIndex table_id) const {
 	return StringUtil::Format("ducklake:%s:net_row_count:table:%llu", instance_id, table_id.index);
+}
+
+string DuckLakeCatalog::FileListCacheKey(TableIndex table_id) const {
+	return StringUtil::Format("ducklake:%s:file_list:table:%llu", instance_id, table_id.index);
+}
+
+optional_idx DuckLakeFileListCacheEntry::GetEstimatedCacheMemory() const {
+	idx_t size = sizeof(DuckLakeFileListCacheEntry) + sizeof(vector<DuckLakeFileListEntry>);
+	for (auto &file : *files) {
+		size += sizeof(DuckLakeFileListEntry) + file.file.path.size() + file.delete_file.path.size() +
+		        file.inlined_file_deletions.size() * sizeof(idx_t) * 4;
+	}
+	return size;
 }
 
 string DuckLakeCatalog::SchemaCacheKey(idx_t schema_version) const {

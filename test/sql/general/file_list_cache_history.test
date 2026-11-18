@@ -1,0 +1,63 @@
+# name: test/sql/general/file_list_cache_history.test
+# description: A flush changes the files of earlier snapshots, so reads of an earlier snapshot do not use the cache
+# group: [general]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/file_list_cache_history.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/file_list_cache_history', DATA_INLINING_ROW_LIMIT 10, METADATA_CATALOG 'file_list_cache_history_meta')
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1), (2)
+
+statement ok
+SET VARIABLE v = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake'))
+
+query II
+SELECT count(*), sum(id) FROM ducklake.t AT (VERSION => getvariable('v'))
+----
+2	3
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 't')
+
+# the rows moved to a file that the earlier snapshot now sees
+query II
+SELECT count(*), sum(id) FROM ducklake.t AT (VERSION => getvariable('v'))
+----
+2	3
+
+# a DuckLake attached at a snapshot reads that snapshot, which a flush can change as well
+statement ok
+CREATE TABLE ducklake.p (id INTEGER)
+
+statement ok
+INSERT INTO ducklake.p VALUES (1), (2)
+
+statement ok
+SET VARIABLE pinned_snapshot = (SELECT max(snapshot_id) FROM ducklake_snapshots('ducklake'))
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS pinned (DATA_PATH '{DATA_PATH}/file_list_cache_history', METADATA_CATALOG 'file_list_cache_history_meta', SNAPSHOT_VERSION getvariable('pinned_snapshot'))
+
+query II
+SELECT count(*), sum(id) FROM pinned.p
+----
+2	3
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake', table_name => 'p')
+
+query II
+SELECT count(*), sum(id) FROM pinned.p
+----
+2	3

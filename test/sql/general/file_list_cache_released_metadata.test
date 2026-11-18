@@ -1,0 +1,50 @@
+# name: test/sql/general/file_list_cache_released_metadata.test
+# description: A scan after a compaction released the metadata transaction neither reads nor fills the file list cache
+# group: [general]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/file_list_cache_released_metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT i FROM range(100) t(i);
+
+statement ok
+INSERT INTO ducklake.t SELECT i FROM range(100, 200) t(i);
+
+statement ok
+CREATE VIEW file_list_queries AS SELECT COUNT(*) AS n FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%data.row_id_start, data.begin_snapshot, data.partial_max%'
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# fill the cache at the current snapshot
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+19900
+
+query I
+SELECT n FROM file_list_queries
+----
+1
+
+# the compaction releases the metadata transaction when it is planned, and the scan in the same statement runs
+# after that: its metadata reads can see commits made after the snapshot, so it reads the catalog
+query IIIII
+SELECT * FROM ducklake_merge_adjacent_files('ducklake', 't'), (SELECT SUM(i) FROM ducklake.t)
+----
+main	t	2	1	19900
+
+query I
+SELECT n FROM file_list_queries
+----
+2

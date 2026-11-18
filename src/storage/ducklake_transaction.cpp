@@ -1031,6 +1031,7 @@ void DuckLakeTransaction::ReleaseMetadataTransaction() {
 	if (connection && connection->HasActiveTransaction()) {
 		connection->Commit();
 		metadata_transaction_released = true;
+		metadata_transaction_restarted = true;
 	}
 }
 
@@ -1756,6 +1757,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		option_lock_failed = false;
 		inlined_inserts.clear();
 		metadata_manager->ClearInlinedTableCaches();
+		metadata_transaction_restarted = true;
 		connection->BeginTransaction();
 		snapshot.reset();
 	};
