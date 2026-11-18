@@ -45,7 +45,7 @@ struct DuckLakeMetadataProfile {
 	bool dropped_tables_stay_readable = true;
 	//! Rename the columns of inlined data tables by copying the tables instead of with ALTER TABLE
 	bool rename_inlined_columns_by_copy = false;
-	//! Write new data files with the DuckDB Appender instead of INSERT statements
+	//! Insert the metadata rows of new data files (ducklake_data_file and file stats) with the DuckDB Appender
 	bool supports_appender = true;
 	//! Whether a table that a commit creates is only found once the cache of the metadata catalog is cleared
 	bool new_tables_require_cache_clear = true;

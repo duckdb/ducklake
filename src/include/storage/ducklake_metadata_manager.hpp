@@ -226,7 +226,6 @@ public:
 	//! Check if the inlined data tables of this metadata backend can store the values of the chunk
 	virtual bool CanInlineValues(DataChunk &chunk);
 	//! Check if this metadata manager supports the DuckDB Appender API for fast inserts
-	//! Returns true for DuckDB and SQLite metadata, false for Postgres and Quack
 	virtual bool SupportsAppender() const;
 
 	//! Whether the metadata catalog commits each statement on its own, so a rollback cannot undo them

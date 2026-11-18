@@ -407,4 +407,3 @@ SELECT i, s FROM dl.t WHERE i < 4 ORDER BY i
 1	it's
 2	NULL
 3	c
-
