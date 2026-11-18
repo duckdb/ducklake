@@ -4662,7 +4662,7 @@ string DuckLakeMetadataManager::StorePath(string path, const string &separator) 
 }
 
 string DuckLakeMetadataManager::LoadPath(string path, const string &separator) {
-	if (separator.empty() || separator == "/") {
+	if (separator.empty() || separator == "/" || FileSystem::IsRemoteFile(path)) {
 		return path;
 	}
 	// LCOV_EXCL_START
