@@ -2982,7 +2982,7 @@ FROM %s data
 %s
 LEFT JOIN (
     SELECT *
-    FROM %s
+    FROM %s%s
     WHERE table_id=%d  AND {SNAPSHOT_ID} >= begin_snapshot
           AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
     ) del ON del.data_file_id = data.data_file_id
@@ -2990,7 +2990,7 @@ WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_I
 		)",
 	                            select_list, DataFileSource(file_events, metadata_table_prefix, table_id.index),
 	                            stats_join_list, DeleteFileSource(file_events, metadata_table_prefix, table_id.index),
-	                            table_id.index, table_id.index);
+	                            file_events ? " del_src" : "", table_id.index, table_id.index);
 
 	if (!filter_result.where_conditions.empty()) {
 		query += "\nAND " + filter_result.where_conditions;
@@ -3317,7 +3317,6 @@ WHERE data.table_id = %d
 		                            table_id.index, table_id.index, start_snapshot.snapshot_id, rewrite_end_condition);
 	}
 
-	// the file sources of the catalog, whose text repeats in every arm
 	query = StringUtil::Replace(query, "{DATA_FILES}", DataFiles(table_id));
 	query = StringUtil::Replace(query, "{DELETE_FILES}", DeleteFiles(table_id));
 
@@ -5337,14 +5336,8 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 		data_file_appender.EndRow();
 
 		if (visibility_appender) {
-			// ducklake_file_visibility columns: branch_id, table_id, data_file_id, snapshot_id, is_delete
-			visibility_appender->BeginRow();
-			visibility_appender->Append<int64_t>(0);
-			visibility_appender->Append<int64_t>(table_id);
-			visibility_appender->Append<int64_t>(data_file_index);
-			visibility_appender->Append<int64_t>(begin_snapshot_val);
-			visibility_appender->Append<bool>(false);
-			visibility_appender->EndRow();
+			// the add event of the main branch
+			visibility_appender->AppendRow(int64_t(0), table_id, data_file_index, begin_snapshot_val, false);
 		}
 
 		// Column stats - using typed values directly
@@ -5467,21 +5460,17 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 		string partial_max = DuckLakeUtil::OptionalIdxOrNull(file.max_partial_file_snapshot);
 		string footer_size = DuckLakeUtil::OptionalIdxOrNull(file.footer_size);
 		string mapping = DuckLakeUtil::MappingIdOrNull(file.mapping_id);
-		string data_file_value;
+		// the range of the file is its add event of the main branch, or the two columns of the row
+		string range_columns = ", " + begin_snapshot + ", NULL";
 		if (file_events) {
-			// the add event of the main branch carries the begin of the file
 			visibility_values.push_back(
 			    StringUtil::Format("(0, %d, %d, %s, FALSE)", table_id, data_file_index, begin_snapshot));
-			data_file_value = StringUtil::Format(
-			    "(%d, %d, NULL, %s, %s, 'parquet', %d, %d, %s, %s, %s, %s, %s, %s", data_file_index, table_id,
-			    SQLString(path.path), DuckLakeUtil::BoolLiteral(path.path_is_relative), file.row_count,
-			    file.file_size_bytes, footer_size, row_id, partition_id, encryption_key, mapping, partial_max);
-		} else {
-			data_file_value = StringUtil::Format(
-			    "(%d, %d, %s, NULL, NULL, %s, %s, 'parquet', %d, %d, %s, %s, %s, %s, %s, %s", data_file_index, table_id,
-			    begin_snapshot, SQLString(path.path), DuckLakeUtil::BoolLiteral(path.path_is_relative), file.row_count,
-			    file.file_size_bytes, footer_size, row_id, partition_id, encryption_key, mapping, partial_max);
+			range_columns = string();
 		}
+		auto data_file_value = StringUtil::Format(
+		    "(%d, %d%s, NULL, %s, %s, 'parquet', %d, %d, %s, %s, %s, %s, %s, %s", data_file_index, table_id,
+		    range_columns, SQLString(path.path), DuckLakeUtil::BoolLiteral(path.path_is_relative), file.row_count,
+		    file.file_size_bytes, footer_size, row_id, partition_id, encryption_key, mapping, partial_max);
 		if (supports_v1_1_metadata) {
 			data_file_value += ", " + DuckLakeUtil::OptionalIdxOrNull(file.row_group_count);
 		}
@@ -5714,22 +5703,17 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 		string begin_snapshot_str =
 		    file.begin_snapshot.IsValid() ? std::to_string(file.begin_snapshot.GetIndex()) : "{SNAPSHOT_ID}";
 		string partial_max = DuckLakeUtil::OptionalIdxOrNull(file.max_snapshot);
-		string delete_file_value;
+		string range_columns = ", " + begin_snapshot_str + ", NULL, ";
 		if (file_events) {
 			visibility_values.push_back(
 			    StringUtil::Format("(0, %d, %d, %s, FALSE)", table_id, delete_file_index, begin_snapshot_str));
-			delete_file_value = StringUtil::Format("(%d, %d, %d, %s, %s, %s, %d, %d, %d, %s, %s", delete_file_index,
-			                                       table_id, data_file_index, SQLString(path.path),
-			                                       DuckLakeUtil::BoolLiteral(path.path_is_relative),
-			                                       SQLString(DeleteFileFormatToString(file.format)), file.delete_count,
-			                                       file.file_size_bytes, file.footer_size, encryption_key, partial_max);
-		} else {
-			delete_file_value = StringUtil::Format(
-			    "(%d, %d, %s, NULL,  %d, %s, %s, %s, %d, %d, %d, %s, %s", delete_file_index, table_id,
-			    begin_snapshot_str, data_file_index, SQLString(path.path),
-			    DuckLakeUtil::BoolLiteral(path.path_is_relative), SQLString(DeleteFileFormatToString(file.format)),
-			    file.delete_count, file.file_size_bytes, file.footer_size, encryption_key, partial_max);
+			range_columns = ",";
 		}
+		auto delete_file_value = StringUtil::Format(
+		    "(%d, %d%s %d, %s, %s, %s, %d, %d, %d, %s, %s", delete_file_index, table_id, range_columns, data_file_index,
+		    SQLString(path.path), DuckLakeUtil::BoolLiteral(path.path_is_relative),
+		    SQLString(DeleteFileFormatToString(file.format)), file.delete_count, file.file_size_bytes, file.footer_size,
+		    encryption_key, partial_max);
 		if (write_row_group_count) {
 			delete_file_value += ", " + DuckLakeUtil::OptionalIdxOrNull(file.row_group_count);
 		}

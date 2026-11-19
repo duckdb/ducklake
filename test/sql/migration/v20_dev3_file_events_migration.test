@@ -92,9 +92,9 @@ query I
 SELECT column_name FROM duckdb_columns() WHERE database_name = 'meta' AND table_name IN ('ducklake_data_file', 'ducklake_delete_file') AND column_name IN ('begin_snapshot', 'end_snapshot')
 ----
 
-# the event tables carry the key of the design
+# the event tables carry the key of the design, SQLite reports the boolean as an integer
 query II
-SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_file_visibility') ORDER BY column_index
+SELECT column_name, CASE WHEN column_name = 'is_delete' AND data_type = 'BIGINT' THEN 'BOOLEAN' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_file_visibility') ORDER BY column_index
 ----
 branch_id	BIGINT
 table_id	BIGINT
@@ -103,7 +103,7 @@ snapshot_id	BIGINT
 is_delete	BOOLEAN
 
 query II
-SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_delete_file_visibility') ORDER BY column_index
+SELECT column_name, CASE WHEN column_name = 'is_delete' AND data_type = 'BIGINT' THEN 'BOOLEAN' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_delete_file_visibility') ORDER BY column_index
 ----
 branch_id	BIGINT
 table_id	BIGINT

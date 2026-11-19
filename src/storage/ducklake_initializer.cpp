@@ -342,6 +342,9 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				if (!healed_by_migration && !DuckLakeMetadataManager::HasHealMarker(metadata)) {
 					metadata_manager.AddV2_0Dev1Additions();
 				}
+				catalog_version = DuckLakeVersion::V2_0_DEV2;
+			}
+			if (catalog_version == DuckLakeVersion::V2_0_DEV2 && catalog_version < target_version) {
 				metadata_manager.MigrateV20Dev2();
 				catalog_version = DuckLakeVersion::V2_0_DEV3;
 			}
