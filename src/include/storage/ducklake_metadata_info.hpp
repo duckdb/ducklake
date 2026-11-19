@@ -653,17 +653,17 @@ struct DuckLakeColumnMappingInfo {
 	vector<DuckLakeNameMapColumnInfo> map_columns;
 };
 
-//! The rows of a cached metadata read, its weight in the cache
+//! The weight of a cached metadata read, its rows and one for the read itself
 struct DuckLakeListingWeight {
 	explicit DuckLakeListingWeight(idx_t rows) : rows(rows) {
 	}
 	idx_t GetWeight() const {
-		return rows;
+		return rows + 1;
 	}
 	idx_t rows;
 };
 
-//! Parsed metadata reads keyed by their statement, bounded in reads and in rows, the least recently used leave first
+//! Parsed metadata reads by statement, bounded in reads and rows, the least recently used leave first
 template <class T>
 class DuckLakeListingCache {
 public:
@@ -673,12 +673,15 @@ public:
 	DuckLakeListingCache() : entries(MAX_ROWS) {
 	}
 
+	//! Whether a read of this many rows fits the cache, checked before the rows are copied for it
+	static bool Admits(idx_t rows) {
+		return rows < MAX_ROWS;
+	}
 	shared_ptr<T> Find(const string &key) {
 		return entries.Get(key);
 	}
 	void Store(const string &key, shared_ptr<T> value, idx_t rows) {
-		// a read larger than the cache is not kept
-		if (rows > MAX_ROWS) {
+		if (!Admits(rows)) {
 			return;
 		}
 		entries.Put(key, std::move(value), rows);

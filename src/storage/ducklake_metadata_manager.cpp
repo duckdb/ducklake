@@ -3120,7 +3120,7 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 	if (WritesFileVisibilityEvents() && !OrdersByStats(file_order)) {
 		RestoreFileIdOrder(files);
 	}
-	if (cacheable) {
+	if (cacheable && file_list_cache.Admits(files.size())) {
 		auto parsed = make_shared_ptr<vector<DuckLakeFileListEntry>>(files);
 		if (listing_head.IsValid()) {
 			transaction.GetCatalog().StoreCachedListing(cache_key, listing_head.GetIndex(), parsed);
@@ -3224,7 +3224,7 @@ WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 		file_entry.delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
 		files.push_back(std::move(file_entry));
 	}
-	if (cacheable) {
+	if (cacheable && file_list_cache.Admits(files.size())) {
 		lock_guard<mutex> guard(listing_cache_lock);
 		file_list_cache.Store(cache_key, make_shared_ptr<vector<DuckLakeFileListEntry>>(files), files.size());
 	}
@@ -3249,8 +3249,10 @@ DuckLakeMetadataManager::GetTableDeletions(DuckLakeTableEntry &table, DuckLakeSn
 		}
 	}
 	auto files = ReadTableDeletions(table, start_snapshot, end_snapshot, include_local_changes);
-	lock_guard<mutex> guard(listing_cache_lock);
-	delete_scan_cache.Store(cache_key, make_shared_ptr<vector<DuckLakeDeleteScanEntry>>(files), files.size());
+	if (delete_scan_cache.Admits(files.size())) {
+		lock_guard<mutex> guard(listing_cache_lock);
+		delete_scan_cache.Store(cache_key, make_shared_ptr<vector<DuckLakeDeleteScanEntry>>(files), files.size());
+	}
 	return files;
 }
 
