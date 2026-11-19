@@ -1,0 +1,66 @@
+# name: test/sql/quack/file_list_cache_concurrent_commits.test
+# description: Scans on a Quack catalog, which shows concurrent commits, read the file list from the catalog each time
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
+
+require quack
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS l (DATA_PATH '{DATA_PATH}/file_list_cache_concurrent_commits', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE l.t AS SELECT i FROM range(100) t(i)
+
+statement ok
+CREATE VIEW file_list_queries AS SELECT COUNT(*) AS n FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%data.row_id_start, data.begin_snapshot, data.partial_max%'
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# each unfiltered scan at the same snapshot fetches the file list
+query I
+SELECT SUM(i) FROM l.t
+----
+4950
+
+query I
+SELECT SUM(i) FROM l.t
+----
+4950
+
+query I
+SELECT n FROM file_list_queries
+----
+2
+
+# inlined rows, which a flush moves to a file of an earlier snapshot
+statement ok
+INSERT INTO l.t VALUES (1000), (1001)
+
+statement ok con2
+BEGIN
+
+query II con2
+SELECT COUNT(*), SUM(i) FROM l.t
+----
+102	6951
+
+statement ok
+CALL ducklake_flush_inlined_data('l', table_name => 't')
+
+# the transaction reads the catalog as it is now, where the rows are in the new file
+query II con2
+SELECT COUNT(*), SUM(i) FROM l.t
+----
+102	6951
+
+statement ok con2
+COMMIT
