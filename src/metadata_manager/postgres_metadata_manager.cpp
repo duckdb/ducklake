@@ -354,7 +354,13 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 }
 
 optional_idx PostgresMetadataManager::BatchServerErrorStart(const string &message) const {
-	// the batch and the server error can contain any text, so the batch is found by its size
+	// the newer scanner omits the batch, so the server error follows the fixed prefix
+	const string failed_query = "Failed to execute query: ";
+	auto query_start = message.find(failed_query);
+	if (query_start != string::npos) {
+		return query_start + failed_query.size();
+	}
+	// the older scanner embeds the batch, which can contain any text, so the batch is found by its size
 	const string failed_batch = "Failed to execute query \"";
 	auto batch_start = message.find(failed_batch);
 	if (batch_start == string::npos) {

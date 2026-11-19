@@ -135,7 +135,9 @@
         "test/sql/storage/compression/roaring/roaring_bool_analyze_bitset.test",
         "test/sql/storage/compression/roaring/roaring_bool_analyze_run.test",
         "test/sql/storage/compression/roaring/roaring_bool_analyze_array.test",
-        "test/sql/copy/parquet/multi_file/adaptive_filter_carryover.test"
+        "test/sql/copy/parquet/multi_file/adaptive_filter_carryover.test",
+        "test/sql/copy/parquet/page_index/page_index_read.test",
+        "test/sql/parallelism/async_task_synchronous_batch.test"
       ]
     },
     {
@@ -183,7 +185,14 @@
         "test/optimizer/partial_aggregate_pushdown.test",
         "test/sql/optimizer/pushdown_extract_reapplied.test",
         "test/sql/optimizer/variant_json_cast_pushdown.test",
-        "test/sql/aggregate/grouping_sets/grouping_sets_sum_having.test"
+        "test/sql/aggregate/grouping_sets/grouping_sets_sum_having.test",
+        "test/sql/setops/compression_expression_collation.test",
+        "test/optimizer/pushdown/non_inner_join_subquery_pushdown.test",
+        "test/optimizer/partial_aggregate_pushdown_throwing_argument.test",
+        "test/optimizer/topn_window_elimination_late_materialization_scan.test",
+        "test/sql/optimizer/pushdown/pushdown_safe_decimal_cast.test",
+        "test/sql/optimizer/self_join_aggregate.test",
+        "test/sql/optimizer/struct_extract_cast_filter.test"
       ]
     },
     {
@@ -217,7 +226,8 @@
       "reason": "Profiling",
       "paths": [
         "test/sql/pragma/profiling/test_custom_profiling_rows_scanned.test",
-        "test/sql/pragma/profiling/test_custom_profiling_row_group_metrics_local_storage.test"
+        "test/sql/pragma/profiling/test_custom_profiling_row_group_metrics_local_storage.test",
+        "test/sql/pragma/profiling/test_profiling_operator_name.test"
       ]
     },
     {
@@ -248,7 +258,8 @@
         "test/sql/alter/add_col/test_add_col_transactions.test",
         "test/sql/alter/drop_col/test_drop_col_transactions.test",
         "test/sql/transactions/transaction_insert_mixed_deletes.test",
-        "test/sql/transactions/transaction_insert_delete_chunks.test"
+        "test/sql/transactions/transaction_insert_delete_chunks.test",
+        "test/sql/json/table/json_table_in_out_threads.test"
       ]
     },
     {
@@ -314,7 +325,8 @@
         "test/sql/transactions/types/test_uhugeint_transactions.test",
         "test/sql/transactions/types/test_hugeint_transactions.test",
         "test/sql/types/hugeint/test_hugeint_ops.test",
-        "test/sql/types/bignum/test_int_varchar_bignum_compatibility.test"
+        "test/sql/types/bignum/test_int_varchar_bignum_compatibility.test",
+        "test/sql/types/hugeint/test_hugeint_to_floating_rounding.test"
       ]
     },
     {
@@ -322,7 +334,8 @@
       "paths": [
         "test/sql/secrets/create_secret_hffs_autoload.test",
         "test/sql/secrets/create_secret_persistence_no_client_context.test",
-        "test/sql/settings/test_external_access_metadata.test"
+        "test/sql/settings/test_external_access_metadata.test",
+        "test/sql/secrets/secrets_without_external_access.test"
       ]
     },
     {
@@ -350,7 +363,11 @@
         "test/sql/table_function/duckdb_eviction_queues.test",
         "test/sql/storage/temp_directory/test_default_temp_directory.test",
         "test/sql/transactions/test_commit_cleanup_oom.test",
-        "test/sql/transactions/test_commit_cleanup_oom_index_retry.test"
+        "test/sql/transactions/test_commit_cleanup_oom_index_retry.test",
+        "test/sql/storage/update/update_out_of_memory_statistics.test",
+        "test/sql/storage/partial_blocks/partial_block_tail_memory.test",
+        "test/sql/storage/temp_directory/offload_small_transient_segments.test",
+        "test/sql/storage/temp_directory/offload_small_transient_segments_no_optimistic_write.test"
       ]
     },
     {
@@ -403,7 +420,8 @@
         "test/sql/attach/attach_read_only.test",
         "test/sql/storage/checkpoint/checkpoint_with_outstanding_insertions.test",
         "test/sql/storage/temp_directory/test_runner_temp_directory.test",
-        "test/sql/collate/collation_invalid_utf8.test"
+        "test/sql/collate/collation_invalid_utf8.test",
+        "test/extension/autoloading_parquet_variant_type.test"
       ]
     },
     {
@@ -538,7 +556,8 @@
     {
       "reason": "Different results",
       "paths": [
-        "test/sql/attach/show_schemas.test"
+        "test/sql/attach/show_schemas.test",
+        "test/optimizer/topn_window_elimination_negative_zero.test"
       ]
     },
     {
@@ -561,7 +580,8 @@
         "test/sql/storage/types/variant/struct_of_variant.test",
         "test/sql/storage/types/variant/test_all_types_single_table.test",
         "test/sql/storage/types/variant/test_all_types.test",
-        "test/sql/storage/types/variant/test_all_types_variant.test"
+        "test/sql/storage/types/variant/test_all_types_variant.test",
+        "test/sql/function/generic/hash_comparison_keys.test"
       ]
     },
     {
@@ -627,7 +647,10 @@
         "test/sql/result_ttl_overflow.test",
         "test/sql/result_ttl_releases_query.test",
         "test/sql/server_connection_limits.test",
-        "test/sql/copy/csv/test_csv_httpfs.test"
+        "test/sql/copy/csv/test_csv_httpfs.test",
+        "test/extension/local_extension_coverage.test",
+        "test/sql/attach/external_resource_lifecycle.test",
+        "test/sql/attach/external_resource_logging.test"
       ]
     },
     {
@@ -669,7 +692,9 @@
         "test/sql/sql_export/pushed_column_paths.test",
         "test/sql/optimizer/plan/dense_or_filter_pushdown.test",
         "test/sql/storage/distinct_statistics_sample.test",
-        "test/sql/explain/tree_renderer_branches.test"
+        "test/sql/explain/tree_renderer_branches.test",
+        "test/optimizer/statistics/statistics_all_null_comparison.test",
+        "test/optimizer/statistics/statistics_additive_duplication.test"
       ]
     },
     {
@@ -681,7 +706,8 @@
         "test/sql/delete/partial_delete_version_info_memory.test",
         "test/sql/storage/partial_delete_pending_compress.test",
         "test/sql/storage/partial_delete_checkpoint_mask.test",
-        "test/sql/storage/adaptive_segment_rollback.test"
+        "test/sql/storage/adaptive_segment_rollback.test",
+        "test/sql/storage/external_file_cache/external_file_cache_metadata_memory.test"
       ]
     },
     {
@@ -736,7 +762,11 @@
         "test/sql/storage/types/variant/variant_shredding_omit_untyped.test",
         "test/sql/storage/compression/rle/rle_select_force_fetch_row.test",
         "test/sql/storage/compression/constant/constant_numeric_types.test",
-        "test/sql/storage/reclaim_space/test_reclaim_space_update_large_string.test"
+        "test/sql/storage/reclaim_space/test_reclaim_space_update_large_string.test",
+        "test/sql/storage/compression/roaring/roaring_bitset_boundaries.test",
+        "test/sql/storage/compression/roaring/roaring_run_boundaries.test",
+        "test/sql/storage/compression/dict_fsst/zero_width_lengths.test",
+        "test/sql/storage/compression/compression_null_block.test"
       ]
     },
     {
@@ -755,7 +785,8 @@
         "test/sql/storage/types/variant/variant_comparator_stats.test",
         "test/sql/storage/types/variant/variant_shredded_extract_non_object.test",
         "test/sql/types/variant/variant_map_to_variant_filter.test",
-        "test/sql/storage/types/variant/variant_struct_field_subquery.test"
+        "test/sql/storage/types/variant/variant_struct_field_subquery.test",
+        "test/sql/function/list/list_contains_variant.test"
       ]
     },
     {
@@ -778,7 +809,8 @@
       "paths": [
         "test/sql/storage/compression/chimp/chimp_fetch_row.test",
         "test/sql/function/string/regex_operators_v1_5_view.test",
-        "test/sql/table_function/external_resource_logging.test"
+        "test/sql/table_function/external_resource_logging.test",
+        "test/sql/storage/bc/null_rows_v1_5_or_filter.test"
       ]
     },
     {
@@ -827,7 +859,8 @@
     {
       "reason": "Asserts DuckDB-native VARIANT shredding statistics and vector types, which differ for VARIANT values stored in Parquet.",
       "paths": [
-        "test/issues/general/test_24298.test"
+        "test/issues/general/test_24298.test",
+        "test/sql/types/struct/struct_variant_projection_pushdown.test"
       ]
     },
     {
@@ -853,6 +886,24 @@
       "reason": "FIXME: fails on DuckDB itself, timestamps in the lowest hours of the int64 range cannot be converted to strings for statistics (pdet/ducklake_internal#202)",
       "paths": [
         "test/sql/optimizer/monotone_preimage_tz.test"
+      ]
+    },
+    {
+      "reason": "reparse_statement verification reparses a statement from its ToString(), but DuckLake's inlined-data flush INSERT reads from an in-memory ColumnDataRef that has no SQL form.",
+      "paths": [
+        "test/sql/create/create_table_as_no_data_limit.test"
+      ]
+    },
+    {
+      "reason": "The minimum DATE cannot round-trip through DuckLake storage (date field value out of range).",
+      "paths": [
+        "test/optimizer/statistics/statistics_monotone_infinity.test"
+      ]
+    },
+    {
+      "reason": "FIXME: crashes - writing a deeply nested VARIANT through a DuckLake CTAS recurses on the thread stack and kills the test runner.",
+      "paths": [
+        "test/sql/copy/parquet/variant_deep_nesting.test"
       ]
     }
   ]
