@@ -6,9 +6,14 @@ require ducklake
 
 require json
 
+require icu
+
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 test-env DATA_PATH {TEST_DIR}
+
+statement ok
+SET TimeZone = 'UTC'
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/pg_lake');

@@ -192,7 +192,9 @@
         "test/optimizer/topn_window_elimination_late_materialization_scan.test",
         "test/sql/optimizer/pushdown/pushdown_safe_decimal_cast.test",
         "test/sql/optimizer/self_join_aggregate.test",
-        "test/sql/optimizer/struct_extract_cast_filter.test"
+        "test/sql/optimizer/struct_extract_cast_filter.test",
+        "test/optimizer/joins/range_join_cardinality_estimation.test",
+        "test/optimizer/joins/left_join_reordering/left_join_composite_domain.test"
       ]
     },
     {
@@ -219,7 +221,10 @@
         "test/sql/sql_export/rewritten_functions.test",
         "test/optimizer/statistics/statistics_early_join_range.test",
         "test/sql/serialization/logical_operator_serialization.test",
-        "test/sql/parser/reject_unknown_option_values.test"
+        "test/sql/parser/reject_unknown_option_values.test",
+        "test/optimizer/statistics/current_domain_join.test",
+        "test/optimizer/statistics/current_domain_semi_anti.test",
+        "test/optimizer/statistics/current_domain_cardinality.test"
       ]
     },
     {
@@ -227,7 +232,8 @@
       "paths": [
         "test/sql/pragma/profiling/test_custom_profiling_rows_scanned.test",
         "test/sql/pragma/profiling/test_custom_profiling_row_group_metrics_local_storage.test",
-        "test/sql/pragma/profiling/test_profiling_operator_name.test"
+        "test/sql/pragma/profiling/test_profiling_operator_name.test",
+        "test/sql/cte/materialized/cte_runtime_filter_sibling_dependencies.test"
       ]
     },
     {
@@ -259,7 +265,8 @@
         "test/sql/alter/drop_col/test_drop_col_transactions.test",
         "test/sql/transactions/transaction_insert_mixed_deletes.test",
         "test/sql/transactions/transaction_insert_delete_chunks.test",
-        "test/sql/json/table/json_table_in_out_threads.test"
+        "test/sql/json/table/json_table_in_out_threads.test",
+        "test/sql/table_function/range_lateral_threads.test"
       ]
     },
     {
@@ -650,14 +657,28 @@
         "test/sql/copy/csv/test_csv_httpfs.test",
         "test/extension/local_extension_coverage.test",
         "test/sql/attach/external_resource_lifecycle.test",
-        "test/sql/attach/external_resource_logging.test"
+        "test/sql/attach/external_resource_logging.test",
+        "test/sql/attach_view_fetch_projection.test",
+        "test/sql/attach_view_fetch_projection_batch_chunks.test",
+        "test/sql/attach_table_fetch_projection.test",
+        "test/sql/attach_catalog_snapshot.test",
+        "test/sql/attach_catalog_multi_batch.test",
+        "test/sql/attach_unbindable_table.test",
+        "test/sql/attach_transactions.test",
+        "test/sql/attach_foreign_keys.test",
+        "test/sql/attach_read_only.test",
+        "test/sql/attach_prepared_rebind.test",
+        "test/sql/virtual_columns.test",
+        "test/sql/setting_scopes.test",
+        "test/sql/self_connect.test"
       ]
     },
     {
       "reason": "duckdb's CONNECT-over-quack tests do not fit a DuckLake default catalog: connect_quack targets duckdb's older quack pin, and concurrent_connect_detach fails the on_new_connection USE dl in an aborted transaction.",
       "paths": [
         "test/sql/connect/connect_quack.test",
-        "test/sql/connect/concurrent_connect_detach.test"
+        "test/sql/connect/concurrent_connect_detach.test",
+        "test/sql/connect/disconnect_aborted_transaction.test"
       ]
     },
     {
@@ -723,7 +744,8 @@
         "test/sql/attach/attach_enums.test",
         "test/sql/catalog/sequence/test_sequence_google_fuzz.test",
         "test/sql/attach/attach_hidden.test",
-        "test/sql/settings/test_disabled_file_systems.test"
+        "test/sql/settings/test_disabled_file_systems.test",
+        "test/sql/catalog/nested_schema/nested_schema_limits.test"
       ]
     },
     {
@@ -766,7 +788,8 @@
         "test/sql/storage/compression/roaring/roaring_bitset_boundaries.test",
         "test/sql/storage/compression/roaring/roaring_run_boundaries.test",
         "test/sql/storage/compression/dict_fsst/zero_width_lengths.test",
-        "test/sql/storage/compression/compression_null_block.test"
+        "test/sql/storage/compression/compression_null_block.test",
+        "test/sql/filter/disjunctive_compressed_filter.test"
       ]
     },
     {
@@ -810,7 +833,8 @@
         "test/sql/storage/compression/chimp/chimp_fetch_row.test",
         "test/sql/function/string/regex_operators_v1_5_view.test",
         "test/sql/table_function/external_resource_logging.test",
-        "test/sql/storage/bc/null_rows_v1_5_or_filter.test"
+        "test/sql/storage/bc/null_rows_v1_5_or_filter.test",
+        "test/sql/table_function/external_resource_callback_recursion.test"
       ]
     },
     {
@@ -904,6 +928,12 @@
       "reason": "FIXME: crashes - writing a deeply nested VARIANT through a DuckLake CTAS recurses on the thread stack and kills the test runner.",
       "paths": [
         "test/sql/copy/parquet/variant_deep_nesting.test"
+      ]
+    },
+    {
+      "reason": "DuckLake tables expose a filename virtual column, making the test's unqualified filename reference ambiguous.",
+      "paths": [
+        "test/sql/copy/file_rotation_preserve_order.test"
       ]
     }
   ]
