@@ -272,14 +272,13 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	// load the data path from the existing duck lake
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto metadata = metadata_manager.LoadDuckLake();
-	DuckLakeVersion resolved_version = DuckLakeVersion::UNSET;
+	// check the attach options against the stored tags before a migration commits anything
+	DuckLakeVersion catalog_version = DuckLakeVersion::UNSET;
+	DuckLakeVersion target_version = DuckLakeVersion::UNSET;
 	for (auto &tag : metadata.tags) {
-		if (tag.key == "version" && metadata_manager.IsRemote()) {
-			// the server takes care of migrating the metadata
-			resolved_version = DuckLakeVersionFromString(tag.value);
-		} else if (tag.key == "version") {
-			auto catalog_version = DuckLakeVersionFromString(tag.value);
-			auto target_version = ResolveTargetVersion(catalog_version, tag.value);
+		if (tag.key == "version" && !metadata_manager.IsRemote()) {
+			catalog_version = DuckLakeVersionFromString(tag.value);
+			target_version = ResolveTargetVersion(catalog_version, tag.value);
 			if (catalog_version > target_version) {
 				// catalog is newer than the requested version, no FWC
 				throw InvalidInputException(
@@ -297,6 +296,44 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				catalog.VerifyWritable();
 				metadata_cache_stale = true;
 			}
+		}
+		if (tag.key == "data_path") {
+			if (options.data_path.empty()) {
+				options.data_path = metadata_manager.LoadPath(tag.value);
+				InitializeDataPath();
+			} else {
+				// the client of a REST catalog can have another view of the data path than the server
+				bool is_rest = catalog.MetadataType() == "rest";
+				if (is_rest && options.data_path != metadata_manager.LoadPath(tag.value)) {
+					catalog.GetRESTClient().SetPathMapping(options.data_path, metadata_manager.LoadPath(tag.value));
+				}
+				// verify that they match if override_data_path is not set to true
+				if (metadata_manager.StorePath(options.data_path) != tag.value && !options.override_data_path &&
+				    !is_rest) {
+					throw InvalidConfigurationException(
+					    "DATA_PATH parameter \"%s\" does not match existing data path in the catalog \"%s\".\nYou can "
+					    "override the DATA_PATH by setting OVERRIDE_DATA_PATH to True.",
+					    options.data_path, tag.value);
+				}
+			}
+		}
+		if (tag.key == "encrypted") {
+			if (tag.value == "true") {
+				catalog.SetEncryption(DuckLakeEncryption::ENCRYPTED);
+			} else if (tag.value == "false") {
+				catalog.SetEncryption(DuckLakeEncryption::UNENCRYPTED);
+			} else {
+				throw NotImplementedException("Encrypted should be either true or false");
+			}
+		}
+	}
+	DuckLakeVersion resolved_version = DuckLakeVersion::UNSET;
+	for (auto &tag : metadata.tags) {
+		if (tag.key == "version" && metadata_manager.IsRemote()) {
+			// the server takes care of migrating the metadata
+			resolved_version = DuckLakeVersionFromString(tag.value);
+		} else if (tag.key == "version") {
+			// every check passed, migrate the catalog to the target version
 			migrating = catalog_version < target_version;
 			if (catalog_version == DuckLakeVersion::V0_1) {
 				metadata_manager.MigrateV01();
@@ -347,35 +384,6 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				// LCOV_EXCL_STOP
 			}
 			resolved_version = catalog_version;
-		}
-		if (tag.key == "data_path") {
-			if (options.data_path.empty()) {
-				options.data_path = metadata_manager.LoadPath(tag.value);
-				InitializeDataPath();
-			} else {
-				// the client of a REST catalog can have another view of the data path than the server
-				bool is_rest = catalog.MetadataType() == "rest";
-				if (is_rest && options.data_path != metadata_manager.LoadPath(tag.value)) {
-					catalog.GetRESTClient().SetPathMapping(options.data_path, metadata_manager.LoadPath(tag.value));
-				}
-				// verify that they match if override_data_path is not set to true
-				if (metadata_manager.StorePath(options.data_path) != tag.value && !options.override_data_path &&
-				    !is_rest) {
-					throw InvalidConfigurationException(
-					    "DATA_PATH parameter \"%s\" does not match existing data path in the catalog \"%s\".\nYou can "
-					    "override the DATA_PATH by setting OVERRIDE_DATA_PATH to True.",
-					    options.data_path, tag.value);
-				}
-			}
-		}
-		if (tag.key == "encrypted") {
-			if (tag.value == "true") {
-				catalog.SetEncryption(DuckLakeEncryption::ENCRYPTED);
-			} else if (tag.value == "false") {
-				catalog.SetEncryption(DuckLakeEncryption::UNENCRYPTED);
-			} else {
-				throw NotImplementedException("Encrypted should be either true or false");
-			}
 		}
 		options.config_options[tag.key] = tag.value;
 	}
