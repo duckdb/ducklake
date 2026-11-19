@@ -663,7 +663,7 @@ struct DuckLakeListingWeight {
 	idx_t rows;
 };
 
-//! Parsed metadata reads by statement, bounded in reads and rows, the least recently used leave first
+//! Parsed metadata reads by statement, bounded in reads and rows, least recently used first out
 template <class T>
 class DuckLakeListingCache {
 public:

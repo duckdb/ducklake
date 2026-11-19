@@ -1,0 +1,80 @@
+# name: test/sql/time_travel/deletion_scan_cache_bound.test
+# description: the inlined deletions of a deletion scan count towards the rows the cache keeps
+# group: [time_travel]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+# 300 files of 2048 rows each
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+CALL dl.set_option('parquet_row_group_size', 2048, table_name => 't')
+
+statement ok
+SET ducklake_target_file_size = '4KB'
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range(300 * 2048)
+
+statement ok
+RESET ducklake_target_file_size
+
+query I
+SELECT file_count >= 300 FROM ducklake_table_info('dl') WHERE table_name = 't'
+----
+true
+
+# 250 inlined deletions per file, 75000 rows of deletions in the scan of the window
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 300, table_name => 't')
+
+statement ok
+DELETE FROM dl.t WHERE i % 2048 < 250
+
+query I
+SELECT count(*) FROM dl.t
+----
+539400
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+statement ok
+BEGIN
+
+query I
+SELECT count(*) FROM dl.table_changes('t', 3, 3) WHERE change_type = 'delete'
+----
+75000
+
+query I
+SELECT count(*) FROM dl.table_changes('t', 3, 3) WHERE change_type = 'delete'
+----
+75000
+
+statement ok
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+# the scan is too large for the cache, so the second read runs the deletion feed again
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite', 'postgres') THEN
+    (SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%main^_results AS%' ESCAPE '^')
+    ELSE 2 END
+----
+2
