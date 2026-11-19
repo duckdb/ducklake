@@ -56,13 +56,17 @@ statement ok
 CALL disable_logging()
 
 # one read of the delete files and at most one listing of the inlined deletion tables (a Postgres catalog lists them
-# on the server) name the candidates, the two candidate tables list their files
+# on the server) name the candidates, the two candidate tables list their files; a quack catalog wraps every
+# statement in a call, so its log is not counted
 query III
-SELECT count(*) FILTER (WHERE regexp_matches(query, '^\s*SELECT') AND query LIKE '%ducklake_delete_file%'
-                        AND query NOT LIKE '%ducklake_data_file%' AND query NOT LIKE '%snapshot_ranges%'),
-       count(*) FILTER (WHERE query LIKE '%pg_tables%') <= 1,
-       count(*) FILTER (WHERE query LIKE '%candidate_files AS%')
-FROM duckdb_logs_parsed('DuckLakeMetadata')
+SELECT CASE WHEN counted THEN reads ELSE 1 END, CASE WHEN counted THEN listings <= 1 ELSE true END,
+       CASE WHEN counted THEN lists ELSE 2 END
+FROM (SELECT (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite', 'postgres') AS counted,
+             count(*) FILTER (WHERE regexp_matches(query, '^\s*SELECT') AND query LIKE '%ducklake_delete_file%'
+                              AND query NOT LIKE '%ducklake_data_file%' AND query NOT LIKE '%snapshot_ranges%') AS reads,
+             count(*) FILTER (WHERE query LIKE '%pg_tables%') AS listings,
+             count(*) FILTER (WHERE query LIKE '%candidate_files AS%') AS lists
+      FROM duckdb_logs_parsed('DuckLakeMetadata'))
 ----
 1	true	2
 
@@ -82,9 +86,11 @@ CALL disable_logging()
 
 # one read of the data files names the tables with two live files, the one candidate lists its files
 query II
-SELECT count(*) FILTER (WHERE query LIKE '%GROUP BY table_id HAVING%'),
-       count(*) FILTER (WHERE query LIKE '%snapshot_ranges AS%' AND query NOT LIKE '%candidate_files%')
-FROM duckdb_logs_parsed('DuckLakeMetadata')
+SELECT CASE WHEN counted THEN reads ELSE 1 END, CASE WHEN counted THEN lists ELSE 1 END
+FROM (SELECT (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite', 'postgres') AS counted,
+             count(*) FILTER (WHERE query LIKE '%GROUP BY table_id HAVING%') AS reads,
+             count(*) FILTER (WHERE query LIKE '%snapshot_ranges AS%' AND query NOT LIKE '%candidate_files%') AS lists
+      FROM duckdb_logs_parsed('DuckLakeMetadata'))
 ----
 1	1
 
@@ -104,9 +110,11 @@ statement ok
 CALL disable_logging()
 
 query II
-SELECT count(*) FILTER (WHERE query LIKE '%GROUP BY table_id HAVING%' AND query LIKE '%file_size_bytes < 1%'),
-       count(*) FILTER (WHERE query LIKE '%snapshot_ranges AS%')
-FROM duckdb_logs_parsed('DuckLakeMetadata')
+SELECT CASE WHEN counted THEN reads ELSE 1 END, CASE WHEN counted THEN lists ELSE 0 END
+FROM (SELECT (SELECT catalog_type FROM ducklake_settings('dl')) IN ('duckdb', 'sqlite', 'postgres') AS counted,
+             count(*) FILTER (WHERE query LIKE '%GROUP BY table_id HAVING%' AND query LIKE '%file_size_bytes < 1%') AS reads,
+             count(*) FILTER (WHERE query LIKE '%snapshot_ranges AS%') AS lists
+      FROM duckdb_logs_parsed('DuckLakeMetadata'))
 ----
 1	0
 
