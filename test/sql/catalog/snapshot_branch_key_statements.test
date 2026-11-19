@@ -8,7 +8,7 @@ require parquet
 
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_files',
-    METADATA_CATALOG 'meta', DUCKLAKE_VERSION '2.0-dev1')
+    METADATA_CATALOG 'meta', DUCKLAKE_VERSION '2.0-dev2')
 
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i

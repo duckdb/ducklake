@@ -1,5 +1,5 @@
-# name: test/sql/migration/v11_to_v20_dev1_snapshot_keys.test
-# description: the migration of a 1.1 catalog rebuilds the snapshot tables with their branch key and keeps the rows
+# name: test/sql/migration/v11_to_v20_dev2_snapshot_keys.test
+# description: a 1.1 catalog migrates through 2.0-dev1 to 2.0-dev2 with its rows in the snapshot tables keyed by branch
 # group: [migration]
 
 require ducklake
@@ -34,7 +34,7 @@ SELECT COUNT(*) FROM meta.ducklake_snapshot
 statement ok
 DETACH dl
 
-# the migration rebuilds the snapshot tables with their branch key and adds the branch table
+# the migration runs both steps, it rebuilds the snapshot tables with their branch key and adds the branch table
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
     AUTOMATIC_MIGRATION TRUE)
@@ -42,12 +42,12 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST
 query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
-2.0-dev1
+2.0-dev2
 
 query I
-SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
 ----
-2.0-dev1.1
+0
 
 query IIII
 SELECT branch_id, branch_name, parent_id, parent_branch_snapshot FROM meta.ducklake_branch
@@ -188,6 +188,7 @@ true
 query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
     WHERE query LIKE '%ducklake_branch%' OR query LIKE '%heal_complete%' OR query LIKE '%_rebuild%'
+    OR query LIKE '%RENAME TO%'
 ----
 0
 
@@ -195,7 +196,7 @@ query III
 SELECT (SELECT count(*) FROM meta.ducklake_snapshot), (SELECT count(*) FROM meta.ducklake_branch),
     (SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete')
 ----
-6	1	1
+6	1	0
 
 query I
 SELECT list(i ORDER BY i) FROM dl.t
