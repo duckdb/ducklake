@@ -14,6 +14,13 @@ statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/canonical_files', METADATA_CATALOG 'metadata')
 
 statement ok
+CREATE TEMP MACRO data_file_ranges() AS TABLE
+SELECT f.*, v.begin_snapshot, v.end_snapshot FROM metadata.ducklake_data_file f
+JOIN (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot,
+             MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot
+      FROM metadata.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id) v ON v.data_file_id = f.data_file_id
+
+statement ok
 CREATE TABLE ducklake.t(id INTEGER, source VARCHAR);
 
 statement ok
@@ -45,7 +52,7 @@ t	2	1
 
 query I
 SELECT path
-FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM metadata.ducklake_data_file f JOIN (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot, MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot FROM metadata.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id) v ON v.data_file_id = f.data_file_id)
+FROM data_file_ranges()
 WHERE end_snapshot IS NULL AND path_is_relative
 ORDER BY ALL
 ----
@@ -89,7 +96,7 @@ t	2	1
 
 query I
 SELECT path
-FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM metadata.ducklake_data_file f JOIN (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot, MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot FROM metadata.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id) v ON v.data_file_id = f.data_file_id)
+FROM data_file_ranges()
 WHERE end_snapshot IS NULL AND path_is_relative AND path LIKE '%__HIVE_DEFAULT_PARTITION__%'
 ORDER BY ALL
 ----
@@ -146,7 +153,7 @@ transformed_t	2	1
 
 query I
 SELECT path
-FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM metadata.ducklake_data_file f JOIN (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot, MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot FROM metadata.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id) v ON v.data_file_id = f.data_file_id)
+FROM data_file_ranges()
 WHERE end_snapshot IS NULL AND path_is_relative AND path LIKE '%year=2024/month=5/%'
 ORDER BY ALL
 ----
@@ -194,7 +201,7 @@ FROM (
 	FROM glob('{DATA_PATH}/external_weird/weird=*/*.parquet')
 	INTERSECT
 	SELECT regexp_extract(path, '(weird=[^/\\]*)[/\\]', 1) AS partition_segment
-	FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM metadata.ducklake_data_file f JOIN (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot, MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot FROM metadata.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id) v ON v.data_file_id = f.data_file_id)
+	FROM data_file_ranges()
 	WHERE end_snapshot IS NULL AND path_is_relative AND path LIKE '%weird=%'
 )
 ----

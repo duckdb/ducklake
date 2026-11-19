@@ -161,7 +161,7 @@ SELECT COUNT(*), COUNT(n), COUNT(*) FILTER (WHERE n IS NULL) FROM null_tbl AT (V
 query II
 SELECT COUNT(*) FILTER (WHERE min_value IS NOT NULL OR max_value IS NOT NULL), BOOL_AND(value_count = 0 AND null_count = record_count)
 FROM ducklake_meta.ducklake_file_column_stats s
-JOIN (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_meta.ducklake_data_file f JOIN (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot, MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot FROM ducklake_meta.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id) v ON v.data_file_id = f.data_file_id) f USING (data_file_id)
+JOIN ducklake_meta.ducklake_data_file f USING (data_file_id)
 WHERE s.table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'null_tbl' AND end_snapshot IS NULL)
   AND column_id = (SELECT column_id FROM ducklake_meta.ducklake_column WHERE column_name = 'n' AND end_snapshot IS NULL AND table_id = (SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name = 'null_tbl' AND end_snapshot IS NULL))
 ----
