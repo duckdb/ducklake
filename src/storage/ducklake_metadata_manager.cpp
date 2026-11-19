@@ -7389,10 +7389,24 @@ string DuckLakeMetadataManager::InsertNewSchema(const DuckLakeSnapshot &snapshot
 	return result;
 }
 
+//! The tables with more live files than the bound, counted through the events where the catalog keeps them
+static string TablesWithLiveFilesQuery(bool file_events, const string &file_source, const string &visibility_table,
+                                       idx_t more_than) {
+	if (file_events) {
+		// an add event counts a file in, its delete event counts it out again
+		return StringUtil::Format("SELECT table_id FROM {METADATA_CATALOG}.%s GROUP BY table_id "
+		                          "HAVING SUM(CASE WHEN is_delete THEN -1 ELSE 1 END) > %d",
+		                          visibility_table, more_than);
+	}
+	return StringUtil::Format(
+	    "SELECT table_id FROM %s WHERE end_snapshot IS NULL GROUP BY table_id HAVING COUNT(*) > %d", file_source,
+	    more_than);
+}
+
 unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithMergeCandidates() {
 	// a merge needs two live files of a table
-	auto result = Query("SELECT table_id FROM " + DataFiles() +
-	                    " WHERE end_snapshot IS NULL GROUP BY table_id HAVING COUNT(*) > 1");
+	auto result =
+	    Query(TablesWithLiveFilesQuery(WritesFileVisibilityEvents(), DataFiles(), "ducklake_file_visibility", 1));
 	result->ThrowIfError("Failed to get the tables with merge candidates from DuckLake: ");
 	unordered_set<idx_t> table_ids;
 	for (auto &row : *result) {
@@ -7403,7 +7417,8 @@ unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithMergeCandidates() {
 
 unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithRewriteCandidates(DuckLakeSnapshot snapshot,
                                                                              const vector<TableIndex> &table_ids) {
-	auto result = Query("SELECT DISTINCT table_id FROM " + DeleteFiles() + " WHERE end_snapshot IS NULL");
+	auto result = Query(
+	    TablesWithLiveFilesQuery(WritesFileVisibilityEvents(), DeleteFiles(), "ducklake_delete_file_visibility", 0));
 	result->ThrowIfError("Failed to get the tables with rewrite candidates from DuckLake: ");
 	unordered_set<idx_t> candidates;
 	for (auto &row : *result) {

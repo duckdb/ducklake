@@ -57,7 +57,8 @@ CALL disable_logging()
 
 # one read of the delete files names the candidates, the two candidate tables list their files
 query II
-SELECT count(*) FILTER (WHERE query LIKE '%DISTINCT table_id FROM%delete_file%'),
+SELECT count(*) FILTER (WHERE regexp_matches(query, '^\s*SELECT') AND query LIKE '%ducklake_delete_file%'
+                        AND query NOT LIKE '%ducklake_data_file%' AND query NOT LIKE '%snapshot_ranges%'),
        count(*) FILTER (WHERE query LIKE '%candidate_files AS%')
 FROM duckdb_logs_parsed('DuckLakeMetadata')
 ----
@@ -79,7 +80,7 @@ CALL disable_logging()
 
 # one read of the data files names the tables with two live files, the one candidate lists its files
 query II
-SELECT count(*) FILTER (WHERE query LIKE '%GROUP BY table_id HAVING COUNT(*) > 1%'),
+SELECT count(*) FILTER (WHERE query LIKE '%GROUP BY table_id HAVING%'),
        count(*) FILTER (WHERE query LIKE '%snapshot_ranges AS%' AND query NOT LIKE '%candidate_files%')
 FROM duckdb_logs_parsed('DuckLakeMetadata')
 ----
