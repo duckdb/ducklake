@@ -86,6 +86,28 @@ FROM duckdb_logs_parsed('DuckLakeMetadata')
 ----
 1	1
 
+# a size bound of the call rules out every file, so no table lists its files
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT count(*) FROM ducklake_merge_adjacent_files('dl', max_file_size => 1)
+----
+0
+
+statement ok
+CALL disable_logging()
+
+query II
+SELECT count(*) FILTER (WHERE query LIKE '%GROUP BY table_id HAVING%' AND query LIKE '%file_size_bytes < 1%'),
+       count(*) FILTER (WHERE query LIKE '%snapshot_ranges AS%')
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1	0
+
 query IIII
 SELECT (SELECT count(*) FROM dl.single), (SELECT list(i ORDER BY i) FROM dl.pair),
        (SELECT list(i ORDER BY i) FROM dl.deleted), (SELECT list(i ORDER BY i) FROM dl.inlined_deletes)

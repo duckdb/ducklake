@@ -1048,7 +1048,7 @@ static unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableF
 		tables_with_files =
 		    transaction.GetMetadataManager().GetTablesWithRewriteCandidates(transaction.GetSnapshot(), table_ids);
 	} else if (skip_tables_without_files) {
-		tables_with_files = transaction.GetMetadataManager().GetTablesWithMergeCandidates();
+		tables_with_files = transaction.GetMetadataManager().GetTablesWithMergeCandidates(merge_options);
 	}
 	vector<unique_ptr<LogicalOperator>> compactions;
 	for (auto &table_ref : tables) {
