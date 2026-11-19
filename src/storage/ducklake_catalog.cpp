@@ -1830,8 +1830,7 @@ shared_ptr<vector<DuckLakeFileListEntry>> DuckLakeCatalog::TryGetCachedListing(c
 	if (!listing_cache_head.IsValid() || listing_cache_head.GetIndex() != head) {
 		return nullptr;
 	}
-	auto entry = listing_cache.Find(key);
-	return entry ? *entry : nullptr;
+	return listing_cache.Find(key);
 }
 
 void DuckLakeCatalog::StoreCachedListing(const string &key, idx_t head,

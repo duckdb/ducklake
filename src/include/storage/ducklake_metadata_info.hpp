@@ -11,6 +11,7 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/unordered_map.hpp"
+#include "duckdb/common/lru_cache.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/reference_map.hpp"
@@ -652,32 +653,45 @@ struct DuckLakeColumnMappingInfo {
 	vector<DuckLakeNameMapColumnInfo> map_columns;
 };
 
-//! Parsed metadata reads keyed by their statement, the cache starts over when it holds too many reads or rows
+//! The rows of a cached metadata read, its weight in the cache
+struct DuckLakeListingWeight {
+	explicit DuckLakeListingWeight(idx_t rows) : rows(rows) {
+	}
+	idx_t GetWeight() const {
+		return rows;
+	}
+	idx_t rows;
+};
+
+//! Parsed metadata reads keyed by their statement, bounded in reads and in rows, the least recently used leave first
 template <class T>
-struct DuckLakeListingCache {
+class DuckLakeListingCache {
+public:
 	static constexpr idx_t MAX_LISTINGS = 256;
 	static constexpr idx_t MAX_ROWS = 1ULL << 16;
 
-	const T *Find(const string &key) const {
-		auto entry = entries.find(key);
-		return entry == entries.end() ? nullptr : &entry->second;
+	DuckLakeListingCache() : entries(MAX_ROWS) {
 	}
-	void Store(string key, T value, idx_t rows) {
-		if (entries.size() >= MAX_LISTINGS || cached_rows + rows > MAX_ROWS) {
-			Clear();
+
+	shared_ptr<T> Find(const string &key) {
+		return entries.Get(key);
+	}
+	void Store(const string &key, shared_ptr<T> value, idx_t rows) {
+		// a read larger than the cache is not kept
+		if (rows > MAX_ROWS) {
+			return;
 		}
-		if (entries.emplace(std::move(key), std::move(value)).second) {
-			cached_rows += rows;
+		entries.Put(key, std::move(value), rows);
+		while (entries.Size() > MAX_LISTINGS) {
+			entries.EvictToReduceAtLeast(1);
 		}
 	}
 	void Clear() {
-		entries.clear();
-		cached_rows = 0;
+		entries.Clear();
 	}
 
 private:
-	unordered_map<string, T> entries;
-	idx_t cached_rows = 0;
+	SharedLruCache<string, T, DuckLakeListingWeight> entries;
 };
 
 } // namespace duckdb

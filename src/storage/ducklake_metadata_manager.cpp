@@ -1536,7 +1536,7 @@ optional_idx DuckLakeMetadataManager::GetNetDataFileRowCountForStats(TableIndex 
 	}
 	if (cacheable) {
 		lock_guard<mutex> guard(listing_cache_lock);
-		row_count_cache.Store(std::move(cache_key), count, 1);
+		row_count_cache.Store(cache_key, make_shared_ptr<optional_idx>(count), 1);
 	}
 	return count;
 }
@@ -3067,21 +3067,17 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 	}
 
 	auto query = GenerateFileListQuery(table, snapshot, filter_info, file_order, runtime_filter_stats_columns);
-	// statements repeat identical listings several times, so reuse the parsed rows until the transaction writes
-	// backends whose reads see other transactions' commits cannot reuse them
+	// the parsed rows serve the statement again until the transaction writes, and other transactions under the same
+	// head, unless the backend shows the commits of other transactions
 	bool cacheable = !ShowsConcurrentCommits();
 	auto cache_key = to_string(snapshot.snapshot_id) + "/" + to_string(snapshot.schema_version) + "\n" + query;
 	if (cacheable) {
 		shared_ptr<vector<DuckLakeFileListEntry>> listing;
 		{
 			lock_guard<mutex> guard(listing_cache_lock);
-			auto cached = file_list_cache.Find(cache_key);
-			if (cached) {
-				listing = *cached;
-			}
+			listing = file_list_cache.Find(cache_key);
 		}
 		if (!listing && listing_head.IsValid()) {
-			// repeated reads of an unchanged head share the parsed listing across transactions
 			listing = transaction.GetCatalog().TryGetCachedListing(cache_key, listing_head.GetIndex());
 			if (listing) {
 				lock_guard<mutex> guard(listing_cache_lock);
@@ -3133,7 +3129,7 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 			transaction.GetCatalog().StoreCachedListing(cache_key, listing_head.GetIndex(), parsed);
 		}
 		lock_guard<mutex> guard(listing_cache_lock);
-		file_list_cache.Store(std::move(cache_key), std::move(parsed), files.size());
+		file_list_cache.Store(cache_key, std::move(parsed), files.size());
 	}
 	AttachInlinedFileDeletions(table_id, snapshot, include_local_changes, files);
 	return files;
@@ -3167,7 +3163,7 @@ DuckLakeMetadataManager::GetTableInsertions(DuckLakeTableEntry &table, DuckLakeS
 		lock_guard<mutex> guard(listing_cache_lock);
 		auto cached = file_list_cache.Find(cache_key);
 		if (cached) {
-			return **cached;
+			return *cached;
 		}
 	}
 	string select_list = GetDataFileSelectList("data") +
@@ -3233,8 +3229,7 @@ WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 	}
 	if (cacheable) {
 		lock_guard<mutex> guard(listing_cache_lock);
-		file_list_cache.Store(std::move(cache_key), make_shared_ptr<vector<DuckLakeFileListEntry>>(files),
-		                      files.size());
+		file_list_cache.Store(cache_key, make_shared_ptr<vector<DuckLakeFileListEntry>>(files), files.size());
 	}
 	return files;
 }
@@ -3253,13 +3248,12 @@ DuckLakeMetadataManager::GetTableDeletions(DuckLakeTableEntry &table, DuckLakeSn
 		lock_guard<mutex> guard(listing_cache_lock);
 		auto cached = delete_scan_cache.Find(cache_key);
 		if (cached) {
-			return **cached;
+			return *cached;
 		}
 	}
 	auto files = ReadTableDeletions(table, start_snapshot, end_snapshot, include_local_changes);
 	lock_guard<mutex> guard(listing_cache_lock);
-	delete_scan_cache.Store(std::move(cache_key), make_shared_ptr<vector<DuckLakeDeleteScanEntry>>(files),
-	                        files.size());
+	delete_scan_cache.Store(cache_key, make_shared_ptr<vector<DuckLakeDeleteScanEntry>>(files), files.size());
 	return files;
 }
 

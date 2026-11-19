@@ -1001,8 +1001,8 @@ private:
 	//! Parsed reads a statement repeats, kept until the transaction writes, with the head they were read under
 	optional_idx listing_head;
 	mutex listing_cache_lock;
-	DuckLakeListingCache<shared_ptr<vector<DuckLakeFileListEntry>>> file_list_cache;
-	DuckLakeListingCache<shared_ptr<vector<DuckLakeDeleteScanEntry>>> delete_scan_cache;
+	DuckLakeListingCache<vector<DuckLakeFileListEntry>> file_list_cache;
+	DuckLakeListingCache<vector<DuckLakeDeleteScanEntry>> delete_scan_cache;
 	DuckLakeListingCache<optional_idx> row_count_cache;
 	unordered_set<idx_t> delete_inlined_table_cache;
 
