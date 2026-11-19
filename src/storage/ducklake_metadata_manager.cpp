@@ -2867,6 +2867,18 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 //! Every statistics CTE adds a join to the file list query, whose planning grows fast with their number
 static constexpr idx_t MAX_STATS_CTES = 32;
 
+//! The size bounds of a merge as conditions on the file size column
+static string FileSizeFilter(const string &column, optional_idx min_size, optional_idx max_size) {
+	string filter;
+	if (min_size.IsValid()) {
+		filter += StringUtil::Format(" AND %s >= %llu", column, min_size.GetIndex());
+	}
+	if (max_size.IsValid()) {
+		filter += StringUtil::Format(" AND %s < %llu", column, max_size.GetIndex());
+	}
+	return filter;
+}
+
 string DuckLakeMetadataManager::OrderTermExpression(const DuckLakeFileListOrder &order) {
 	auto cte_name = StatsCteName(order.column_field_index);
 	return CastStatsToTarget(StatsColumn(cte_name, order.use_max ? "max_value" : "min_value"), order.column_type);
@@ -3662,11 +3674,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 
 	// Add file filtering for MERGE_ADJACENT_TABLES compaction
 	if (type == CompactionType::MERGE_ADJACENT_TABLES) {
-		if (options.min_file_size.IsValid()) {
-			file_filter_clause +=
-			    StringUtil::Format(" AND data.file_size_bytes >= %llu", options.min_file_size.GetIndex());
-		}
-		file_filter_clause += StringUtil::Format(" AND data.file_size_bytes < %llu", effective_max_file_size);
+		file_filter_clause += FileSizeFilter("data.file_size_bytes", options.min_file_size, effective_max_file_size);
 		// filter on snapshot ids (commit order), not snapshot_time (transaction start), so late commits count as newer
 		auto first_snapshot_at = [](const Value &timestamp) {
 			auto timestamp_tz = timestamp.GetValue<timestamp_tz_t>();
@@ -5436,10 +5444,6 @@ string DuckLakeMetadataManager::WriteNewDataFilesWithAppender(DuckLakeSnapshot &
 		                                 : static_cast<int64_t>(commit_snapshot.snapshot_id);
 		auto path = GetRelativePath(file.table_id, file.file_name, new_tables, new_schemas_result);
 
-		// ducklake_data_file columns:
-		// data_file_id, table_id, begin_snapshot, end_snapshot, file_order, path, path_is_relative,
-		// file_format, record_count, file_size_bytes, footer_size, row_id_start, partition_id,
-		// encryption_key, mapping_id, partial_max, row_group_count (>= 1.1)
 		data_file_appender.BeginRow();
 		data_file_appender.Append<int64_t>(data_file_index); // data_file_id
 		data_file_appender.Append<int64_t>(table_id);        // table_id
@@ -7428,13 +7432,7 @@ static string TablesWithLiveFilesQuery(bool file_events, const string &file_sour
 unordered_set<idx_t>
 DuckLakeMetadataManager::GetTablesWithMergeCandidates(const DuckLakeMergeAdjacentOptions &options) {
 	// a merge needs two live files of a table within the size bounds of the call
-	string file_filter;
-	if (options.min_file_size.IsValid()) {
-		file_filter += StringUtil::Format(" AND file_size_bytes >= %llu", options.min_file_size.GetIndex());
-	}
-	if (options.max_file_size.IsValid()) {
-		file_filter += StringUtil::Format(" AND file_size_bytes < %llu", options.max_file_size.GetIndex());
-	}
+	auto file_filter = FileSizeFilter("file_size_bytes", options.min_file_size, options.max_file_size);
 	auto result = Query(TablesWithLiveFilesQuery(WritesFileVisibilityEvents(), DataFiles(), "ducklake_file_visibility",
 	                                             1, file_filter));
 	result->ThrowIfError("Failed to get the tables with merge candidates from DuckLake: ");
@@ -7454,11 +7452,10 @@ unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithRewriteCandidates(con
 		candidates.insert(row.GetValue<idx_t>(0));
 	}
 	// inlined deletions live in a table per data table, listed once
-	for (auto &name : *InlinedDeletionTables()) {
-		candidates.insert(std::stoull(name.substr(strlen(INLINED_DELETION_TABLE_PREFIX))));
-	}
+	auto inlined_deletion_tables = InlinedDeletionTables();
 	for (auto &table_id : table_ids) {
-		if (transaction.HasLocalDeletes(table_id) || transaction.HasLocalInlinedFileDeletes(table_id)) {
+		if (transaction.HasLocalDeletes(table_id) || transaction.HasLocalInlinedFileDeletes(table_id) ||
+		    inlined_deletion_tables->count(InlinedFileDeletionTableName(table_id).GetIdentifierName())) {
 			candidates.insert(table_id.index);
 		}
 	}

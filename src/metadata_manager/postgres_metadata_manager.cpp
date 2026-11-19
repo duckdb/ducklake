@@ -400,7 +400,7 @@ unordered_set<string> PostgresMetadataManager::ListInlinedDeletionTables() {
 	// the server lists the tables, so a table another connection committed is seen without a catalog refresh
 	auto &catalog = transaction.GetCatalog();
 	auto remote_query = StringUtil::Format("SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = %s "
-	                                       "AND tablename LIKE 'ducklake\_inlined\_delete\_%%'",
+	                                       "AND tablename LIKE 'ducklake\\_inlined\\_delete\\_%%'",
 	                                       SQLString::ToString(catalog.MetadataSchemaName().GetIdentifierName()));
 	auto query = StringUtil::Format(
 	    "SELECT tablename FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
