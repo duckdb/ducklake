@@ -4910,6 +4910,11 @@ bool DuckLakeMetadataManager::InlinedDeletionTableExists(const Identifier &table
 	return InlinedDeletionTables()->count(table_name.GetIdentifierName()) > 0;
 }
 
+bool DuckLakeMetadataManager::CommittedInlinedDeletionTableExists(const Identifier &table_name) {
+	// a writer of another process may have created the table after the listing of this snapshot
+	return ListInlinedDeletionTables().count(table_name.GetIdentifierName()) > 0;
+}
+
 Identifier DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
                                                                 bool include_local_changes) {
 	// The table name is always deterministic

@@ -595,6 +595,8 @@ public:
 	                                               bool include_local_changes = true);
 	//! Whether the inlined deletion table exists, answered from one listing per snapshot
 	bool InlinedDeletionTableExists(const Identifier &table_name);
+	//! Whether the inlined deletion table exists now, read from the catalog for the checks of a commit
+	bool CommittedInlinedDeletionTableExists(const Identifier &table_name);
 	//! The inlined deletion tables of the metadata catalog
 	virtual unordered_set<string> ListInlinedDeletionTables();
 	//! The listing of the inlined deletion tables the transaction's snapshot shares
