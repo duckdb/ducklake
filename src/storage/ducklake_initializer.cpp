@@ -338,6 +338,13 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				catalog_version = DuckLakeVersion::V2_0_DEV1;
 				healed_by_migration = true;
 			}
+			if (catalog_version == DuckLakeVersion::V2_0_DEV1 && catalog_version < target_version) {
+				if (!healed_by_migration && !DuckLakeMetadataManager::HasHealMarker(metadata)) {
+					metadata_manager.AddV2_0Dev1Additions();
+				}
+				metadata_manager.MigrateV20Dev2();
+				catalog_version = DuckLakeVersion::V2_0_DEV3;
+			}
 			migrating = false;
 			if (catalog_version != target_version) {
 				// LCOV_EXCL_START
@@ -466,7 +473,7 @@ void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &trans
 	unique_ptr<DuckLakeMetadataManager> new_manager;
 	if (version == DuckLakeVersion::V1_1) {
 		new_manager = MakeVersionedManager<DuckLakeMetadataManagerV1_1>(transaction);
-	} else if (version == DuckLakeVersion::V2_0_DEV1) {
+	} else if (version >= DuckLakeVersion::V2_0_DEV1) {
 		new_manager = MakeVersionedManager<DuckLakeMetadataManagerV2_0>(transaction);
 	} else {
 		throw InternalException("SetVersionedMetadataManager: unsupported version");

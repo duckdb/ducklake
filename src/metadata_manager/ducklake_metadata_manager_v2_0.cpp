@@ -11,9 +11,28 @@ string DuckLakeMetadataManagerV2_0<Base>::GetCreateTableStatements() {
 	result += DuckLakeMetadataManager::GetSnapshotTagTableStatement() + "\n";
 	result += DuckLakeMetadataManager::GetBranchTableStatement() + "\n";
 	result += DuckLakeMetadataManager::GetMainBranchRowStatement() + "\n";
+	result += DuckLakeMetadataManager::GetFileVisibilityTableStatement() + "\n";
+	result += DuckLakeMetadataManager::GetDeleteFileVisibilityTableStatement() + "\n";
 	// a fresh catalog has the healed layout, so it carries the marker of a completed heal
 	result += DuckLakeMetadataManager::HealMarkerSql();
 	return result;
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetDataFileTableStatement() {
+	// the visibility of a file is in its events, the row holds no range
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(data_file_id BIGINT PRIMARY KEY, table_id BIGINT, "
+	       "file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, record_count BIGINT, "
+	       "file_size_bytes BIGINT, footer_size BIGINT, row_id_start BIGINT, partition_id BIGINT, "
+	       "encryption_key VARCHAR, mapping_id BIGINT, partial_max BIGINT, row_group_count BIGINT);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetDeleteFileTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_delete_file(delete_file_id BIGINT PRIMARY KEY, table_id BIGINT, "
+	       "data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, format VARCHAR, delete_count BIGINT, "
+	       "file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR, partial_max BIGINT, "
+	       "row_group_count BIGINT);";
 }
 
 template <typename Base>
@@ -30,7 +49,7 @@ string DuckLakeMetadataManagerV2_0<Base>::GetSnapshotChangesTableStatement() {
 
 template <typename Base>
 string DuckLakeMetadataManagerV2_0<Base>::GetVersionString() {
-	constexpr auto VERSION = DuckLakeVersion::V2_0_DEV1;
+	constexpr auto VERSION = DuckLakeVersion::V2_0_DEV3;
 	return DuckLakeVersionToString(VERSION);
 }
 

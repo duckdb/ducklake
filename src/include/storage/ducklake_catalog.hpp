@@ -381,6 +381,10 @@ public:
 	bool SupportsBranching() const {
 		return ducklake_version >= DuckLakeVersion::V2_0_DEV1;
 	}
+	//! Whether the file tables keep their visibility as events instead of inline ranges, the layout of 2.0-dev3
+	bool SupportsFileVisibilityEvents() const {
+		return ducklake_version >= DuckLakeVersion::V2_0_DEV3;
+	}
 	//! Whether an expiry commits a snapshot whose changes list the expired snapshots
 	bool RecordsExpiredSnapshots() const {
 		return SupportsSnapshotTags();
