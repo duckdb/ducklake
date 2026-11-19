@@ -53,6 +53,10 @@ ORDER BY ts DESC LIMIT 1
 statement ok
 USE ducklake
 
+# a commit moves the head, so the listing cache serves none of the reads below
+statement ok
+INSERT INTO events VALUES (TIMESTAMP '2026-01-06', 'other')
+
 statement ok
 CALL enable_logging('DuckLakeMetadata')
 
@@ -221,6 +225,10 @@ EXPLAIN ANALYZE SELECT p.score FROM runtime_probe p JOIN runtime_build b ON p.k 
 ORDER BY p.score DESC LIMIT 1
 ----
 analyzed_plan	<REGEX>:(?s).*PRF.*
+
+# the explained read filled the listing cache, a commit empties it
+statement ok
+INSERT INTO runtime_probe VALUES (300, 0)
 
 statement ok
 CALL enable_logging('DuckLakeMetadata')
