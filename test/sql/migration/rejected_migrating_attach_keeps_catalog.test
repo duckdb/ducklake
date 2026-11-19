@@ -6,11 +6,13 @@ require ducklake
 
 require parquet
 
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files',
-METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DUCKLAKE_VERSION '1.1')
 
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
@@ -20,8 +22,7 @@ DETACH dl
 
 # an attach without the migration option reads the 1.1 catalog
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files',
-METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
 
 query I
 SELECT i FROM dl.t
@@ -33,36 +34,29 @@ DETACH dl
 
 # the data path is checked before the migration runs
 statement error
-ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{DATA_PATH}/other', METADATA_CATALOG 'meta',
-AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/other', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE)
 ----
 does not match existing data path
 
-# the catalog keeps its version and its snapshot tables
+# the attach without the migration option still works, so the catalog kept its version
 statement ok
 DETACH DATABASE IF EXISTS meta
 
 statement ok
-ATTACH '{TEST_DIR}/{BASE_TEST_NAME}.db' AS meta
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
 
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
 1.1
 
+# the snapshot tables were not renamed and no tag table was added
 query I
 SELECT list(table_name ORDER BY table_name) FROM duckdb_tables() WHERE database_name = 'meta'
-AND table_name LIKE 'ducklake_snapshot%'
+    AND schema_name IN ('main', 'public') AND table_name LIKE 'ducklake_snapshot%'
 ----
 [ducklake_snapshot, ducklake_snapshot_changes]
-
-statement ok
-DETACH meta
-
-# the attach without the migration option still works
-statement ok
-ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files',
-METADATA_CATALOG 'meta')
 
 query I
 SELECT i FROM dl.t
@@ -74,13 +68,19 @@ DETACH dl
 
 # the migrating attach with the stored data path migrates the catalog
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files',
-METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE)
 
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
 2.0-dev2
+
+query I
+SELECT list(table_name ORDER BY table_name) FROM duckdb_tables() WHERE database_name = 'meta'
+    AND schema_name IN ('main', 'public') AND table_name LIKE 'ducklake_snapshot%'
+----
+[ducklake_snapshot, ducklake_snapshot_changes, ducklake_snapshot_tag]
 
 query I
 SELECT i FROM dl.t

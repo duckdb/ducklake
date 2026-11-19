@@ -273,10 +273,14 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto metadata = metadata_manager.LoadDuckLake();
 	// check the attach options against the stored tags before a migration commits anything
+	DuckLakeVersion resolved_version = DuckLakeVersion::UNSET;
 	DuckLakeVersion catalog_version = DuckLakeVersion::UNSET;
 	DuckLakeVersion target_version = DuckLakeVersion::UNSET;
 	for (auto &tag : metadata.tags) {
-		if (tag.key == "version" && !metadata_manager.IsRemote()) {
+		if (tag.key == "version" && metadata_manager.IsRemote()) {
+			// the server takes care of migrating the metadata
+			resolved_version = DuckLakeVersionFromString(tag.value);
+		} else if (tag.key == "version") {
 			catalog_version = DuckLakeVersionFromString(tag.value);
 			target_version = ResolveTargetVersion(catalog_version, tag.value);
 			if (catalog_version > target_version) {
@@ -327,12 +331,8 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			}
 		}
 	}
-	DuckLakeVersion resolved_version = DuckLakeVersion::UNSET;
 	for (auto &tag : metadata.tags) {
-		if (tag.key == "version" && metadata_manager.IsRemote()) {
-			// the server takes care of migrating the metadata
-			resolved_version = DuckLakeVersionFromString(tag.value);
-		} else if (tag.key == "version") {
+		if (tag.key == "version" && !metadata_manager.IsRemote()) {
 			// every check passed, migrate the catalog to the target version
 			migrating = catalog_version < target_version;
 			if (catalog_version == DuckLakeVersion::V0_1) {
