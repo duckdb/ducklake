@@ -452,6 +452,12 @@ public:
 	GetTableDeletions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot, DuckLakeSnapshot snapshot,
 	                  bool include_local_changes = true,
 	                  optional_ptr<const vector<DuckLakeProjectedColumn>> projection = nullptr);
+	//! Attaches the inlined file deletions of the table to the listed files
+	void AttachInlinedFileDeletions(TableIndex table_id, DuckLakeSnapshot snapshot, bool include_local_changes,
+	                                vector<DuckLakeFileListEntry> &files);
+	//! Runs the deletion scan of GetTableDeletions, which caches it
+	vector<DuckLakeDeleteScanEntry> ReadTableDeletions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot,
+	                                                   DuckLakeSnapshot end_snapshot, bool include_local_changes);
 	//! The snapshots of the range that rewrote data files of the table without changing its rows
 	set<idx_t> GetTableRewriteSnapshots(TableIndex table_id, DuckLakeSnapshot start_snapshot,
 	                                    DuckLakeSnapshot snapshot);
@@ -670,6 +676,12 @@ public:
 	virtual string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const;
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
+	//! The head the last snapshot read saw, under which the listings transactions share are stored
+	optional_idx GetListingHead() const {
+		return listing_head;
+	}
+	//! Drops the cached listings, deletion scans and row counts, called when the transaction writes metadata
+	void InvalidateFileListCache();
 	//! Whether the metadata statements run on DuckDB itself, rather than through the scanner of another database
 	static bool IsDuckDBMetadataType(const string &metadata_type);
 	//! Whether a lookup on snapshot_id names the branch of main, where the metadata engine serves it from the key
@@ -997,6 +1009,12 @@ private:
 	                                               const Identifier &snapshot_column);
 
 	unordered_map<idx_t, Identifier> insert_inlined_table_name_cache;
+	//! Parsed reads a statement repeats, kept until the transaction writes, with the head they were read under
+	optional_idx listing_head;
+	mutex listing_cache_lock;
+	unordered_map<string, shared_ptr<vector<DuckLakeFileListEntry>>> file_list_cache;
+	unordered_map<string, shared_ptr<vector<DuckLakeDeleteScanEntry>>> delete_scan_cache;
+	unordered_map<string, optional_idx> row_count_cache;
 	unordered_set<idx_t> delete_inlined_table_cache;
 
 protected:

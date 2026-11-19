@@ -163,6 +163,12 @@
       "paths": [
         "test/sql/quack/partial_file_count.test"
       ]
+    },
+    {
+      "reason": "The concurrent compaction commit fails with \"database is locked\" while the reader transaction is open, which skip_error_messages turns into a silent skip",
+      "paths": [
+        "test/sql/time_travel/time_travel_listing_cache_transaction.test"
+      ]
     }
   ]
 }
