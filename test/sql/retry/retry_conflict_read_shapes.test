@@ -1,0 +1,374 @@
+# name: test/sql/retry/retry_conflict_read_shapes.test
+# description: a retried commit reads the files other commits covered or ended from the file events directly
+# group: [retry]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+SET immediate_transaction_mode=true
+
+statement ok
+SET ducklake_retry_wait_ms = 0
+
+# file k of t holds the rows 10k to 10k + 9
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+loop k 0 10
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range({k} * 10, {k} * 10 + 10)
+
+endloop
+
+statement ok
+CREATE TABLE dl.gone AS SELECT range AS i FROM range(10)
+
+statement ok
+CREATE TABLE dl.t2 AS SELECT range AS i FROM range(10)
+
+# the conflict reads of the log, those naming the two visibility tables of main directly and those aggregating events
+statement ok
+CREATE MACRO conflict_reads() AS TABLE
+SELECT count(*) FILTER (WHERE query NOT LIKE '%GROUP BY%'
+		AND query LIKE '%delete^_file^_visibility%(snapshot^_id > % OR delete^_file^_id >= %' ESCAPE '^'
+		AND query LIKE '%ducklake^_file^_visibility%WHERE is^_delete AND snapshot^_id > %' ESCAPE '^') AS direct,
+	count(*) FILTER (WHERE query LIKE '%delete^_file^_id >= %' ESCAPE '^' AND query LIKE '%GROUP BY%') AS aggregated
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# a concurrent delete of every row of file 0 ends the file, the retried delete of a row of file 1 commits
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM dl.t WHERE i < 10
+
+statement ok con2
+DELETE FROM dl.t WHERE i = 15
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query II
+SELECT count(*), count(*) FILTER (WHERE i < 10 OR i = 15) FROM dl.t
+----
+89	0
+
+# the conflict read of the retry named the two visibility tables of main directly and aggregated nothing
+query II
+SELECT direct, aggregated FROM conflict_reads()
+----
+1	0
+
+# a delete of a row of the ended file 2 is refused
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM dl.t WHERE i >= 20 AND i < 30
+
+statement ok con2
+DELETE FROM dl.t WHERE i = 25
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*deleted from it.*
+
+query II
+SELECT count(*), count(*) FILTER (WHERE i >= 20 AND i < 30) FROM dl.t
+----
+79	0
+
+query II
+SELECT direct, aggregated FROM conflict_reads()
+----
+1	0
+
+# a concurrent commit drops a table and deletes from file 3, the retried delete of a row of file 4 commits
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DROP TABLE dl.gone
+
+statement ok con1
+DELETE FROM dl.t WHERE i = 35
+
+statement ok con2
+DELETE FROM dl.t WHERE i = 45
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query II
+SELECT count(*), count(*) FILTER (WHERE i IN (35, 45)) FROM dl.t
+----
+77	0
+
+# the drop ended the file of the dropped table with a delete event the conflict read saw
+query I
+SELECT count(*)
+FROM meta.ducklake_file_visibility v
+JOIN meta.ducklake_data_file f ON f.data_file_id = v.data_file_id
+JOIN meta.ducklake_table t ON t.table_id = f.table_id
+WHERE t.table_name = 'gone' AND v.is_delete
+----
+1
+
+query II
+SELECT direct, aggregated FROM conflict_reads()
+----
+1	0
+
+# a delete from a table another transaction dropped is refused
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DROP TABLE dl.t2
+
+statement ok con2
+DELETE FROM dl.t2 WHERE i = 1
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*dropped it.*
+
+# a concurrent delete file on file 5 refuses a second delete of a row of file 5
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM dl.t WHERE i = 55
+
+statement ok con2
+DELETE FROM dl.t WHERE i = 56
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*deleted from it.*
+
+query II
+SELECT count(*), count(*) FILTER (WHERE i IN (55, 56)) FROM dl.t
+----
+76	1
+
+query II
+SELECT direct, aggregated FROM conflict_reads()
+----
+1	0
+
+# delete files on different files commit, the retried one dated at its own commit snapshot
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM dl.t WHERE i = 65
+
+statement ok con2
+DELETE FROM dl.t WHERE i = 75
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query II
+SELECT count(*), count(*) FILTER (WHERE i IN (65, 75)) FROM dl.t
+----
+74	0
+
+query I
+SELECT count(*)
+FROM meta.ducklake_delete_file_visibility v
+WHERE NOT v.is_delete AND v.snapshot_id = (SELECT max(snapshot_id) FROM meta.ducklake_snapshot)
+----
+1
+
+query II
+SELECT direct, aggregated FROM conflict_reads()
+----
+1	0
+
+# a flushed delete file keeps the snapshot of its inlined deletion, so only its new id tells the retry about it
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 1)
+
+statement ok
+DELETE FROM dl.t WHERE i = 85
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok con2
+DELETE FROM dl.t WHERE i = 86
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*deleted from it.*
+
+query II
+SELECT count(*), count(*) FILTER (WHERE i IN (85, 86)) FROM dl.t
+----
+73	1
+
+query I
+SELECT v.snapshot_id < (SELECT max(snapshot_id) FROM meta.ducklake_snapshot)
+FROM meta.ducklake_delete_file_visibility v
+WHERE NOT v.is_delete AND v.delete_file_id = (SELECT max(delete_file_id) FROM meta.ducklake_delete_file)
+----
+true
+
+query II
+SELECT direct, aggregated FROM conflict_reads()
+----
+1	0
+
+# a concurrent rewrite ends the files with deletes, the retried delete of a row of the untouched file 9 commits
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_rewrite_data_files('dl', 't', delete_threshold => 0.05)
+
+statement ok con2
+DELETE FROM dl.t WHERE i = 95
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query II
+SELECT count(*), count(*) FILTER (WHERE i = 95) FROM dl.t
+----
+72	0
+
+query II
+SELECT direct, aggregated FROM conflict_reads()
+----
+1	0
+
+# a delete of a row of a file a concurrent rewrite ended is refused
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+CALL ducklake_rewrite_data_files('dl', 't', delete_threshold => 0.05)
+
+statement ok con2
+DELETE FROM dl.t WHERE i = 96
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*Transaction conflict.*compacted it.*
+
+query II
+SELECT count(*), count(*) FILTER (WHERE i = 96) FROM dl.t
+----
+72	1
+
+query II
+SELECT direct, aggregated FROM conflict_reads()
+----
+1	0
+
+statement ok
+CALL disable_logging()
+
+statement ok
+DETACH dl

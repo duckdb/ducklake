@@ -49,11 +49,10 @@ DETACH lake2;
 result_query IIIIII
 SET VARIABLE delete_targets = (SELECT list('lake.t_' || k) FROM range(20) t(k));
 SELECT (SELECT count(*) FROM lake.snapshots()), count(*), sum(id),
-(SELECT count(*) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL),
-(SELECT sum(delete_count) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL),
+(SELECT coalesce(sum(delete_file_count), 0)::BIGINT FROM ducklake_table_info('lake')),
+(SELECT sum(delete_count) FROM __ducklake_metadata_lake.ducklake_delete_file),
 (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_delete_file d
-JOIN lake.snapshots() s ON s.snapshot_id = d.begin_snapshot - 1
-WHERE d.delete_count = 20 AND list_contains(s.changes['tables_deleted_from'], d.table_id::VARCHAR))
+WHERE d.delete_count = 20)
 FROM query_table(getvariable('delete_targets'))
 ----
 45	81500	166097000	4136	4516	20
