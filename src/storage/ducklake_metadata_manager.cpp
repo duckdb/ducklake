@@ -345,18 +345,29 @@ string DuckLakeMetadataManager::GetSchemaTableStatement() {
 	       "begin_snapshot BIGINT, end_snapshot BIGINT, schema_name VARCHAR, path VARCHAR, path_is_relative BOOLEAN);";
 }
 
+string DuckLakeMetadataManager::DataFileTableColumns(bool with_ranges, bool with_row_group_count) {
+	return string("data_file_id BIGINT PRIMARY KEY, table_id BIGINT, ") +
+	       (with_ranges ? "begin_snapshot BIGINT, end_snapshot BIGINT, " : "") +
+	       "file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, record_count BIGINT, "
+	       "file_size_bytes BIGINT, footer_size BIGINT, row_id_start BIGINT, partition_id BIGINT, "
+	       "encryption_key VARCHAR, mapping_id BIGINT, partial_max BIGINT" +
+	       (with_row_group_count ? ", row_group_count BIGINT" : "");
+}
+
+string DuckLakeMetadataManager::DeleteFileTableColumns(bool with_ranges, bool with_row_group_count) {
+	return string("delete_file_id BIGINT PRIMARY KEY, table_id BIGINT, ") +
+	       (with_ranges ? "begin_snapshot BIGINT, end_snapshot BIGINT, " : "") +
+	       "data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, format VARCHAR, delete_count BIGINT, "
+	       "file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR, partial_max BIGINT" +
+	       (with_row_group_count ? ", row_group_count BIGINT" : "");
+}
+
 string DuckLakeMetadataManager::GetDataFileTableStatement() {
-	return "CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(data_file_id BIGINT PRIMARY KEY, table_id BIGINT, "
-	       "begin_snapshot BIGINT, end_snapshot BIGINT, file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, "
-	       "file_format VARCHAR, record_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, row_id_start BIGINT, "
-	       "partition_id BIGINT, encryption_key VARCHAR,  mapping_id BIGINT, partial_max BIGINT);";
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(" + DataFileTableColumns(true, false) + ");";
 }
 
 string DuckLakeMetadataManager::GetDeleteFileTableStatement() {
-	return "CREATE TABLE {METADATA_CATALOG}.ducklake_delete_file(delete_file_id BIGINT PRIMARY KEY, table_id BIGINT, "
-	       "begin_snapshot BIGINT, end_snapshot BIGINT, data_file_id BIGINT, path VARCHAR, path_is_relative BOOLEAN, "
-	       "format VARCHAR, delete_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR, "
-	       "partial_max BIGINT);";
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_delete_file(" + DeleteFileTableColumns(true, false) + ");";
 }
 
 string DuckLakeMetadataManager::GetFileColumnStatsTableStatement() {
@@ -445,7 +456,7 @@ string DuckLakeMetadataManager::DeleteFiles(TableIndex table_id) const {
 string DuckLakeMetadataManager::FileEndEvents(const string &visibility_table, const string &file_id_column,
                                               const string &filter_column, const string &id_list,
                                               const string &snapshot) {
-	// ending a file is a delete event next to its add event, a file that has one keeps it
+	// a file that has a delete event keeps it
 	return StringUtil::Format(R"(INSERT INTO {METADATA_CATALOG}.%s
 SELECT 0, v.table_id, v.%s, %s, TRUE
 FROM {METADATA_CATALOG}.%s v

@@ -356,6 +356,9 @@ public:
 	static string BranchedSnapshotTableColumns();
 	static string BranchedSnapshotChangesTableColumns();
 	virtual string GetSchemaTableStatement();
+	//! The columns of the file tables, with the inline ranges before the events and the row group count from 1.1 on
+	static string DataFileTableColumns(bool with_ranges, bool with_row_group_count);
+	static string DeleteFileTableColumns(bool with_ranges, bool with_row_group_count);
 	virtual string GetDataFileTableStatement();
 	virtual string GetDeleteFileTableStatement();
 	//! The visibility events of the data and delete files, one add and at most one delete event per file and branch
@@ -758,7 +761,7 @@ public:
 		bool has_begin = false;
 		bool has_end = false;
 	};
-	//! The file tables the step still has to move aside, and those moved aside it turns into events and renames back
+	//! The file tables to move aside, and the renamed ones to turn into events
 	struct V2_0Dev3Ranges {
 		vector<string> tables_to_rename;
 		vector<V2_0Dev3RangeTable> tables_to_convert;
