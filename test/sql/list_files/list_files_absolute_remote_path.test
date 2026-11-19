@@ -17,11 +17,15 @@ statement ok
 CREATE TABLE lake.items AS SELECT 42 AS i
 
 # Write an absolute URL to the metadata without relying on a remote server.
+foreach scheme https S3 lake-storage
+
 statement ok
 UPDATE meta.ducklake_data_file
-SET path = 'https://example.invalid/warehouse/data.parquet', path_is_relative = false
+SET path = '{scheme}://example.invalid/warehouse/data.parquet', path_is_relative = false
 
 query I
-SELECT data_file FROM ducklake_list_files('lake', 'items')
+SELECT data_file = '{scheme}://example.invalid/warehouse/data.parquet' FROM ducklake_list_files('lake', 'items')
 ----
-https://example.invalid/warehouse/data.parquet
+true
+
+endloop
