@@ -674,9 +674,8 @@
       ]
     },
     {
-      "reason": "duckdb's CONNECT-over-quack tests do not fit a DuckLake default catalog: connect_quack targets duckdb's older quack pin, and concurrent_connect_detach fails the on_new_connection USE dl in an aborted transaction.",
+      "reason": "duckdb's CONNECT-over-quack tests do not fit a DuckLake default catalog: concurrent_connect_detach's on_new_connection USE dl runs on a connection whose database was detached, and disconnect_aborted_transaction reaches the remote table through the nested path qk.dl.main.",
       "paths": [
-        "test/sql/connect/connect_quack.test",
         "test/sql/connect/concurrent_connect_detach.test",
         "test/sql/connect/disconnect_aborted_transaction.test"
       ]
