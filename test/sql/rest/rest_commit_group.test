@@ -1,0 +1,170 @@
+# name: test/sql/rest/rest_commit_group.test
+# description: Group commits share a queue with regular commits, concurrent appends keep all rows
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+# half of the clients inline their rows, the other half writes files
+loop i 0 4
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl{i} (DATA_INLINING_ROW_LIMIT 1000)
+
+endloop
+
+loop i 4 8
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl{i} (DATA_INLINING_ROW_LIMIT 0)
+
+endloop
+
+statement ok
+CREATE TABLE dl0.shared(i INTEGER)
+
+statement ok
+SET ducklake_rest_group_commit=true
+
+concurrentloop i 0 8
+
+statement ok
+SET ducklake_max_retry_count=0
+
+loop j 0 10
+
+statement ok
+INSERT INTO dl{i}.shared VALUES ({i} * 10 + {j})
+
+endloop
+
+endloop
+
+query III
+SELECT count(*), count(DISTINCT i), sum(i) FROM dl0.shared
+----
+80	80	3160
+
+query I
+SELECT count(*) > 0 FROM ducklake_list_files('dl0', 'shared')
+----
+true
+
+# appends to tables created after the oldest snapshot of a group commit on their own
+concurrentloop i 0 8
+
+statement ok
+CREATE TABLE dl{i}.own{i}(i INTEGER)
+
+loop j 0 5
+
+statement ok
+INSERT INTO dl{i}.shared VALUES (100 + {i} * 10 + {j})
+
+statement ok
+INSERT INTO dl{i}.own{i} VALUES ({j})
+
+endloop
+
+endloop
+
+query II
+SELECT count(*), count(DISTINCT i) FROM dl0.shared
+----
+120	120
+
+loop i 0 8
+
+query II
+SELECT count(*), sum(i) FROM dl0.own{i}
+----
+5	10
+
+endloop
+
+# an update conflicts with a group commit as it does with a regular commit
+statement ok con1
+BEGIN
+
+statement ok con1
+UPDATE dl0.shared SET i = -1 WHERE i = 0
+
+statement ok con2
+UPDATE dl1.shared SET i = -2 WHERE i = 0
+
+statement error con1
+COMMIT
+----
+conflict
+
+# regular commits and group commits wait in the same queue
+statement ok
+CREATE TABLE dl0.mixed(i INTEGER)
+
+concurrentloop i 0 8
+
+statement ok
+SET SESSION ducklake_rest_group_commit=({i} % 2 = 0)
+
+statement ok
+SET ducklake_max_retry_count=0
+
+loop j 0 10
+
+statement ok
+INSERT INTO dl{i}.mixed VALUES ({i} * 10 + {j})
+
+endloop
+
+endloop
+
+query III
+SELECT count(*), count(DISTINCT i), sum(i) FROM dl0.mixed
+----
+80	80	3160
+
+# a regular commit publishes a snapshot of its own
+statement ok
+SET ducklake_rest_group_commit=false
+
+statement ok
+SET VARIABLE snapshots_before = (SELECT count(*) FROM ducklake_snapshots('dl0'))
+
+concurrentloop i 0 8
+
+statement ok
+INSERT INTO dl{i}.mixed VALUES (1000 + {i})
+
+endloop
+
+query I
+SELECT count(*) - getvariable('snapshots_before') FROM ducklake_snapshots('dl0')
+----
+8
+
+# a group commit with other changes than appends commits as a regular commit does
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/group-commit', '{"requests":[{"create_schema":{"placeholder_id":-1,"schema_name":"grouped"}}]}')
+----
+200
+
+query I
+SELECT count(*) FROM information_schema.schemata WHERE catalog_name = 'dl0' AND schema_name = 'grouped'
+----
+1
+
+# a group commit that fails reports its error
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/group-commit', '{"requests":[{"create_schema":{"placeholder_id":-1,"schema_name":"grouped"}}]}')
+----
+404
+
+loop i 0 8
+
+statement ok
+DETACH dl{i}
+
+endloop
+
+include test/template/rest_teardown.test_template

@@ -21,6 +21,53 @@
 
 namespace duckdb {
 
+//! The number of commits that share a snapshot at most
+static constexpr idx_t MAX_COMMIT_GROUP = 256;
+
+bool DuckLakeRESTPendingCommit::CanShareSnapshotWith(const DuckLakeRESTPendingCommit &other) const {
+	return shares_snapshot && other.shares_snapshot && server == other.server && prefix == other.prefix &&
+	       accepts_arrow == other.accepts_arrow;
+}
+
+vector<reference<DuckLakeRESTPendingCommit>> DuckLakeRESTCommitQueue::TakeNext() {
+	vector<reference<DuckLakeRESTPendingCommit>> result;
+	result.push_back(pending.front());
+	pending.pop_front();
+	auto &first = result[0].get();
+	// the commits that cannot share the snapshot keep their place in the queue
+	for (auto entry = pending.begin(); entry != pending.end() && result.size() < MAX_COMMIT_GROUP;) {
+		if (first.CanShareSnapshotWith(entry->get())) {
+			result.push_back(*entry);
+			entry = pending.erase(entry);
+		} else {
+			entry++;
+		}
+	}
+	return result;
+}
+
+void DuckLakeRESTCommitQueue::Submit(DuckLakeRESTPendingCommit &commit, const run_commits_t &run_commits) {
+	unique_lock<mutex> guard(lock);
+	pending.push_back(commit);
+	ready.wait(guard, [&] { return commit.done || !running; });
+	if (commit.done) {
+		return;
+	}
+	running = true;
+	while (!commit.done) {
+		auto commits = TakeNext();
+		guard.unlock();
+		run_commits(commits);
+		guard.lock();
+		for (auto &entry : commits) {
+			entry.get().done = true;
+		}
+		ready.notify_all();
+	}
+	running = false;
+	ready.notify_all();
+}
+
 //===--------------------------------------------------------------------===//
 // Request
 //===--------------------------------------------------------------------===//
@@ -72,8 +119,9 @@ void DuckLakeRESTServer::AddCatalog(const string &prefix, shared_ptr<DatabaseIns
 	if (prefix.empty() || prefix.find('/') != string::npos) {
 		throw InvalidInputException("The prefix of a catalog has to be a name without slashes, not \"%s\"", prefix);
 	}
+	auto commit_queue = DuckLakeRESTServerRegistry::Get().GetCommitQueue(*db, catalog_name);
 	lock_guard<mutex> guard(catalog_lock);
-	catalogs[prefix] = ServedCatalog {prefix, std::move(db), std::move(catalog_name)};
+	catalogs[prefix] = ServedCatalog {prefix, std::move(db), std::move(catalog_name), std::move(commit_queue)};
 }
 
 //! Plans expire after this many seconds
@@ -213,21 +261,49 @@ int32_t DuckLakeRESTServer::HandleRequest(const RESTRoute &route, optional_ptr<c
 		if (entry == endpoints.end()) {
 			throw InternalException("DuckLake REST: the endpoint \"%s\" has no handler", route.endpoint);
 		}
-		DuckLakeRESTRequest request(*served.db, served.catalog_name);
 		string json_body = body;
+		shared_ptr<const string> request_data;
+		vector<RESTMultipartPart> request_parts;
 		if (RESTMultipart::IsMultipart(request_content_type)) {
 			// the JSON document is a part of the request, the other parts are tables
-			request.request_data = make_shared_ptr<const string>(body);
-			request.request_parts = RESTMultipart::Parse(*request.request_data, request_content_type);
-			auto &json_part = RESTMultipart::Find(request.request_parts, "request");
-			json_body = request.request_data->substr(json_part.offset, json_part.size);
+			request_data = make_shared_ptr<const string>(body);
+			request_parts = RESTMultipart::Parse(*request_data, request_content_type);
+			auto &json_part = RESTMultipart::Find(request_parts, "request");
+			json_body = request_data->substr(json_part.offset, json_part.size);
 		}
 		auto request_json = route.ServerRequest(path_values, query, json_body);
+		// lists are Arrow, unless the request asks for JSON only
+		bool accepts_arrow =
+		    accept.empty() || accept.find("multipart/mixed") != string::npos || accept.find("*/*") != string::npos;
+		bool group_commit = route.endpoint == "group_commit_transaction";
+		if (group_commit || route.endpoint == "commit_transaction") {
+			// the commit runs after the queued ones, so that its metadata transaction sees what they published
+			DuckLakeRESTPendingCommit commit;
+			commit.endpoint = route.endpoint;
+			commit.shares_snapshot = group_commit && DuckLakeRESTCommitGroup::IsAppendOnly(request_json);
+			commit.request_json = std::move(request_json);
+			commit.request_data = std::move(request_data);
+			commit.request_parts = std::move(request_parts);
+			commit.server = this;
+			commit.prefix = served.prefix;
+			commit.accepts_arrow = accepts_arrow;
+			served.commit_queue->Submit(
+			    commit, [&](vector<reference<DuckLakeRESTPendingCommit>> &commits) { RunCommits(served, commits); });
+			if (commit.error.HasError()) {
+				auto status = StatusCodeForError(commit.error.Type());
+				response = ErrorBody(commit.error.Type(), commit.error.RawMessage(), status);
+				return status;
+			}
+			response = std::move(commit.response);
+			content_type = commit.content_type;
+			return 200;
+		}
+		DuckLakeRESTRequest request(*served.db, served.catalog_name);
+		request.request_data = std::move(request_data);
+		request.request_parts = std::move(request_parts);
 		request.server = this;
 		request.prefix = served.prefix;
-		// lists are Arrow, unless the request asks for JSON only
-		request.accepts_arrow =
-		    accept.empty() || accept.find("multipart/mixed") != string::npos || accept.find("*/*") != string::npos;
+		request.accepts_arrow = accepts_arrow;
 		try {
 			response = entry->second(request, request_json);
 			content_type = request.content_type;
@@ -246,6 +322,73 @@ int32_t DuckLakeRESTServer::HandleRequest(const RESTRoute &route, optional_ptr<c
 		auto status = StatusCodeForError(error.Type());
 		response = ErrorBody(error.Type(), error.RawMessage(), status);
 		return status;
+	}
+}
+
+static void InitializeCommitRequest(DuckLakeRESTRequest &request, const DuckLakeRESTPendingCommit &commit) {
+	request.request_data = commit.request_data;
+	request.request_parts = commit.request_parts;
+	request.server = commit.server;
+	request.prefix = commit.prefix;
+	request.accepts_arrow = commit.accepts_arrow;
+}
+
+void DuckLakeRESTServer::RunCommit(const ServedCatalog &served, DuckLakeRESTPendingCommit &commit) {
+	try {
+		auto endpoint = DuckLakeRESTAPI::GetEndpoints().at(commit.endpoint);
+		DuckLakeRESTRequest request(*served.db, served.catalog_name);
+		InitializeCommitRequest(request, commit);
+		try {
+			commit.response = endpoint(request, commit.request_json);
+			commit.content_type = request.content_type;
+			if (request.connection.HasActiveTransaction()) {
+				request.connection.Commit();
+			}
+		} catch (...) {
+			if (request.connection.HasActiveTransaction()) {
+				request.connection.Rollback();
+			}
+			throw;
+		}
+	} catch (std::exception &ex) {
+		commit.error = ErrorData(ex);
+	}
+}
+
+bool DuckLakeRESTServer::RunCommitGroup(const ServedCatalog &served,
+                                        vector<reference<DuckLakeRESTPendingCommit>> &group) {
+	try {
+		DuckLakeRESTRequest request(*served.db, served.catalog_name);
+		InitializeCommitRequest(request, group[0].get());
+		string response;
+		try {
+			response = DuckLakeRESTCommitGroup::Commit(request, group);
+			if (request.connection.HasActiveTransaction()) {
+				request.connection.Commit();
+			}
+		} catch (...) {
+			if (request.connection.HasActiveTransaction()) {
+				request.connection.Rollback();
+			}
+			throw;
+		}
+		for (auto &commit : group) {
+			commit.get().response = response;
+			commit.get().content_type = request.content_type;
+		}
+		return true;
+	} catch (std::exception &ex) {
+		return false;
+	}
+}
+
+void DuckLakeRESTServer::RunCommits(const ServedCatalog &served,
+                                    vector<reference<DuckLakeRESTPendingCommit>> &commits) {
+	if (commits.size() > 1 && RunCommitGroup(served, commits)) {
+		return;
+	}
+	for (auto &commit : commits) {
+		RunCommit(served, commit.get());
 	}
 }
 
@@ -408,6 +551,25 @@ bool DuckLakeRESTServerRegistry::Stop(const string &uri) {
 	}
 	server->Stop();
 	return true;
+}
+
+shared_ptr<DuckLakeRESTCommitQueue> DuckLakeRESTServerRegistry::GetCommitQueue(DatabaseInstance &db,
+                                                                               const string &catalog_name) {
+	lock_guard<mutex> guard(lock);
+	for (auto entry = commit_queues.begin(); entry != commit_queues.end();) {
+		if (entry->second.expired()) {
+			entry = commit_queues.erase(entry);
+		} else {
+			entry++;
+		}
+	}
+	auto &entry = commit_queues[make_pair(&db, StringUtil::Lower(catalog_name))];
+	auto queue = entry.lock();
+	if (!queue) {
+		queue = make_shared_ptr<DuckLakeRESTCommitQueue>();
+		entry = queue;
+	}
+	return queue;
 }
 
 optional_ptr<DuckLakeRESTServer> DuckLakeRESTServerRegistry::GetServer(const string &uri) {

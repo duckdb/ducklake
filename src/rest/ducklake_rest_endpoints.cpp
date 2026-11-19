@@ -1,7 +1,9 @@
 #include "rest/ducklake_rest_server.hpp"
 #include "duckdb/common/vector/struct_vector.hpp"
+#include "rest/ducklake_rest_arrow_responses.hpp"
 #include "rest/ducklake_rest_catalog_changes.hpp"
 #include "rest/ducklake_rest_filters.hpp"
+#include "rest/ducklake_rest_json.hpp"
 
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/common/enum_util.hpp"
@@ -774,6 +776,10 @@ public:
 	}
 
 	RESTCommitTransactionResponse Run(const RESTCommitTransactionRequest &parameters);
+	//! The retry settings and the commit information of the snapshot
+	void Configure(const RESTCommitTransactionRequest &parameters);
+	void ApplyRequests(const RESTCommitTransactionRequest &parameters);
+	RESTCommitTransactionResponse Commit();
 
 protected:
 	void CreateSchema(RESTCreateSchemaRequest &parameters) override;
@@ -1320,11 +1326,7 @@ void DuckLakeRESTCommit::InsertFiles(RESTInsertFilesRequest &parameters) {
 	transaction.AppendFiles(table.GetTableId(), std::move(parameters.files));
 }
 
-RESTCommitTransactionResponse DuckLakeRESTCommit::Run(const RESTCommitTransactionRequest &parameters) {
-	if (!RESTIsNull(parameters.snapshot) || parameters.snapshot_id.IsValid()) {
-		// conflicts are detected against the snapshot the client transaction started from
-		transaction.SetSnapshot(request.GetSnapshot(parameters));
-	}
+void DuckLakeRESTCommit::Configure(const RESTCommitTransactionRequest &parameters) {
 	if (parameters.retry) {
 		auto &retry = *parameters.retry;
 		DuckLakeUtil::SetExtensionSetting(context, "ducklake_max_retry_count", Value::UBIGINT(retry.max_retry_count));
@@ -1334,6 +1336,9 @@ RESTCommitTransactionResponse DuckLakeRESTCommit::Run(const RESTCommitTransactio
 	if (parameters.commit_info) {
 		transaction.SetCommitMessage(*parameters.commit_info);
 	}
+}
+
+void DuckLakeRESTCommit::ApplyRequests(const RESTCommitTransactionRequest &parameters) {
 	auto &requests = parameters.requests;
 	for (idx_t i = 0; i < requests.size(); i++) {
 		next_request = nullptr;
@@ -1345,6 +1350,19 @@ RESTCommitTransactionResponse DuckLakeRESTCommit::Run(const RESTCommitTransactio
 	if (!dropped_macros.empty()) {
 		DuckLakeSchemaEntry::ThrowIfTablesCallMacros(context, catalog, dropped_macros);
 	}
+}
+
+RESTCommitTransactionResponse DuckLakeRESTCommit::Run(const RESTCommitTransactionRequest &parameters) {
+	if (!RESTIsNull(parameters.snapshot) || parameters.snapshot_id.IsValid()) {
+		// conflicts are detected against the snapshot the client transaction started from
+		transaction.SetSnapshot(request.GetSnapshot(parameters));
+	}
+	Configure(parameters);
+	ApplyRequests(parameters);
+	return Commit();
+}
+
+RESTCommitTransactionResponse DuckLakeRESTCommit::Commit() {
 	auto transaction_ref = transaction.shared_from_this();
 	request.connection.Commit();
 	RESTCommitTransactionResponse result;
@@ -1377,6 +1395,79 @@ RESTCommitTransactionResponse DuckLakeRESTEndpoints::CommitTransaction(DuckLakeR
                                                                        const RESTCommitTransactionRequest &parameters) {
 	DuckLakeRESTCommit commit(request);
 	return commit.Run(parameters);
+}
+
+RESTCommitTransactionResponse
+DuckLakeRESTEndpoints::GroupCommitTransaction(DuckLakeRESTRequest &request,
+                                              const RESTCommitTransactionRequest &parameters) {
+	// a group commit that shares its snapshot with no other commit
+	return CommitTransaction(request, parameters);
+}
+
+//===--------------------------------------------------------------------===//
+// Commit Group
+//===--------------------------------------------------------------------===//
+bool DuckLakeRESTCommitGroup::IsAppendOnly(const string &request_json) {
+	try {
+		RESTJsonReader document(request_json);
+		auto parameters = DuckLakeRESTSerializer::Read<RESTCommitTransactionRequest>(document.Root());
+		for (auto &commit_request : parameters.requests) {
+			if (commit_request->type == RESTCommitRequestType::INSERT_FILES) {
+				continue;
+			}
+			if (commit_request->type != RESTCommitRequestType::INSERT_ROWS) {
+				return false;
+			}
+			if (!commit_request->Cast<RESTInsertRowsRequest>().row_ids.empty()) {
+				// rows that keep their row ids are the rows of an update
+				return false;
+			}
+		}
+		return !parameters.requests.empty();
+	} catch (std::exception &ex) {
+		// the commit reports what is wrong with the request
+		return false;
+	}
+}
+
+string DuckLakeRESTCommitGroup::Commit(DuckLakeRESTRequest &request,
+                                       const vector<reference<DuckLakeRESTPendingCommit>> &commits) {
+	vector<RESTCommitTransactionRequest> group;
+	for (auto &entry : commits) {
+		auto &commit = entry.get();
+		request.request_data = commit.request_data;
+		request.request_parts = commit.request_parts;
+		group.push_back(
+		    DuckLakeRESTSerializer::ReadRequest<RESTCommitTransactionRequest>(request, commit.request_json));
+	}
+	// conflicts are detected against the oldest snapshot that a transaction of the group started from
+	bool has_snapshot = false;
+	DuckLakeSnapshot oldest;
+	for (auto &parameters : group) {
+		if (RESTIsNull(parameters.snapshot) && !parameters.snapshot_id.IsValid()) {
+			continue;
+		}
+		auto snapshot = request.GetSnapshot(parameters);
+		if (!has_snapshot || snapshot.snapshot_id < oldest.snapshot_id) {
+			oldest = snapshot;
+			has_snapshot = true;
+		}
+	}
+	if (has_snapshot) {
+		request.transaction->SetSnapshot(oldest);
+	}
+	RESTCommitTransactionResponse result;
+	for (idx_t i = 0; i < group.size(); i++) {
+		DuckLakeRESTCommit commit(request);
+		if (i == 0) {
+			commit.Configure(group[i]);
+		}
+		commit.ApplyRequests(group[i]);
+		if (i + 1 == group.size()) {
+			result = commit.Commit();
+		}
+	}
+	return DuckLakeRESTSerializer::ToResponse(request, result);
 }
 
 } // namespace duckdb
