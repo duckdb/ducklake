@@ -1,0 +1,92 @@
+# name: test/sql/compaction/compaction_candidate_tables.test
+# description: a rewrite or a merge over the catalog lists the files of the candidate tables only, found by one read
+# group: [compaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/compaction_candidate_tables', DATA_INLINING_ROW_LIMIT 0)
+
+# one file, nothing to merge or rewrite
+statement ok
+CREATE TABLE dl.single AS SELECT range AS i FROM range(10)
+
+# two files without deletes, a merge candidate
+statement ok
+CREATE TABLE dl.pair (i INTEGER)
+
+statement ok
+INSERT INTO dl.pair VALUES (1)
+
+statement ok
+INSERT INTO dl.pair VALUES (2)
+
+# a delete file, a rewrite candidate
+statement ok
+CREATE TABLE dl.deleted AS SELECT range AS i FROM range(10)
+
+statement ok
+DELETE FROM dl.deleted WHERE i = 3
+
+# an inlined deletion, a rewrite candidate found through its deletion table
+statement ok
+CREATE TABLE dl.inlined_deletes AS SELECT range AS i FROM range(10)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 5, table_name => 'inlined_deletes')
+
+statement ok
+DELETE FROM dl.inlined_deletes WHERE i = 4
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT sum(files_processed) FROM ducklake_rewrite_data_files('dl', delete_threshold => 0)
+----
+2
+
+statement ok
+CALL disable_logging()
+
+# one read of the delete files names the candidates, the two candidate tables list their files
+query II
+SELECT count(*) FILTER (WHERE query LIKE '%DISTINCT table_id FROM%delete_file%'),
+       count(*) FILTER (WHERE query LIKE '%candidate_files AS%')
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1	2
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query II
+SELECT sum(files_processed), sum(files_created) FROM ducklake_merge_adjacent_files('dl')
+----
+2	1
+
+statement ok
+CALL disable_logging()
+
+# one read of the data files names the tables with two live files, the one candidate lists its files
+query II
+SELECT count(*) FILTER (WHERE query LIKE '%GROUP BY table_id HAVING COUNT(*) > 1%'),
+       count(*) FILTER (WHERE query LIKE '%snapshot_ranges AS%' AND query NOT LIKE '%candidate_files%')
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1	1
+
+query IIII
+SELECT (SELECT count(*) FROM dl.single), (SELECT list(i ORDER BY i) FROM dl.pair),
+       (SELECT list(i ORDER BY i) FROM dl.deleted), (SELECT list(i ORDER BY i) FROM dl.inlined_deletes)
+----
+10	[1, 2]	[0, 1, 2, 4, 5, 6, 7, 8, 9]	[0, 1, 2, 3, 5, 6, 7, 8, 9]

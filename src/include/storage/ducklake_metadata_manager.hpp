@@ -748,8 +748,10 @@ public:
 	//! Deletes the metadata that only the deleted snapshots referenced, once the caller checked the catalog version
 	virtual void CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
-	//! The tables with data files that are not dropped
-	unordered_set<idx_t> GetTablesWithLiveDataFiles();
+	//! The tables with more than one live data file
+	unordered_set<idx_t> GetTablesWithMergeCandidates();
+	//! The tables in scope with live delete files or inlined deletions
+	unordered_set<idx_t> GetTablesWithRewriteCandidates(DuckLakeSnapshot snapshot, const vector<TableIndex> &table_ids);
 	//! Returns the rows the option is expected to have after it is written
 	virtual idx_t SetConfigOption(const DuckLakeConfigOption &option);
 	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);

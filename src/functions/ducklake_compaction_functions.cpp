@@ -1037,11 +1037,18 @@ static unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableF
 	} else {
 		tables = DuckLakeBaseMetadataFunction::GetTablesInScope(context, ducklake_catalog, schema, string());
 	}
-	// tables without live data files have nothing to compact
+	// one read over the file tables names the tables that can have something to compact
 	bool skip_tables_without_files = tables.size() > 1;
 	unordered_set<idx_t> tables_with_files;
-	if (skip_tables_without_files) {
-		tables_with_files = transaction.GetMetadataManager().GetTablesWithLiveDataFiles();
+	if (skip_tables_without_files && type == CompactionType::REWRITE_DELETES) {
+		vector<TableIndex> table_ids;
+		for (auto &table_ref : tables) {
+			table_ids.push_back(table_ref.get().GetTableId());
+		}
+		tables_with_files =
+		    transaction.GetMetadataManager().GetTablesWithRewriteCandidates(transaction.GetSnapshot(), table_ids);
+	} else if (skip_tables_without_files) {
+		tables_with_files = transaction.GetMetadataManager().GetTablesWithMergeCandidates();
 	}
 	vector<unique_ptr<LogicalOperator>> compactions;
 	for (auto &table_ref : tables) {
