@@ -791,11 +791,13 @@ public:
 	static string GetMainBranchRowStatement();
 	//! Whether the catalog already has every metadata table and column of v1.1
 	bool HasV1_1Additions();
-	//! The additions of 2.0-dev1 a catalog is missing, all of them for the 1.1 migration
-	struct V2_0Dev1Additions {
+	//! Migrates a 2.0-dev1 catalog of any dev build or interruption state to the layout of 2.0-dev2
+	virtual void MigrateV20Dev1();
+	//! The additions of 2.0-dev2 a catalog is missing, probed so an interrupted migration resumes
+	struct V2_0Dev2Additions {
 		bool snapshot_tag_table = true;
 		bool branch_table = true;
-		//! Rebuilt through a rebuild table and an old table so an interrupted heal resumes
+		//! Rebuilt through a rebuild table and an old table so an interrupted rebuild resumes
 		bool rebuild_snapshots = true;
 		bool has_snapshot_table = true;
 		bool snapshot_has_branch_column = false;
@@ -807,19 +809,11 @@ public:
 		bool has_changes_rebuild = false;
 		bool has_changes_old = false;
 	};
-	V2_0Dev1Additions ProbeV2_0Dev1Additions();
-	//! The first batch of a rebuild, which drops the marker, takes the snapshot tables away by name and commits
-	static string V2_0Dev1RenameSql(const V2_0Dev1Additions &add);
+	V2_0Dev2Additions ProbeV2_0Dev2Additions();
+	//! The first batch of a rebuild, which takes the snapshot tables away by name and commits
+	static string V2_0Dev2RenameSql(const V2_0Dev2Additions &add);
 	//! The other additions, the second batch of a rebuild copies from the renamed tables
-	static string V2_0Dev1AdditionsSql(const V2_0Dev1Additions &add);
-	//! Adds the missing additions to a 2.0-dev1 catalog of an older dev build or of an interrupted heal
-	void AddV2_0Dev1Additions();
-	//! Whether the loaded metadata holds the marker of a completed heal of the current development layout
-	static bool HasHealMarker(const DuckLakeMetadata &metadata);
-	//! Reads the metadata table for the marker
-	bool HasHealMarker();
-	//! Writes the marker, the last statements of a heal
-	static string HealMarkerSql();
+	static string V2_0Dev2AdditionsSql(const V2_0Dev2Additions &add);
 	bool HasMetadataColumn(const string &table, const string &column);
 	//! Scans the metadata schema into the memo, once per probe pass
 	void ProbeMetadataSchema();

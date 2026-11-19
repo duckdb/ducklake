@@ -13,8 +13,6 @@ string DuckLakeMetadataManagerV2_0<Base>::GetCreateTableStatements() {
 	result += DuckLakeMetadataManager::GetMainBranchRowStatement() + "\n";
 	result += DuckLakeMetadataManager::GetFileVisibilityTableStatement() + "\n";
 	result += DuckLakeMetadataManager::GetDeleteFileVisibilityTableStatement() + "\n";
-	// a fresh catalog has the healed layout, so it carries the marker of a completed heal
-	result += DuckLakeMetadataManager::HealMarkerSql();
 	return result;
 }
 

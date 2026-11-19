@@ -56,7 +56,7 @@ SELECT max(reads) FILTER (retries = 0) = max(reads) FILTER (retries = 8) FROM me
 ----
 true
 
-# the failed attach left a 2.0-dev1 catalog without the marker, its snapshot tables renamed
+# the failed attach left a 2.0-dev1 catalog, its snapshot tables renamed
 statement ok
 DETACH DATABASE IF EXISTS meta
 
@@ -69,30 +69,25 @@ SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 2.0-dev1
 
 query I
-SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
-----
-0
-
-query I
 SELECT list(table_name ORDER BY table_name) FROM duckdb_tables() WHERE database_name = 'meta'
 AND table_name LIKE 'ducklake_snapshot%'
 ----
-[ducklake_snapshot_changes_old, ducklake_snapshot_old]
+[ducklake_snapshot_changes_old, ducklake_snapshot_old, ducklake_snapshot_tag]
 
 statement ok
 DETACH meta
 
-# a read only attach cannot heal it
+# an attach without the migration option refuses the dev version
 statement error
 ATTACH 'ducklake:{TEST_DIR}/migration_load_error_8.db' AS dl (DATA_PATH '{DATA_PATH}/migration_load_error_8',
-METADATA_CATALOG 'meta', READ_ONLY)
+METADATA_CATALOG 'meta')
 ----
-attach it writable once
+catalog version is 2.0-dev1, but the extension requires version 2.0-dev2
 
-# the next writable attach heals it without a migration option
+# the next writable attach with the migration option completes the migration
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/migration_load_error_8.db' AS dl (DATA_PATH '{DATA_PATH}/migration_load_error_8',
-METADATA_CATALOG 'meta')
+METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
 
 query I
 SELECT count(*) FROM dl.t
@@ -100,9 +95,9 @@ SELECT count(*) FROM dl.t
 0
 
 query I
-SELECT value FROM meta.ducklake_metadata WHERE key = 'heal_complete'
+SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev1.1
+2.0-dev2
 
 query I
 SELECT list(table_name ORDER BY table_name) FROM duckdb_tables() WHERE database_name = 'meta'

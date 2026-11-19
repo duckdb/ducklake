@@ -10,7 +10,6 @@
 #include "storage/ducklake_variant_stats.hpp"
 #include "duckdb/logging/logger.hpp"
 #include "common/ducklake_util.hpp"
-#include "common/ducklake_version.hpp"
 #include "duckdb/planner/tableref/bound_at_clause.hpp"
 #include "duckdb/common/types/blob.hpp"
 #include "duckdb/common/type_visitor.hpp"
@@ -834,20 +833,25 @@ string DuckLakeMetadataManager::GetMainBranchRowStatement() {
 }
 
 void DuckLakeMetadataManager::MigrateV11() {
-	// a catalog can hold some of the additions already, from an interrupted migration
-	auto rename_query = V2_0Dev1RenameSql(ProbeV2_0Dev1Additions());
-	// the version moves with the rename, so a catalog left between the batches heals on its next writable attach
-	string version_update =
-	    "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version';\n";
-	bool renamed = !rename_query.empty();
-	if (renamed) {
+	auto migrate_query = GetSnapshotTagTableStatement() + R"(
+UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version';
+)";
+	ExecuteMigration(migrate_query, false, "1.1", "2.0-dev1");
+}
+
+void DuckLakeMetadataManager::MigrateV20Dev1() {
+	// a catalog can hold some of the additions already, from an older dev build or an interrupted migration
+	auto rename_query = V2_0Dev2RenameSql(ProbeV2_0Dev2Additions());
+	if (!rename_query.empty()) {
 		// the rename commits before the copy, so the copy sees every commit the rename waited for
-		ExecuteMigration(rename_query + version_update, false, "1.1", "2.0-dev1");
+		ExecuteMigration(rename_query, false, "2.0-dev1", "2.0-dev2");
 		transaction.ReleaseMetadataTransaction();
 	}
-	auto missing = ProbeV2_0Dev1Additions();
-	auto migrate_query = V2_0Dev1AdditionsSql(missing) + (renamed ? string() : version_update) + HealMarkerSql();
-	ExecuteMigration(migrate_query, false, "1.1", "2.0-dev1");
+	auto migrate_query = V2_0Dev2AdditionsSql(ProbeV2_0Dev2Additions());
+	// a dev build of this layout marked a completed rebuild in the metadata table
+	migrate_query += "DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'heal_complete';\n";
+	migrate_query += "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev2' WHERE key = 'version';\n";
+	ExecuteMigration(migrate_query, false, "2.0-dev1", "2.0-dev2");
 }
 
 string DuckLakeMetadataManager::VisibilityEventBackfillSql(const string &visibility_table, const string &file_table,
@@ -985,13 +989,7 @@ DROP TABLE {METADATA_CATALOG}.%s;
 	return result;
 }
 
-//! Deletes the marker of a completed heal
-static string HealMarkerDeleteSql() {
-	return StringUtil::Format("DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s;\n",
-	                          SQLString(DUCKLAKE_HEAL_MARKER_KEY));
-}
-
-string DuckLakeMetadataManager::V2_0Dev1RenameSql(const V2_0Dev1Additions &add) {
+string DuckLakeMetadataManager::V2_0Dev2RenameSql(const V2_0Dev2Additions &add) {
 	string result;
 	if (add.rebuild_snapshots) {
 		result += SnapshotTableRenameSql("ducklake_snapshot", add.has_snapshot_table, add.snapshot_has_branch_column,
@@ -1001,14 +999,10 @@ string DuckLakeMetadataManager::V2_0Dev1RenameSql(const V2_0Dev1Additions &add) 
 		result += SnapshotTableRenameSql("ducklake_snapshot_changes", add.has_changes_table,
 		                                 add.changes_has_branch_column, add.has_changes_rebuild, add.has_changes_old);
 	}
-	if (result.empty()) {
-		return result;
-	}
-	// the marker goes first, so a stale rebuild that stops after this batch leaves a catalog that probes again
-	return HealMarkerDeleteSql() + result;
+	return result;
 }
 
-string DuckLakeMetadataManager::V2_0Dev1AdditionsSql(const V2_0Dev1Additions &add) {
+string DuckLakeMetadataManager::V2_0Dev2AdditionsSql(const V2_0Dev2Additions &add) {
 	string result;
 	if (add.snapshot_tag_table) {
 		result += GetSnapshotTagTableStatement() + "\n";
@@ -1032,41 +1026,9 @@ string DuckLakeMetadataManager::V2_0Dev1AdditionsSql(const V2_0Dev1Additions &ad
 	return result;
 }
 
-bool DuckLakeMetadataManager::HasHealMarker(const DuckLakeMetadata &metadata) {
-	for (auto &tag : metadata.tags) {
-		if (tag.key == DUCKLAKE_HEAL_MARKER_KEY && tag.value == DUCKLAKE_HEAL_GENERATION) {
-			return true;
-		}
-	}
-	return false;
-}
-
-bool DuckLakeMetadataManager::HasHealMarker() {
-	// read after a failed heal, an error leaves the failure of the heal to be reported
-	auto result = Query(
-	    StringUtil::Format("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = %s AND scope IS NULL",
-	                       SQLString(DUCKLAKE_HEAL_MARKER_KEY)));
-	if (result->HasError()) {
-		return false;
-	}
-	for (auto &row : *result) {
-		if (row.GetValue<string>(0) == DUCKLAKE_HEAL_GENERATION) {
-			return true;
-		}
-	}
-	return false;
-}
-
-string DuckLakeMetadataManager::HealMarkerSql() {
-	// the marker comes last, so a heal interrupted anywhere before it runs again on the next writable attach
-	return HealMarkerDeleteSql() +
-	       StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES (%s, %s);\n",
-	                          SQLString(DUCKLAKE_HEAL_MARKER_KEY), SQLString(DUCKLAKE_HEAL_GENERATION));
-}
-
-DuckLakeMetadataManager::V2_0Dev1Additions DuckLakeMetadataManager::ProbeV2_0Dev1Additions() {
+DuckLakeMetadataManager::V2_0Dev2Additions DuckLakeMetadataManager::ProbeV2_0Dev2Additions() {
 	ResetProbedColumns();
-	V2_0Dev1Additions missing;
+	V2_0Dev2Additions missing;
 	missing.snapshot_tag_table = !HasMetadataColumn("ducklake_snapshot_tag", "tag_name");
 	missing.branch_table = !HasMetadataColumn("ducklake_branch", "branch_id");
 	missing.has_snapshot_table = HasMetadataColumn("ducklake_snapshot", "snapshot_id");
@@ -1083,19 +1045,6 @@ DuckLakeMetadataManager::V2_0Dev1Additions DuckLakeMetadataManager::ProbeV2_0Dev
 	missing.rebuild_snapshot_changes =
 	    !missing.changes_has_branch_column || missing.has_changes_rebuild || missing.has_changes_old;
 	return missing;
-}
-
-void DuckLakeMetadataManager::AddV2_0Dev1Additions() {
-	auto rename_query = V2_0Dev1RenameSql(ProbeV2_0Dev1Additions());
-	if (!rename_query.empty()) {
-		// the rename commits before the copy, so the copy sees every commit the rename waited for
-		auto renamed = Execute(rename_query);
-		renamed->ThrowIfError("Failed to heal the snapshot tables of DuckLake: ");
-		transaction.ReleaseMetadataTransaction();
-	}
-	auto missing = ProbeV2_0Dev1Additions();
-	auto result = Execute(V2_0Dev1AdditionsSql(missing) + HealMarkerSql());
-	result->ThrowIfError("Failed to heal the snapshot tables of DuckLake: ");
 }
 
 bool DuckLakeMetadataManager::ProbeMetadataColumns() {
