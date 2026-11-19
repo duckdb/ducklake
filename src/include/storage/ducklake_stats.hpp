@@ -94,6 +94,8 @@ public:
 	                                           bool table_has_rows);
 	//! The statistics of count values that are all the given value
 	static DuckLakeColumnStats FromConstant(const LogicalType &type, const Value &value, idx_t count);
+	//! Encode a BLOB bound in the same hexadecimal format as Parquet
+	static string EncodeBlobBound(string_t value);
 	//! Discards the min/max bounds, leaving the counts intact
 	void ClearBounds();
 	//! Rewrite FLOAT bounds as the DOUBLE values they widen to
