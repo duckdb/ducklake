@@ -1821,7 +1821,7 @@ void DuckLakeCatalog::ObserveListingHead(idx_t head) {
 	if (listing_cache_head.IsValid() && listing_cache_head.GetIndex() == head) {
 		return;
 	}
-	listing_cache.clear();
+	listing_cache.Clear();
 	listing_cache_head = head;
 }
 
@@ -1830,8 +1830,8 @@ shared_ptr<vector<DuckLakeFileListEntry>> DuckLakeCatalog::TryGetCachedListing(c
 	if (!listing_cache_head.IsValid() || listing_cache_head.GetIndex() != head) {
 		return nullptr;
 	}
-	auto entry = listing_cache.find(key);
-	return entry == listing_cache.end() ? nullptr : entry->second;
+	auto entry = listing_cache.Find(key);
+	return entry ? *entry : nullptr;
 }
 
 void DuckLakeCatalog::StoreCachedListing(const string &key, idx_t head,
@@ -1840,15 +1840,13 @@ void DuckLakeCatalog::StoreCachedListing(const string &key, idx_t head,
 	if (!listing_cache_head.IsValid() || listing_cache_head.GetIndex() != head) {
 		return;
 	}
-	if (listing_cache.size() >= 256) {
-		listing_cache.clear();
-	}
-	listing_cache.emplace(key, std::move(entries));
+	auto rows = entries->size();
+	listing_cache.Store(key, std::move(entries), rows);
 }
 
 void DuckLakeCatalog::InvalidateListingCache() {
 	lock_guard<mutex> guard(listing_cache_lock);
-	listing_cache.clear();
+	listing_cache.Clear();
 	listing_cache_head = optional_idx();
 }
 

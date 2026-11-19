@@ -652,4 +652,32 @@ struct DuckLakeColumnMappingInfo {
 	vector<DuckLakeNameMapColumnInfo> map_columns;
 };
 
+//! Parsed metadata reads keyed by their statement, the cache starts over when it holds too many reads or rows
+template <class T>
+struct DuckLakeListingCache {
+	static constexpr idx_t MAX_LISTINGS = 256;
+	static constexpr idx_t MAX_ROWS = 1ULL << 16;
+
+	const T *Find(const string &key) const {
+		auto entry = entries.find(key);
+		return entry == entries.end() ? nullptr : &entry->second;
+	}
+	void Store(string key, T value, idx_t rows) {
+		if (entries.size() >= MAX_LISTINGS || cached_rows + rows > MAX_ROWS) {
+			Clear();
+		}
+		if (entries.emplace(std::move(key), std::move(value)).second) {
+			cached_rows += rows;
+		}
+	}
+	void Clear() {
+		entries.clear();
+		cached_rows = 0;
+	}
+
+private:
+	unordered_map<string, T> entries;
+	idx_t cached_rows = 0;
+};
+
 } // namespace duckdb

@@ -1521,9 +1521,9 @@ optional_idx DuckLakeMetadataManager::GetNetDataFileRowCountForStats(TableIndex 
 	auto cache_key = StringUtil::Format("rowcount/%d/%d", table_id.index, snapshot.snapshot_id);
 	if (cacheable) {
 		lock_guard<mutex> guard(listing_cache_lock);
-		auto cached = row_count_cache.find(cache_key);
-		if (cached != row_count_cache.end()) {
-			return cached->second;
+		auto cached = row_count_cache.Find(cache_key);
+		if (cached) {
+			return *cached;
 		}
 	}
 	auto query = GetNetDataFileRowCountSql(table_id, GetInlinedDeletionTableName(table_id, snapshot),
@@ -1536,7 +1536,7 @@ optional_idx DuckLakeMetadataManager::GetNetDataFileRowCountForStats(TableIndex 
 	}
 	if (cacheable) {
 		lock_guard<mutex> guard(listing_cache_lock);
-		row_count_cache.emplace(std::move(cache_key), count);
+		row_count_cache.Store(std::move(cache_key), count, 1);
 	}
 	return count;
 }
@@ -3075,9 +3075,9 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 		shared_ptr<vector<DuckLakeFileListEntry>> listing;
 		{
 			lock_guard<mutex> guard(listing_cache_lock);
-			auto cached = file_list_cache.find(cache_key);
-			if (cached != file_list_cache.end()) {
-				listing = cached->second;
+			auto cached = file_list_cache.Find(cache_key);
+			if (cached) {
+				listing = *cached;
 			}
 		}
 		if (!listing && listing_head.IsValid()) {
@@ -3085,7 +3085,7 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 			listing = transaction.GetCatalog().TryGetCachedListing(cache_key, listing_head.GetIndex());
 			if (listing) {
 				lock_guard<mutex> guard(listing_cache_lock);
-				file_list_cache.emplace(cache_key, listing);
+				file_list_cache.Store(cache_key, listing, listing->size());
 			}
 		}
 		if (listing) {
@@ -3133,7 +3133,7 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 			transaction.GetCatalog().StoreCachedListing(cache_key, listing_head.GetIndex(), parsed);
 		}
 		lock_guard<mutex> guard(listing_cache_lock);
-		file_list_cache.emplace(std::move(cache_key), std::move(parsed));
+		file_list_cache.Store(std::move(cache_key), std::move(parsed), files.size());
 	}
 	AttachInlinedFileDeletions(table_id, snapshot, include_local_changes, files);
 	return files;
@@ -3165,9 +3165,9 @@ DuckLakeMetadataManager::GetTableInsertions(DuckLakeTableEntry &table, DuckLakeS
 	    StringUtil::Format("insertions/%d/%d/%d", table_id.index, start_snapshot.snapshot_id, end_snapshot.snapshot_id);
 	if (cacheable) {
 		lock_guard<mutex> guard(listing_cache_lock);
-		auto cached = file_list_cache.find(cache_key);
-		if (cached != file_list_cache.end()) {
-			return *cached->second;
+		auto cached = file_list_cache.Find(cache_key);
+		if (cached) {
+			return **cached;
 		}
 	}
 	string select_list = GetDataFileSelectList("data") +
@@ -3233,7 +3233,8 @@ WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 	}
 	if (cacheable) {
 		lock_guard<mutex> guard(listing_cache_lock);
-		file_list_cache.emplace(std::move(cache_key), make_shared_ptr<vector<DuckLakeFileListEntry>>(files));
+		file_list_cache.Store(std::move(cache_key), make_shared_ptr<vector<DuckLakeFileListEntry>>(files),
+		                      files.size());
 	}
 	return files;
 }
@@ -3250,14 +3251,15 @@ DuckLakeMetadataManager::GetTableDeletions(DuckLakeTableEntry &table, DuckLakeSn
 	                                    end_snapshot.snapshot_id);
 	{
 		lock_guard<mutex> guard(listing_cache_lock);
-		auto cached = delete_scan_cache.find(cache_key);
-		if (cached != delete_scan_cache.end()) {
-			return *cached->second;
+		auto cached = delete_scan_cache.Find(cache_key);
+		if (cached) {
+			return **cached;
 		}
 	}
 	auto files = ReadTableDeletions(table, start_snapshot, end_snapshot, include_local_changes);
 	lock_guard<mutex> guard(listing_cache_lock);
-	delete_scan_cache.emplace(std::move(cache_key), make_shared_ptr<vector<DuckLakeDeleteScanEntry>>(files));
+	delete_scan_cache.Store(std::move(cache_key), make_shared_ptr<vector<DuckLakeDeleteScanEntry>>(files),
+	                        files.size());
 	return files;
 }
 
@@ -4769,9 +4771,9 @@ void DuckLakeMetadataManager::ClearInlinedTableCaches() {
 void DuckLakeMetadataManager::InvalidateFileListCache() {
 	{
 		lock_guard<mutex> guard(listing_cache_lock);
-		file_list_cache.clear();
-		delete_scan_cache.clear();
-		row_count_cache.clear();
+		file_list_cache.Clear();
+		delete_scan_cache.Clear();
+		row_count_cache.Clear();
 	}
 	transaction.GetCatalog().InvalidateListingCache();
 }

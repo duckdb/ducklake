@@ -597,7 +597,7 @@ private:
 	//! Parsed listings of reads at or below the observed head, shared across transactions
 	mutex listing_cache_lock;
 	optional_idx listing_cache_head;
-	unordered_map<string, shared_ptr<vector<DuckLakeFileListEntry>>> listing_cache;
+	DuckLakeListingCache<shared_ptr<vector<DuckLakeFileListEntry>>> listing_cache;
 	optional_idx rewrite_snapshots_read_until;
 	unordered_map<idx_t, set<idx_t>> rewrite_snapshots;
 	//! The inlined deletion tables of the metadata catalog, listed per snapshot id for the latest snapshots
