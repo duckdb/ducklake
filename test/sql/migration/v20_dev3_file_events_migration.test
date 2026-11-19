@@ -13,7 +13,7 @@ test-env DATA_PATH {TEST_DIR}
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
 
-# snapshots 1 to 3 add three files to t
+# snapshot 1 creates t, snapshots 2 and 3 add a file each
 statement ok
 CREATE TABLE dl.t(i INTEGER)
 

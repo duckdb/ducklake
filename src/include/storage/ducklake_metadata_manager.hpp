@@ -752,8 +752,15 @@ public:
 	virtual void MigrateV11();
 	//! The file visibility events replace the inline ranges of the file tables
 	virtual void MigrateV20Dev2();
-	//! Creates the event tables a catalog lacks and turns the ranges it still holds inline into events
-	static string V2_0Dev3MigrationQuery(bool data_ranges, bool delete_ranges);
+	//! The file tables whose inline ranges the step still has to move aside or turn into events
+	struct V2_0Dev3Ranges {
+		vector<string> tables_to_rename;
+		vector<string> tables_to_convert;
+	};
+	V2_0Dev3Ranges ProbeV2_0Dev3Ranges();
+	static string V2_0Dev3RenameSql(const V2_0Dev3Ranges &ranges);
+	//! Creates the event tables a catalog lacks and turns the ranges of the renamed tables into events
+	static string V2_0Dev3MigrationQuery(const V2_0Dev3Ranges &ranges);
 	//! The branch 0 events of the ranges a file table holds inline
 	static string VisibilityEventBackfillSql(const string &visibility_table, const string &file_table,
 	                                         const string &file_id_column);
@@ -835,6 +842,8 @@ protected:
 
 	virtual string GenerateFileColumnStatsCTEBody(const CTERequirement &req, TableIndex table_id,
 	                                              const string &metadata_table_prefix);
+	//! The statistic a file order sorts on, cast to the column type, empty for a type without comparable statistics
+	string OrderTermExpression(const DuckLakeFileListOrder &order);
 	//! Whether a file order of the listing renders as an ORDER BY on the statistics
 	bool OrdersByStats(const vector<DuckLakeFileListOrder> &file_order);
 	//! The snapshot placeholders of the query are replaced later, unless an override does it
