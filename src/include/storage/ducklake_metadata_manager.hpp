@@ -374,7 +374,7 @@ public:
 	string DataFiles(TableIndex table_id) const;
 	string DeleteFiles() const;
 	string DeleteFiles(TableIndex table_id) const;
-	//! Adds the delete events of the files the filter column selects that have none
+	//! Adds the delete events the selected files lack
 	static string FileEndEvents(const string &visibility_table, const string &file_id_column,
 	                            const string &filter_column, const string &id_list, const string &snapshot);
 	virtual string GetFileColumnStatsTableStatement();

@@ -230,7 +230,6 @@
         "test/sql/partitioning/reset_partitioning_insert_transaction.test",
         "test/sql/partitioning/reset_set_back_same_spec.test",
         "test/sql/quack/noop_partition_alter_data_files.test",
-        "test/sql/quack/server_side_commit_staged_protocol.test",
         "test/sql/rewrite_data_files/test_rewrite_concurrency.test",
         "test/sql/rewrite_data_files/test_rewrite_db.test",
         "test/sql/rewrite_data_files/test_rewrite_inlined_deletes_flush.test",
