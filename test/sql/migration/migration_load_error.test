@@ -14,7 +14,7 @@ CREATE TABLE metadata_reads(retries INTEGER, reads BIGINT)
 statement ok
 SET ducklake_retry_wait_ms = 1
 
-# the rename of the snapshot tables commits before the load error, so every round migrates its own catalog
+# the renames of the migration commit before the load error, so every round migrates its own catalog
 foreach retries 0 8
 
 statement ok
@@ -56,7 +56,7 @@ SELECT max(reads) FILTER (retries = 0) = max(reads) FILTER (retries = 8) FROM me
 ----
 true
 
-# the failed attach left a 2.0-dev1 catalog, its snapshot tables renamed
+# the failed attach left a 2.0-dev2 catalog, its snapshot tables rebuilt and its file tables renamed
 statement ok
 DETACH DATABASE IF EXISTS meta
 
@@ -66,13 +66,19 @@ ATTACH '{TEST_DIR}/migration_load_error_8.db' AS meta
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev1
+2.0-dev2
 
 query I
 SELECT list(table_name ORDER BY table_name) FROM duckdb_tables() WHERE database_name = 'meta'
 AND table_name LIKE 'ducklake_snapshot%'
 ----
-[ducklake_snapshot_changes_old, ducklake_snapshot_old, ducklake_snapshot_tag]
+[ducklake_snapshot, ducklake_snapshot_changes, ducklake_snapshot_tag]
+
+query I
+SELECT list(table_name ORDER BY table_name) FROM duckdb_tables() WHERE database_name = 'meta'
+AND (table_name LIKE 'ducklake_data_file%' OR table_name LIKE 'ducklake_delete_file%')
+----
+[ducklake_data_file_ranges, ducklake_delete_file_ranges]
 
 statement ok
 DETACH meta
@@ -82,7 +88,7 @@ statement error
 ATTACH 'ducklake:{TEST_DIR}/migration_load_error_8.db' AS dl (DATA_PATH '{DATA_PATH}/migration_load_error_8',
 METADATA_CATALOG 'meta')
 ----
-catalog version is 2.0-dev1, but the extension requires version 2.0-dev2
+catalog version is 2.0-dev2, but the extension requires version 2.0-dev3
 
 # the next writable attach with the migration option completes the migration
 statement ok
@@ -97,10 +103,16 @@ SELECT count(*) FROM dl.t
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev2
+2.0-dev3
 
 query I
 SELECT list(table_name ORDER BY table_name) FROM duckdb_tables() WHERE database_name = 'meta'
 AND table_name LIKE 'ducklake_snapshot%'
 ----
 [ducklake_snapshot, ducklake_snapshot_changes, ducklake_snapshot_tag]
+
+query I
+SELECT list(table_name ORDER BY table_name) FROM duckdb_tables() WHERE database_name = 'meta'
+AND (table_name LIKE 'ducklake_data_file%' OR table_name LIKE 'ducklake_delete_file%')
+----
+[ducklake_data_file, ducklake_delete_file, ducklake_delete_file_visibility]

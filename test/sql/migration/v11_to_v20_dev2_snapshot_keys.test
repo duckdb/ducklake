@@ -1,5 +1,5 @@
 # name: test/sql/migration/v11_to_v20_dev2_snapshot_keys.test
-# description: a 1.1 catalog migrates through 2.0-dev1 to 2.0-dev2 with its rows in the snapshot tables keyed by branch
+# description: a 1.1 catalog migrates through 2.0-dev1 and 2.0-dev2 to 2.0-dev3 with its rows in the snapshot tables keyed by branch
 # group: [migration]
 
 require ducklake

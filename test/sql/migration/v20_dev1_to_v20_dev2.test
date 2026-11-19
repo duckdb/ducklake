@@ -1,5 +1,5 @@
 # name: test/sql/migration/v20_dev1_to_v20_dev2.test
-# description: a 2.0-dev1 catalog of any dev build or interruption state migrates to 2.0-dev2 on a writable attach
+# description: a 2.0-dev1 catalog of any dev build or interruption state migrates to 2.0-dev3 on a writable attach
 # group: [migration]
 
 require ducklake
@@ -72,7 +72,7 @@ DETACH dl
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
 ----
-catalog version is 2.0-dev1, but the extension requires version 2.0-dev2
+catalog version is 2.0-dev1, but the extension requires version 2.0-dev3
 
 # a read only attach cannot migrate
 statement error
@@ -109,7 +109,7 @@ true
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev2
+2.0-dev3
 
 query I
 SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
@@ -235,7 +235,7 @@ DETACH dl
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
 ----
-catalog version is 2.0-dev1, but the extension requires version 2.0-dev2
+catalog version is 2.0-dev1, but the extension requires version 2.0-dev3
 
 # a read only attach cannot migrate
 statement error
@@ -265,14 +265,15 @@ true
 
 query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%CREATE TABLE%' OR query LIKE '%_rebuild%' OR query LIKE '%RENAME TO%'
+WHERE query LIKE '%CREATE TABLE%ducklake_snapshot%' OR query LIKE '%CREATE TABLE%ducklake_branch%'
+OR query LIKE '%_rebuild%' OR query LIKE '%RENAME TO%'
 ----
 0
 
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev2
+2.0-dev3
 
 query I
 SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
@@ -321,7 +322,7 @@ DETACH dl
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
 ----
-catalog version is 2.0-dev1, but the extension requires version 2.0-dev2
+catalog version is 2.0-dev1, but the extension requires version 2.0-dev3
 
 # a read only attach cannot migrate
 statement error
@@ -337,7 +338,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev2
+2.0-dev3
 
 query I
 SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
@@ -413,7 +414,7 @@ DETACH dl
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
 ----
-catalog version is 2.0-dev1, but the extension requires version 2.0-dev2
+catalog version is 2.0-dev1, but the extension requires version 2.0-dev3
 
 # a read only attach cannot migrate
 statement error
@@ -429,7 +430,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev2
+2.0-dev3
 
 query I
 SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
@@ -499,7 +500,7 @@ DETACH dl
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
 ----
-catalog version is 2.0-dev1, but the extension requires version 2.0-dev2
+catalog version is 2.0-dev1, but the extension requires version 2.0-dev3
 
 # a read only attach cannot migrate
 statement error
@@ -515,7 +516,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev2
+2.0-dev3
 
 query I
 SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
@@ -592,7 +593,7 @@ DETACH dl
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
 ----
-catalog version is 2.0-dev1, but the extension requires version 2.0-dev2
+catalog version is 2.0-dev1, but the extension requires version 2.0-dev3
 
 # a read only attach cannot migrate
 statement error
@@ -608,7 +609,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev2
+2.0-dev3
 
 query I
 SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
@@ -688,7 +689,7 @@ DETACH dl
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
 ----
-catalog version is 2.0-dev1, but the extension requires version 2.0-dev2
+catalog version is 2.0-dev1, but the extension requires version 2.0-dev3
 
 # a read only attach cannot migrate
 statement error
@@ -704,7 +705,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev2
+2.0-dev3
 
 query I
 SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
@@ -791,7 +792,7 @@ SELECT list(i ORDER BY i) FROM dl.t
 statement ok
 DETACH dl
 
-# a 2.0-dev2 attach runs no probe or migration statement
+# a 2.0-dev3 attach runs no probe or migration statement
 statement ok
 CALL truncate_duckdb_logs()
 
