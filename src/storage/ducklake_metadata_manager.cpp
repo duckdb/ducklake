@@ -396,25 +396,22 @@ string DuckLakeMetadataManager::GetDeleteFileVisibilityTableStatement(bool if_no
 	return FileVisibilityTableStatement("ducklake_delete_file_visibility", "delete_file_id", if_not_exists);
 }
 
-//! A file table joined with the range its branch 0 events span, one scan of the events serves both bounds
+//! A file table joined with its add event and its delete event, the one of each a file has on the main branch
 static string FileSourceOverEvents(const string &prefix, const string &file_table, const string &visibility_table,
                                    const string &file_id_column, optional_idx table_id) {
-	// every event is one of main, so the scan names no branch
-	string table_filter;
+	// every event is one of main, so the scans name no branch
+	string add_filter;
+	string end_filter;
 	if (table_id.IsValid()) {
-		table_filter = StringUtil::Format(" WHERE table_id = %d", table_id.GetIndex());
+		add_filter = StringUtil::Format(" AND a.table_id = %d", table_id.GetIndex());
+		end_filter = StringUtil::Format(" AND e.table_id = %d", table_id.GetIndex());
 	}
-	return StringUtil::Format("(SELECT f.*, v.begin_snapshot, v.end_snapshot "
+	return StringUtil::Format("(SELECT f.*, a.snapshot_id AS begin_snapshot, e.snapshot_id AS end_snapshot "
 	                          "FROM %s.%s f "
-	                          "JOIN (SELECT %s, table_id, "
-	                          "MIN(CASE WHEN NOT is_delete THEN snapshot_id END) AS begin_snapshot, "
-	                          "MIN(CASE WHEN is_delete THEN snapshot_id END) AS end_snapshot "
-	                          "FROM %s.%s%s "
-	                          "GROUP BY %s, table_id "
-	                          "HAVING MIN(CASE WHEN NOT is_delete THEN snapshot_id END) IS NOT NULL) v "
-	                          "ON v.%s = f.%s AND v.table_id = f.table_id)",
-	                          prefix, file_table, file_id_column, prefix, visibility_table, table_filter,
-	                          file_id_column, file_id_column, file_id_column);
+	                          "JOIN %s.%s a ON a.%s = f.%s AND a.is_delete = FALSE%s "
+	                          "LEFT JOIN %s.%s e ON e.%s = f.%s AND e.is_delete = TRUE%s)",
+	                          prefix, file_table, prefix, visibility_table, file_id_column, file_id_column, add_filter,
+	                          prefix, visibility_table, file_id_column, file_id_column, end_filter);
 }
 
 string DuckLakeMetadataManager::DataFileSource(bool file_events, const string &prefix, optional_idx table_id) {
