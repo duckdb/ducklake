@@ -405,13 +405,7 @@ unordered_set<string> PostgresMetadataManager::ListInlinedDeletionTables() {
 	auto query = StringUtil::Format(
 	    "SELECT tablename FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
 	    SQLString::ToString(remote_query));
-	auto result = DuckLakeMetadataManager::Query(query);
-	result->ThrowIfError("Failed to list the DuckLake inlined deletion tables: ");
-	unordered_set<string> listed;
-	for (auto &row : *result) {
-		listed.insert(row.GetValue<string>(0));
-	}
-	return listed;
+	return ReadTableNames(*DuckLakeMetadataManager::Query(query));
 }
 
 void PostgresMetadataManager::MigrateInlinedDataTypes() {

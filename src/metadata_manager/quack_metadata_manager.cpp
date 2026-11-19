@@ -75,13 +75,7 @@ unordered_set<string> QuackMetadataManager::ListInlinedDeletionTables() {
 	string query = "SELECT table_name FROM duckdb_tables() WHERE database_name = current_database() "
 	               "AND schema_name = {METADATA_SCHEMA_NAME_LITERAL} AND starts_with(table_name, "
 	               "'ducklake_inlined_delete_')";
-	auto result = Query(query);
-	result->ThrowIfError("Failed to list the DuckLake inlined deletion tables: ");
-	unordered_set<string> listed;
-	for (auto &row : *result) {
-		listed.insert(row.GetValue<string>(0));
-	}
-	return listed;
+	return ReadTableNames(*Query(query));
 }
 
 void QuackMetadataManager::ClearCache() {

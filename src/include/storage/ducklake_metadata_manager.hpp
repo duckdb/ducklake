@@ -599,6 +599,8 @@ public:
 	bool CommittedInlinedDeletionTableExists(const Identifier &table_name);
 	//! The inlined deletion tables of the metadata catalog
 	virtual unordered_set<string> ListInlinedDeletionTables();
+	//! The table names a listing returned
+	static unordered_set<string> ReadTableNames(QueryResult &result);
 	//! The listing of the inlined deletion tables the transaction's snapshot shares
 	shared_ptr<const unordered_set<string>> InlinedDeletionTables();
 	//! Also drops the empty inlined data tables of the replaced tables

@@ -4889,6 +4889,15 @@ unordered_set<idx_t> DuckLakeMetadataManager::GetFileIdsWithInlinedDeletions(Tab
 	return result;
 }
 
+unordered_set<string> DuckLakeMetadataManager::ReadTableNames(QueryResult &result) {
+	result.ThrowIfError("Failed to list the DuckLake inlined deletion tables: ");
+	unordered_set<string> tables;
+	for (auto &row : result) {
+		tables.insert(row.GetValue<string>(0));
+	}
+	return tables;
+}
+
 unordered_set<string> DuckLakeMetadataManager::ListInlinedDeletionTables() {
 	unordered_set<string> tables;
 	for (auto &name : GetMetadataTableNames()) {
