@@ -1045,8 +1045,7 @@ static unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableF
 		for (auto &table_ref : tables) {
 			table_ids.push_back(table_ref.get().GetTableId());
 		}
-		tables_with_files =
-		    transaction.GetMetadataManager().GetTablesWithRewriteCandidates(transaction.GetSnapshot(), table_ids);
+		tables_with_files = transaction.GetMetadataManager().GetTablesWithRewriteCandidates(table_ids);
 	} else if (skip_tables_without_files) {
 		tables_with_files = transaction.GetMetadataManager().GetTablesWithMergeCandidates(merge_options);
 	}

@@ -55,14 +55,16 @@ SELECT sum(files_processed) FROM ducklake_rewrite_data_files('dl', delete_thresh
 statement ok
 CALL disable_logging()
 
-# one read of the delete files names the candidates, the two candidate tables list their files
-query II
+# one read of the delete files and at most one listing of the inlined deletion tables (a Postgres catalog lists them
+# on the server) name the candidates, the two candidate tables list their files
+query III
 SELECT count(*) FILTER (WHERE regexp_matches(query, '^\s*SELECT') AND query LIKE '%ducklake_delete_file%'
                         AND query NOT LIKE '%ducklake_data_file%' AND query NOT LIKE '%snapshot_ranges%'),
+       count(*) FILTER (WHERE query LIKE '%pg_tables%') <= 1,
        count(*) FILTER (WHERE query LIKE '%candidate_files AS%')
 FROM duckdb_logs_parsed('DuckLakeMetadata')
 ----
-1	2
+1	true	2
 
 statement ok
 CALL truncate_duckdb_logs()

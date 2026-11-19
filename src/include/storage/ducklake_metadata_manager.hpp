@@ -593,8 +593,12 @@ public:
 	//! Get the name of the inlined deletion table for a given table ID
 	virtual Identifier GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
 	                                               bool include_local_changes = true);
-	//! Probe for the physical inlined-deletion table without aborting the active metadata transaction.
-	virtual bool InlinedDeletionTableExists(const Identifier &table_name);
+	//! Whether the inlined deletion table exists, answered from one listing per snapshot
+	bool InlinedDeletionTableExists(const Identifier &table_name);
+	//! The inlined deletion tables of the metadata catalog
+	virtual unordered_set<string> ListInlinedDeletionTables();
+	//! The listing of the inlined deletion tables the transaction's snapshot shares
+	shared_ptr<const unordered_set<string>> InlinedDeletionTables();
 	//! Also drops the empty inlined data tables of the replaced tables
 	virtual string WriteNewInlinedTables(DuckLakeSnapshot commit_snapshot, const vector<DuckLakeTableInfo> &tables,
 	                                     const set<TableIndex> &replaced_tables);
@@ -751,7 +755,7 @@ public:
 	//! The tables with more than one live data file within the size bounds of the merge
 	unordered_set<idx_t> GetTablesWithMergeCandidates(const DuckLakeMergeAdjacentOptions &options);
 	//! The tables in scope with live delete files or inlined deletions
-	unordered_set<idx_t> GetTablesWithRewriteCandidates(DuckLakeSnapshot snapshot, const vector<TableIndex> &table_ids);
+	unordered_set<idx_t> GetTablesWithRewriteCandidates(const vector<TableIndex> &table_ids);
 	//! Returns the rows the option is expected to have after it is written
 	virtual idx_t SetConfigOption(const DuckLakeConfigOption &option);
 	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);

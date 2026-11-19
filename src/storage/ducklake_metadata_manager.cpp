@@ -4716,8 +4716,10 @@ WHERE %s=deleted_row_id AND %s IS NULL AND %s != {SNAPSHOT_ID};
 	return batch_queries;
 }
 
+static const char *const INLINED_DELETION_TABLE_PREFIX = "ducklake_inlined_delete_";
+
 Identifier DuckLakeMetadataManager::InlinedFileDeletionTableName(TableIndex table_id) {
-	return Identifier(StringUtil::Format("ducklake_inlined_delete_%d", table_id.index));
+	return Identifier(StringUtil::Format("%s%d", INLINED_DELETION_TABLE_PREFIX, table_id.index));
 }
 
 string
@@ -4879,10 +4881,25 @@ unordered_set<idx_t> DuckLakeMetadataManager::GetFileIdsWithInlinedDeletions(Tab
 	return result;
 }
 
+unordered_set<string> DuckLakeMetadataManager::ListInlinedDeletionTables() {
+	unordered_set<string> tables;
+	for (auto &name : GetMetadataTableNames()) {
+		if (StringUtil::StartsWith(name, INLINED_DELETION_TABLE_PREFIX)) {
+			tables.insert(name);
+		}
+	}
+	return tables;
+}
+
+shared_ptr<const unordered_set<string>> DuckLakeMetadataManager::InlinedDeletionTables() {
+	// the listing is keyed by the newest snapshot of the transaction, which a catalog attached at an older snapshot
+	// can read too
+	return transaction.GetCatalog().GetInlinedDeletionTables(transaction.GetNewestVisibleSnapshotId(),
+	                                                         [&]() { return ListInlinedDeletionTables(); });
+}
+
 bool DuckLakeMetadataManager::InlinedDeletionTableExists(const Identifier &table_name) {
-	auto &catalog = transaction.GetCatalog();
-	return transaction.GetConnection().TableInfo(catalog.MetadataDatabaseName(), catalog.MetadataSchemaName(),
-	                                             table_name) != nullptr;
+	return InlinedDeletionTables()->count(table_name.GetIdentifierName()) > 0;
 }
 
 Identifier DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
@@ -7428,8 +7445,7 @@ DuckLakeMetadataManager::GetTablesWithMergeCandidates(const DuckLakeMergeAdjacen
 	return table_ids;
 }
 
-unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithRewriteCandidates(DuckLakeSnapshot snapshot,
-                                                                             const vector<TableIndex> &table_ids) {
+unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithRewriteCandidates(const vector<TableIndex> &table_ids) {
 	auto result = Query(TablesWithLiveFilesQuery(WritesFileVisibilityEvents(), DeleteFiles(),
 	                                             "ducklake_delete_file_visibility", 0, string()));
 	result->ThrowIfError("Failed to get the tables with rewrite candidates from DuckLake: ");
@@ -7437,13 +7453,12 @@ unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithRewriteCandidates(Duc
 	for (auto &row : *result) {
 		candidates.insert(row.GetValue<idx_t>(0));
 	}
-	// inlined deletions live in an unlisted table per data table, so probe the tables in scope
+	// inlined deletions live in a table per data table, listed once
+	for (auto &name : *InlinedDeletionTables()) {
+		candidates.insert(std::stoull(name.substr(strlen(INLINED_DELETION_TABLE_PREFIX))));
+	}
 	for (auto &table_id : table_ids) {
-		if (candidates.count(table_id.index)) {
-			continue;
-		}
-		if (transaction.HasLocalDeletes(table_id) || transaction.HasLocalInlinedFileDeletes(table_id) ||
-		    !GetInlinedDeletionTableName(table_id, snapshot, false).GetIdentifierName().empty()) {
+		if (transaction.HasLocalDeletes(table_id) || transaction.HasLocalInlinedFileDeletes(table_id)) {
 			candidates.insert(table_id.index);
 		}
 	}
