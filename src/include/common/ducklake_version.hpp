@@ -23,14 +23,11 @@ enum class DuckLakeVersion : uint8_t {
 	V1_0 = 7,
 	V1_1_DEV_1 = 8,
 	V1_1 = 9,
-	V2_0_DEV1 = 10
+	V2_0_DEV1 = 10,
+	V2_0_DEV2 = 11
 };
 
-static constexpr DuckLakeVersion DUCKLAKE_LATEST_VERSION = DuckLakeVersion::V2_0_DEV1;
-//! The metadata key of a completed heal of the development layout
-static constexpr const char *DUCKLAKE_HEAL_MARKER_KEY = "heal_complete";
-//! The generation of that layout, bumped whenever the development layout changes
-static constexpr const char *DUCKLAKE_HEAL_GENERATION = "2.0-dev1.1";
+static constexpr DuckLakeVersion DUCKLAKE_LATEST_VERSION = DuckLakeVersion::V2_0_DEV2;
 
 DuckLakeVersion DuckLakeVersionFromString(const string &version_str);
 //! The versions this build attaches without a migration, the releases and the version it writes

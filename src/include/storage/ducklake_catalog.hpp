@@ -379,7 +379,7 @@ public:
 	}
 	//! Whether the snapshot tables are keyed by branch and snapshot, the layout of 2.0
 	bool SupportsBranching() const {
-		return ducklake_version >= DuckLakeVersion::V2_0_DEV1;
+		return ducklake_version >= DuckLakeVersion::V2_0_DEV2;
 	}
 	//! Whether an expiry commits a snapshot whose changes list the expired snapshots
 	bool RecordsExpiredSnapshots() const {

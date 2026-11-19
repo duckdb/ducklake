@@ -11,8 +11,6 @@ string DuckLakeMetadataManagerV2_0<Base>::GetCreateTableStatements() {
 	result += DuckLakeMetadataManager::GetSnapshotTagTableStatement() + "\n";
 	result += DuckLakeMetadataManager::GetBranchTableStatement() + "\n";
 	result += DuckLakeMetadataManager::GetMainBranchRowStatement() + "\n";
-	// a fresh catalog has the healed layout, so it carries the marker of a completed heal
-	result += DuckLakeMetadataManager::HealMarkerSql();
 	return result;
 }
 
@@ -30,7 +28,7 @@ string DuckLakeMetadataManagerV2_0<Base>::GetSnapshotChangesTableStatement() {
 
 template <typename Base>
 string DuckLakeMetadataManagerV2_0<Base>::GetVersionString() {
-	constexpr auto VERSION = DuckLakeVersion::V2_0_DEV1;
+	constexpr auto VERSION = DuckLakeVersion::V2_0_DEV2;
 	return DuckLakeVersionToString(VERSION);
 }
 
