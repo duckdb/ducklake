@@ -12,6 +12,7 @@
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/hive_partitioning.hpp"
 #include "duckdb/common/multi_file/multi_file_reader.hpp"
+#include "duckdb/common/types/blob.hpp"
 #include "duckdb/common/types/value.hpp"
 #include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/types/vector.hpp"
@@ -240,6 +241,15 @@ static bool TryGetCount(const VectorIterator<int64_t>::ValueEntry &entry, idx_t 
 	return entry.IsValid() && TryCast::Operation<int64_t, idx_t>(entry.GetValue(), result);
 }
 
+static string ParquetBoundToDuckLake(string_t value, const LogicalType &type) {
+	if (type.id() == LogicalTypeId::BLOB) {
+		// parquet_full_metadata renders binary bounds as escaped text.
+		auto bytes = Blob::ToBlob(value);
+		return DuckLakeColumnStats::EncodeBlobBound(string_t(bytes));
+	}
+	return value.GetString();
+}
+
 static InvalidInputException MappingError(const string &column_name, const string &file_path,
                                           const DuckLakeTableEntry &table, const string &failures) {
 	return InvalidInputException("Failed to map column \"%s\" from file \"%s\" to the column in table %s\n* %s",
@@ -426,7 +436,7 @@ FROM parquet_full_metadata(%s)
 			auto stats_min = stats_entry.GetChildValue<1>();
 			if (read_bounds && stats_min.IsValid()) {
 				stats.has_min = true;
-				stats.min = stats_min.GetValue().GetString();
+				stats.min = ParquetBoundToDuckLake(stats_min.GetValue(), column.duckdb_type);
 				// files without the footer flag conservatively count as truncated
 				auto min_is_exact = stats_entry.GetChildValue<8>();
 				stats.min_is_exact = min_is_exact.IsValid() && min_is_exact.GetValue();
@@ -435,7 +445,7 @@ FROM parquet_full_metadata(%s)
 			auto stats_max = stats_entry.GetChildValue<2>();
 			if (read_bounds && stats_max.IsValid()) {
 				stats.has_max = true;
-				stats.max = stats_max.GetValue().GetString();
+				stats.max = ParquetBoundToDuckLake(stats_max.GetValue(), column.duckdb_type);
 				auto max_is_exact = stats_entry.GetChildValue<9>();
 				stats.max_is_exact = max_is_exact.IsValid() && max_is_exact.GetValue();
 			}

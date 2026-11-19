@@ -473,6 +473,7 @@
         "test/sql/sorted_table/set_sorted_by_rollback_basic.test",
         "test/sql/sorted_table/set_sorted_by_rollback_mixed.test",
         "test/sql/stats/alter_type_stats_reseed.test",
+        "test/sql/stats/blob_statistics_encoding.test",
         "test/sql/stats/float_to_double_retype_stats.test",
         "test/sql/stats/min_max_nested_leaf_rewrite_corruption.test",
         "test/sql/stats/min_max_optimization_truncated_strings.test",
