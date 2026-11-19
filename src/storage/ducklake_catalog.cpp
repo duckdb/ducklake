@@ -1207,11 +1207,17 @@ shared_ptr<const vector<DuckLakeFileListEntry>> DuckLakeCatalog::GetCommittedFil
 	}
 	auto files = make_shared_ptr<const vector<DuckLakeFileListEntry>>(
 	    transaction.GetMetadataManager().GetFilesForTable(table, snapshot, nullptr, false));
-	// a read at an older snapshot leaves the entry of a newer one alone
-	bool newer = !cached || cached->snapshot_id < snapshot.snapshot_id;
 	// metadata read outside the view of the snapshot can hold commits made since
-	if (newer && !transaction.MetadataViewDiffers()) {
-		PutCacheEntry(std::move(key), make_shared_ptr<DuckLakeFileListCacheEntry>(snapshot.snapshot_id, files));
+	if (transaction.MetadataViewDiffers()) {
+		return files;
+	}
+	// a read at an older snapshot leaves the entry of a newer one alone, even one stored during its fetch
+	lock_guard<mutex> guard(cache_entries_lock);
+	auto current = GetObjectCacheInstance().Get<DuckLakeFileListCacheEntry>(key);
+	if (!current || current->snapshot_id < snapshot.snapshot_id) {
+		shared_ptr<ObjectCacheEntry> entry = make_shared_ptr<DuckLakeFileListCacheEntry>(snapshot.snapshot_id, files);
+		TrackCacheEntry(key, entry);
+		GetObjectCacheInstance().Put(std::move(key), std::move(entry));
 	}
 	return files;
 }
