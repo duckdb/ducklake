@@ -62,7 +62,7 @@ SELECT branch_id, table_id, delete_file_id, snapshot_id, is_delete::BOOLEAN FROM
 0	1	2	3	false
 
 query I
-SELECT table_name FROM duckdb_tables() WHERE database_name = 'meta' AND table_name IN ('ducklake_data_file', 'ducklake_data_file_ranges', 'ducklake_delete_file', 'ducklake_delete_file_ranges', 'ducklake_file_visibility', 'ducklake_delete_file_visibility') ORDER BY table_name
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name IN ('ducklake_data_file', 'ducklake_data_file_ranges', 'ducklake_delete_file', 'ducklake_delete_file_ranges', 'ducklake_file_visibility', 'ducklake_delete_file_visibility') ORDER BY table_name
 ----
 ducklake_data_file
 ducklake_delete_file

@@ -212,10 +212,7 @@
         "test/sql/compaction/rewrite_deletes_full_file_delete_after_flush.test",
         "test/sql/compaction/rewrite_narrow_older_transaction.test",
         "test/sql/compaction/rewrite_record_count.test",
-        "test/sql/delete/full_file_delete_stats.test",
-        "test/sql/delete/full_file_delete_stats_default_inlining.test",
         "test/sql/delete/multi_deletes.test",
-        "test/sql/deletion_inlining/flush_inlined_file_deletes_after_delete_transaction.test",
         "test/sql/deletion_inlining/test_deletion_from_file_and_inserted_inlining.test",
         "test/sql/deletion_inlining/test_deletion_from_file_and_inserted_inlining_non_sequential.test",
         "test/sql/deletion_inlining/test_deletion_from_inlined_insertion.test",
@@ -256,8 +253,7 @@
         "test/sql/stats/skip_stats_columns_nested.test",
         "test/sql/stats/skip_stats_columns_transaction.test",
         "test/sql/stats/table_stats_null_totals.test",
-        "test/sql/stats/table_stats_null_totals_retry.test",
-        "test/sql/transaction/transaction_conflicts_replaced_delete_file.test"
+        "test/sql/stats/table_stats_null_totals_retry.test"
       ]
     }
   ]

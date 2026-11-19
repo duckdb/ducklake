@@ -548,6 +548,7 @@
         "test/sql/types/timestamptz_ns_v10.test",
         "test/sql/migration/v11_to_v20_dev1.test",
         "test/sql/migration/v20_dev3_file_events_migration.test",
+        "test/sql/migration/v20_dev3_file_events_migration_resume.test",
         "test/sql/metadata/file_visibility_layout.test",
         "test/sql/delete/delete_file_events_main.test",
         "test/sql/delete/delete_replacement_commit_statements.test",

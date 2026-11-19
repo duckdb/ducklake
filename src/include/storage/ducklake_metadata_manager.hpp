@@ -371,7 +371,7 @@ public:
 	string DataFiles(TableIndex table_id) const;
 	string DeleteFiles() const;
 	string DeleteFiles(TableIndex table_id) const;
-	//! The delete events at the snapshot of the files the filter column selects that have none
+	//! Adds the delete events of the files the filter column selects that have none
 	static string FileEndEvents(const string &visibility_table, const string &file_id_column,
 	                            const string &filter_column, const string &id_list, const string &snapshot);
 	virtual string GetFileColumnStatsTableStatement();
@@ -752,10 +752,16 @@ public:
 	virtual void MigrateV11();
 	//! The file visibility events replace the inline ranges of the file tables
 	virtual void MigrateV20Dev2();
-	//! The file tables whose inline ranges the step still has to move aside or turn into events
+	//! A file table moved aside with the range columns it still holds
+	struct V2_0Dev3RangeTable {
+		string name;
+		bool has_begin = false;
+		bool has_end = false;
+	};
+	//! The file tables the step still has to move aside, and those moved aside it turns into events and renames back
 	struct V2_0Dev3Ranges {
 		vector<string> tables_to_rename;
-		vector<string> tables_to_convert;
+		vector<V2_0Dev3RangeTable> tables_to_convert;
 	};
 	V2_0Dev3Ranges ProbeV2_0Dev3Ranges();
 	static string V2_0Dev3RenameSql(const V2_0Dev3Ranges &ranges);

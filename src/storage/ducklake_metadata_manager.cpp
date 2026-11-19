@@ -841,14 +841,20 @@ void DuckLakeMetadataManager::MigrateV11() {
 
 string DuckLakeMetadataManager::VisibilityEventBackfillSql(const string &visibility_table, const string &file_table,
                                                            const string &file_id_column) {
+	// a resumed backfill skips the events an earlier attempt wrote
 	return StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.%s
-SELECT 0, table_id, %s, begin_snapshot, FALSE FROM {METADATA_CATALOG}.%s;
+SELECT 0, f.table_id, f.%s, f.begin_snapshot, FALSE FROM {METADATA_CATALOG}.%s f
+WHERE NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.%s v WHERE v.branch_id = 0 AND v.%s = f.%s AND v.is_delete = FALSE);
 INSERT INTO {METADATA_CATALOG}.%s
-SELECT 0, table_id, %s, end_snapshot, TRUE FROM {METADATA_CATALOG}.%s WHERE end_snapshot IS NOT NULL;
+SELECT 0, f.table_id, f.%s, f.end_snapshot, TRUE FROM {METADATA_CATALOG}.%s f
+WHERE f.end_snapshot IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.%s v WHERE v.branch_id = 0 AND v.%s = f.%s AND v.is_delete = TRUE);
 )",
 	                          visibility_table, file_id_column, file_table, visibility_table, file_id_column,
-	                          file_table);
+	                          file_id_column, visibility_table, file_id_column, file_table, visibility_table,
+	                          file_id_column, file_id_column);
 }
 
 //! The name a file table carries while its ranges become events
@@ -866,17 +872,22 @@ string DuckLakeMetadataManager::V2_0Dev3RenameSql(const V2_0Dev3Ranges &ranges) 
 }
 
 string DuckLakeMetadataManager::V2_0Dev3MigrationQuery(const V2_0Dev3Ranges &ranges) {
-	// a dev catalog can hold the events already, the ranges it still holds become branch 0 events
+	// every statement leaves a state the probes recognize, so the step resumes on a backend that commits each one
 	string query = GetFileVisibilityTableStatement(true) + "\n" + GetDeleteFileVisibilityTableStatement(true) + "\n";
 	for (auto &table : ranges.tables_to_convert) {
-		bool data = table == "ducklake_data_file";
-		auto range_table = RangeTableName(table);
-		query += VisibilityEventBackfillSql(data ? "ducklake_file_visibility" : "ducklake_delete_file_visibility",
-		                                    range_table, data ? "data_file_id" : "delete_file_id");
-		query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s DROP COLUMN begin_snapshot;\n"
-		                            "ALTER TABLE {METADATA_CATALOG}.%s DROP COLUMN end_snapshot;\n"
-		                            "ALTER TABLE {METADATA_CATALOG}.%s RENAME TO %s;\n",
-		                            range_table, range_table, range_table, table);
+		bool data = table.name == "ducklake_data_file";
+		auto range_table = RangeTableName(table.name);
+		if (table.has_begin && table.has_end) {
+			query += VisibilityEventBackfillSql(data ? "ducklake_file_visibility" : "ducklake_delete_file_visibility",
+			                                    range_table, data ? "data_file_id" : "delete_file_id");
+		}
+		if (table.has_begin) {
+			query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s DROP COLUMN begin_snapshot;\n", range_table);
+		}
+		if (table.has_end) {
+			query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s DROP COLUMN end_snapshot;\n", range_table);
+		}
+		query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME TO %s;\n", range_table, table.name);
 	}
 	query += "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev3' WHERE key = 'version';\n";
 	return query;
@@ -889,8 +900,13 @@ DuckLakeMetadataManager::V2_0Dev3Ranges DuckLakeMetadataManager::ProbeV2_0Dev3Ra
 		if (HasMetadataColumn(table, "begin_snapshot")) {
 			ranges.tables_to_rename.push_back(table);
 		}
-		if (HasMetadataColumn(RangeTableName(table), "begin_snapshot")) {
-			ranges.tables_to_convert.push_back(table);
+		auto range_table = RangeTableName(table);
+		if (HasMetadataColumn(range_table, "table_id")) {
+			V2_0Dev3RangeTable renamed;
+			renamed.name = table;
+			renamed.has_begin = HasMetadataColumn(range_table, "begin_snapshot");
+			renamed.has_end = HasMetadataColumn(range_table, "end_snapshot");
+			ranges.tables_to_convert.push_back(std::move(renamed));
 		}
 	}
 	return ranges;
