@@ -3249,9 +3249,14 @@ DuckLakeMetadataManager::GetTableDeletions(DuckLakeTableEntry &table, DuckLakeSn
 		}
 	}
 	auto files = ReadTableDeletions(table, start_snapshot, end_snapshot, include_local_changes);
-	if (delete_scan_cache.Admits(files.size())) {
+	// the inlined deletions of the files are rows of the scan as well
+	idx_t rows = files.size();
+	for (auto &file : files) {
+		rows += file.inlined_file_deletions.size();
+	}
+	if (delete_scan_cache.Admits(rows)) {
 		lock_guard<mutex> guard(listing_cache_lock);
-		delete_scan_cache.Store(cache_key, make_shared_ptr<vector<DuckLakeDeleteScanEntry>>(files), files.size());
+		delete_scan_cache.Store(cache_key, make_shared_ptr<vector<DuckLakeDeleteScanEntry>>(files), rows);
 	}
 	return files;
 }
