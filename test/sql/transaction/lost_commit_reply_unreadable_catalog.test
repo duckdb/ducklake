@@ -1,0 +1,60 @@
+# name: test/sql/transaction/lost_commit_reply_unreadable_catalog.test
+# description: The options of a commit whose outcome could not be read are reloaded by the next transaction
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/lost_commit_reply_unreadable_catalog', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake.set_option('require_commit_message', true)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+# the catalog never carries the COMMIT out and cannot be read while the outcome is checked
+statement ok
+SET ducklake_debug_lose_commit_reply = 'before_unreadable'
+
+statement error
+COMMIT
+----
+whether it carried the commit out is unknown
+
+# the catalog stays unreadable, so the option of the lost commit stays cached and a message stays required
+statement error
+CREATE TABLE ducklake.t2(i INTEGER)
+----
+required
+
+statement ok
+RESET ducklake_debug_lose_commit_reply
+
+query I
+SELECT count(*) FROM metadata.ducklake_metadata WHERE key = 'require_commit_message'
+----
+0
+
+# the next transaction reads the option from the catalog, so its commit needs no message
+statement ok
+CREATE TABLE ducklake.t2(i INTEGER)
+
+query I
+SELECT count(*) FROM ducklake.t2
+----
+0
+
+statement error
+SELECT * FROM ducklake.t
+----
+does not exist

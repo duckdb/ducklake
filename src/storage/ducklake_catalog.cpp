@@ -1317,6 +1317,14 @@ static option_map_t &GetOptionScope(DuckLakeOptions &options, const DuckLakeConf
 	return options.config_options;
 }
 
+static void SetOptionEntry(option_map_t &scope, const string &key, bool set, const string &value) {
+	if (set) {
+		scope[key] = value;
+	} else {
+		scope.erase(key);
+	}
+}
+
 static DuckLakeConfigOptionUndo GetConfigOptionUndo(const option_map_t &scope, const DuckLakeConfigOption &option) {
 	DuckLakeConfigOptionUndo undo;
 	undo.option = option;
@@ -1328,10 +1336,30 @@ static DuckLakeConfigOptionUndo GetConfigOptionUndo(const option_map_t &scope, c
 	return undo;
 }
 
+DuckLakeConfigOptionState &DuckLakeCatalog::GetConfigOptionState(const DuckLakeConfigOption &option) {
+	DuckLakeConfigOptionKey key(option);
+	auto entry = config_option_states.find(key);
+	if (entry != config_option_states.end()) {
+		return entry->second;
+	}
+	// an option no transaction changed yet holds the value of the catalog or the ATTACH
+	auto &scope = GetOptionScope(options, option);
+	auto cached = scope.find(option.option.key);
+	DuckLakeConfigOptionState state;
+	state.committed_set = cached != scope.end();
+	if (state.committed_set) {
+		state.committed_value = cached->second;
+	}
+	return config_option_states.emplace(std::move(key), std::move(state)).first->second;
+}
+
 DuckLakeConfigOptionUndo DuckLakeCatalog::SetConfigOption(const DuckLakeConfigOption &option) {
 	lock_guard<mutex> guard(config_lock);
 	auto &scope = GetOptionScope(options, option);
 	auto undo = GetConfigOptionUndo(scope, option);
+	// the write numbers the change for a catalog that commits each statement, the commit numbers it for the others
+	undo.attempt = ++commit_attempt_count;
+	GetConfigOptionState(option).open_changes++;
 	scope[option.option.key] = option.option.value;
 	return undo;
 }
@@ -1340,7 +1368,9 @@ DuckLakeConfigOptionUndo DuckLakeCatalog::ResetConfigOption(const DuckLakeConfig
 	lock_guard<mutex> guard(config_lock);
 	auto &scope = GetOptionScope(options, option);
 	auto undo = GetConfigOptionUndo(scope, option);
+	undo.attempt = ++commit_attempt_count;
 	undo.reset = true;
+	GetConfigOptionState(option).open_changes++;
 	scope.erase(option.option.key);
 	return undo;
 }
@@ -1348,21 +1378,159 @@ DuckLakeConfigOptionUndo DuckLakeCatalog::ResetConfigOption(const DuckLakeConfig
 void DuckLakeCatalog::UndoConfigOption(const DuckLakeConfigOptionUndo &undo) {
 	lock_guard<mutex> guard(config_lock);
 	auto &scope = GetOptionScope(options, undo.option);
-	auto entry = scope.find(undo.option.option.key);
-	if (undo.reset) {
-		if (entry == scope.end() && undo.was_set) {
-			scope[undo.option.option.key] = undo.previous_value;
+	auto &key = undo.option.option.key;
+	auto &state = GetConfigOptionState(undo.option);
+	D_ASSERT(state.open_changes > 0);
+	if (--state.open_changes == 0) {
+		SetOptionEntry(scope, key, state.committed_set, state.committed_value);
+		return;
+	}
+	auto entry = scope.find(key);
+	bool holds = undo.reset ? entry == scope.end() : entry != scope.end() && entry->second == undo.option.option.value;
+	if (!holds) {
+		// a value another transaction set since stays in place
+		return;
+	}
+	SetOptionEntry(scope, key, undo.was_set, undo.previous_value);
+}
+
+idx_t DuckLakeCatalog::NextCommitAttempt() {
+	lock_guard<mutex> guard(config_lock);
+	return ++commit_attempt_count;
+}
+
+idx_t DuckLakeCatalog::ConfigOptionPublications(const DuckLakeConfigOption &option) const {
+	lock_guard<mutex> guard(config_lock);
+	auto entry = config_option_states.find(DuckLakeConfigOptionKey(option));
+	return entry == config_option_states.end() ? 0 : entry->second.publications;
+}
+
+void DuckLakeCatalog::CommitConfigOptions(const vector<DuckLakeConfigOptionUndo> &changes) {
+	lock_guard<mutex> guard(config_lock);
+	for (idx_t i = 0; i < changes.size(); i++) {
+		auto &change = changes[i];
+		auto &state = GetConfigOptionState(change.option);
+		D_ASSERT(state.open_changes > 0);
+		state.open_changes--;
+		bool changed_again = false;
+		for (idx_t later = i + 1; later < changes.size(); later++) {
+			changed_again = changed_again || changes[later].option.IsSame(change.option);
 		}
-		return;
+		if (changed_again) {
+			continue;
+		}
+		// the last change of the option is the catalog's value, which the cache shows unless a transaction holds one
+		if (change.attempt > state.committed_attempt) {
+			state.committed_set = !change.reset;
+			state.committed_value = change.option.option.value;
+			state.committed_attempt = change.attempt;
+		}
+		// a reload that read before this commit reads again, also where a later attempt published already
+		state.publications++;
+		if (state.open_changes == 0) {
+			SetOptionEntry(GetOptionScope(options, change.option), change.option.option.key, state.committed_set,
+			               state.committed_value);
+		}
 	}
-	if (entry == scope.end() || entry->second != undo.option.option.value) {
-		// another transaction has set the option since - leave its value in place
-		return;
+}
+
+void DuckLakeCatalog::SetCommittedConfigOption(const DuckLakeConfigOption &option, idx_t attempt) {
+	lock_guard<mutex> guard(config_lock);
+	auto entry = config_option_states.find(DuckLakeConfigOptionKey(option));
+	if (entry != config_option_states.end()) {
+		auto &state = entry->second;
+		state.publications++;
+		if (attempt < state.committed_attempt) {
+			return;
+		}
+		state.committed_set = true;
+		state.committed_value = option.option.value;
+		state.committed_attempt = attempt;
+		if (state.open_changes > 0) {
+			return;
+		}
 	}
-	if (undo.was_set) {
-		entry->second = undo.previous_value;
-	} else {
-		scope.erase(entry);
+	GetOptionScope(options, option)[option.option.key] = option.option.value;
+}
+
+idx_t DuckLakeCatalog::AddPendingOptionReload(const DuckLakeConfigOptionReload &reload) {
+	lock_guard<mutex> guard(config_lock);
+	// the changes leave their transaction, the cache keeps their values until the catalog answers
+	for (auto &change : reload.changes) {
+		auto &state = GetConfigOptionState(change.option);
+		D_ASSERT(state.open_changes > 0);
+		state.open_changes--;
+	}
+	pending_option_reloads[pending_option_reload_count] = reload;
+	return pending_option_reload_count++;
+}
+
+bool DuckLakeCatalog::ReloadConfigOption(const DuckLakeConfigOption &option, bool has_row, bool reset,
+                                         idx_t publications, idx_t attempt) {
+	lock_guard<mutex> guard(config_lock);
+	auto &state = GetConfigOptionState(option);
+	if (state.publications != publications) {
+		// the option was published since the read, so the value read is behind the catalog
+		return false;
+	}
+	if (has_row) {
+		state.committed_set = true;
+		state.committed_value = option.option.value;
+	} else if (reset) {
+		// a reset is recorded only where the catalog had a row, so a committed reset removed it
+		state.committed_set = false;
+	}
+	// a commit numbered below the lost one counts as older than the value read, the kept record repairs exceptions
+	state.committed_attempt = MaxValue<idx_t>(state.committed_attempt, attempt);
+	state.publications++;
+	if (state.open_changes > 0) {
+		// the changes of an option an open transaction holds stay for a later transaction
+		return false;
+	}
+	SetOptionEntry(GetOptionScope(options, option), option.option.key, state.committed_set, state.committed_value);
+	return true;
+}
+
+map<idx_t, DuckLakeConfigOptionReload> DuckLakeCatalog::PendingOptionReloads() const {
+	lock_guard<mutex> guard(config_lock);
+	return pending_option_reloads;
+}
+
+void DuckLakeCatalog::ResolvePendingOptionReloads(const vector<idx_t> &commit_numbers,
+                                                  const vector<DuckLakeConfigOption> &unresolved) {
+	lock_guard<mutex> guard(config_lock);
+	for (auto commit_number : commit_numbers) {
+		auto entry = pending_option_reloads.find(commit_number);
+		if (entry == pending_option_reloads.end()) {
+			continue;
+		}
+		auto &record = entry->second;
+		auto is_unresolved = [&](const DuckLakeConfigOption &option) {
+			for (auto &unresolved_option : unresolved) {
+				if (option.IsSame(unresolved_option)) {
+					return true;
+				}
+			}
+			return false;
+		};
+		vector<DuckLakeConfigOptionUndo> changes;
+		for (auto &change : record.changes) {
+			if (is_unresolved(change.option)) {
+				changes.push_back(std::move(change));
+			}
+		}
+		vector<DuckLakeConfigOption> table_options;
+		for (auto &table_option : record.table_options) {
+			if (is_unresolved(table_option)) {
+				table_options.push_back(std::move(table_option));
+			}
+		}
+		if (changes.empty() && table_options.empty()) {
+			pending_option_reloads.erase(entry);
+		} else {
+			record.changes = std::move(changes);
+			record.table_options = std::move(table_options);
+		}
 	}
 }
 

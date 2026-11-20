@@ -59,9 +59,47 @@ unique_ptr<QueryResult> QuackMetadataManager::Execute(DuckLakeSnapshot snapshot,
 	return ExecuteInTransaction(query);
 }
 
+void QuackMetadataManager::BeginMigration() {
+	auto result = Query("BEGIN TRANSACTION;");
+	result->ThrowIfError("Failed to begin the migration transaction in DuckLake: ");
+	migration_transaction = true;
+}
+
+void QuackMetadataManager::CommitMigration() {
+	if (!migration_transaction) {
+		return;
+	}
+	auto result = Query("COMMIT;");
+	result->ThrowIfError("Failed to commit the migration in DuckLake: ");
+	migration_transaction = false;
+}
+
+void QuackMetadataManager::RollbackMigration() {
+	if (!migration_transaction) {
+		return;
+	}
+	migration_transaction = false;
+	Query("ROLLBACK;");
+}
+
+bool QuackMetadataManager::HasV1_1Additions() {
+	// a failed probe aborts the migration transaction, so the columns come from the listing of the schema
+	ResetProbedColumns();
+	for (auto &added : V1_1AddedColumns()) {
+		if (!HasMetadataColumn(added.table, added.column)) {
+			return false;
+		}
+	}
+	return HasMetadataColumn("ducklake_view_column_tag", "view_id");
+}
+
 unique_ptr<QueryResult> QuackMetadataManager::ExecuteInTransaction(string &query) {
 	// hold the lock through the rollback
 	lock_guard<std::recursive_mutex> guard(transaction.GetCatalog().GetMetadataQueryLock());
+	if (migration_transaction) {
+		// the statements join the server transaction of the migration
+		return Query(query);
+	}
 	return DuckLakeMetadataManager::ExecuteInTransaction(query);
 }
 

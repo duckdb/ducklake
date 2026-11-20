@@ -1196,7 +1196,7 @@ void RESTMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tran
 		option.option.key = setting.key;
 		option.option.value = setting.value;
 		option.table_id = TableIndex(setting.table_id.value);
-		catalog.SetConfigOption(option);
+		catalog.SetCommittedConfigOption(option, catalog.NextCommitAttempt());
 	}
 	catalog.SetCommittedSnapshotId(response.snapshot.snapshot_id);
 	flush_transaction.ApplyServerSideCommit(response.snapshot.schema_version, response.snapshot.next_file_id);

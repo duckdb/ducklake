@@ -64,6 +64,12 @@ struct DuckLakeInlinedValueCheck {
 	Identifier column_name;
 };
 
+struct DuckLakeAddedColumn {
+	const char *table;
+	const char *column;
+	const char *type;
+};
+
 //! Metadata column names inside ducklake_inlined_data_<table_id>_<schema_version> tables.
 struct DuckLakeInlinedColNames {
 	//! Column name prefix reserved for DuckLake internal use
@@ -285,6 +291,10 @@ public:
 	//! Whether the client can skip the snapshot fetch and let the server read it.
 	virtual bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const;
 	virtual bool IsRetryableCommitError(const string &message) const;
+	//! Whether a failed COMMIT can still have been carried out by the catalog, as when only its reply was lost
+	virtual bool IsCommitOutcomeUnknown(const string &message) const {
+		return false;
+	}
 	//! The error of a failed commit without the text of the failed query that it repeats
 	virtual string CommitErrorWithoutQuery(const string &message) const {
 		return message;
@@ -722,6 +732,15 @@ public:
 	virtual idx_t SetConfigOption(const DuckLakeConfigOption &option);
 	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);
 	idx_t ConfigOptionRowCount(const DuckLakeConfigOption &option, optional_ptr<const string> value = nullptr);
+	//! Runs a migration batch in one metadata transaction on a catalog where each statement commits on its own
+	virtual void BeginMigration() {
+	}
+	virtual void CommitMigration() {
+	}
+	virtual void RollbackMigration() {
+	}
+	//! Reads the value the catalog holds for the option into it, false when the option is not set
+	bool TryGetConfigOption(DuckLakeConfigOption &option);
 	virtual void MigrateV01();
 	virtual void MigrateV02(bool allow_failures = false);
 	virtual void MigrateV03(bool allow_failures = false);
@@ -732,8 +751,10 @@ public:
 	static string GetBranchTableStatement();
 	//! Inserts the row of the main branch unless the table has it
 	static string GetMainBranchRowStatement();
+	//! The columns that v1.1 added to the metadata tables
+	static const vector<DuckLakeAddedColumn> &V1_1AddedColumns();
 	//! Whether the catalog already has every metadata table and column of v1.1
-	bool HasV1_1Additions();
+	virtual bool HasV1_1Additions();
 	//! Migrates a 2.0-dev1 catalog of any dev build or interruption state to the layout of 2.0-dev2
 	virtual void MigrateV20Dev1();
 	//! The additions of 2.0-dev2 a catalog is missing, probed so an interrupted migration resumes

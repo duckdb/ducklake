@@ -1,0 +1,62 @@
+# name: test/sql/transaction/lost_commit_reply_attach_option_reload.test
+# description: An option given at ATTACH survives the reload after a lost commit reply
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/lost_commit_reply_attach_option_reload', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 20)
+
+statement ok
+CREATE TABLE ducklake.uncommitted(i INTEGER)
+
+# the catalog never carries the COMMIT out
+statement ok
+SET ducklake_debug_lose_commit_reply = 'before'
+
+statement error
+COMMIT
+----
+whether it carried the commit out is unknown
+
+statement ok
+RESET ducklake_debug_lose_commit_reply
+
+query I
+SELECT count(*) FROM metadata.ducklake_metadata WHERE key = 'data_inlining_row_limit'
+----
+0
+
+statement error
+SELECT * FROM ducklake.uncommitted
+----
+does not exist
+
+# the limit of the ATTACH still holds, so the row goes to a file
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/lost_commit_reply_attach_option_reload/main/t/*.parquet')
+----
+1
+
+query I
+SELECT i FROM ducklake.t
+----
+1
