@@ -1,0 +1,93 @@
+# name: test/sql/stats/stats_of_dropped_tables.test
+# description: Loading the stats of a snapshot reads the stats rows of the tables it sees, and skips those of dropped ones
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/stats_of_dropped_tables')
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+CREATE TABLE ducklake.gone AS SELECT range AS id FROM range(10)
+
+statement ok
+CREATE TABLE ducklake.kept AS SELECT range AS id FROM range(10)
+
+# a stats row without a table size, as lakes from before file_size_bytes have: reading the row sums the table's files,
+# a metadata query of its own that shows whether the row was read
+statement ok
+UPDATE __ducklake_metadata_ducklake.ducklake_table_stats SET file_size_bytes = NULL
+WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'gone')
+
+statement ok
+CREATE MACRO stats_queries() AS (
+	SELECT count(*) FILTER (query LIKE '%ducklake_table_column_stats%') || ' stats, ' ||
+	       count(*) FILTER (query LIKE '%SUM(file_size_bytes)%') || ' sizes'
+	FROM duckdb_logs_parsed('DuckLakeMetadata'))
+
+# con1 starts before the drop and keeps seeing the table
+statement ok con1
+BEGIN
+
+statement ok con1
+FROM ducklake.current_snapshot()
+
+# a commit before the drop gives con1's snapshot a stats cache key of its own: the drop caches the stats it reads
+# under the key of the next snapshot
+statement ok con2
+INSERT INTO ducklake.kept VALUES (10)
+
+# the stats rows of a dropped table stay until its snapshots expire
+statement ok con2
+DROP TABLE ducklake.gone
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I con1
+SELECT count(*) FROM ducklake.gone
+----
+10
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT stats_queries()
+----
+1 stats, 1 sizes
+
+statement ok con1
+COMMIT
+
+statement ok
+CALL truncate_duckdb_logs()
+
+# a commit moves the key of the stats cache, so the next read loads the stats again
+statement ok
+INSERT INTO ducklake.kept VALUES (11)
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT stats(id) FROM ducklake.kept LIMIT 1
+----
+{'has_no_null': true, 'has_null': false, 'max': 11, 'min': 0}
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT stats_queries()
+----
+1 stats, 0 sizes

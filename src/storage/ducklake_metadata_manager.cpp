@@ -1851,6 +1851,12 @@ static string TableStatsQuery(const string &select_list, bool include_column_sta
 			ids.push_back(to_string(table_id.index));
 		}
 		query += "WHERE table_id IN (" + StringUtil::Join(ids, ", ") + ")\n";
+	} else {
+		// the tables of the snapshot, as GetCatalogForSnapshot selects them: the stats rows of dropped or replaced
+		// tables stay until their snapshots expire, and a lake that replaces its tables often holds many times more
+		// of them than of the tables it can read
+		query += "WHERE table_id IN (SELECT table_id FROM {METADATA_CATALOG}.ducklake_table WHERE {SNAPSHOT_ID} >= "
+		         "begin_snapshot AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL))\n";
 	}
 	if (include_column_stats) {
 		query += "ORDER BY table_id ASC\n";

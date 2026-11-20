@@ -395,7 +395,7 @@ public:
 	//! SQL on a fresh Connection without going through the metadata-manager wrapper.
 	//! keyed_lookups puts branch_id = 0 beside the predicates on snapshot_id, keyed_scans on a MAX over the table
 	static string LatestSnapshotQuery(bool keyed_lookups, bool keyed_scans);
-	//! With table ids only those tables' stats are read
+	//! With table ids only those tables' stats are read, without them the stats of the tables of {SNAPSHOT_ID}
 	static string GlobalTableStatsQuery(bool include_exactness, const vector<TableIndex> &table_ids = {});
 	//! Pure parsers for the results of the above queries.
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
