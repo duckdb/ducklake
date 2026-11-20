@@ -1,0 +1,75 @@
+# name: test/sql/rest/rest_commit_group_direct_writer.test
+# description: Group commits next to a writer that alters the table on the lake of the server directly
+# group: [rest]
+
+require ducklake
+
+require parquet
+
+# the server runs in the database of the test, so that a connection of a concurrent loop can write to its lake
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_rest_server.db' AS direct (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_rest_files')
+
+statement ok
+SET VARIABLE rest_uri = (SELECT listen_uri FROM ducklake_rest_serve('direct'))
+
+loop i 0 8
+
+statement ok
+ATTACH 'ducklake:rest:' || getvariable('rest_uri') AS dl{i} (DATA_INLINING_ROW_LIMIT 1000)
+
+endloop
+
+statement ok
+CREATE TABLE direct.t(i INTEGER, w INTEGER)
+
+statement ok
+INSERT INTO direct.t VALUES (-1, -1)
+
+statement ok
+SET ducklake_rest_group_commit=true
+
+# the direct writer is not in the queue of the server: an append conflicts with its ALTER or is in the table once
+concurrentloop i 0 8
+
+loop j 0 6
+
+onlyif i=0
+statement ok
+ALTER TABLE direct.t ADD COLUMN c{j} INTEGER
+
+skipif i=0
+statement maybe
+INSERT INTO dl{i}.t (i, w) VALUES ({j}, {i})
+----
+Transaction conflict
+
+endloop
+
+endloop
+
+query II
+SELECT count(*) = count(DISTINCT (i, w)), count(*) >= 1 FROM direct.t
+----
+true	true
+
+query I
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'direct' AND table_name = 't'
+----
+8
+
+# a client reads the same rows as the direct writer
+query I
+SELECT (SELECT count(*) FROM dl0.t) = (SELECT count(*) FROM direct.t)
+----
+true
+
+loop i 0 8
+
+statement ok
+DETACH dl{i}
+
+endloop
+
+statement ok
+SELECT * FROM ducklake_rest_stop(regexp_extract(getvariable('rest_uri'), '^(.*://[^/]+)', 1))

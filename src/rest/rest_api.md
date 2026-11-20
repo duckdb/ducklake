@@ -81,9 +81,11 @@ client directly, so the data path has to be accessible from both the client and 
 
 The requests of `commit_transaction` and `group_commit_transaction` for the same attached catalog wait in one queue within the server process and run one at a time. The queue is shared across URL prefixes and listeners that serve that catalog. The metadata transaction of a commit starts when it is its turn, so it sees earlier publications.
 
-The commit at the front of the queue runs next. A `commit_transaction` runs alone and publishes a snapshot of its own. A `group_commit_transaction` that only appends rows or files runs together with all other such requests in the queue, also those behind requests that cannot join: they are published as one snapshot. Their responses return that same snapshot, which has the commit information of the first of them. Conflicts of such a group are checked against the oldest snapshot that one of its transactions started from. If the group cannot commit, its commits run one by one.
+The commit at the front of the queue runs next. A `commit_transaction` runs alone and publishes a snapshot of its own. A `group_commit_transaction` that only appends rows or files runs together with the other such requests in the queue, also those behind requests that cannot join: they are published as one snapshot. A group has at most 256 requests. Its requests came in through the same listener and prefix and ask for the same response format (Arrow or JSON). Requests that differ in one of these wait for a group of their own. The responses of a group return the same snapshot, which has the commit information of the first of its requests. Conflicts of a group are checked against the oldest snapshot that one of its transactions started from. If the group cannot commit, its commits run one by one.
 
-Clients choose the endpoint with the `ducklake_rest_group_commit` setting.
+A commit that was published is never run again. If the server fails after the publication, for example while it builds the response, the request fails with an IO error that says that the transaction was committed.
+
+Clients choose the endpoint with the `ducklake_rest_group_commit` setting. A plain `SET ducklake_rest_group_commit = true` changes it for all connections of the database. `SET SESSION` changes it for the connection only.
 
 Direct writers, Quack writers, maintenance calls, and separate attachments of the same metadata database do not participate in this queue. They can still cause metadata retries.
 

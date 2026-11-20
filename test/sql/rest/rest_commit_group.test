@@ -51,6 +51,37 @@ SELECT count(*) > 0 FROM ducklake_list_files('dl0', 'shared')
 ----
 true
 
+# group commits that wait together share a snapshot
+statement ok
+CREATE TABLE dl0.sharing(i INTEGER, w INTEGER)
+
+statement ok
+SET VARIABLE snapshots_before = (SELECT count(*) FROM ducklake_snapshots('dl0'))
+
+concurrentloop i 0 8
+
+statement ok
+SET ducklake_max_retry_count=0
+
+loop j 0 25
+
+statement ok
+INSERT INTO dl{i}.sharing VALUES ({j}, {i})
+
+endloop
+
+endloop
+
+query III
+SELECT count(*), count(DISTINCT (i, w)), sum(i) FROM dl0.sharing
+----
+200	200	2400
+
+query I
+SELECT count(*) - getvariable('snapshots_before') < 200 FROM ducklake_snapshots('dl0')
+----
+true
+
 # appends to tables created after the oldest snapshot of a group commit on their own
 concurrentloop i 0 8
 

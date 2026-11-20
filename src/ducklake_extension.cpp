@@ -54,7 +54,8 @@ static void LoadInternal(ExtensionLoader &loader) {
 
 	config.AddExtensionOption("ducklake_rest_group_commit",
 	                          "Commit through the group commit of a DuckLake REST server, where transactions that only "
-	                          "insert data can share a snapshot with other transactions",
+	                          "insert data can share a snapshot with other transactions. SET changes it for all "
+	                          "connections of the database, SET SESSION for the connection only",
 	                          LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);
 
 	DuckLakeRESTServeFunction rest_serve;
