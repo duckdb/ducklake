@@ -68,7 +68,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_SCHEMA 'dev1_skips_prese
 query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
-2.0-dev2
+2.0-dev1
 
 query I
 SELECT * FROM dl.t

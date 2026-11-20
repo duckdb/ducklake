@@ -1,5 +1,5 @@
 # name: test/sql/migration/v20_dev1_new_catalog.test
-# description: a new catalog is created at 2.0-dev2 with the snapshot tag table and the catalog mutex row
+# description: a new catalog is created at 2.0-dev1 with the snapshot tag table and the catalog mutex row
 # group: [migration]
 
 require ducklake
@@ -16,7 +16,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v20_dev1_n
 query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
-2.0-dev2
+2.0-dev1
 
 # SQLite reports the timestamp column as text
 query II
@@ -51,7 +51,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v20_dev1_n
 query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
-2.0-dev2
+2.0-dev1
 
 query I
 SELECT * FROM dl.t
