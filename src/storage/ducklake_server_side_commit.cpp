@@ -101,6 +101,7 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	supports_v1_1_metadata = catalog_version >= DuckLakeVersion::V1_1;
 	supports_v2_0_metadata = catalog_version >= DuckLakeVersion::V2_0_DEV1;
 	supports_file_visibility_events = catalog_version >= DuckLakeVersion::V2_0_DEV1;
+	supports_row_visibility = catalog_version >= DuckLakeVersion::V2_0_DEV1;
 	branch_keyed_lookups = BranchKeyedLookups();
 	ReadCommitHeader();
 	ReadColumnTypes();
@@ -669,6 +670,7 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.supports_v1_1_metadata = supports_v1_1_metadata;
 	ctx.supports_v2_0_metadata = supports_v2_0_metadata;
 	ctx.supports_file_visibility_events = supports_file_visibility_events;
+	ctx.supports_row_visibility = supports_row_visibility;
 	ctx.branch_keyed_lookups = branch_keyed_lookups;
 	ctx.snapshot_and_stats_query =
 	    DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(supports_v1_1_metadata, branch_keyed_lookups, false);

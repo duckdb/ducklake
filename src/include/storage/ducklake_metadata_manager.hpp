@@ -356,6 +356,26 @@ public:
 	static string BranchedSnapshotTableColumns();
 	static string BranchedSnapshotChangesTableColumns();
 	virtual string GetSchemaTableStatement();
+	//! A catalog table whose version rows end in a companion table, with the key columns naming an entity
+	struct RowVisibilityKind {
+		string kind;
+		vector<string> key_columns;
+	};
+	//! The versioned catalog kinds, the companion of a kind is ducklake_<kind>_visibility
+	static const vector<RowVisibilityKind> &RowVisibilityKinds();
+	//! The kinds whose readers and writers end rows in a companion, the later pull requests extend the list
+	static const vector<string> &V2_0RowCompanionKinds();
+	static const RowVisibilityKind &RowKind(const string &kind);
+	//! The row table of a kind, the partition and sort specs keep their info suffix
+	static string RowTableName(const string &kind);
+	//! The type of a key column, the tag keys and names are text
+	static string RowKeyType(const string &key);
+	//! The companion table holding the ends of the version rows of a kind, one end per row per branch
+	static string GetRowVisibilityTableStatement(const RowVisibilityKind &kind);
+	//! Whether a version row of the alias is visible at the read snapshot on the main branch
+	static string RowVisibility(const string &alias, const RowVisibilityKind &kind, const string &read_snapshot);
+	//! Ends the version rows of a kind the filter selects, live at the commit snapshot, in its companion
+	static string EndRows(const string &kind, const string &filter);
 	//! The columns of the file tables, with the inline ranges before the events and the row group count from 1.1 on
 	static string DataFileTableColumns(bool with_ranges, bool with_row_group_count);
 	static string DeleteFileTableColumns(bool with_ranges, bool with_row_group_count);

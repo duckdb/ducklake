@@ -346,6 +346,110 @@ string DuckLakeMetadataManager::GetSchemaTableStatement() {
 	       "begin_snapshot BIGINT, end_snapshot BIGINT, schema_name VARCHAR, path VARCHAR, path_is_relative BOOLEAN);";
 }
 
+const vector<DuckLakeMetadataManager::RowVisibilityKind> &DuckLakeMetadataManager::RowVisibilityKinds() {
+	static const vector<RowVisibilityKind> KINDS = {{"schema", {"schema_id"}},
+	                                                {"table", {"table_id"}},
+	                                                {"view", {"view_id"}},
+	                                                {"column", {"table_id", "column_id"}},
+	                                                {"partition", {"partition_id"}},
+	                                                {"sort", {"sort_id"}},
+	                                                {"macro", {"macro_id"}},
+	                                                {"tag", {"object_id", "key"}},
+	                                                {"column_tag", {"table_id", "column_id", "key"}},
+	                                                {"view_column_tag", {"view_id", "column_name", "key"}},
+	                                                {"snapshot_tag", {"tag_name"}}};
+	return KINDS;
+}
+
+const vector<string> &DuckLakeMetadataManager::V2_0RowCompanionKinds() {
+	// an unconverted kind keeps its end column until the pull request that converts its readers and writers
+	static const vector<string> KINDS = {"schema", "table", "view"};
+	return KINDS;
+}
+
+const DuckLakeMetadataManager::RowVisibilityKind &DuckLakeMetadataManager::RowKind(const string &kind) {
+	for (auto &entry : RowVisibilityKinds()) {
+		if (entry.kind == kind) {
+			return entry;
+		}
+	}
+	throw InternalException("Unknown DuckLake row visibility kind %s", kind);
+}
+
+string DuckLakeMetadataManager::RowTableName(const string &kind) {
+	if (kind == "partition" || kind == "sort") {
+		return "ducklake_" + kind + "_info";
+	}
+	return "ducklake_" + kind;
+}
+
+string DuckLakeMetadataManager::RowKeyType(const string &key) {
+	if (key == "key" || key == "column_name" || key == "tag_name") {
+		return "VARCHAR";
+	}
+	return "BIGINT";
+}
+
+//! The key column of an alias, collated byte for byte when the key is text like the tag writers match it
+static string KeyColumn(const string &alias, const string &key) {
+	auto qualified = alias + "." + key;
+	if (DuckLakeMetadataManager::RowKeyType(key) == "VARCHAR") {
+		return DuckLakeUtil::WithBinaryCollation(qualified);
+	}
+	return qualified;
+}
+
+//! Matches the key columns of the end alias with those of the row alias
+static string KeyMatches(const DuckLakeMetadataManager::RowVisibilityKind &kind, const string &end_alias,
+                         const string &row_alias) {
+	vector<string> matches;
+	for (auto &key : kind.key_columns) {
+		matches.push_back(KeyColumn(end_alias, key) + " = " + KeyColumn(row_alias, key));
+	}
+	return StringUtil::Join(matches, " AND ");
+}
+
+string DuckLakeMetadataManager::GetRowVisibilityTableStatement(const RowVisibilityKind &kind) {
+	// (row_branch_id, row_snapshot) name the version row by its birth, branch_id the branch whose lineage ends it
+	string key_definitions;
+	for (auto &key : kind.key_columns) {
+		key_definitions += key + " " + RowKeyType(key) + ", ";
+	}
+	return StringUtil::Format(
+	    "CREATE TABLE {METADATA_CATALOG}.ducklake_%s_visibility(branch_id BIGINT, %srow_branch_id "
+	    "BIGINT, row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, %s, "
+	    "row_branch_id, row_snapshot));",
+	    kind.kind, key_definitions, StringUtil::Join(kind.key_columns, ", "));
+}
+
+string DuckLakeMetadataManager::RowVisibility(const string &alias, const RowVisibilityKind &kind,
+                                              const string &read_snapshot) {
+	// the main segment, the row is born on main at or before the read and no end of main is in the view
+	return StringUtil::Format("%s.branch_id = 0 AND %s.begin_snapshot <= %s AND NOT EXISTS (SELECT 1 FROM "
+	                          "{METADATA_CATALOG}.ducklake_%s_visibility vis WHERE %s AND vis.row_branch_id = "
+	                          "%s.branch_id AND vis.row_snapshot = %s.begin_snapshot AND vis.branch_id = 0 AND "
+	                          "vis.snapshot_id <= %s)",
+	                          alias, alias, read_snapshot, kind.kind, KeyMatches(kind, "vis", alias), alias, alias,
+	                          read_snapshot);
+}
+
+string DuckLakeMetadataManager::EndRows(const string &kind_name, const string &filter) {
+	// the ends of a commit run before the version rows it adds, so a row born at the commit snapshot is not ended
+	auto &kind = RowKind(kind_name);
+	vector<string> keys;
+	for (auto &key : kind.key_columns) {
+		keys.push_back("t." + key);
+	}
+	return StringUtil::Format(R"(INSERT INTO {METADATA_CATALOG}.ducklake_%s_visibility
+    (branch_id, %s, row_branch_id, row_snapshot, snapshot_id)
+SELECT 0, %s, t.branch_id, t.begin_snapshot, {SNAPSHOT_ID}
+FROM {METADATA_CATALOG}.%s t
+WHERE %s AND %s;
+)",
+	                          kind.kind, StringUtil::Join(kind.key_columns, ", "), StringUtil::Join(keys, ", "),
+	                          RowTableName(kind.kind), filter, RowVisibility("t", kind, "{SNAPSHOT_ID}"));
+}
+
 string DuckLakeMetadataManager::DataFileTableColumns(bool with_ranges, bool with_row_group_count) {
 	return string("data_file_id BIGINT PRIMARY KEY, table_id BIGINT, ") +
 	       (with_ranges ? "begin_snapshot BIGINT, end_snapshot BIGINT, " : "") +
