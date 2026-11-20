@@ -548,11 +548,16 @@
         "test/sql/types/timestamptz_ns_v10.test",
         "test/sql/migration/v11_to_v20_dev1.test",
         "test/sql/migration/v20_dev1_new_catalog.test",
+        "test/sql/migration/v11_to_v20_dev2_snapshot_keys.test",
+        "test/sql/migration/v20_dev1_to_v20_dev2.test",
+        "test/sql/migration/rejected_migrating_attach_keeps_catalog.test",
+        "test/sql/catalog/snapshot_branch_key.test",
         "test/sql/migration/inlined_column_rename_batches.test",
         "test/sql/tags/tags_version_gate_time_travel.test",
         "test/sql/data_inlining/inlining_obstacle_log.test",
         "test/sql/compaction/user_columns_named_like_internal_columns.test",
-        "test/sql/data_inlining/data_inlining_transaction_local_field_readd_rejected.test"
+        "test/sql/data_inlining/data_inlining_transaction_local_field_readd_rejected.test",
+        "test/sql/data_inlining/data_inlining_variant_stats.test"
       ]
     },
     {
@@ -681,7 +686,8 @@
         "test/sql/tags/postgres_tags_read_committed.test",
         "test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test",
-        "test/sql/data_inlining/data_inlining_variant_sql_rollback.test"
+        "test/sql/data_inlining/data_inlining_variant_sql_rollback.test",
+        "test/sql/catalog/snapshot_branch_key_statements_postgres.test"
       ]
     },
     {
