@@ -559,7 +559,9 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 
 string PostgresMetadataManager::GetGlobalTableStatsQuery(const vector<TableIndex> &table_ids) const {
 	// Separate scanner statements can observe narrowed bounds after reading an older snapshot ID at READ COMMITTED.
-	auto remote_query = DuckLakeMetadataManager::GetGlobalTableStatsQuery(table_ids);
+	auto &catalog = transaction.GetCatalog();
+	auto remote_query =
+	    GlobalTableStatsQuery(catalog.SupportsV1_1Metadata(), table_ids, true, catalog.SupportsBranching());
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	return PostgresQuery(remote_query);

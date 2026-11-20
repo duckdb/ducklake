@@ -1859,7 +1859,7 @@ static string TableStatsQuery(const string &select_list, bool include_column_sta
 }
 
 string DuckLakeMetadataManager::GlobalTableStatsQuery(bool include_exactness, const vector<TableIndex> &table_ids,
-                                                      bool include_snapshot_id) {
+                                                      bool include_snapshot_id, bool keyed_scans) {
 	string select_list =
 	    "table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, "
 	    "max_value, extra_stats";
@@ -1867,7 +1867,9 @@ string DuckLakeMetadataManager::GlobalTableStatsQuery(bool include_exactness, co
 		select_list += ", min_is_exact, max_is_exact";
 	}
 	if (include_snapshot_id) {
-		select_list += ", (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot) AS latest_snapshot_id";
+		select_list += StringUtil::Format(
+		    ", (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot%s) AS latest_snapshot_id",
+		    keyed_scans ? " WHERE branch_id = 0" : "");
 	}
 	return TableStatsQuery(select_list, true, table_ids);
 }

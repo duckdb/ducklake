@@ -396,7 +396,7 @@ public:
 	//! keyed_lookups puts branch_id = 0 beside the predicates on snapshot_id, keyed_scans on a MAX over the table
 	static string LatestSnapshotQuery(bool keyed_lookups, bool keyed_scans);
 	static string GlobalTableStatsQuery(bool include_exactness, const vector<TableIndex> &table_ids = {},
-	                                    bool include_snapshot_id = false);
+	                                    bool include_snapshot_id = false, bool keyed_scans = false);
 	//! Pure parsers for the results of the above queries.
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
 	                                                  optional_ptr<string> catalog_version = nullptr);
