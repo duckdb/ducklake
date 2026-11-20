@@ -316,6 +316,10 @@ public:
 	void SetFilesOwnedByClient() {
 		files_owned_by_client = true;
 	}
+	//! Whether the commit wrote its changes to the metadata, also if it failed after that
+	bool IsPublished() const {
+		return published;
+	}
 	bool SchemaChangesMade() const;
 	idx_t GetLocalCatalogId();
 	static bool IsTransactionLocal(idx_t id) {
@@ -539,6 +543,7 @@ private:
 
 private:
 	bool files_owned_by_client = false;
+	bool published = false;
 };
 
 } // namespace duckdb

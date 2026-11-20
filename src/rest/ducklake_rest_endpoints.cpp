@@ -1367,8 +1367,8 @@ RESTCommitTransactionResponse DuckLakeRESTCommit::Commit() {
 	try {
 		request.connection.Commit();
 	} catch (...) {
-		// a step after the commit of the metadata can fail, the snapshot is published by then
-		request.published = transaction_ref->GetCommittedSnapshot().snapshot_id != DConstants::INVALID_INDEX;
+		// the commit of the metadata, or a step after it, can fail when the changes are published
+		request.published = transaction_ref->IsPublished();
 		throw;
 	}
 	request.published = true;

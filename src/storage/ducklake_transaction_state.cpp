@@ -2906,10 +2906,27 @@ bool DuckLakeTransactionState::FindConflictWithOtherCommits(DuckLakeSnapshot tra
 	return found_conflict;
 }
 
+//! Commits the metadata connection. A commit that is durable although it reports an error is published: the error
+//! is kept for the end of the commit, as nothing can be rolled back, retried or cleaned up after it
+static void CommitMetadata(const DuckLakeCommitContext &context, ErrorData &error_after_commit) {
+	try {
+		context.commit_connection();
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		// DuckDB reports a checkpoint that fails after the commit with the error of the checkpoint
+		if (!StringUtil::Contains(error.RawMessage(), "Transaction COMMIT succeeded and is durable")) {
+			throw;
+		}
+		error_after_commit = std::move(error);
+	}
+	context.set_published();
+}
+
 void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
                                       const TransactionChangeInformation &transaction_changes,
                                       const DuckLakeRetryConfig &retry_config, const DuckLakeCommitContext &context) {
 	SnapshotAndStats commit_stats_snapshot;
+	ErrorData error_after_commit;
 	auto &commit_snapshot = commit_stats_snapshot.snapshot;
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
 	bool flushed_inlined = false;
@@ -2945,7 +2962,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			wrote_snapshot = context.write_snapshot &&
 			                 (!expired_snapshots.empty() || !expiry.tags.empty() || !context.only_expires_snapshots);
 			if (!wrote_snapshot && !context.locks_config_options) {
-				context.commit_connection();
+				CommitMetadata(context, error_after_commit);
 				break;
 			}
 			for (auto &snapshot : expired_snapshots) {
@@ -2982,9 +2999,10 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			}
 			flushed_inlined = !flushed_inlined_tables.empty();
 			context.flush_cache_if_pending();
-			context.commit_connection();
-			committed_tables = commit_state.committed_tables;
-			committed_entry_oids = std::move(commit_state.new_entry_oids);
+			CommitMetadata(context, error_after_commit);
+			// a swap cannot throw: nothing fails between the commit and the end of the attempt, which is never retried
+			committed_tables.swap(commit_state.committed_tables);
+			committed_entry_oids.swap(commit_state.new_entry_oids);
 			break;
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
@@ -3044,7 +3062,14 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			context.prepare_retry();
 		}
 	}
+	// the error of a commit that is durable is reported once the committer knows what it published
+	auto report_error_after_commit = [&]() {
+		if (error_after_commit.HasError()) {
+			error_after_commit.Throw();
+		}
+	};
 	if (!wrote_snapshot) {
+		report_error_after_commit();
 		return;
 	}
 	// If we got here, this snapshot was successful
@@ -3071,6 +3096,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		// No-op if the previous schema version doesn't exist in cache.
 		context.invalidate_schema_cache(commit_snapshot.schema_version - 1);
 	}
+	report_error_after_commit();
 }
 
 } // namespace duckdb
