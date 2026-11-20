@@ -3217,7 +3217,6 @@ string DuckLakeMetadataManager::GetRewriteSnapshotsQuery(TableIndex table_id, id
                                                          idx_t last_snapshot) const {
 	// a rewrite stays out of the change feed while its snapshot exists, since the files it ended stay until then
 	// quoted names are stripped so a table name cannot spoof the rewrite marker
-	// the branch conjunct names its table, the joined snapshots have the column too
 	return StringUtil::Format(R"(
 SELECT changes.snapshot_id
 FROM {METADATA_CATALOG}.ducklake_snapshot_changes changes
