@@ -246,7 +246,6 @@
         "test/sql/sorted_table/merge_adjacent_sorted_transaction_alter_table_unrelated.test",
         "test/sql/sorted_table/merge_adjacent_sorted_transaction_renamed.test",
         "test/sql/stats/skip_stats_columns.test",
-        "test/sql/stats/skip_stats_columns_transaction.test",
         "test/sql/stats/table_stats_null_totals.test",
         "test/sql/stats/table_stats_null_totals_retry.test"
       ]
