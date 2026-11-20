@@ -108,6 +108,16 @@ vector<string> DuckLakeMetadataManager::SystemColumnNames() const {
 	return GetMetadataProfile().system_column_names;
 }
 
+string DuckLakeMetadataManager::TimestampTzColumnType() const {
+	auto &profile = GetMetadataProfile();
+	auto entry = profile.column_type_overrides.find(LogicalTypeId::TIMESTAMP_TZ);
+	if (entry != profile.column_type_overrides.end()) {
+		return entry->second;
+	}
+	// a catalog without the type stores it as text, like the tag table it creates
+	return profile.natively_unsupported_types.count(LogicalTypeId::TIMESTAMP_TZ) ? "VARCHAR" : "TIMESTAMPTZ";
+}
+
 bool DuckLakeMetadataManager::IsRetryableCommitError(const string &message) const {
 	auto rule = GetMetadataProfile().FindCommitErrorRule(message);
 	return rule && rule->retryable;
@@ -819,10 +829,14 @@ string DuckLakeMetadataManager::V2_0Dev2RenameSql(const V2_0Dev2Additions &add) 
 	return result;
 }
 
-string DuckLakeMetadataManager::V2_0Dev2AdditionsSql(const V2_0Dev2Additions &add) {
+string DuckLakeMetadataManager::V2_0Dev2AdditionsSql(const V2_0Dev2Additions &add) const {
 	string result;
 	if (add.snapshot_tag_table) {
 		result += GetSnapshotTagTableStatement() + "\n";
+	}
+	if (add.snapshot_tag_expiry) {
+		result += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_tag ADD COLUMN expires_at %s;\n",
+		                             TimestampTzColumnType());
 	}
 	if (add.branch_table) {
 		result += GetBranchTableStatement() + "\n";
@@ -847,6 +861,8 @@ DuckLakeMetadataManager::V2_0Dev2Additions DuckLakeMetadataManager::ProbeV2_0Dev
 	ResetProbedColumns();
 	V2_0Dev2Additions missing;
 	missing.snapshot_tag_table = !HasMetadataColumn("ducklake_snapshot_tag", "tag_name");
+	missing.snapshot_tag_expiry =
+	    !missing.snapshot_tag_table && !HasMetadataColumn("ducklake_snapshot_tag", "expires_at");
 	missing.branch_table = !HasMetadataColumn("ducklake_branch", "branch_id");
 	missing.has_snapshot_table = HasMetadataColumn("ducklake_snapshot", "snapshot_id");
 	missing.snapshot_has_branch_column = HasMetadataColumn("ducklake_snapshot", "branch_id");
