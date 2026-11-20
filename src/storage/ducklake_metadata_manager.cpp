@@ -866,7 +866,6 @@ WHERE f.end_snapshot IS NOT NULL AND NOT EXISTS (
 	                          file_id_column, file_id_column);
 }
 
-//! The name a file table carries while its ranges become events
 static string RangeTableName(const string &file_table) {
 	return file_table + "_ranges";
 }
@@ -4911,7 +4910,6 @@ shared_ptr<const unordered_set<string>> DuckLakeMetadataManager::InlinedDeletion
 	                                                         [&]() { return ListInlinedDeletionTables(); });
 }
 
-//! One table looked up in the catalog of the metadata database
 static bool MetadataTableExists(DuckLakeTransaction &transaction, const Identifier &table_name) {
 	auto &catalog = transaction.GetCatalog();
 	return transaction.GetConnection().TableInfo(catalog.MetadataDatabaseName(), catalog.MetadataSchemaName(),
