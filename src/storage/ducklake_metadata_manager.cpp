@@ -396,22 +396,20 @@ string DuckLakeMetadataManager::GetDeleteFileVisibilityTableStatement(bool if_no
 	return FileVisibilityTableStatement("ducklake_delete_file_visibility", "delete_file_id", if_not_exists);
 }
 
-//! A file table joined with its add event and its delete event, the one of each a file has on the main branch
+//! A file table joined with the add event and the delete event each of its files has on the main branch
 static string FileSourceOverEvents(const string &prefix, const string &file_table, const string &visibility_table,
                                    const string &file_id_column, optional_idx table_id) {
-	// every event is one of main, so the scans name no branch
-	string add_filter;
-	string end_filter;
+	// one aggregate row per file, Postgres rescanned a join per event for every file
+	string table_filter;
 	if (table_id.IsValid()) {
-		add_filter = StringUtil::Format(" AND a.table_id = %d", table_id.GetIndex());
-		end_filter = StringUtil::Format(" AND e.table_id = %d", table_id.GetIndex());
+		table_filter = StringUtil::Format(" AND table_id = %d", table_id.GetIndex());
 	}
-	return StringUtil::Format("(SELECT f.*, a.snapshot_id AS begin_snapshot, e.snapshot_id AS end_snapshot "
-	                          "FROM %s.%s f "
-	                          "JOIN %s.%s a ON a.%s = f.%s AND a.is_delete = FALSE%s "
-	                          "LEFT JOIN %s.%s e ON e.%s = f.%s AND e.is_delete = TRUE%s)",
-	                          prefix, file_table, prefix, visibility_table, file_id_column, file_id_column, add_filter,
-	                          prefix, visibility_table, file_id_column, file_id_column, end_filter);
+	return StringUtil::Format("(SELECT f.*, v.begin_snapshot, v.end_snapshot FROM %s.%s f JOIN "
+	                          "(SELECT %s, MIN(CASE WHEN is_delete THEN NULL ELSE snapshot_id END) AS begin_snapshot, "
+	                          "MAX(CASE WHEN is_delete THEN snapshot_id ELSE NULL END) AS end_snapshot "
+	                          "FROM %s.%s WHERE branch_id = 0%s GROUP BY %s) v ON v.%s = f.%s)",
+	                          prefix, file_table, file_id_column, prefix, visibility_table, table_filter,
+	                          file_id_column, file_id_column, file_id_column);
 }
 
 string DuckLakeMetadataManager::DataFileSource(bool file_events, const string &prefix, optional_idx table_id) {
