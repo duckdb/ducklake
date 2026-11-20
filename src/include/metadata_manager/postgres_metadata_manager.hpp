@@ -51,6 +51,7 @@ public:
 	void MigrateInlinedDataTypes() override;
 	void ResetCommitAttempt() override;
 	bool IsRetryableCommitError(const string &message) override;
+	bool ProbeMetadataColumns() override;
 	string CommitErrorWithoutQuery(const string &message) const override;
 	string ConfigOptionLockSql() const override;
 
