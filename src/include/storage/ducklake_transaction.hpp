@@ -316,6 +316,9 @@ public:
 	void SetFilesOwnedByClient() {
 		files_owned_by_client = true;
 	}
+	bool FilesOwnedByClient() const {
+		return files_owned_by_client;
+	}
 	//! Whether the commit wrote its changes to the metadata, also if it failed after that
 	bool IsPublished() const {
 		return published;

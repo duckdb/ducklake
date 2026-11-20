@@ -1,0 +1,85 @@
+# name: test/sql/rest/rest_commit_group_relay.test
+# description: A server that relays its commits to another server keeps the files of its clients when a group fails
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+# the lake of the relay is a client of the first server
+statement ok relay_db:relay_con
+ATTACH 'ducklake:rest:{rest_server}' AS relay
+
+statement ok relay_db:relay_con
+SET VARIABLE relay_uri = (SELECT listen_uri FROM ducklake_rest_serve('relay'))
+
+set variable relay_server <variable:relay_con:relay_uri>
+
+statement ok
+ATTACH 'ducklake:rest:{relay_server}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok rest_db:rest_server_con
+CREATE TABLE rest_lake.good(i INTEGER)
+
+statement ok rest_db:rest_server_con
+CREATE TABLE rest_lake.bad(i INTEGER)
+
+# the requests are based on the snapshot before a direct writer drops one of the tables
+statement ok
+CREATE TABLE requests AS SELECT response->>'$.snapshot.snapshot_id' AS old_snapshot FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', '')
+
+statement ok
+CREATE TABLE ids AS SELECT j->>'$.table_name' AS name, (j->>'$.table_id')::BIGINT AS id FROM (SELECT unnest(from_json(response->'$.catalog.tables', '["JSON"]')) AS j FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest?include_catalog=true', ''))
+
+statement ok rest_db:rest_server_con
+DROP TABLE rest_lake.bad
+
+loop i 0 24
+
+statement ok
+COPY (SELECT {i}::INTEGER AS i) TO '{TEST_DIR}/{BASE_TEST_NAME}_member_{i}.parquet' (FORMAT PARQUET, FIELD_IDS {i: 1})
+
+endloop
+
+statement ok
+CREATE TABLE outcomes(i INTEGER, status INTEGER, response VARCHAR)
+
+# a large regular commit keeps the queue busy, so that the group commits wait together
+# every third group commit appends to the dropped table
+concurrentloop i 0 24
+
+statement ok
+SET VARIABLE file_size = (SELECT size FROM read_blob('{TEST_DIR}/{BASE_TEST_NAME}_member_{i}.parquet'))
+
+statement ok
+SET VARIABLE body = json_object('snapshot_id', (SELECT old_snapshot::UBIGINT FROM requests), 'requests', (SELECT list(json_object('insert_files', json_object('table_id', (SELECT id FROM ids WHERE name = CASE WHEN {i}%3=1 THEN 'bad' ELSE 'good' END), 'files', [json_object('path', '{TEST_DIR}/{BASE_TEST_NAME}_member_{i}.parquet', 'record_count', 1, 'file_size_bytes', getvariable('file_size'))]))) FROM range(CASE WHEN {i}=0 THEN 3000 ELSE 1 END)))
+
+statement ok
+INSERT INTO outcomes SELECT {i}, status, response FROM ducklake_rest_request('{relay_server}', 'POST', CASE WHEN {i}=0 THEN '/v1/transactions/commit' ELSE '/v1/transactions/group-commit' END, getvariable('body'))
+
+endloop
+
+query II
+SELECT count(*) FILTER (WHERE status=200), count(*) FILTER (WHERE status=409) FROM outcomes
+----
+16	8
+
+# the appends that committed still have their files
+query I
+SELECT count(*) FROM outcomes o WHERE status=200 AND NOT EXISTS (SELECT 1 FROM glob('{TEST_DIR}/{BASE_TEST_NAME}_member_*.parquet') g WHERE ends_with(g.file, '_member_' || o.i || '.parquet'))
+----
+0
+
+# the first commit registered its file 3000 times
+query II rest_db:rest_server_con
+SELECT count(*), count(DISTINCT i) FROM rest_lake.good
+----
+3015	16
+
+statement ok
+DETACH dl
+
+statement ok relay_db:relay_con
+SELECT * FROM ducklake_rest_stop(regexp_extract(getvariable('relay_uri'), '^(.*://[^/]+)', 1))
+
+include test/template/rest_teardown.test_template

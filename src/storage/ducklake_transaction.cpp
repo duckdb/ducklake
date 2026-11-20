@@ -1605,6 +1605,10 @@ void DuckLakeTransaction::FlushChanges() {
 }
 
 void DuckLakeTransaction::CleanupFiles() {
+	if (files_owned_by_client) {
+		// the client that wrote the files removes them, also when the commit was passed on to another server
+		return;
+	}
 	state->CleanupFiles();
 }
 
