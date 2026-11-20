@@ -1,0 +1,46 @@
+# name: test/sql/table_changes/table_changes_rewrite_memo_expiry.test
+# description: the rewrite memo of the feed is cleared when the transaction expires snapshots
+# group: [table_changes]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{TEST_DIR}/rewrite_memo', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(a INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1), (2)
+
+statement ok
+DELETE FROM ducklake.t WHERE a = 1
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 't', delete_threshold => 0)
+
+statement ok
+INSERT INTO ducklake.t VALUES (4)
+
+statement ok
+BEGIN
+
+query I
+SELECT count(*) FROM ducklake.table_changes('t', 1, 5)
+----
+4
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [2, 3, 4])
+
+query II
+SELECT (SELECT count(*) FROM ducklake.table_changes('t', 1, 5)), (SELECT count(*) FROM ducklake.table_changes('t', 0, 5))
+----
+2	2
+
+statement ok
+ROLLBACK

@@ -1,0 +1,37 @@
+# name: benchmark/micro/fixtures/rewritten_history.benchmark.in
+# description: A 100K-row table in ten files with delete commits before and after a rewrite of them into one, read-only
+# group: [fixtures]
+
+cache_file rewritten_history_ready.marker
+
+# Snapshots 2 to 11 insert one file each, 12 to 21 delete, 22 rewrites the ten files into one and 23 to 32 delete again
+load
+@create rewritten_history
+@attach rewritten_history AS lake (DATA_PATH '${BENCHMARK_DIR}/rewritten_history_files', DATA_INLINING_ROW_LIMIT 0)
+CREATE TABLE lake.t (id BIGINT, v BIGINT);
+BEGIN;
+@for k in range(10)
+INSERT INTO lake.t SELECT i, i FROM range(@{k} * 10000, (@{k} + 1) * 10000) t(i); COMMIT; BEGIN;
+@end
+@for r in range(10)
+DELETE FROM lake.t WHERE id % 100 = @{r}; COMMIT; BEGIN;
+@end
+COMMIT;
+CALL ducklake_rewrite_data_files('lake', delete_threshold => 0);
+BEGIN;
+@for r in range(50, 60)
+DELETE FROM lake.t WHERE id % 100 = @{r}; COMMIT; BEGIN;
+@end
+COMMIT;
+SELECT CASE WHEN (SELECT count(*) <> 33 FROM lake.snapshots())
+OR (SELECT count(*) <> 1 FROM lake.snapshots() WHERE snapshot_id = 22 AND changes::VARCHAR LIKE '%rewrite_delete%')
+OR (SELECT count(*) <> 1 FROM __ducklake_metadata_lake.ducklake_data_file WHERE begin_snapshot = 22)
+THEN error('rewritten_history: expected 33 snapshots and one rewritten file at snapshot 22') END;
+CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
+DETACH lake;
+@seal rewritten_history
+COPY (SELECT 1) TO '${BENCHMARK_DIR}/rewritten_history_ready.marker' (FORMAT CSV);
+@attach rewritten_history AS lake (READ_ONLY)
+
+reload
+@attach rewritten_history AS lake (READ_ONLY)
