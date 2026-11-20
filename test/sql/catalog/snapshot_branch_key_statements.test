@@ -91,11 +91,19 @@ WHERE query LIKE '%DELETE FROM %ducklake_snapshot WHERE snapshot_id IN (1);%'
 ----
 true
 
-# no predicate names the branch, the texts are those of 1.x
+# no snapshot predicate names the branch, the texts are those of 1.x
 query I
-SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%branch_id = 0%'
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%branch_id = 0%' AND query NOT LIKE '%file_visibility%'
 ----
 0
+
+# the file sources read the events of branch 0
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%file_visibility%' AND query LIKE '%branch_id = 0%'
+----
+true
 
 query I
 SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()

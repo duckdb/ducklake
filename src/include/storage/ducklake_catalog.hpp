@@ -381,7 +381,6 @@ public:
 	bool SupportsBranching() const {
 		return ducklake_version >= DuckLakeVersion::V2_0_DEV2;
 	}
-	//! Whether the file tables keep their visibility as events instead of inline ranges
 	bool SupportsFileVisibilityEvents() const {
 		return ducklake_version >= DuckLakeVersion::V2_0_DEV3;
 	}
@@ -504,7 +503,6 @@ public:
 	void ObserveListingHead(idx_t head);
 	shared_ptr<vector<DuckLakeFileListEntry>> TryGetCachedListing(const string &key, idx_t head);
 	void StoreCachedListing(const string &key, idx_t head, shared_ptr<vector<DuckLakeFileListEntry>> entries);
-	//! Called when a transaction writes metadata
 	void InvalidateListingCache();
 	//! Invalidate the cached schema entry for a given schema_version.
 	void InvalidateSchemaCache(idx_t schema_version);

@@ -380,7 +380,6 @@ string DuckLakeMetadataManager::GetTableColumnStatsTableStatement() {
 	       "contains_null BOOLEAN, contains_nan BOOLEAN, min_value VARCHAR, max_value VARCHAR, extra_stats VARCHAR);";
 }
 
-//! The events of a file table, one add and at most one delete event per file and branch
 static string FileVisibilityTableStatement(const string &visibility_table, const string &file_id_column,
                                            bool if_not_exists) {
 	return StringUtil::Format("CREATE TABLE %s{METADATA_CATALOG}.%s(branch_id BIGINT, table_id BIGINT, %s BIGINT, "
@@ -2865,7 +2864,6 @@ string DuckLakeMetadataManager::BuildBucketPartitionPruningClause(DuckLakeTableE
 //! Every statistics CTE adds a join to the file list query, whose planning grows fast with their number
 static constexpr idx_t MAX_STATS_CTES = 32;
 
-//! The size bounds of a merge as conditions on the file size column
 static string FileSizeFilter(const string &column, optional_idx min_size, optional_idx max_size) {
 	string filter;
 	if (min_size.IsValid()) {
@@ -6927,8 +6925,8 @@ WHERE data_file_id IN (%s);
 }
 //! Moves the add or delete event of the files to the snapshot, a file without a delete event gets one
 static string CompactionEventUpdates(const string &visibility_table, const string &id_column, bool is_delete,
-                                     idx_t snapshot_id, const vector<idx_t> &file_ids) {
-	auto id_list = StringUtil::Join(file_ids, file_ids.size(), ", ", [](idx_t id) { return to_string(id); });
+                                     idx_t snapshot_id, const vector<DataFileIndex> &file_ids) {
+	auto id_list = GenerateIDList(file_ids);
 	auto result = StringUtil::Format("UPDATE {METADATA_CATALOG}.%s SET snapshot_id = %llu WHERE branch_id = 0 AND "
 	                                 "is_delete = %s AND %s IN (%s);\n",
 	                                 visibility_table, snapshot_id, is_delete ? "TRUE" : "FALSE", id_column, id_list);
@@ -6954,18 +6952,18 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 
 	if (file_events) {
 		// one statement per rewrite snapshot and file kind instead of one per file
-		map<idx_t, vector<idx_t>> ended_delete_files;
-		map<idx_t, vector<idx_t>> ended_data_files;
-		map<idx_t, vector<idx_t>> new_data_files;
+		map<idx_t, vector<DataFileIndex>> ended_delete_files;
+		map<idx_t, vector<DataFileIndex>> ended_data_files;
+		map<idx_t, vector<DataFileIndex>> new_data_files;
 		for (auto &compaction : compactions) {
 			D_ASSERT(!compaction.path.empty());
 			auto last_snapshot = table_idx_last_snapshot[compaction.table_index.index];
 			if (compaction.delete_file_id.IsValid() && !compaction.delete_file_end_snapshot.IsValid()) {
-				ended_delete_files[last_snapshot].push_back(compaction.delete_file_id.index);
+				ended_delete_files[last_snapshot].push_back(compaction.delete_file_id);
 			}
-			ended_data_files[last_snapshot].push_back(compaction.source_id.index);
+			ended_data_files[last_snapshot].push_back(compaction.source_id);
 			if (compaction.new_id.IsValid()) {
-				new_data_files[last_snapshot].push_back(compaction.new_id.index);
+				new_data_files[last_snapshot].push_back(compaction.new_id);
 			}
 		}
 		string batch_query;

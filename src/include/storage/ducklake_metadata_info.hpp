@@ -673,7 +673,6 @@ public:
 	DuckLakeListingCache() : entries(MAX_ROWS) {
 	}
 
-	//! Whether a read of this many rows fits the cache
 	static bool Admits(idx_t rows) {
 		return rows < MAX_ROWS;
 	}

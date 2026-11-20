@@ -367,7 +367,6 @@ public:
 	//! A file table with begin_snapshot and end_snapshot, derived from the branch 0 events when the catalog keeps them
 	static string DataFileSource(bool file_events, const string &prefix, optional_idx table_id = optional_idx());
 	static string DeleteFileSource(bool file_events, const string &prefix, optional_idx table_id = optional_idx());
-	//! Whether the attached catalog keeps the visibility of its files as events
 	bool WritesFileVisibilityEvents() const;
 	//! The file sources of the attached catalog, with the table filter pushed into the events when given
 	string DataFiles() const;
@@ -452,7 +451,6 @@ public:
 	GetTableDeletions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot, DuckLakeSnapshot snapshot,
 	                  bool include_local_changes = true,
 	                  optional_ptr<const vector<DuckLakeProjectedColumn>> projection = nullptr);
-	//! Attaches the inlined file deletions of the table to the listed files
 	void AttachInlinedFileDeletions(TableIndex table_id, DuckLakeSnapshot snapshot, bool include_local_changes,
 	                                vector<DuckLakeFileListEntry> &files);
 	vector<DuckLakeDeleteScanEntry> ReadTableDeletions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot,
@@ -601,9 +599,7 @@ public:
 	virtual bool ListsInlinedDeletionTables() const {
 		return false;
 	}
-	//! The inlined deletion tables of the metadata catalog
 	virtual unordered_set<string> ListInlinedDeletionTables();
-	//! The table names a listing returned
 	static unordered_set<string> ReadTableNames(QueryResult &result);
 	//! The listing of the inlined deletion tables the transaction's snapshot shares
 	shared_ptr<const unordered_set<string>> InlinedDeletionTables();
