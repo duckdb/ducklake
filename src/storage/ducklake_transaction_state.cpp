@@ -215,8 +215,8 @@ static set<TableIndex> GetRenamedAfterSnapshot(const string &metadata_table_name
 	if (ids.empty()) {
 		return result;
 	}
-	auto query_result = context.conflict_query_executor(
-	    DuckLakeMetadataManager::GetRenamedAfterSnapshotSql(metadata_table_name, id_name, ids));
+	auto query_result = context.conflict_query_executor(DuckLakeMetadataManager::GetRenamedAfterSnapshotSql(
+	    metadata_table_name, id_name, ids, context.supports_row_visibility));
 	query_result->ThrowIfError("Failed to commit DuckLake transaction - failed to get renamed tables and views for "
 	                           "conflict resolution:");
 	for (auto &row : *query_result) {
@@ -2345,22 +2345,25 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 
 	string batch_queries;
 	// drop entries
+	// the ends come first, the version rows this commit adds are born at its snapshot and must not be ended by it
 	if (!dropped_tables.empty()) {
-		batch_queries +=
-		    DuckLakeMetadataManager::DropTables(dropped_tables, false, context.supports_file_visibility_events);
+		batch_queries += DuckLakeMetadataManager::DropTables(
+		    dropped_tables, false, context.supports_file_visibility_events, context.supports_row_visibility);
 	}
 
 	if (!renamed_tables.empty()) {
-		batch_queries +=
-		    DuckLakeMetadataManager::DropTables(renamed_tables, true, context.supports_file_visibility_events);
+		batch_queries += DuckLakeMetadataManager::DropTables(
+		    renamed_tables, true, context.supports_file_visibility_events, context.supports_row_visibility);
 	}
 
 	if (!dropped_views.empty()) {
-		batch_queries += DuckLakeMetadataManager::DropViews(dropped_views, false, context.supports_v1_1_metadata);
+		batch_queries += DuckLakeMetadataManager::DropViews(dropped_views, false, context.supports_v1_1_metadata,
+		                                                    context.supports_row_visibility);
 	}
 
 	if (!renamed_views.empty()) {
-		batch_queries += DuckLakeMetadataManager::DropViews(renamed_views, true, context.supports_v1_1_metadata);
+		batch_queries += DuckLakeMetadataManager::DropViews(renamed_views, true, context.supports_v1_1_metadata,
+		                                                    context.supports_row_visibility);
 	}
 
 	if (!dropped_scalar_macros.empty()) {
@@ -2375,7 +2378,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		for (auto &entry : dropped_schemas) {
 			dropped_schema_ids.insert(entry.first);
 		}
-		batch_queries += DuckLakeMetadataManager::DropSchemas(dropped_schema_ids);
+		batch_queries += DuckLakeMetadataManager::DropSchemas(dropped_schema_ids, context.supports_row_visibility);
 	}
 	batch_queries += DuckLakeMetadataManager::WriteSnapshotTagChanges(new_snapshot_tags, dropped_snapshot_tags);
 	auto relative_paths = [&](const auto &entries) {
@@ -2390,8 +2393,9 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	vector<DuckLakeSchemaInfo> new_schemas_result;
 	if (new_schemas) {
 		new_schemas_result = GetNewSchemas(commit_state);
-		batch_queries += DuckLakeMetadataManager::WriteNewSchemas(
-		    new_schemas_result, relative_paths(new_schemas_result), context.supports_v1_1_metadata);
+		batch_queries +=
+		    DuckLakeMetadataManager::WriteNewSchemas(new_schemas_result, relative_paths(new_schemas_result),
+		                                             context.supports_v1_1_metadata, context.supports_row_visibility);
 	}
 
 	// write new tables
@@ -2436,15 +2440,16 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			resolved_table_paths.push_back(
 			    DuckLakeMetadataManager::GetRelativePath(table.path, get_schema_path(table.schema_id), separator));
 		}
-		batch_queries += DuckLakeMetadataManager::WriteNewTables(result.new_tables, resolved_table_paths);
+		batch_queries += DuckLakeMetadataManager::WriteNewTables(result.new_tables, resolved_table_paths,
+		                                                         context.supports_row_visibility);
 		batch_queries += DuckLakeMetadataManager::WriteNewTableOptions(result.new_table_options);
 		committed_table_options = result.new_table_options;
 		DuckLakeCatalogInfo existing_catalog;
 		if (!result.new_partition_keys.empty() || !result.new_sort_keys.empty()) {
 			// only a commit that changes a partition or sort spec compares it with the committed ones
-			existing_catalog =
-			    DuckLakeMetadataManager::BuildCatalogForSnapshot(commit_snapshot, context.query_metadata_with_snapshot,
-			                                                     data_path, separator, context.supports_v1_1_metadata);
+			existing_catalog = DuckLakeMetadataManager::BuildCatalogForSnapshot(
+			    commit_snapshot, context.query_metadata_with_snapshot, data_path, separator,
+			    context.supports_v1_1_metadata, context.supports_row_visibility);
 		}
 		batch_queries +=
 		    DuckLakeMetadataManager::WriteNewPartitionKeys(existing_catalog.partitions, result.new_partition_keys);
@@ -2457,7 +2462,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 				partition_id.second = unchanged->second;
 			}
 		}
-		batch_queries += DuckLakeMetadataManager::WriteNewViews(result.new_views);
+		batch_queries += DuckLakeMetadataManager::WriteNewViews(result.new_views, context.supports_row_visibility);
 		batch_queries += DuckLakeMetadataManager::WriteNewTags(result.new_tags);
 		batch_queries += DuckLakeMetadataManager::WriteNewColumnTags(result.new_column_tags);
 		if (context.supports_v1_1_metadata) {

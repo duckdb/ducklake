@@ -58,7 +58,7 @@ statement ok con2
 CALL ducklake_flush_inlined_data('lake')
 
 query I con2
-SELECT count(*) FROM __ducklake_metadata_lake.ducklake_inlined_data_tables WHERE table_id = (SELECT table_id FROM __ducklake_metadata_lake.ducklake_table WHERE table_name = 't' AND end_snapshot IS NULL)
+SELECT count(*) FROM __ducklake_metadata_lake.ducklake_inlined_data_tables WHERE table_id = (SELECT table_id FROM __ducklake_metadata_lake.ducklake_table WHERE table_name = 't')
 ----
 1
 

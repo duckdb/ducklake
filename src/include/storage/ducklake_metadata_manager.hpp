@@ -356,6 +356,8 @@ public:
 	static string BranchedSnapshotTableColumns();
 	static string BranchedSnapshotChangesTableColumns();
 	virtual string GetSchemaTableStatement();
+	virtual string GetTableTableStatement();
+	virtual string GetViewTableStatement();
 	//! A catalog table whose version rows end in a companion table, with the key columns naming an entity
 	struct RowVisibilityKind {
 		string kind;
@@ -453,7 +455,8 @@ public:
 	static DuckLakeCatalogInfo
 	BuildCatalogForSnapshot(DuckLakeSnapshot snapshot,
 	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
-	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata = false);
+	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata = false,
+	                        bool row_visibility = false);
 	//! The global stats of every table of the snapshot, or of the given tables
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot,
 	                                                            const vector<TableIndex> &table_ids = {});
@@ -531,20 +534,21 @@ public:
 	virtual unique_ptr<QueryResult> ReadMetadataTable(const string &table_name);
 
 	virtual void RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files);
-	static string DropSchemas(const set<SchemaIndex> &ids);
-	static string DropTables(const set<TableIndex> &ids, bool renamed, bool file_events);
-	static string DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags = false);
+	static string DropSchemas(const set<SchemaIndex> &ids, bool row_visibility);
+	static string DropTables(const set<TableIndex> &ids, bool renamed, bool file_events, bool row_visibility);
+	static string DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags, bool row_visibility);
 	static string DropMacros(const set<MacroIndex> &ids);
 
 	//! Emits the INSERT for new schemas. Caller supplies resolved paths (one per schema, same order)
 	//! since path resolution depends on the catalog's data_path / separator (instance state).
 	static string WriteNewSchemas(const vector<DuckLakeSchemaInfo> &new_schemas,
-	                              const vector<DuckLakePath> &resolved_paths, bool supports_v1_1_metadata);
+	                              const vector<DuckLakePath> &resolved_paths, bool supports_v1_1_metadata,
+	                              bool row_visibility);
 	//! Emits the INSERT for new tables and their columns. Caller supplies resolved paths (one per
 	//! table, same order). commit_snapshot is currently unused by the body — kept off the signature.
 	static string WriteNewTables(const vector<DuckLakeTableInfo> &new_tables,
-	                             const vector<DuckLakePath> &resolved_paths);
-	static string WriteNewViews(const vector<DuckLakeViewInfo> &new_views);
+	                             const vector<DuckLakePath> &resolved_paths, bool row_visibility);
+	static string WriteNewViews(const vector<DuckLakeViewInfo> &new_views, bool row_visibility);
 	//! Emits the partition-key diff SQL. Caller supplies the existing partition state (fetched
 	//! via GetCatalogForSnapshot) since the diff is computed against it.
 	static string WriteNewPartitionKeys(const vector<DuckLakePartitionInfo> &existing_partitions,
@@ -655,7 +659,7 @@ public:
 	                                  const DuckLakeInlinedColNames &col_names);
 	//! Selects the given tables or views renamed after the snapshot
 	static string GetRenamedAfterSnapshotSql(const string &metadata_table_name, const string &id_name,
-	                                         const set<TableIndex> &ids);
+	                                         const set<TableIndex> &ids, bool row_visibility);
 	//! Caller supplies one resolved path per overwritten file, in the same order.
 	static string DeleteOverwrittenDeleteFiles(const vector<DuckLakeOverwrittenDeleteFile> &overwritten_files,
 	                                           const vector<DuckLakePath> &resolved_paths, bool file_events);
@@ -769,6 +773,8 @@ public:
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	//! Deletes the metadata that only the deleted snapshots referenced, once the caller checked the catalog version
 	virtual void CleanupExpiredSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
+	//! Deletes the ends of a kind whose version row is gone
+	void DeleteOrphanRowEnds(const RowVisibilityKind &kind);
 	virtual vector<DuckLakeTableSizeInfo> GetTableSizes(DuckLakeSnapshot snapshot);
 	//! The tables with more than one live data file within the size bounds of the merge
 	unordered_set<idx_t> GetTablesWithMergeCandidates(const DuckLakeMergeAdjacentOptions &options);
@@ -832,10 +838,30 @@ public:
 	static string V2_0SnapshotRenameSql(const V2_0SnapshotAdditions &add);
 	//! The other additions, the second batch of a rebuild copies from the renamed tables
 	static string V2_0SnapshotAdditionsSql(const V2_0SnapshotAdditions &add);
+	//! The shape of a catalog kind against the row companions, probed so an interrupted step resumes
+	struct V2_0RowCompanion {
+		string kind;
+		//! Whether the row table exists, a catalog without it gets no statement for the kind
+		bool present = false;
+		bool has_branch_column = false;
+		bool has_companion = false;
+		bool has_end_column = false;
+		//! Whether the kind still lacks a part of the step
+		bool Incomplete() const;
+	};
+	//! The row companions of the converted kinds
+	struct V2_0RowCompanions {
+		vector<V2_0RowCompanion> kinds;
+		bool Incomplete() const;
+	};
+	V2_0RowCompanions ProbeV2_0RowCompanions();
+	//! Adds the birth branch and the companion of every converted kind and turns its end column into end rows
+	static string V2_0RowCompanionsSql(const V2_0RowCompanions &rows);
 	//! The shape of the catalog against the steps of 2.0, one probe of the metadata schema
 	struct V2_0Layout {
 		V2_0SnapshotAdditions additions;
 		V2_0FileRanges ranges;
+		V2_0RowCompanions rows;
 	};
 	V2_0Layout ProbeV2_0Layout();
 	//! The first step of 2.0 the catalog lacks, empty for a complete layout

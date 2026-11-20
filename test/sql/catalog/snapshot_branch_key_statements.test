@@ -91,10 +91,10 @@ WHERE query LIKE '%DELETE FROM %ducklake_snapshot WHERE snapshot_id IN (1);%'
 ----
 true
 
-# no snapshot predicate names the branch, the texts are those of 1.x
+# no snapshot predicate names the branch, the texts are those of 1.x, the catalog rows qualify theirs by alias
 query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%branch_id = 0%' AND query NOT LIKE '%file_visibility%'
+WHERE regexp_matches(query, '(^|[^.\w])branch_id = 0') AND query NOT LIKE '%file_visibility%'
 ----
 0
 
@@ -102,6 +102,13 @@ WHERE query LIKE '%branch_id = 0%' AND query NOT LIKE '%file_visibility%'
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
 WHERE query LIKE '%file_visibility%' AND query LIKE '%branch_id = 0%'
+----
+true
+
+# the expiry reads the ends of the catalog rows on branch 0
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%ducklake_table_visibility e%' AND query LIKE '%e.branch_id = 0 AND e.table_id = t.table_id%'
 ----
 true
 

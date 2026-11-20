@@ -247,7 +247,11 @@
         "test/sql/sorted_table/merge_adjacent_sorted_transaction_renamed.test",
         "test/sql/stats/skip_stats_columns.test",
         "test/sql/stats/table_stats_null_totals.test",
-        "test/sql/stats/table_stats_null_totals_retry.test"
+        "test/sql/stats/table_stats_null_totals_retry.test",
+        "test/sql/general/long_name_paths.test",
+        "test/sql/issues/issue_1332.test",
+        "test/sql/partitioning/partition_rename_in_transaction.test",
+        "test/sql/view/view_schema_cache_eviction.test_slow"
       ]
     }
   ]

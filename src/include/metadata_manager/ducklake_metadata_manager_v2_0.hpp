@@ -20,6 +20,9 @@ public:
 	}
 
 	string GetCreateTableStatements() override;
+	string GetSchemaTableStatement() override;
+	string GetTableTableStatement() override;
+	string GetViewTableStatement() override;
 	string GetDataFileTableStatement() override;
 	string GetDeleteFileTableStatement() override;
 	string GetSnapshotTableStatement() override;
