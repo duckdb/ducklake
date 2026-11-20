@@ -1,0 +1,34 @@
+# name: benchmark/micro/write/insert_inlined_long_string_bound.benchmark
+# description: Inline a 4 MB quoted string that becomes the bound of its column, then commit ten small inserts
+# group: [write]
+
+name Insert Inlined Long String Bound
+group micro
+subgroup write
+
+require ducklake
+
+argument work inlined_long_bound_work
+
+include benchmark/micro/fixtures/inlined_insert.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+INSERT INTO lake.t VALUES (0, 0, 0, 0, DATE '2000-01-01', repeat('abcd''', 800000));
+INSERT INTO lake.t VALUES (1, 1, 1, 1, DATE '2000-01-02', 'ab');
+INSERT INTO lake.t VALUES (2, 2, 2, 2, DATE '2000-01-03', 'ab');
+INSERT INTO lake.t VALUES (3, 3, 3, 3, DATE '2000-01-04', 'ab');
+INSERT INTO lake.t VALUES (4, 4, 4, 4, DATE '2000-01-05', 'ab');
+INSERT INTO lake.t VALUES (5, 5, 5, 5, DATE '2000-01-06', 'ab');
+INSERT INTO lake.t VALUES (6, 6, 6, 6, DATE '2000-01-07', 'ab');
+INSERT INTO lake.t VALUES (7, 7, 7, 7, DATE '2000-01-08', 'ab');
+INSERT INTO lake.t VALUES (8, 8, 8, 8, DATE '2000-01-09', 'ab');
+INSERT INTO lake.t VALUES (9, 9, 9, 9, DATE '2000-01-10', 'ab');
+INSERT INTO lake.t VALUES (10, 10, 10, 10, DATE '2000-01-11', 'ab');
+
+# A data file means the rows were not inlined
+result_query III
+SELECT (SELECT count(*) FROM lake.t), (SELECT length(f) FROM lake.t WHERE a = 0), (SELECT count(*) FROM ducklake_list_files('lake', 't'))
+----
+11	4000000	0

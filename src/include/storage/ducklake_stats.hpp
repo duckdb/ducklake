@@ -96,6 +96,8 @@ public:
 	static DuckLakeColumnStats FromConstant(const LogicalType &type, const Value &value, idx_t count);
 	//! Discards the min/max bounds, leaving the counts intact
 	void ClearBounds();
+	//! Cuts VARCHAR bounds to the length the Parquet writer stores, as inexact bounds
+	void TruncateStringBounds();
 	//! Rewrite FLOAT bounds as the DOUBLE values they widen to
 	void WidenFloatBounds();
 	//! Rewrite bounds of the source type as the values they cast to, dropping the bounds that do not cast
