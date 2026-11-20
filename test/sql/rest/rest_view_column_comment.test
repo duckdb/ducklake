@@ -1,0 +1,32 @@
+# name: test/sql/rest/rest_view_column_comment.test
+# description: A comment on a column of a view of a DuckLake served by a REST server
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+statement ok
+CREATE VIEW dl.v AS SELECT 42 AS i
+
+statement ok
+COMMENT ON COLUMN dl.v.i IS 'the id'
+
+query I
+SELECT comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 'v'
+----
+the id
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+query I
+SELECT comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 'v'
+----
+the id
+
+include test/template/rest_teardown.test_template

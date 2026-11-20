@@ -1,0 +1,27 @@
+# name: benchmark/micro/compaction/rewrite_data_files_partial.benchmark
+# description: Rewrite one of the two files of each of 50 tables while the other keeps its delete, with the commit
+# group: [compaction]
+
+name Rewrite Data Files Partial
+group micro
+subgroup compaction
+
+require ducklake
+
+require parquet
+
+argument work rewrite_partial_work
+
+include benchmark/micro/fixtures/rewrite_partial.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+SELECT count(*) AS tables, sum(files_processed) AS processed, sum(files_created) AS created
+FROM ducklake_rewrite_data_files('lake', delete_threshold => 0.5);
+
+# One file of every table is rewritten while the other keeps its delete
+result_query III
+SELECT tables, processed, created FROM __answer
+----
+50	50	50

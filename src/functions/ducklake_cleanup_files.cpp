@@ -13,20 +13,6 @@ struct CleanupBindData : public MetadataBindData {
 	explicit CleanupBindData(DuckLakeCatalog &catalog, CleanupType type) : catalog(catalog), type(type) {
 	}
 
-	string GetFilter() const {
-		if (timestamp_filter.empty()) {
-			return "";
-		}
-		switch (type) {
-		case CleanupType::OLD_FILES:
-			return StringUtil::Format("WHERE schedule_start::TIMESTAMPTZ < '%s'", timestamp_filter);
-		case CleanupType::ORPHANED_FILES:
-			return StringUtil::Format(" AND last_modified::TIMESTAMPTZ < '%s'", timestamp_filter);
-		default:
-			throw InternalException("Unknown Cleanup type for GetFilter()");
-		}
-	}
-
 	string GetFunctionName() const {
 		switch (type) {
 		case CleanupType::OLD_FILES:
@@ -96,7 +82,7 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 			                            result->GetFunctionName());
 		}
 		auto &metadata_manager = transaction.GetMetadataManager();
-		result->files = metadata_manager.GetFilesForCleanup(result->GetFilter(), type);
+		result->files = metadata_manager.GetFilesForCleanup(result->timestamp_filter, type);
 		for (auto &file : result->files) {
 			result->rows.push_back({Value(file.path)});
 		}

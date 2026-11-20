@@ -1,0 +1,93 @@
+# name: test/sql/rest/rest_review_probes.test
+# description: Filters, schema paths and extended file lists of the REST server
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+# DuckDB compares an INTEGER column with a FLOAT constant as FLOAT, so the INTEGER bounds cannot prune
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (16777217)
+
+query I
+SELECT count(*) FROM dl.t WHERE i = CAST(16777216 AS FLOAT)
+----
+1
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"filters":{"expressions":["i = CAST(16777216 AS FLOAT)"]}}')
+----
+200	1
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"filters":{"expressions":["i IN (CAST(16777216 AS FLOAT), 0)"]}}')
+----
+200	1
+
+# a wider type keeps the order of the column, so it still prunes
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"filters":{"expressions":["i > CAST(16777217 AS BIGINT)"]}}')
+----
+200	0
+
+# a TRY_CAST that fails is NULL
+statement ok
+CREATE TABLE dl.d(d DECIMAL(3,1))
+
+statement ok
+INSERT INTO dl.d VALUES (1.2)
+
+query I
+SELECT count(*) FROM dl.d WHERE d IN (1.2, TRY_CAST('bad' AS INTEGER))
+----
+1
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/2/scan', '{"filters":{"expressions":["d IN (1.2, TRY_CAST(''bad'' AS INTEGER))"]}}')
+----
+200	1
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/2/scan', '{"filters":{"expressions":["d > TRY_CAST(''bad'' AS DECIMAL(3,1))"]}}')
+----
+200
+
+# the extended file list has the delete file of each file
+statement ok
+CREATE TABLE dl.e AS SELECT i FROM range(1000) t(i)
+
+statement ok
+INSERT INTO dl.e SELECT i FROM range(50) t(i)
+
+statement ok
+DELETE FROM dl.e WHERE i < 10 AND i >= 5
+
+query II
+SELECT row_count, delete_file.row_count
+FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/3/scan', '{"extended": true}', part := 'extended_files') ORDER BY 1
+----
+50	5
+1000	5
+
+statement ok
+DETACH dl
+
+# the path of a schema without a trailing separator holds the directories of its tables
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests":[{"create_schema":{"placeholder_id":-1,"schema_name":"s","path":' || to_json('{TEST_DIR}/chosen') || '}},{"create_table":{"placeholder_id":-2,"schema_id":-1,"table_name":"st","columns":[{"column_name":"i","column_type":{"id":"int32"}}]}}]}')
+----
+200
+
+query I
+SELECT regexp_matches(j->>'$.path', '[/\\]chosen[/\\]st[/\\]$') FROM (SELECT unnest(from_json(response->'$.catalog.tables', '["JSON"]')) AS j FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest?include_catalog=true', '')) WHERE j->>'$.table_name' = 'st'
+----
+true
+
+include test/template/rest_teardown.test_template

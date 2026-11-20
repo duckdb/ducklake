@@ -1,0 +1,72 @@
+# name: test/sql/rest/rest_delete_overwrite.test
+# description: A delete file of the DuckLake REST API replaces the delete file that its data file has
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok con1
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok con1
+CREATE TABLE dl.t AS SELECT i FROM range(100) t(i)
+
+# every delete of the file writes a delete file with all the deletes of the file
+statement ok con1
+DELETE FROM dl.t WHERE i < 10
+
+statement ok con1
+DELETE FROM dl.t WHERE i >= 10 AND i < 20
+
+statement ok con1
+DELETE FROM dl.t WHERE i >= 20 AND i < 30
+
+query I con1
+SELECT count(*) FROM dl.t
+----
+70
+
+query I con1
+SELECT min(i) FROM dl.t
+----
+30
+
+query I con1
+SELECT count(*) FROM ducklake_list_files('dl', 't') WHERE delete_file IS NOT NULL
+----
+1
+
+# transactions that replace the same delete file conflict
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+DELETE FROM dl.t WHERE i = 50
+
+statement ok con2
+DELETE FROM dl.t WHERE i = 60
+
+statement ok con1
+COMMIT
+
+statement error con2
+COMMIT
+----
+<REGEX>:.*onflict.*
+
+query I con2
+SELECT count(*) FROM dl.t
+----
+69
+
+query I con2
+SELECT count(*) FROM dl.t WHERE i IN (50, 60)
+----
+1
+
+statement ok con1
+DETACH dl
+
+include test/template/rest_teardown.test_template

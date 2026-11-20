@@ -1,0 +1,245 @@
+# name: test/sql/time_travel/at_timestamp_expired_snapshots.test
+# description: Time travel by timestamp refuses times before the newest gap that expired snapshots left
+# group: [time_travel]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/at_timestamp_expired_snapshots.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS l (DATA_PATH '{DATA_PATH}/at_timestamp_expired_snapshots', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE l.t(a INT)
+
+statement ok
+INSERT INTO l.t VALUES (1)
+
+statement ok
+INSERT INTO l.t VALUES (2)
+
+statement ok
+INSERT INTO l.t VALUES (3)
+
+statement ok
+SET VARIABLE t1 = (SELECT snapshot_time FROM l.snapshots() WHERE snapshot_id = 1)
+
+statement ok
+SET VARIABLE t3 = (SELECT snapshot_time FROM l.snapshots() WHERE snapshot_id = 3)
+
+statement ok
+SET VARIABLE t4 = (SELECT snapshot_time FROM l.snapshots() WHERE snapshot_id = 4)
+
+query I
+SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => getvariable('t3'))
+----
+[1, 2]
+
+# snapshots 2 and 3 expire, snapshot 4 is the first one after the gap
+statement ok
+CALL ducklake_expire_snapshots('l', versions => [2, 3])
+
+# the expiry's own snapshot follows on catalog versions that commit one
+query I
+SELECT list(snapshot_id) FROM l.snapshots() WHERE snapshot_id <= 4
+----
+[0, 1, 4]
+
+# the snapshot current at the time of snapshot 3 is gone, so the time cannot be resolved
+statement error
+SELECT * FROM l.t AT (TIMESTAMP => getvariable('t3'))
+----
+snapshots 2 to 3 were expired
+
+# a time at which the remaining snapshot 1 was current is refused as well, the commit times of the gap are gone
+statement error
+SELECT * FROM l.t AT (TIMESTAMP => getvariable('t1'))
+----
+Cannot time travel to timestamp
+
+# from the first snapshot after the gap on, time travel by timestamp works
+query I
+SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => getvariable('t4'))
+----
+[1, 2, 3]
+
+query I
+SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => now())
+----
+[1, 2, 3]
+
+# travel by version still reaches every remaining snapshot, the table was created in snapshot 1 and is empty there
+query I
+SELECT count(*) FROM l.t AT (VERSION => 1)
+----
+0
+
+query I
+SELECT list(a ORDER BY a) FROM l.t AT (VERSION => 4)
+----
+[1, 2, 3]
+
+statement error
+SELECT * FROM l.t AT (VERSION => 3)
+----
+No snapshot found at version 3
+
+# the same for the snapshot of an attach
+statement ok
+DETACH l
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS l (SNAPSHOT_TIME getvariable('t3'))
+----
+snapshots 2 to 3 were expired
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS l (SNAPSHOT_TIME getvariable('t4'))
+
+query I
+SELECT list(a ORDER BY a) FROM l.t
+----
+[1, 2, 3]
+
+statement ok
+DETACH l
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS l (DATA_INLINING_ROW_LIMIT 0)
+
+# the files of a snapshot are listed by the same rule
+statement error
+SELECT * FROM ducklake_list_files('l', 't', snapshot_time => getvariable('t3'))
+----
+snapshots 2 to 3 were expired
+
+query I
+SELECT count(*) FROM ducklake_list_files('l', 't', snapshot_time => getvariable('t4'))
+----
+3
+
+# the end of a change feed keeps taking the newest remaining snapshot at or before its timestamp, snapshot 1 here
+query I
+SELECT count(*) FROM ducklake_table_changes('l', 'main', 't', getvariable('t1'), getvariable('t3'))
+----
+0
+
+query II
+SELECT snapshot_id, a FROM ducklake_table_changes('l', 'main', 't', getvariable('t1'), getvariable('t4')) ORDER BY ALL
+----
+2	1
+3	2
+4	3
+
+# in one transaction the end of a change feed and time travel at the same timestamp resolve apart
+statement ok
+BEGIN
+
+query I
+SELECT count(*) FROM ducklake_table_changes('l', 'main', 't', getvariable('t1'), getvariable('t3'))
+----
+0
+
+statement error
+SELECT * FROM l.t AT (TIMESTAMP => getvariable('t3'))
+----
+snapshots 2 to 3 were expired
+
+statement ok
+ROLLBACK
+
+# a second expiry adds a newer gap, which refuses the times that were fine before it, while the older gap stays
+statement ok
+SET VARIABLE t_before = (SELECT max(snapshot_time) FROM l.snapshots())
+
+statement ok
+INSERT INTO l.t VALUES (4)
+
+statement ok
+SET VARIABLE s_insert4 = (SELECT max(snapshot_id) FROM l.snapshots())
+
+statement ok
+INSERT INTO l.t VALUES (5)
+
+statement ok
+SET VARIABLE t_insert5 = (SELECT max(snapshot_time) FROM l.snapshots())
+
+statement ok
+CALL ducklake_expire_snapshots('l', versions => [getvariable('s_insert4')])
+
+query I
+SELECT list(snapshot_id) FROM l.snapshots() WHERE snapshot_id <= 4
+----
+[0, 1, 4]
+
+query I
+SELECT count(*) FROM l.snapshots() WHERE snapshot_id = getvariable('s_insert4')
+----
+0
+
+statement error
+SELECT * FROM l.t AT (TIMESTAMP => getvariable('t4'))
+----
+was expired and its commit time is not kept
+
+statement error
+SELECT * FROM l.t AT (TIMESTAMP => getvariable('t_before'))
+----
+was expired and its commit time is not kept
+
+statement error
+SELECT * FROM l.t AT (TIMESTAMP => getvariable('t1'))
+----
+was expired and its commit time is not kept
+
+query I
+SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => getvariable('t_insert5'))
+----
+[1, 2, 3, 4, 5]
+
+# snapshots expired at the start of the history leave no gap, times before the remaining ones find no snapshot
+statement ok
+CALL ducklake_expire_snapshots('l', versions => [0, 1])
+
+query I
+SELECT min(snapshot_id) FROM l.snapshots()
+----
+4
+
+statement error
+SELECT * FROM l.t AT (TIMESTAMP => getvariable('t1'))
+----
+No snapshot found at timestamp
+
+statement error
+SELECT * FROM l.t AT (TIMESTAMP => getvariable('t4'))
+----
+was expired and its commit time is not kept
+
+# once the last survivor before the newer gap is expired as well, that gap is gone too
+statement ok
+CALL ducklake_expire_snapshots('l', older_than => getvariable('t_insert5'))
+
+query I
+SELECT min(snapshot_id) = getvariable('s_insert4') + 1 FROM l.snapshots()
+----
+true
+
+statement error
+SELECT * FROM l.t AT (TIMESTAMP => getvariable('t4'))
+----
+No snapshot found at timestamp
+
+query I
+SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => getvariable('t_insert5'))
+----
+[1, 2, 3, 4, 5]
+
+query I
+SELECT list(a ORDER BY a) FROM l.t AT (TIMESTAMP => now())
+----
+[1, 2, 3, 4, 5]

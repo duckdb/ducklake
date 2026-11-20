@@ -1,0 +1,24 @@
+# name: benchmark/micro/read/snapshots_listing_count.benchmark
+# description: Count the snapshots returned by five ducklake_snapshots listings over 100001 snapshots
+# group: [read]
+
+name Snapshots Listing Count
+group micro
+subgroup read
+
+require ducklake
+
+include benchmark/micro/fixtures/snap100k.benchmark.in
+
+run
+SELECT count(*) FROM (
+SELECT * FROM ducklake_snapshots('lake')
+@for k in range(4)
+UNION ALL SELECT * FROM ducklake_snapshots('lake')
+@end
+);
+
+result_query I
+SELECT * FROM __answer
+----
+500005

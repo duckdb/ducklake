@@ -1,0 +1,35 @@
+# name: test/sql/stats/count_star_optimization_cache_two_lakes.test
+# description: Two DuckLakes with the same snapshot and table ids keep their own COUNT(*)
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DUCKLAKE_CONNECTION_2 {TEST_DIR}/{UUID}_2.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake1 (DATA_PATH '{DATA_PATH}/count_star_cache_lake1', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION_2}' AS lake2 (DATA_PATH '{DATA_PATH}/count_star_cache_lake2', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake1.t AS SELECT i FROM range(500) t(i);
+
+statement ok
+CREATE TABLE lake2.t AS SELECT i FROM range(30) t(i);
+
+query I
+SELECT COUNT(*) FROM lake1.t;
+----
+500
+
+query I
+SELECT COUNT(*) FROM lake2.t;
+----
+30

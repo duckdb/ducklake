@@ -1,0 +1,177 @@
+# name: test/sql/rest/rest_entry_ids.test
+# description: Commit requests of the DuckLake REST API refer to entries by their ids
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+# entries created in the transaction are referred to by placeholder ids
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [
+  {"create_schema": {"placeholder_id": -1, "schema_name": "parent"}},
+  {"create_schema": {"placeholder_id": -2, "parent_schema_id": -1, "schema_name": "child"}},
+  {"create_table": {"placeholder_id": -3, "schema_id": -2, "table_name": "t", "columns": [{"column_name": "i", "column_type": {"id": "int32"}}]}},
+  {"create_view": {"placeholder_id": -4, "schema_id": -1, "view_name": "v", "sql": "SELECT 42 AS x"}},
+  {"alter": {"entry_id": -3, "alter": {"add_column": {"column": {"column_name": "j", "column_type": {"id": "int64"}}}}}},
+  {"alter": {"entry_id": -4, "alter": {"rename_view": {"new_name": "w"}}}},
+  {"alter": {"entry_id": -3, "alter": {"rename_table": {"new_name": "u"}}}},
+  {"alter": {"entry_id": -3, "alter": {"set_comment": {"entry_type": "TABLE_ENTRY", "comment": "renamed twice"}}}}
+]}')
+----
+200
+
+query I
+SELECT string_agg(column_name, ',' ORDER BY column_name) FROM (DESCRIBE dl.parent.child.u)
+----
+i,j
+
+query I
+SELECT x FROM dl.parent.w
+----
+42
+
+# an entry that is renamed in the transaction is still found by its id
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [
+  {"create_table": {"placeholder_id": -1, "schema_id": 0, "table_name": "a", "columns": [{"column_name": "i", "column_type": {"id": "int32"}}]}},
+  {"alter": {"entry_id": -1, "alter": {"rename_table": {"new_name": "b"}}}},
+  {"drop": {"entry_type": "table", "entry_id": -1}}
+]}')
+----
+200
+
+statement error
+SELECT * FROM dl.a
+----
+Catalog Error
+
+statement error
+SELECT * FROM dl.b
+----
+Catalog Error
+
+# committed entries are found by id, whatever their name is now
+statement ok
+CREATE TABLE dl.main.r(i INTEGER)
+
+statement ok
+CREATE SCHEMA dl.sch
+
+statement ok
+CREATE VIEW dl.sch.vw AS SELECT 1 AS x
+
+statement ok
+CREATE MACRO dl.sch.mc(a) AS a + 1
+
+statement ok
+SET VARIABLE r_id = (SELECT j->>'$.table_id' FROM (
+  SELECT unnest(from_json(response->'$.catalog.tables', '["JSON"]')) AS j
+  FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest?include_catalog=true', '')) WHERE j->>'$.table_name' = 'r')
+
+statement ok
+ALTER TABLE dl.r RENAME TO r2
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"alter": {"entry_id": ' || getvariable('r_id') || ', "alter": {"set_comment": {"entry_type": "TABLE_ENTRY", "comment": "found by id"}}}}]}')
+----
+200
+
+query I
+SELECT comment FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 'r2'
+----
+found by id
+
+# a table that was dropped and created again is another entry
+statement ok
+DROP TABLE dl.r2
+
+statement ok
+CREATE TABLE dl.main.r2(i INTEGER)
+
+query II
+SELECT status, response->>'$.error.type' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"drop": {"entry_type": "table", "entry_id": ' || getvariable('r_id') || '}}]}')
+----
+404	Catalog
+
+query I
+SELECT count(*) FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 'r2'
+----
+1
+
+# the type of the entry has to match
+statement ok
+SET VARIABLE r2_id = (SELECT j->>'$.table_id' FROM (
+  SELECT unnest(from_json(response->'$.catalog.tables', '["JSON"]')) AS j
+  FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest?include_catalog=true', '')) WHERE j->>'$.table_name' = 'r2')
+
+query II
+SELECT status, response->>'$.error.message' LIKE '%is not a view%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"drop": {"entry_type": "view", "entry_id": ' || getvariable('r2_id') || '}}]}')
+----
+400	true
+
+query II
+SELECT status, response->>'$.error.type' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"create_table": {"placeholder_id": -1, "schema_id": 100000, "table_name": "x", "columns": [{"column_name": "i", "column_type": {"id": "int32"}}]}}]}')
+----
+404	Catalog
+
+# placeholder ids are negative
+query II
+SELECT status, response->>'$.error.message' LIKE '%placeholder id is negative%' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"create_schema": {"placeholder_id": 5, "schema_name": "x"}}]}')
+----
+400	true
+
+query II
+SELECT status, response->>'$.error.type' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit',
+'{"requests": [{"create_table": {"placeholder_id": -1, "schema_id": -7, "table_name": "x", "columns": [{"column_name": "i", "column_type": {"id": "int32"}}]}}]}')
+----
+400	Invalid Input
+
+# the client drops the entries by id: schemas, views and macros, created in the transaction or committed
+statement ok
+BEGIN
+
+statement ok
+CREATE SCHEMA dl.tmp
+
+statement ok
+CREATE VIEW dl.tmp.tv AS SELECT 1 AS x
+
+statement ok
+CREATE MACRO dl.tmp.tm(a) AS a
+
+statement ok
+DROP MACRO dl.tmp.tm
+
+statement ok
+DROP VIEW dl.tmp.tv
+
+statement ok
+DROP SCHEMA dl.tmp
+
+statement ok
+COMMIT
+
+statement ok
+DROP MACRO dl.sch.mc
+
+statement ok
+DROP VIEW dl.sch.vw
+
+statement ok
+DROP SCHEMA dl.sch
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

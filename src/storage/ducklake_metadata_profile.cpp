@@ -53,6 +53,11 @@ public:
 				profile.rename_inlined_columns_by_copy = GetBoolean(key, value);
 			} else if (key == "commit_errors") {
 				ParseCommitErrors(value);
+			} else if (key == "reset_settings") {
+				profile.reset_settings.clear();
+				IterateStrings(key, value, [&](const string &name) { profile.reset_settings.push_back(name); });
+			} else if (key == "reported_catalog_type") {
+				profile.reported_catalog_type = GetString(key, value);
 			} else {
 				throw InvalidInputException("unknown field \"%s\"", key);
 			}
@@ -169,35 +174,7 @@ private:
 	DuckLakeMetadataProfile &profile;
 };
 
-//! The profile of SQLite metadata databases, until the sqlite extension registers its own
-const char *const SQLITE_PROFILE =
-    R"({
-	"types": {
-		"natively_unsupported": ["STRUCT", "MAP", "LIST", "FLOAT", "DOUBLE", "TIMESTAMP WITH TIME ZONE",
-		                         "TIMESTAMPTZ_NS", "VARIANT"],
-		"column_type_overrides": {"FLOAT": "VARCHAR", "DOUBLE": "VARCHAR", "NULL": "INTEGER"}
-	},
-	"max_column_count": 2000,
-	"system_column_names": ["rowid", "oid", "_rowid_"],
-	"dropped_tables_stay_readable": false,
-	"rename_inlined_columns_by_copy": true,
-	"commit_errors": [
-		{
-			"pattern": "failed to execute query \"commit\": database is locked",
-			"hint": "In its rollback journal mode, a SQLite catalog cannot commit while another transaction is )"
-    R"(open on it. Attach the catalog with META_JOURNAL_MODE 'WAL' to let open transactions and a )"
-    R"(commit run at the same time.\n",
-			"hint_unless_parameter": {"journal_mode": "wal"}
-		},
-		{"pattern": "database is locked\\s*$", "retryable": true}
-	]
-})";
-
 } // namespace
-
-DuckLakeMetadataProfiles::DuckLakeMetadataProfiles() {
-	Register("sqlite", SQLITE_PROFILE);
-}
 
 DuckLakeMetadataProfiles &DuckLakeMetadataProfiles::Get(DatabaseInstance &db) {
 	auto extension = StorageExtension::Find(DBConfig::GetConfig(db), "ducklake");
@@ -209,7 +186,7 @@ DuckLakeMetadataProfiles &DuckLakeMetadataProfiles::Get(DatabaseInstance &db) {
 	return static_cast<DuckLakeStorageExtension &>(*extension).metadata_profiles;
 }
 
-void DuckLakeMetadataProfiles::Register(const string &name, const string &json) {
+void DuckLakeMetadataProfiles::Register(const string &name, const string &json, bool replace) {
 	try {
 		if (DuckLakeMetadataManager::HasBuiltInManager(name)) {
 			throw InvalidInputException("DuckLake has a built-in metadata manager of this name");
@@ -237,7 +214,11 @@ void DuckLakeMetadataProfiles::Register(const string &name, const string &json) 
 		}
 		DuckLakeProfileParser(*profile).ParseProfile(root);
 		lock_guard<mutex> guard(lock);
-		profiles[name] = std::move(profile);
+		auto &entry = profiles[name];
+		if (entry && !replace) {
+			return;
+		}
+		entry = std::move(profile);
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
 		if (error.Type() != ExceptionType::INVALID_INPUT) {

@@ -1,0 +1,171 @@
+# name: test/sql/rest/rest_server_edge_cases.test
+# description: The arguments of the DuckLake REST server functions and the plans that a server keeps
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok rest_db:rest_server_con
+SET VARIABLE rest_port = regexp_extract(getvariable('rest_listen_uri'), ':([0-9]+)/', 1)::UBIGINT
+
+# the arguments of the functions cannot be NULL
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve(NULL)
+----
+the catalog cannot be NULL
+
+statement error
+SELECT * FROM ducklake_rest_stop(NULL)
+----
+the listen URI cannot be NULL
+
+statement error
+SELECT * FROM ducklake_rest_request(NULL, 'GET', '/v1/config', '')
+----
+the arguments cannot be NULL
+
+statement error
+SELECT * FROM ducklake_rest_rows('{rest_server}', 'POST', NULL, '{}')
+----
+the arguments cannot be NULL
+
+# a response without tables has no rows
+statement error
+SELECT * FROM ducklake_rest_rows('{rest_server}', 'GET', '/v1/snapshots/latest', '')
+----
+has no tables
+
+# only DuckLake catalogs are served
+statement ok rest_db:rest_server_con
+ATTACH ':memory:' AS plain_db
+
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('plain_db', port := getvariable('rest_port'), prefix := 'plain')
+----
+is not a DuckLake catalog
+
+# the prefix of a catalog is a name without slashes
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('rest_lake', port := getvariable('rest_port'), prefix := 'a/b')
+----
+has to be a name without slashes
+
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('rest_lake', port := getvariable('rest_port'), prefix := '')
+----
+has to be a name without slashes
+
+# pages have entries
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('rest_lake', port := getvariable('rest_port'), prefix := 'other', page_size := 0)
+----
+page_size has to be larger than 0
+
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('rest_lake', port := getvariable('rest_port'), prefix := 'other', files_per_page := 0)
+----
+files_per_page has to be larger than 0
+
+# a new server is not started for arguments that are refused
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('rest_lake', prefix := 'fresh', page_size := 0)
+----
+page_size has to be larger than 0
+
+# the properties for clients cannot be NULL
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('rest_lake', port := getvariable('rest_port'), prefix := 'other', defaults := MAP {'a': NULL})
+----
+the properties cannot be NULL
+
+# a server that cannot listen on its address does not start
+statement error rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('rest_lake', host := '192.0.2.1', prefix := 'unreachable')
+----
+Failed to start DuckLake REST server
+
+# stopping a server that does not run
+query I
+SELECT stopped FROM ducklake_rest_stop('http://localhost:1')
+----
+false
+
+# a second server is stopped on its own
+statement ok rest_db:rest_server_con
+SET VARIABLE second_uri = (SELECT listen_uri FROM ducklake_rest_serve('rest_lake', prefix := 'second'))
+
+set variable second_server <variable:rest_server_con:second_uri>
+
+query I
+SELECT status FROM ducklake_rest_request('{second_server}', 'GET', '/v1/snapshots/latest', '')
+----
+200
+
+query I
+SELECT stopped FROM ducklake_rest_stop(regexp_extract('{second_server}', '^(.*://[^/]+)', 1))
+----
+true
+
+# a served catalog that is replaced by a database that is not a DuckLake
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_swapped.db' AS swapped (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_swapped_files')
+
+statement ok rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('swapped', port := getvariable('rest_port'))
+
+statement ok rest_db:rest_server_con
+DETACH swapped
+
+statement ok rest_db:rest_server_con
+ATTACH ':memory:' AS swapped
+
+query II
+SELECT status, response->>'$.error.message' LIKE '%is not a DuckLake catalog%'
+FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/swapped/snapshots/latest', '')
+----
+400	true
+
+query I
+SELECT stopped FROM ducklake_rest_stop(regexp_extract('{rest_server}', '^(.*://[^/]+)', 1) || '/swapped')
+----
+true
+
+# the server keeps a limited number of plans of scans with several pages
+statement ok rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('rest_lake', port := getvariable('rest_port'), files_per_page := 1)
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+SET VARIABLE first_page = (SELECT response->>'$.page_tokens[0]' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{}'))
+
+query II
+SELECT status, json_array_length(response->'$.files') FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"page_token": "' || getvariable('first_page') || '"}')
+----
+200	1
+
+loop i 0 256
+
+statement ok
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{}')
+
+endloop
+
+# the oldest plan made way for newer ones
+query II
+SELECT status, response->>'$.error.type' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/tables/1/scan', '{"page_token": "' || getvariable('first_page') || '"}')
+----
+404	Catalog
+
+include test/template/rest_teardown.test_template

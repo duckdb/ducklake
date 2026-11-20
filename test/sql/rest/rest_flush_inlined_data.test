@@ -1,0 +1,100 @@
+# name: test/sql/rest/rest_flush_inlined_data.test
+# description: Flush inlined data to Parquet files through the DuckLake REST API
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 'a'), (2, 'b'), (3, 'c')
+
+statement ok
+INSERT INTO dl.t VALUES (4, 'd')
+
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 't')
+----
+0
+
+query III
+SELECT * FROM ducklake_flush_inlined_data('dl')
+----
+main	t	4
+
+query I
+SELECT count(*) FROM ducklake_list_files('dl', 't')
+----
+1
+
+query II
+FROM dl.t ORDER BY i
+----
+1	a
+3	c
+4	d
+
+# time travel to before the flush still sees the old data
+query II
+FROM dl.t AT (VERSION => 2) ORDER BY i
+----
+1	a
+2	b
+3	c
+
+# inlined deletions of rows in data files are flushed to delete files
+statement ok
+DELETE FROM dl.t WHERE i = 3
+
+query II
+FROM dl.t ORDER BY i
+----
+1	a
+4	d
+
+statement ok
+CHECKPOINT dl
+
+query II
+FROM dl.t ORDER BY i
+----
+1	a
+4	d
+
+query II rest_db:rest_server_con
+FROM rest_lake.t ORDER BY i
+----
+1	a
+4	d
+
+# sorted tables are flushed in sort order
+statement ok
+CREATE TABLE dl.sorted(i INTEGER)
+
+statement ok
+ALTER TABLE dl.sorted SET SORTED BY (i DESC)
+
+statement ok
+INSERT INTO dl.sorted VALUES (1), (3), (2)
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name := 'sorted')
+
+query I
+SELECT i FROM dl.sorted
+----
+3
+2
+1
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

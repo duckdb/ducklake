@@ -48,6 +48,11 @@ static void DuckLakeGetMetrics(TableFunctionGetMetricsInput &input) {
 	auto &gstate = input.global_state->Cast<MultiFileGlobalState>();
 	auto &file_list = gstate.file_list.Cast<DuckLakeMultiFileList>();
 
+	// This replaces the multi-file scan's own get_metrics, so it also has to report the rows scanned that one would
+	if (input.local_state) {
+		input.operator_metrics.rows_scanned = input.local_state->Cast<MultiFileLocalState>().rows_scanned;
+	}
+
 	// Count different types of files
 	auto files_loaded = gstate.file_index.load();
 	auto &files = file_list.GetFiles();
@@ -207,12 +212,11 @@ vector<PartitionStatistics> DuckLakeGetPartitionStats(ClientContext &context, Ge
 		return result;
 	}
 
-	auto file_count =
-	    transaction->GetMetadataManager().GetNetDataFileRowCountForStats(table_id, transaction->GetSnapshot());
-	if (!file_count.IsValid()) {
+	auto row_count = transaction->GetCatalog().GetTableNetRowCount(*transaction, table);
+	if (!row_count.IsValid()) {
 		return result;
 	}
-	idx_t net_count = file_count.GetIndex() + table.GetNetInlinedRowCount(*transaction);
+	idx_t net_count = row_count.GetIndex();
 
 	// MIN/MAX can be answered from the catalog column stats, but only when those stats are exact.
 	// Global column stats only ever widen on insert (via MergeStats) and are never tightened by deletes

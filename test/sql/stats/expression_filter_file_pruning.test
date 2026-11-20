@@ -1,0 +1,203 @@
+# name: test/sql/stats/expression_filter_file_pruning.test
+# description: filters on an expression over a column prune files through the statistics DuckDB derives for them
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+require icu
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/expression_filter_file_pruning', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+SET TimeZone = 'UTC'
+
+statement ok
+CREATE TABLE dl.t (ts TIMESTAMP, utc TIMESTAMPTZ, k BIGINT)
+
+# one file per month of 2026, with an hour between the rows
+statement ok
+INSERT INTO dl.t SELECT TIMESTAMP '2026-01-01' + to_hours(range), to_timestamp(1767225600 + range * 3600), range FROM range(744)
+
+statement ok
+INSERT INTO dl.t SELECT TIMESTAMP '2026-02-01' + to_hours(range), to_timestamp(1769904000 + range * 3600), 1000 + range FROM range(672)
+
+statement ok
+INSERT INTO dl.t SELECT TIMESTAMP '2026-03-01' + to_hours(range), to_timestamp(1772323200 + range * 3600), 2000 + range FROM range(744)
+
+# a date part that is not a range on the column
+query I
+SELECT count(*) FROM dl.t WHERE month(ts) = 2
+----
+672
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE month(ts) = 2
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# arithmetic on the column
+query I
+SELECT count(*) FROM dl.t WHERE k // 1000 = 1
+----
+672
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE k // 1000 = 1
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# a value between the files
+query I
+SELECT count(*) FROM dl.t WHERE k // 100 = 8
+----
+0
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE k // 100 = 8
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 0.*
+
+# together with a filter the file list query expresses, on another column and on the same column
+query I
+SELECT count(*) FROM dl.t WHERE month(ts) = 2 AND k >= 1500
+----
+172
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE month(ts) = 2 AND k >= 1500
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+query I
+SELECT count(*) FROM dl.t WHERE k >= 500 AND k // 1000 = 1
+----
+672
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.t WHERE k >= 500 AND k // 1000 = 1
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# an instant filter written as a local time of a zone
+query I
+SELECT k FROM dl.t WHERE utc AT TIME ZONE 'America/Los_Angeles' = TIMESTAMP '2026-02-01 00:00:00'
+----
+1008
+
+# the statistics of a geometry are not its bounds, so the files are read
+statement ok
+CREATE TABLE dl.shapes (g GEOMETRY)
+
+statement ok
+INSERT INTO dl.shapes VALUES ('POINT(1 2)'::GEOMETRY)
+
+statement ok
+INSERT INTO dl.shapes VALUES ('POINT(3 4)'::GEOMETRY)
+
+query I
+SELECT count(*) FROM dl.shapes WHERE vertex_extract(g, 'y') = 4
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.shapes WHERE vertex_extract(g, 'y') = 4
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+# a filter that is false or NULL for every row of a file skips it
+statement ok
+CREATE TABLE dl.f (x DOUBLE)
+
+statement ok
+INSERT INTO dl.f SELECT range::DOUBLE FROM range(10)
+
+statement ok
+INSERT INTO dl.f VALUES ('nan'::DOUBLE), (1.5)
+
+query I
+SELECT count(*) FROM dl.f WHERE isnan(x)
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.f WHERE isnan(x)
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# a Top-N query on a type the bounds check leaves out still orders the files by its bounds
+statement ok
+CREATE TABLE dl.times (t TIME_NS, z TIMETZ)
+
+statement ok
+INSERT INTO dl.times VALUES (TIME_NS '01:00:00', TIMETZ '01:00:00+01'), (TIME_NS '02:00:00', TIMETZ '02:00:00+01')
+
+statement ok
+INSERT INTO dl.times VALUES (TIME_NS '03:00:00', TIMETZ '03:00:00+01')
+
+query I
+SELECT t FROM dl.times ORDER BY t LIMIT 1
+----
+01:00:00
+
+query I
+SELECT z FROM dl.times ORDER BY z DESC LIMIT 1
+----
+02:00:00+00
+
+# more filtered columns than the statistics budget of the file list query, the first ones still prune
+statement ok
+CREATE TABLE dl.wide AS SELECT * FROM (PIVOT (SELECT range AS i, 0 AS v FROM range(600)) ON i USING first(v))
+
+statement ok
+INSERT INTO dl.wide SELECT * FROM (PIVOT (SELECT range AS i, 3 AS v FROM range(600)) ON i USING first(v))
+
+query I
+SELECT count(*) FROM dl.wide WHERE least(COLUMNS(*), 1) = 0
+----
+1
+
+query II
+EXPLAIN ANALYZE SELECT count(*) FROM dl.wide WHERE least(COLUMNS(*), 1) = 0
+----
+analyzed_plan	<REGEX>:.*Total Files Read: 1.*
+
+# the file list query joins the statistics of the first 32 columns
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT count(*) FROM dl.wide WHERE least(COLUMNS(*), 1) = 0
+----
+1
+
+query I
+SELECT len(regexp_extract_all(query, 'col_[0-9]+_stats AS'))
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%col_%_stats AS%'
+ORDER BY timestamp DESC LIMIT 1
+----
+32
+
+statement ok
+CALL disable_logging()
+
+# a file of NULL values has no bounds to check
+statement ok
+INSERT INTO dl.t SELECT NULL, NULL, NULL FROM range(10)
+
+query I
+SELECT count(*) FROM dl.t WHERE month(ts) = 2
+----
+672
+
+query I
+SELECT count(*) FROM dl.t WHERE month(ts) IS NULL
+----
+10

@@ -22,7 +22,7 @@ jobs:
   codecov:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Code Coverage
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
     env:
       VCPKG_TARGET_TRIPLET: x64-linux
@@ -112,6 +112,15 @@ jobs:
         DUCKLAKE_CI: 1
       run: |
         python3 scripts/run_quack_tests.py --timeout 300 --build-dir build/codecov
+
+    # Every DuckLake is served by a REST server that the test starts on a fixed port, so the tests run one at a time
+    - name: Test REST
+      env:
+        LLVM_PROFILE_FILE: ${{ env.PROFILES }}/ducklake-%m.profraw
+        DUCKLAKE_CI: 1
+      run: |
+        python3 duckdb/scripts/ci/run_tests.py build/codecov/test/unittest --retry 2 --workers 1 \
+          --test-config test/configs/rest_ducklake.json "test/sql/*"
 
     # Every test runs on S3 storage as well, which reaches the code for remote paths. The tests share one bucket, so
     # they run one at a time, and without DUCKLAKE_CI, which skips the PostgreSQL tests

@@ -83,24 +83,14 @@ void QuackMetadataManager::RollbackMigration() {
 }
 
 bool QuackMetadataManager::HasV1_1Additions() {
-	// a failed probe aborts the migration transaction, so the additions are listed instead
-	auto &added_columns = V1_1AddedColumns();
-	string columns;
-	for (auto &added : added_columns) {
-		columns += StringUtil::Format("%s(table_name = '%s' AND column_name = '%s')", columns.empty() ? "" : " OR ",
-		                              added.table, added.column);
+	// a failed probe aborts the migration transaction, so the columns come from the listing of the schema
+	ResetProbedColumns();
+	for (auto &added : V1_1AddedColumns()) {
+		if (!HasMetadataColumn(added.table, added.column)) {
+			return false;
+		}
 	}
-	auto result = Query(StringUtil::Format(
-	    "SELECT (SELECT COUNT(*) FROM information_schema.columns WHERE table_catalog = current_database() AND "
-	    "table_schema = {METADATA_SCHEMA_NAME_LITERAL} AND (%s)) = %d AND EXISTS (SELECT 1 FROM "
-	    "information_schema.tables WHERE table_catalog = current_database() AND table_schema = "
-	    "{METADATA_SCHEMA_NAME_LITERAL} AND table_name = 'ducklake_view_column_tag')",
-	    columns, added_columns.size()));
-	result->ThrowIfError("Failed to probe the v1.1 metadata additions in DuckLake: ");
-	for (auto &row : *result) {
-		return row.GetValue<bool>(0);
-	}
-	return false;
+	return HasMetadataColumn("ducklake_view_column_tag", "view_id");
 }
 
 unique_ptr<QueryResult> QuackMetadataManager::ExecuteInTransaction(string &query) {
@@ -140,6 +130,13 @@ void QuackMetadataManager::ClearCache() {
 	lock_guard<std::recursive_mutex> guard(transaction.GetCatalog().GetMetadataQueryLock());
 	string clear = "CALL quack_clear_cache();";
 	transaction.ExecuteRaw(clear);
+}
+
+bool QuackMetadataManager::ProbeMetadataColumns() {
+	// duckdb_columns() lists every column of the server's metadata schema, so one statement serves every probe
+	return ProbeMetadataColumnsFromListing(
+	    "SELECT table_name, column_name FROM duckdb_columns() WHERE database_name = current_database() "
+	    "AND schema_name = {METADATA_SCHEMA_NAME_LITERAL} ORDER BY table_name, column_index");
 }
 
 void QuackMetadataManager::ProbeServerCapabilities() {

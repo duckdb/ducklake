@@ -2,6 +2,7 @@ add_library(
   ducklake_functions OBJECT
   base_metadata_function.cpp
   ducklake_add_data_files.cpp
+  ducklake_remove_data_files.cpp
   ducklake_commit.cpp
   ducklake_cleanup_files.cpp
   ducklake_expire_snapshots.cpp
@@ -9,6 +10,7 @@ add_library(
   ducklake_current_snapshot.cpp
   ducklake_last_committed_snapshot.cpp
   ducklake_list_files.cpp
+  ducklake_metadata_table.cpp
   ducklake_compaction_functions.cpp
   ducklake_set_commit_message.cpp
   ducklake_set_option.cpp

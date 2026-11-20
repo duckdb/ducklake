@@ -1,0 +1,80 @@
+# name: test/sql/rest/rest_struct_projection.test
+# description: A scan can ask for fields of structs through the DuckLake REST API
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(s STRUCT(x INTEGER, y VARCHAR, z STRUCT(p INTEGER, q INTEGER)), i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES ({'x': 1, 'y': 'one', 'z': {'p': 10, 'q': 11}}, 100), (NULL, 200)
+
+# field ids: s = 1, x = 2, y = 3, z = 4, p = 5, q = 6, i = 7
+query I
+SELECT s::JSON FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan', '{}') WHERE _ducklake_row_id = 0
+----
+{"x":1,"y":"one","z":{"p":10,"q":11}}
+
+# the fields that are not read are NULL
+query I
+SELECT s::JSON FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan',
+'{"columns": [{"field_id": 1, "children": [{"field_id": 2}]}]}') WHERE _ducklake_row_id = 0
+----
+{"x":1,"y":null,"z":null}
+
+query I
+SELECT s::JSON FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan',
+'{"columns": [{"field_id": 1, "children": [{"field_id": 3}, {"field_id": 4, "children": [{"field_id": 6}]}]}]}') WHERE _ducklake_row_id = 0
+----
+{"x":null,"y":"one","z":{"p":null,"q":11}}
+
+# a struct that is NULL stays NULL
+query I
+SELECT s::JSON FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan',
+'{"columns": [{"field_id": 1, "children": [{"field_id": 2}]}]}') WHERE _ducklake_row_id = 1
+----
+NULL
+
+# a field that does not exist reads nothing of the struct
+query I
+SELECT s::JSON FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan',
+'{"columns": [{"field_id": 1, "children": [{"field_id": 1000}]}]}') WHERE _ducklake_row_id = 0
+----
+{"x":null,"y":null,"z":null}
+
+# children of a column that is not a struct are ignored
+query I
+SELECT i FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan',
+'{"columns": [{"field_id": 7, "children": [{"field_id": 2}]}]}') WHERE _ducklake_row_id = 0
+----
+100
+
+# queries that read fields of structs
+query II
+SELECT s.x, s.z.q FROM dl.t ORDER BY i
+----
+1	11
+NULL	NULL
+
+query II
+SELECT s.y, i FROM dl.t WHERE i > 0 ORDER BY i
+----
+one	100
+NULL	200
+
+query I
+SELECT s FROM dl.t ORDER BY i
+----
+{'x': 1, 'y': one, 'z': {'p': 10, 'q': 11}}
+NULL
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template
