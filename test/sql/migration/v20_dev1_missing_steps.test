@@ -1,5 +1,5 @@
-# name: test/sql/migration/v20_dev1_to_v20_dev2.test
-# description: a 2.0-dev1 catalog of any dev build or interruption state migrates to 2.0-dev3 on a writable attach
+# name: test/sql/migration/v20_dev1_missing_steps.test
+# description: a 2.0-dev1 catalog of an older dev build or an interrupted migration completes its missing steps on a writable attach
 # group: [migration]
 
 require ducklake
@@ -68,11 +68,11 @@ DROP TABLE meta.changes_backup
 statement ok
 DETACH dl
 
-# the dev version is refused without the migration option
+# the incomplete layout is refused without the migration option
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
 ----
-catalog version is 2.0-dev1, but the extension requires version 2.0-dev3
+catalog version is 2.0-dev1, but the catalog lacks the branch key of the snapshot tables
 
 # a read only attach cannot migrate
 statement error
@@ -95,13 +95,13 @@ CALL disable_logging()
 # the rename batch commits before the copy and leaves the version alone
 query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%RENAME TO ducklake_snapshot_old%' AND query NOT LIKE '%2.0-dev2%'
+WHERE query LIKE '%RENAME TO ducklake_snapshot_old%' AND query NOT LIKE '%2.0-dev1%'
 ----
 1
 
 # the second batch bumps the version after it renames the rebuilt tables into place
 query I
-SELECT instr(query, '2.0-dev2') > instr(query, 'RENAME TO ducklake_snapshot;')
+SELECT instr(query, '2.0-dev1') > instr(query, 'RENAME TO ducklake_snapshot;')
 FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%RENAME TO ducklake_snapshot;%'
 ----
 true
@@ -109,12 +109,7 @@ true
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev3
-
-query I
-SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
-----
-0
+2.0-dev1
 
 query IIII
 SELECT branch_id, branch_name, parent_id, parent_branch_snapshot FROM meta.ducklake_branch
@@ -221,77 +216,6 @@ SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snaps
 1	0
 2	0
 
-# a dev build of the branched layout wrote a marker row instead of bumping the version
-statement ok
-UPDATE meta.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version'
-
-statement ok
-INSERT INTO meta.ducklake_metadata (key, value) VALUES ('heal_complete', '2.0-dev1.1')
-
-statement ok
-DETACH dl
-
-# the dev version is refused without the migration option
-statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
-----
-catalog version is 2.0-dev1, but the extension requires version 2.0-dev3
-
-# a read only attach cannot migrate
-statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    READ_ONLY, AUTOMATIC_MIGRATION TRUE)
-----
-read-only mode
-
-# the migration deletes the row, bumps the version and rebuilds nothing
-statement ok
-CALL truncate_duckdb_logs()
-
-statement ok
-CALL enable_logging('DuckLakeMetadata', storage = 'memory')
-
-statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    AUTOMATIC_MIGRATION TRUE)
-
-statement ok
-CALL disable_logging()
-
-query I
-SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%heal_complete%'
-----
-true
-
-query I
-SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%CREATE TABLE%ducklake_snapshot%' OR query LIKE '%CREATE TABLE%ducklake_branch%'
-OR query LIKE '%_rebuild%' OR query LIKE '%RENAME TO%'
-----
-0
-
-query I
-SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
-----
-2.0-dev3
-
-query I
-SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
-----
-0
-
-query IIII
-SELECT branch_id, branch_name, parent_id, parent_branch_snapshot FROM meta.ducklake_branch
-----
-0	main	NULL	NULL
-
-query II
-SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
-----
-0	0
-1	0
-2	0
-
 statement ok
 INSERT INTO dl.t VALUES (44)
 
@@ -318,11 +242,11 @@ DROP TABLE meta.ducklake_snapshot
 statement ok
 DETACH dl
 
-# the dev version is refused without the migration option
+# the incomplete layout is refused without the migration option
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
 ----
-catalog version is 2.0-dev1, but the extension requires version 2.0-dev3
+catalog version is 2.0-dev1, but the catalog lacks the branch key of the snapshot tables
 
 # a read only attach cannot migrate
 statement error
@@ -338,12 +262,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev3
-
-query I
-SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
-----
-0
+2.0-dev1
 
 query II
 SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
@@ -410,11 +329,11 @@ DROP TABLE meta.ducklake_snapshot_changes
 statement ok
 DETACH dl
 
-# the dev version is refused without the migration option
+# the incomplete layout is refused without the migration option
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
 ----
-catalog version is 2.0-dev1, but the extension requires version 2.0-dev3
+catalog version is 2.0-dev1, but the catalog lacks the branch key of the snapshot tables
 
 # a read only attach cannot migrate
 statement error
@@ -430,12 +349,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev3
-
-query I
-SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
-----
-0
+2.0-dev1
 
 query II
 SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
@@ -496,11 +410,11 @@ SELECT snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id
 statement ok
 DETACH dl
 
-# the dev version is refused without the migration option
+# the incomplete layout is refused without the migration option
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
 ----
-catalog version is 2.0-dev1, but the extension requires version 2.0-dev3
+catalog version is 2.0-dev1, but the catalog lacks the branch key of the snapshot tables
 
 # a read only attach cannot migrate
 statement error
@@ -516,12 +430,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev3
-
-query I
-SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
-----
-0
+2.0-dev1
 
 statement error
 SELECT * FROM meta.ducklake_snapshot_old
@@ -589,11 +498,11 @@ FROM meta.ducklake_snapshot WHERE snapshot_id = 0
 statement ok
 DETACH dl
 
-# the dev version is refused without the migration option
+# the incomplete layout is refused without the migration option
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
 ----
-catalog version is 2.0-dev1, but the extension requires version 2.0-dev3
+catalog version is 2.0-dev1, but the catalog lacks the branch key of the snapshot tables
 
 # a read only attach cannot migrate
 statement error
@@ -609,12 +518,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev3
-
-query I
-SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
-----
-0
+2.0-dev1
 
 query II
 SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
@@ -685,11 +589,11 @@ DROP TABLE meta.changes_backup
 statement ok
 DETACH dl
 
-# the dev version is refused without the migration option
+# the incomplete layout is refused without the migration option
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
 ----
-catalog version is 2.0-dev1, but the extension requires version 2.0-dev3
+catalog version is 2.0-dev1, but the catalog lacks the branch key of the snapshot tables
 
 # a read only attach cannot migrate
 statement error
@@ -705,12 +609,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev3
-
-query I
-SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete'
-----
-0
+2.0-dev1
 
 query II
 SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
@@ -792,7 +691,7 @@ SELECT list(i ORDER BY i) FROM dl.t
 statement ok
 DETACH dl
 
-# a 2.0-dev3 attach runs no probe or migration statement
+# a 2.0-dev1 attach of a complete layout runs no migration statement
 statement ok
 CALL truncate_duckdb_logs()
 
@@ -812,7 +711,7 @@ true
 
 query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%heal_complete%' OR query LIKE '%ducklake_branch%' OR query LIKE '%_rebuild%'
+WHERE query LIKE '%ducklake_branch%' OR query LIKE '%_rebuild%'
     OR query LIKE '%RENAME TO%' OR query LIKE '%pg_attribute%' OR query LIKE '%duckdb_columns()%'
 ----
 0

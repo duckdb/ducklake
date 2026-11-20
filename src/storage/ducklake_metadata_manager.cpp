@@ -832,26 +832,19 @@ string DuckLakeMetadataManager::GetMainBranchRowStatement() {
 	       "WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_id = 0);";
 }
 
-void DuckLakeMetadataManager::MigrateV11() {
-	auto migrate_query = GetSnapshotTagTableStatement() + R"(
-UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version';
-)";
-	ExecuteMigration(migrate_query, false, "1.1", "2.0-dev1");
-}
-
-void DuckLakeMetadataManager::MigrateV20Dev1() {
-	// a catalog can hold some of the additions already, from an older dev build or an interrupted migration
-	auto rename_query = V2_0Dev2RenameSql(ProbeV2_0Dev2Additions());
+void DuckLakeMetadataManager::MigrateV11(bool from_dev1) {
+	// the renames of the first batch commit before the copies, so the copies see every commit a rename waited for
+	string from_version = from_dev1 ? "2.0-dev1" : "1.1";
+	auto layout = ProbeV2_0Layout();
+	auto rename_query = V2_0SnapshotRenameSql(layout.additions) + V2_0FileRenameSql(layout.ranges);
 	if (!rename_query.empty()) {
-		// the rename commits before the copy, so the copy sees every commit the rename waited for
-		ExecuteMigration(rename_query, false, "2.0-dev1", "2.0-dev2");
+		ExecuteMigration(rename_query, false, from_version, "2.0-dev1");
 		transaction.ReleaseMetadataTransaction();
+		layout = ProbeV2_0Layout();
 	}
-	auto migrate_query = V2_0Dev2AdditionsSql(ProbeV2_0Dev2Additions());
-	// a dev build of this layout marked a completed rebuild in the metadata table
-	migrate_query += "DELETE FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'heal_complete';\n";
-	migrate_query += "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev2' WHERE key = 'version';\n";
-	ExecuteMigration(migrate_query, false, "2.0-dev1", "2.0-dev2");
+	auto migrate_query = V2_0SnapshotAdditionsSql(layout.additions) + V2_0FileEventsSql(layout.ranges);
+	migrate_query += "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version';\n";
+	ExecuteMigration(migrate_query, false, from_version, "2.0-dev1");
 }
 
 string DuckLakeMetadataManager::VisibilityEventBackfillSql(const string &visibility_table, const string &file_table,
@@ -876,7 +869,7 @@ static string RangeTableName(const string &file_table) {
 	return file_table + "_ranges";
 }
 
-string DuckLakeMetadataManager::V2_0Dev3RenameSql(const V2_0Dev3Ranges &ranges) {
+string DuckLakeMetadataManager::V2_0FileRenameSql(const V2_0FileRanges &ranges) {
 	// a writer that commits while the rename waits lands in the renamed table, a later one fails by name
 	string query;
 	for (auto &table : ranges.tables_to_rename) {
@@ -885,7 +878,7 @@ string DuckLakeMetadataManager::V2_0Dev3RenameSql(const V2_0Dev3Ranges &ranges) 
 	return query;
 }
 
-string DuckLakeMetadataManager::V2_0Dev3MigrationQuery(const V2_0Dev3Ranges &ranges) {
+string DuckLakeMetadataManager::V2_0FileEventsSql(const V2_0FileRanges &ranges) {
 	// every statement leaves a state the probes recognize, so the step resumes on a backend that commits each one
 	string query = GetFileVisibilityTableStatement(true) + "\n" + GetDeleteFileVisibilityTableStatement(true) + "\n";
 	for (auto &table : ranges.tables_to_convert) {
@@ -903,20 +896,20 @@ string DuckLakeMetadataManager::V2_0Dev3MigrationQuery(const V2_0Dev3Ranges &ran
 		}
 		query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME TO %s;\n", range_table, table.name);
 	}
-	query += "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev3' WHERE key = 'version';\n";
 	return query;
 }
 
-DuckLakeMetadataManager::V2_0Dev3Ranges DuckLakeMetadataManager::ProbeV2_0Dev3Ranges() {
-	ResetProbedColumns();
-	V2_0Dev3Ranges ranges;
+DuckLakeMetadataManager::V2_0FileRanges DuckLakeMetadataManager::ProbeV2_0FileRanges() {
+	V2_0FileRanges ranges;
+	ranges.has_file_visibility = HasMetadataColumn("ducklake_file_visibility", "branch_id");
+	ranges.has_delete_file_visibility = HasMetadataColumn("ducklake_delete_file_visibility", "branch_id");
 	for (auto &table : {string("ducklake_data_file"), string("ducklake_delete_file")}) {
 		if (HasMetadataColumn(table, "begin_snapshot")) {
 			ranges.tables_to_rename.push_back(table);
 		}
 		auto range_table = RangeTableName(table);
 		if (HasMetadataColumn(range_table, "table_id")) {
-			V2_0Dev3RangeTable renamed;
+			V2_0RangeTable renamed;
 			renamed.name = table;
 			renamed.has_begin = HasMetadataColumn(range_table, "begin_snapshot");
 			renamed.has_end = HasMetadataColumn(range_table, "end_snapshot");
@@ -924,18 +917,6 @@ DuckLakeMetadataManager::V2_0Dev3Ranges DuckLakeMetadataManager::ProbeV2_0Dev3Ra
 		}
 	}
 	return ranges;
-}
-
-void DuckLakeMetadataManager::MigrateV20Dev2() {
-	// the rename commits before the copy, so the copy sees every commit the rename waited for
-	auto ranges = ProbeV2_0Dev3Ranges();
-	auto rename_query = V2_0Dev3RenameSql(ranges);
-	if (!rename_query.empty()) {
-		ExecuteMigration(rename_query, false, "2.0-dev2", "2.0-dev3");
-		transaction.ReleaseMetadataTransaction();
-		ranges = ProbeV2_0Dev3Ranges();
-	}
-	ExecuteMigration(V2_0Dev3MigrationQuery(ranges), false, "2.0-dev2", "2.0-dev3");
 }
 
 //! Takes a snapshot table without its branch key away by name, the first batch of its rebuild
@@ -988,7 +969,7 @@ DROP TABLE {METADATA_CATALOG}.%s;
 	return result;
 }
 
-string DuckLakeMetadataManager::V2_0Dev2RenameSql(const V2_0Dev2Additions &add) {
+string DuckLakeMetadataManager::V2_0SnapshotRenameSql(const V2_0SnapshotAdditions &add) {
 	string result;
 	if (add.rebuild_snapshots) {
 		result += SnapshotTableRenameSql("ducklake_snapshot", add.has_snapshot_table, add.snapshot_has_branch_column,
@@ -1001,7 +982,7 @@ string DuckLakeMetadataManager::V2_0Dev2RenameSql(const V2_0Dev2Additions &add) 
 	return result;
 }
 
-string DuckLakeMetadataManager::V2_0Dev2AdditionsSql(const V2_0Dev2Additions &add) {
+string DuckLakeMetadataManager::V2_0SnapshotAdditionsSql(const V2_0SnapshotAdditions &add) {
 	string result;
 	if (add.snapshot_tag_table) {
 		result += GetSnapshotTagTableStatement() + "\n";
@@ -1025,9 +1006,8 @@ string DuckLakeMetadataManager::V2_0Dev2AdditionsSql(const V2_0Dev2Additions &ad
 	return result;
 }
 
-DuckLakeMetadataManager::V2_0Dev2Additions DuckLakeMetadataManager::ProbeV2_0Dev2Additions() {
-	ResetProbedColumns();
-	V2_0Dev2Additions missing;
+DuckLakeMetadataManager::V2_0SnapshotAdditions DuckLakeMetadataManager::ProbeV2_0SnapshotAdditions() {
+	V2_0SnapshotAdditions missing;
 	missing.snapshot_tag_table = !HasMetadataColumn("ducklake_snapshot_tag", "tag_name");
 	missing.branch_table = !HasMetadataColumn("ducklake_branch", "branch_id");
 	missing.has_snapshot_table = HasMetadataColumn("ducklake_snapshot", "snapshot_id");
@@ -1044,6 +1024,30 @@ DuckLakeMetadataManager::V2_0Dev2Additions DuckLakeMetadataManager::ProbeV2_0Dev
 	missing.rebuild_snapshot_changes =
 	    !missing.changes_has_branch_column || missing.has_changes_rebuild || missing.has_changes_old;
 	return missing;
+}
+
+DuckLakeMetadataManager::V2_0Layout DuckLakeMetadataManager::ProbeV2_0Layout() {
+	ResetProbedColumns();
+	V2_0Layout layout;
+	layout.additions = ProbeV2_0SnapshotAdditions();
+	layout.ranges = ProbeV2_0FileRanges();
+	return layout;
+}
+
+string DuckLakeMetadataManager::MissingV2_0Step() {
+	auto layout = ProbeV2_0Layout();
+	if (layout.additions.snapshot_tag_table) {
+		return "the snapshot tag table";
+	}
+	if (layout.additions.branch_table || layout.additions.rebuild_snapshots ||
+	    layout.additions.rebuild_snapshot_changes) {
+		return "the branch key of the snapshot tables";
+	}
+	if (!layout.ranges.tables_to_rename.empty() || !layout.ranges.tables_to_convert.empty() ||
+	    !layout.ranges.has_file_visibility || !layout.ranges.has_delete_file_visibility) {
+		return "the file visibility events";
+	}
+	return string();
 }
 
 bool DuckLakeMetadataManager::ProbeMetadataColumns() {

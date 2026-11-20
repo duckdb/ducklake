@@ -1,4 +1,4 @@
-# name: test/sql/migration/v20_dev3_ended_delete_file_migration.test
+# name: test/sql/migration/v20_ended_delete_file_migration.test
 # description: Migration preserves ended delete files and their snapshot history
 # group: [migration]
 
@@ -31,7 +31,7 @@ statement ok
 DETACH dl
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '2.0-dev3', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '2.0-dev1', AUTOMATIC_MIGRATION TRUE)
 
 query IIII
 SELECT branch_id, delete_file_id, snapshot_id, is_delete::BOOLEAN FROM meta.ducklake_delete_file_visibility ORDER BY snapshot_id

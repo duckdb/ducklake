@@ -763,24 +763,25 @@ public:
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool from_dev1 = false);
-	virtual void MigrateV11();
-	//! The file visibility events replace the inline ranges of the file tables
-	virtual void MigrateV20Dev2();
+	//! Runs the steps from 1.1 to 2.0-dev1 the catalog lacks, from a 1.1 catalog or a 2.0-dev1 catalog that stopped
+	virtual void MigrateV11(bool from_dev1 = false);
 	//! A file table moved aside with the range columns it still holds
-	struct V2_0Dev3RangeTable {
+	struct V2_0RangeTable {
 		string name;
 		bool has_begin = false;
 		bool has_end = false;
 	};
-	//! The file tables to move aside, and the renamed ones to turn into events
-	struct V2_0Dev3Ranges {
+	//! The file tables to move aside, the renamed ones to turn into events, and the event tables the catalog has
+	struct V2_0FileRanges {
 		vector<string> tables_to_rename;
-		vector<V2_0Dev3RangeTable> tables_to_convert;
+		vector<V2_0RangeTable> tables_to_convert;
+		bool has_file_visibility = false;
+		bool has_delete_file_visibility = false;
 	};
-	V2_0Dev3Ranges ProbeV2_0Dev3Ranges();
-	static string V2_0Dev3RenameSql(const V2_0Dev3Ranges &ranges);
+	V2_0FileRanges ProbeV2_0FileRanges();
+	static string V2_0FileRenameSql(const V2_0FileRanges &ranges);
 	//! Creates the event tables a catalog lacks and turns the ranges of the renamed tables into events
-	static string V2_0Dev3MigrationQuery(const V2_0Dev3Ranges &ranges);
+	static string V2_0FileEventsSql(const V2_0FileRanges &ranges);
 	//! The branch 0 events of the ranges a file table holds inline
 	static string VisibilityEventBackfillSql(const string &visibility_table, const string &file_table,
 	                                         const string &file_id_column);
@@ -790,10 +791,8 @@ public:
 	static string GetMainBranchRowStatement();
 	//! Whether the catalog already has every metadata table and column of v1.1
 	bool HasV1_1Additions();
-	//! Migrates a 2.0-dev1 catalog of any dev build or interruption state to the layout of 2.0-dev2
-	virtual void MigrateV20Dev1();
-	//! The additions of 2.0-dev2 a catalog is missing, probed so an interrupted migration resumes
-	struct V2_0Dev2Additions {
+	//! The snapshot additions of 2.0 a catalog is missing, probed so an interrupted migration resumes
+	struct V2_0SnapshotAdditions {
 		bool snapshot_tag_table = true;
 		bool branch_table = true;
 		//! Rebuilt through a rebuild table and an old table so an interrupted rebuild resumes
@@ -808,11 +807,19 @@ public:
 		bool has_changes_rebuild = false;
 		bool has_changes_old = false;
 	};
-	V2_0Dev2Additions ProbeV2_0Dev2Additions();
+	V2_0SnapshotAdditions ProbeV2_0SnapshotAdditions();
 	//! The first batch of a rebuild, which takes the snapshot tables away by name and commits
-	static string V2_0Dev2RenameSql(const V2_0Dev2Additions &add);
+	static string V2_0SnapshotRenameSql(const V2_0SnapshotAdditions &add);
 	//! The other additions, the second batch of a rebuild copies from the renamed tables
-	static string V2_0Dev2AdditionsSql(const V2_0Dev2Additions &add);
+	static string V2_0SnapshotAdditionsSql(const V2_0SnapshotAdditions &add);
+	//! The shape of the catalog against the steps of 2.0, one probe of the metadata schema
+	struct V2_0Layout {
+		V2_0SnapshotAdditions additions;
+		V2_0FileRanges ranges;
+	};
+	V2_0Layout ProbeV2_0Layout();
+	//! The first step of 2.0 the catalog lacks, empty for a complete layout
+	string MissingV2_0Step();
 	bool HasMetadataColumn(const string &table, const string &column);
 	//! Scans the metadata schema into the memo, once per probe pass
 	void ProbeMetadataSchema();

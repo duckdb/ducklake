@@ -1,5 +1,5 @@
-# name: test/sql/migration/v20_dev3_file_events_migration.test
-# description: the migration to 2.0-dev3 turns the inline file ranges of a 1.1 catalog into branch 0 events and drops the range columns
+# name: test/sql/migration/v20_file_events_migration.test
+# description: the migration to 2.0-dev1 turns the inline file ranges of a 1.1 catalog into branch 0 events and drops the range columns
 # group: [migration]
 
 require ducklake
@@ -72,7 +72,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST
 query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
-2.0-dev3
+2.0-dev1
 
 query IIIII
 SELECT branch_id, table_id, data_file_id, snapshot_id, is_delete::BOOLEAN FROM meta.ducklake_file_visibility ORDER BY data_file_id, is_delete

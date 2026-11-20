@@ -1,5 +1,5 @@
-# name: test/sql/migration/v20_dev3_file_events_migration_resume_one_table.test
-# description: the migration to 2.0-dev3 resumes when one file table is back under its name and the other still renamed
+# name: test/sql/migration/v20_file_events_migration_resume_one_table.test
+# description: the migration to 2.0-dev1 resumes when one file table is back under its name and the other still renamed
 # group: [migration]
 
 require ducklake
@@ -53,7 +53,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST
 query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
-2.0-dev3
+2.0-dev1
 
 query IIIII
 SELECT branch_id, table_id, delete_file_id, snapshot_id, is_delete::BOOLEAN FROM meta.ducklake_delete_file_visibility
