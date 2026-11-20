@@ -16,10 +16,10 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lk (DATA_PATH '{DATA_PATH}/commit_rea
 loop i 0 5
 
 statement ok
-CREATE TABLE lk.t${i}(i INTEGER)
+CREATE TABLE lk.t{i}(i INTEGER)
 
 statement ok
-INSERT INTO lk.t${i} VALUES (${i})
+INSERT INTO lk.t{i} VALUES ({i})
 
 endloop
 

@@ -774,7 +774,7 @@ static optional_ptr<PhysicalOperator> PlanInsertSort(ClientContext &context, Phy
 	// the sort keys are bound after the statement, so the statement cannot know that they need a rebind
 	if (binder->GetStatementProperties().always_require_rebind) {
 		requires_rebind = true;
-		context.registered_state->GetOrCreate<DuckLakeSortRebindState>(DuckLakeSortRebindState::KEY);
+		context.GetContext().GetRegisteredState().GetOrCreate<DuckLakeSortRebindState>(DuckLakeSortRebindState::KEY);
 	}
 
 	// Convert BoundColumnRefExpression to BoundReferenceExpression for physical plan

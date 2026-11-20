@@ -1,0 +1,85 @@
+# name: test/sql/metadata/finalization_deadline.test
+# description: Commit retries survive the caller deadline and disconnected transactions clean up their files
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_finalization_deadline.db' AS lake
+(DATA_PATH '{TEST_DIR}/metadata_finalization_deadline_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.items AS SELECT 42 AS i
+
+statement ok con1
+SET ducklake_retry_wait_ms = 500
+
+statement ok con1
+BEGIN
+
+statement ok con1
+INSERT INTO lake.items VALUES (43)
+
+# con2 takes the next snapshot ID, forcing con1 to retry after a 250-500 ms wait
+statement ok con2
+INSERT INTO lake.items VALUES (44)
+
+statement ok con1
+SET max_execution_time = 100
+
+# No more statements use con1: even RESET would run under its short deadline.
+statement ok con1
+COMMIT
+
+query I
+SELECT record_count FROM __ducklake_metadata_lake.ducklake_table_stats
+----
+3
+
+query I rowsort
+SELECT * FROM lake.items
+----
+42
+43
+44
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/metadata_finalization_deadline_files/**/*.parquet')
+----
+3
+
+# The internal metadata connection must not keep its caller alive after the query.
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO lake.items VALUES (45)
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/metadata_finalization_deadline_files/**/*.parquet')
+----
+4
+
+reconnect
+
+query I rowsort
+SELECT * FROM lake.items
+----
+42
+43
+44
+
+query I
+SELECT record_count FROM __ducklake_metadata_lake.ducklake_table_stats
+----
+3
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/metadata_finalization_deadline_files/**/*.parquet')
+----
+3
+
+statement ok
+DETACH lake

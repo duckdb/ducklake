@@ -103,7 +103,7 @@ static void DuckLakeRemoveDataFilesExecute(ClientContext &context, TableFunction
 			break;
 		}
 		if (!found) {
-			throw InvalidInputException("File \"%s\" is not a data file of table \"%s\" - ducklake_list_files lists "
+			throw InvalidInputException("File \"%s\" is not a data file of table %s - ducklake_list_files lists "
 			                            "the data files of a table",
 			                            input_path, table.name);
 		}

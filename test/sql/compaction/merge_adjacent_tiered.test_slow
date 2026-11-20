@@ -21,7 +21,7 @@ USE ducklake;
 statement ok
 CREATE TABLE tiered (id integer, payload varchar);
 
-# Create 512 small files upfront (~1KB each)
+# Create 512 small files upfront
 loop i 0 512
 
 statement ok
@@ -34,41 +34,89 @@ SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_s
 ----
 512
 
+# The bounds below allow up to twice each target for this fixed fixture, including overshoot and Parquet overhead.
+# Compaction preserves source snapshot ranges, so identify newly written files by their IDs.
+
 # Tier 0 → Tier 1: merge tiny files (< 10KB) into ~50KB files
 statement ok
 CALL ducklake_set_option('ducklake', 'target_file_size', '50KB');
 
 statement ok
+CREATE OR REPLACE TEMP TABLE prior_files AS
+SELECT data_file_id, file_size_bytes FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+
+statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 'tiered', max_file_size=>10000);
 
-query I
-SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+# Encoding and Bloom-filter overhead can change the number of groups, but each tier must compact toward its target.
+query II
+SELECT count(*) > 1 AND count(*) < (SELECT count(*) FROM prior_files),
+       max(file_size_bytes) FILTER (WHERE data_file_id NOT IN (SELECT data_file_id FROM prior_files)) < 100000
+FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
 ----
-47
+true	true
+
+# Files outside this tier's size interval must remain live.
+query I
+SELECT count(*) FROM prior_files p
+JOIN __ducklake_metadata_ducklake.ducklake_data_file d USING (data_file_id)
+WHERE d.end_snapshot IS NOT NULL AND p.file_size_bytes >= 10000
+----
+0
 
 # Tier 1 → Tier 2: merge medium files (10KB-100KB) into ~200KB files
 statement ok
 CALL ducklake_set_option('ducklake', 'target_file_size', '200KB');
 
 statement ok
+CREATE OR REPLACE TEMP TABLE prior_files AS
+SELECT data_file_id, file_size_bytes FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+
+statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 'tiered', min_file_size=>10000, max_file_size=>100000);
 
-query I
-SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+# Encoding and Bloom-filter overhead can change the number of groups, but each tier must compact toward its target.
+query II
+SELECT count(*) > 1 AND count(*) < (SELECT count(*) FROM prior_files),
+       max(file_size_bytes) FILTER (WHERE data_file_id NOT IN (SELECT data_file_id FROM prior_files)) < 400000
+FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
 ----
-12
+true	true
+
+# Files outside this tier's size interval must remain live.
+query I
+SELECT count(*) FROM prior_files p
+JOIN __ducklake_metadata_ducklake.ducklake_data_file d USING (data_file_id)
+WHERE d.end_snapshot IS NOT NULL AND (p.file_size_bytes < 10000 OR p.file_size_bytes >= 100000)
+----
+0
 
 # Tier 2 → Tier 3: merge large files (100KB-500KB) into ~1MB files
 statement ok
 CALL ducklake_set_option('ducklake', 'target_file_size', '1MB');
 
 statement ok
+CREATE OR REPLACE TEMP TABLE prior_files AS
+SELECT data_file_id, file_size_bytes FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+
+statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 'tiered', min_file_size=>100000, max_file_size=>500000);
 
-query I
-SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+# Encoding and Bloom-filter overhead can change the number of groups, but each tier must compact toward its target.
+query II
+SELECT count(*) > 1 AND count(*) < (SELECT count(*) FROM prior_files),
+       max(file_size_bytes) FILTER (WHERE data_file_id NOT IN (SELECT data_file_id FROM prior_files)) < 2000000
+FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
 ----
-3
+true	true
+
+# Files outside this tier's size interval must remain live.
+query I
+SELECT count(*) FROM prior_files p
+JOIN __ducklake_metadata_ducklake.ducklake_data_file d USING (data_file_id)
+WHERE d.end_snapshot IS NOT NULL AND (p.file_size_bytes < 100000 OR p.file_size_bytes >= 500000)
+----
+0
 
 # Full compaction: merge everything into final large files
 statement ok
@@ -83,7 +131,7 @@ SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_s
 1
 
 # Verify data integrity
-query III
-SELECT count(*), min(id), max(id) FROM tiered
+query IIII
+SELECT count(*), count(DISTINCT id), min(id), max(id) FROM tiered
 ----
-51200	0	511099
+51200	51200	0	511099

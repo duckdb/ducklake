@@ -6,15 +6,15 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
+#include "storage/ducklake_transaction.hpp"
 #include "duckdb/main/database.hpp"
 #include "duckdb/common/sql_identifier.hpp"
-#include "common/ducklake_util.hpp"
 
 namespace duckdb {
 
 void DuckLakeTransactionManager::Checkpoint(ClientContext &context, bool force) {
-	auto conn = make_uniq<Connection>(ducklake_catalog.GetDatabase());
-	DuckLakeUtil::CopyExtensionSettings(context, *conn->context);
+	auto conn =
+	    DuckLakeInternalConnectionState::CreateConnection(ducklake_catalog.GetDatabase(), context.shared_from_this());
 	// the errors of the steps become part of the CHECKPOINT error, which a global SET errors_as_json would nest
 	Settings::Set<ErrorsAsJSONSetting>(*conn->context, SetScope::SESSION, Value::BOOLEAN(false));
 	// 1. We first flush inlined data, since these can generate many files, which would be important for compaction

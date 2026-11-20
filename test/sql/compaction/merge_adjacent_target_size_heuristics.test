@@ -16,7 +16,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/merg
 statement ok
 USE ducklake
 
-# two files of about 4KB each, which barely compress
+# two similarly sized files, which barely compress
 statement ok
 CREATE TABLE t(i UBIGINT)
 
@@ -26,14 +26,20 @@ INSERT INTO t SELECT hash(i) FROM range(500) t(i)
 statement ok
 INSERT INTO t SELECT hash(i + 1000) FROM range(500) t(i)
 
-query I
-SELECT count(*) FROM ducklake_list_files('ducklake', 't') WHERE data_file_size_bytes BETWEEN 3500 AND 4900
-----
-2
-
-# with a 5KB target, merging both files ends up further from the target than either file on its own
+# Derive the target from metadata so added Parquet metadata does not change the heuristic being tested.
 statement ok
-CALL ducklake.set_option('target_file_size', '5KB')
+SET VARIABLE target_size = (SELECT max(data_file_size_bytes) + 1 FROM ducklake_list_files('ducklake', 't'))
+
+query III
+SELECT count(*), bool_and(data_file_size_bytes < getvariable('target_size')),
+       sum(data_file_size_bytes) - getvariable('target_size') > max(getvariable('target_size') - data_file_size_bytes)
+FROM ducklake_list_files('ducklake', 't')
+----
+2	true	true
+
+# Each file fits below the target, but merging both ends up further from it than either file on its own.
+statement ok
+CALL ducklake.set_option('target_file_size', getvariable('target_size')::VARCHAR || 'B')
 
 query III
 SELECT table_name, files_processed, files_created FROM ducklake_merge_adjacent_files('ducklake', 't', max_compacted_files => 1)

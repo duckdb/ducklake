@@ -1,0 +1,73 @@
+# name: test/sql/metadata/attach_retry_deadline.test
+# description: A caller deadline interrupts the wait after a transient metadata load error
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+statement ok
+SET threads = 1
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_attach_retry_deadline.db' AS lake (DATA_PATH '{TEST_DIR}/metadata_attach_retry_deadline_files')
+
+statement ok
+ALTER TABLE __ducklake_metadata_lake.ducklake_metadata RENAME TO original_metadata
+
+# The existence probe does not read value; loading it fails immediately with a non-interrupt error.
+statement ok
+CREATE VIEW __ducklake_metadata_lake.ducklake_metadata AS
+SELECT key, CAST(key || 'x' AS INTEGER)::VARCHAR AS value, scope, scope_id
+FROM __ducklake_metadata_lake.original_metadata
+
+statement ok
+DETACH lake
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+SET ducklake_retry_wait_ms = 10000
+
+statement ok
+SET max_execution_time = 500
+
+statement ok
+SET VARIABLE attach_retry_start = epoch_ms(current_timestamp)
+
+statement error
+ATTACH 'ducklake:{TEST_DIR}/metadata_attach_retry_deadline.db' AS deadline_lake
+----
+Query exceeded maximum execution time
+
+statement ok
+RESET max_execution_time
+
+# An expired deadline ends the wait before retrying ATTACH.
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE catalog = 'deadline_lake' AND query LIKE 'ATTACH OR REPLACE %'
+----
+1
+
+# The 500ms deadline must interrupt a retry wait capped at 3000ms, with generous scheduling margin.
+query I
+SELECT epoch_ms(current_timestamp) - getvariable('attach_retry_start') < 2000
+----
+true
+
+statement ok
+ATTACH '{TEST_DIR}/metadata_attach_retry_deadline.db' AS metadata
+
+statement ok
+DROP VIEW metadata.ducklake_metadata
+
+statement ok
+ALTER TABLE metadata.original_metadata RENAME TO ducklake_metadata
+
+statement ok
+DETACH metadata
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/metadata_attach_retry_deadline.db' AS deadline_lake
