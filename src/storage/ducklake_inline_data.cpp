@@ -266,8 +266,28 @@ static void ThrowIfNegativeInterval(Vector &input_vec, idx_t row_count) {
 	}
 }
 
+//! A VARIANT has no bounds, only its null count is collected
+static DuckLakeColumnStats GetVariantStats(Vector &input_vec, idx_t row_count) {
+	UnifiedVectorFormat format;
+	input_vec.ToUnifiedFormat(format);
+	DuckLakeColumnStats result(input_vec.GetType());
+	result.any_valid = false;
+	result.has_null_count = true;
+	for (idx_t i = 0; i < row_count; i++) {
+		if (format.validity.RowIsValid(format.sel->get_index(i))) {
+			result.any_valid = true;
+		} else {
+			result.null_count++;
+		}
+	}
+	return result;
+}
+
 DuckLakeColumnStats GetVectorStats(Vector &input_vec, idx_t row_count) {
 	auto &type = input_vec.GetType();
+	if (type.id() == LogicalTypeId::VARIANT) {
+		return GetVariantStats(input_vec, row_count);
+	}
 	Vector str_vector(LogicalType::VARCHAR, row_count);
 	VectorOperations::DefaultCast(input_vec, str_vector, row_count);
 	// FIXME: we can be more efficient here by templating on other types (numerics...)
