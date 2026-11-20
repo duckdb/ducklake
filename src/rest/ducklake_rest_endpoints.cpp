@@ -1364,7 +1364,14 @@ RESTCommitTransactionResponse DuckLakeRESTCommit::Run(const RESTCommitTransactio
 
 RESTCommitTransactionResponse DuckLakeRESTCommit::Commit() {
 	auto transaction_ref = transaction.shared_from_this();
-	request.connection.Commit();
+	try {
+		request.connection.Commit();
+	} catch (...) {
+		// a step after the commit of the metadata can fail, the snapshot is published by then
+		request.published = transaction_ref->GetCommittedSnapshot().snapshot_id != DConstants::INVALID_INDEX;
+		throw;
+	}
+	request.published = true;
 	RESTCommitTransactionResponse result;
 	auto committed = transaction_ref->GetCommittedSnapshot();
 	if (committed.snapshot_id != DConstants::INVALID_INDEX) {

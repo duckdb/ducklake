@@ -31,6 +31,8 @@ bool DuckLakeRESTPendingCommit::CanShareSnapshotWith(const DuckLakeRESTPendingCo
 
 vector<reference<DuckLakeRESTPendingCommit>> DuckLakeRESTCommitQueue::TakeNext() {
 	vector<reference<DuckLakeRESTPendingCommit>> result;
+	// the commits are taken off the queue after the only allocation, so that a failure loses none of them
+	result.reserve(MinValue<idx_t>(pending.size(), MAX_COMMIT_GROUP));
 	result.push_back(pending.front());
 	pending.pop_front();
 	auto &first = result[0].get();
@@ -54,15 +56,40 @@ void DuckLakeRESTCommitQueue::Submit(DuckLakeRESTPendingCommit &commit, const ru
 		return;
 	}
 	running = true;
-	while (!commit.done) {
-		auto commits = TakeNext();
-		guard.unlock();
-		run_commits(commits);
-		guard.lock();
-		for (auto &entry : commits) {
-			entry.get().done = true;
+	vector<reference<DuckLakeRESTPendingCommit>> commits;
+	try {
+		while (!commit.done) {
+			commits = TakeNext();
+			guard.unlock();
+			run_commits(commits);
+			guard.lock();
+			for (auto &entry : commits) {
+				entry.get().done = true;
+			}
+			commits.clear();
+			ready.notify_all();
 		}
-		ready.notify_all();
+	} catch (...) {
+		// the queue must not stay blocked, and it must not keep the commit of a request that leaves
+		if (!guard.owns_lock()) {
+			guard.lock();
+		}
+		for (auto &entry : commits) {
+			auto &taken = entry.get();
+			// a commit that has its response or its error ran to its end
+			taken.interrupted = taken.response.empty() && !taken.error.HasError();
+			taken.done = true;
+		}
+		if (!commit.done) {
+			for (auto entry = pending.begin(); entry != pending.end(); entry++) {
+				if (&entry->get() == &commit) {
+					pending.erase(entry);
+					break;
+				}
+			}
+			commit.interrupted = true;
+			commit.done = true;
+		}
 	}
 	running = false;
 	ready.notify_all();
@@ -289,6 +316,10 @@ int32_t DuckLakeRESTServer::HandleRequest(const RESTRoute &route, optional_ptr<c
 			commit.accepts_arrow = accepts_arrow;
 			served.commit_queue->Submit(
 			    commit, [&](vector<reference<DuckLakeRESTPendingCommit>> &commits) { RunCommits(served, commits); });
+			if (commit.interrupted) {
+				// an IO error, as for a lost response: the client must not remove the files of the transaction
+				throw IOException("The commit did not run to its end, it is unknown whether it was published");
+			}
 			if (commit.error.HasError()) {
 				auto status = StatusCodeForError(commit.error.Type());
 				response = ErrorBody(commit.error.Type(), commit.error.RawMessage(), status);
@@ -333,7 +364,15 @@ static void InitializeCommitRequest(DuckLakeRESTRequest &request, const DuckLake
 	request.accepts_arrow = commit.accepts_arrow;
 }
 
+//! The error of a commit that failed after it published its changes: an IO error, as for a lost response, so that
+//! the client does not remove the files of the transaction
+static ErrorData ErrorAfterPublication(const ErrorData &error) {
+	return ErrorData(ExceptionType::IO,
+	                 "The transaction was committed, but the server failed to respond: " + error.RawMessage());
+}
+
 void DuckLakeRESTServer::RunCommit(const ServedCatalog &served, DuckLakeRESTPendingCommit &commit) {
+	bool published = false;
 	try {
 		auto endpoint = DuckLakeRESTAPI::GetEndpoints().at(commit.endpoint);
 		DuckLakeRESTRequest request(*served.db, served.catalog_name);
@@ -345,41 +384,61 @@ void DuckLakeRESTServer::RunCommit(const ServedCatalog &served, DuckLakeRESTPend
 				request.connection.Commit();
 			}
 		} catch (...) {
+			published = request.published;
 			if (request.connection.HasActiveTransaction()) {
 				request.connection.Rollback();
 			}
 			throw;
 		}
 	} catch (std::exception &ex) {
-		commit.error = ErrorData(ex);
+		ErrorData error(ex);
+		commit.error = published ? ErrorAfterPublication(error) : error;
 	}
 }
 
 bool DuckLakeRESTServer::RunCommitGroup(const ServedCatalog &served,
                                         vector<reference<DuckLakeRESTPendingCommit>> &group) {
+	bool published = false;
+	string response;
+	string content_type;
+	ErrorData error;
 	try {
 		DuckLakeRESTRequest request(*served.db, served.catalog_name);
 		InitializeCommitRequest(request, group[0].get());
-		string response;
 		try {
 			response = DuckLakeRESTCommitGroup::Commit(request, group);
+			content_type = request.content_type;
 			if (request.connection.HasActiveTransaction()) {
 				request.connection.Commit();
 			}
 		} catch (...) {
+			published = request.published;
 			if (request.connection.HasActiveTransaction()) {
 				request.connection.Rollback();
 			}
 			throw;
 		}
-		for (auto &commit : group) {
-			commit.get().response = response;
-			commit.get().content_type = request.content_type;
-		}
-		return true;
 	} catch (std::exception &ex) {
-		return false;
+		if (!published) {
+			return false;
+		}
+		// the commits of a published group never run again
+		error = ErrorAfterPublication(ErrorData(ex));
 	}
+	for (auto &entry : group) {
+		auto &commit = entry.get();
+		if (error.HasError()) {
+			commit.error = error;
+			continue;
+		}
+		try {
+			commit.response = response;
+			commit.content_type = content_type;
+		} catch (std::exception &ex) {
+			commit.error = ErrorAfterPublication(ErrorData(ex));
+		}
+	}
+	return true;
 }
 
 void DuckLakeRESTServer::RunCommits(const ServedCatalog &served,

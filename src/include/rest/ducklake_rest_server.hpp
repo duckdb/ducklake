@@ -47,6 +47,8 @@ struct DuckLakeRESTPendingCommit {
 	bool shares_snapshot = false;
 
 	bool done = false;
+	//! Whether the commit did not run to its end, so that it is unknown whether it published its changes
+	bool interrupted = false;
 	string response;
 	string content_type;
 	ErrorData error;
@@ -104,6 +106,8 @@ public:
 	shared_ptr<const string> request_data;
 	//! The content type of the response, set by the endpoint if it is not JSON
 	string content_type = "application/json";
+	//! Whether the request committed its changes, a failure after that is not a reason to commit them again
+	bool published = false;
 };
 
 //! The pages of the scans that were split into pages, which the server keeps for a while
@@ -207,7 +211,7 @@ private:
 	//! Runs a commit, or the commits that share a snapshot
 	static void RunCommits(const ServedCatalog &served, vector<reference<DuckLakeRESTPendingCommit>> &commits);
 	static void RunCommit(const ServedCatalog &served, DuckLakeRESTPendingCommit &commit);
-	//! Returns false if the group did not commit, its commits then run one by one
+	//! Returns false if the group published nothing, its commits then run one by one
 	static bool RunCommitGroup(const ServedCatalog &served, vector<reference<DuckLakeRESTPendingCommit>> &group);
 
 private:
