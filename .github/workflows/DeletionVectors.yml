@@ -15,7 +15,7 @@ jobs:
   ducklake-deletion-vector-tests:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: DuckLake Tests (Deletion Vectors)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         arch: ['linux_amd64']

@@ -140,7 +140,7 @@ public:
 	shared_ptr<DuckLakeTableStats> GetTableStats(ClientContext &context);
 	shared_ptr<DuckLakeTableStats> GetTableStats(DuckLakeTransaction &transaction);
 	idx_t GetNetDataFileRowCount(DuckLakeTransaction &transaction);
-	idx_t GetNetInlinedRowCount(DuckLakeTransaction &transaction);
+	idx_t GetNetInlinedRowCount(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 
 	//! Gets the top-level not-null fields
 	identifier_set_t GetNotNullFields() const;
@@ -246,7 +246,7 @@ public:
 	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change);
 	// ! Create a DuckLakeTableEntry from an ADD COLUMN, the context reads the default of the existing rows
 	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change,
-	                   ClientContext &context);
+	                   ClientContext &context, const Value &initial_default = Value());
 	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, SetDefaultLocalChange local_change,
 	                   ClientContext &context);
 

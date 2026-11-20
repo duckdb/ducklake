@@ -1,0 +1,133 @@
+# name: test/sql/metadata/postgres_attach_cache_clear.test
+# description: attaches clear the PostgreSQL metadata cache only after creation, migration, or catalog reuse
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS attach_cache_clear, attach_cache_clear_v10 CASCADE')
+
+statement ok
+CREATE MACRO cache_clears() AS (
+	SELECT count(*) FROM duckdb_logs WHERE type = 'QueryLog' AND message LIKE '%clear_catalog_cache = true%'
+)
+
+# postgres_scanner loads the tables of a schema with one query on pg_namespace
+statement ok
+CREATE MACRO schema_loads(metadata_schema) AS (
+	SELECT count(*) FROM duckdb_logs_parsed('PostgresQueryLog')
+	WHERE query LIKE '%FROM pg_namespace%' AND contains(query, '(''' || metadata_schema || ''')')
+)
+
+statement ok
+CALL enable_logging(['QueryLog', 'PostgresQueryLog'], storage = 'memory')
+
+# the attach that creates the metadata tables clears the cache that loaded the schema before them
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/attach_cache_clear', METADATA_SCHEMA 'attach_cache_clear')
+
+query I
+SELECT cache_clears()
+----
+1
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DETACH dl
+
+# the attach of an existing lake keeps the cache, so the next query reuses the schema the attach loaded
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/attach_cache_clear', METADATA_SCHEMA 'attach_cache_clear')
+
+query I
+SELECT i FROM dl.t
+----
+42
+
+query II
+SELECT cache_clears(), schema_loads('attach_cache_clear')
+----
+0	1
+
+statement ok
+DETACH dl
+
+# a DuckLake that reuses the metadata catalog of an attached DuckLake clears the cache that catalog kept
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/attach_cache_clear', METADATA_SCHEMA 'attach_cache_clear', METADATA_CATALOG 'shared_meta')
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl2 (DATA_PATH '{DATA_PATH}/attach_cache_clear', METADATA_SCHEMA 'attach_cache_clear', METADATA_CATALOG 'shared_meta')
+
+query I
+SELECT cache_clears()
+----
+1
+
+query I
+SELECT i FROM dl2.t
+----
+42
+
+statement ok
+DETACH dl2
+
+statement ok
+DETACH dl
+
+# the attach that migrates the metadata tables clears the cache that loaded them before the migration
+# without inlined data the migration has no inlined columns to rename, which clears the cache as well
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS old (DATA_PATH '{DATA_PATH}/attach_cache_clear_v10', METADATA_SCHEMA 'attach_cache_clear_v10', DUCKLAKE_VERSION '1.0', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE old.t AS SELECT 7 AS i
+
+statement ok
+DETACH old
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS old (DATA_PATH '{DATA_PATH}/attach_cache_clear_v10', METADATA_SCHEMA 'attach_cache_clear_v10', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT cache_clears()
+----
+1
+
+query I
+SELECT i FROM old.t
+----
+7
+
+statement ok
+DETACH old
+
+statement ok
+CALL disable_logging()
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA attach_cache_clear, attach_cache_clear_v10 CASCADE')

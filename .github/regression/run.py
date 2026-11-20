@@ -1,4 +1,4 @@
-"""Runs DuckDB's regression runner and fails when any benchmark regresses in two runs in a row"""
+"""Runs DuckDB's regression comparison and fails on regressions confirmed beyond the absolute floor"""
 
 import argparse
 import os
@@ -13,10 +13,11 @@ from pathlib import Path
 from uuid import uuid4
 
 from catalog import create_catalog, render_root
+from compare import REGRESSION_FLOOR_SECONDS
 
 REPOSITORY = Path(__file__).resolve().parents[2]
 RUNNER = REPOSITORY / "duckdb" / "scripts" / "regression" / "test_runner.py"
-# Compares without confirming faster changes, while the rerun of the regressed benchmarks still confirms them
+# Confirms candidate regressions with extra pairs, an absolute floor and time-capped confirmation runs
 COMPARE = Path(__file__).resolve().with_name("compare.py")
 REGRESSED = re.compile(r"^(?:confirm|samples): (\S+): .*\| regression$", re.MULTILINE)
 COLOR = re.compile(r"\x1b\[[0-9;]*m")
@@ -195,19 +196,12 @@ def main(argv=None):
         initial = directory / f"{suite}.csv"
         initial.write_text("\n".join(benchmarks) + "\n", encoding="utf-8")
         code, regressed = run(COMPARE, root, passthrough, initial)
-        if code != 0 or not regressed:
-            return code
-
-        print("Rerunning the regressed benchmarks " + ", ".join(sorted(regressed)), flush=True)
-        rerun = directory / f"{suite}_rerun.csv"
-        rerun.write_text("\n".join(sorted(regressed)) + "\n", encoding="utf-8")
-        code, again = run(RUNNER, root, passthrough, rerun)
     if code != 0:
         return code
-    repeated = regressed & again
-    for benchmark in sorted(repeated):
-        print(f"::error::{benchmark} ({suite}) is 10% or more slower in two runs in a row", flush=True)
-    return 1 if repeated else 0
+    floor = round(REGRESSION_FLOOR_SECONDS * 1000)
+    for benchmark in sorted(regressed):
+        print(f"::error::{benchmark} ({suite}) is at least 10% and {floor} ms slower", flush=True)
+    return 1 if regressed else 0
 
 
 if __name__ == "__main__":

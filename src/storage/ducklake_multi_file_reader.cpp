@@ -146,21 +146,26 @@ static bool CanSkipFileByTopNDynamicFilter(const DuckLakeFileColumnStats &column
 	}
 }
 
-static bool CanSkipFileByPrefixRangeFilter(const DuckLakeFileColumnStats &file_stats,
-                                           const ColumnFilterInfo &column_filter, ClientContext &context) {
-	if (!ExpressionFilter::ContainsInternalFunction(*column_filter.table_filter->expr, PrefixRangeScalarFun::NAME)) {
+static bool CanSkipFileByStatistics(const DuckLakeFileColumnStats &file_stats, const ColumnFilterInfo &column_filter,
+                                    ClientContext &context) {
+	if (!DuckLakeColumnStats::StatsFromBounds(column_filter.column_type)) {
 		return false;
 	}
-
 	DuckLakeColumnStats column_stats(column_filter.column_type);
 	column_stats.min = file_stats.min;
 	column_stats.max = file_stats.max;
 	column_stats.has_min = file_stats.has_min;
 	column_stats.has_max = file_stats.has_max;
+	column_stats.contains_nan = file_stats.contains_nan;
+	column_stats.has_contains_nan = file_stats.has_contains_nan;
 
 	auto stats = column_stats.ToStats();
-	return stats &&
-	       column_filter.table_filter->CheckStatistics(context, *stats) == FilterPropagateResult::FILTER_ALWAYS_FALSE;
+	if (!stats) {
+		return false;
+	}
+	const auto prune_result = column_filter.table_filter->CheckStatistics(context, *stats);
+	return prune_result == FilterPropagateResult::FILTER_ALWAYS_FALSE ||
+	       prune_result == FilterPropagateResult::FILTER_FALSE_OR_NULL;
 }
 
 static bool CanSkipFileByRuntimeFilter(const DuckLakeFileListEntry &file_entry, const FilterPushdownInfo &filter_info,
@@ -176,7 +181,7 @@ static bool CanSkipFileByRuntimeFilter(const DuckLakeFileListEntry &file_entry, 
 		}
 		const auto &column_stats = stats_entry->second;
 		if (CanSkipFileByTopNDynamicFilter(column_stats, column_filter) ||
-		    CanSkipFileByPrefixRangeFilter(column_stats, column_filter, context)) {
+		    CanSkipFileByStatistics(column_stats, column_filter, context)) {
 			return true;
 		}
 	}
@@ -276,6 +281,31 @@ void DuckLakeMultiFileReader::BindOptions(MultiFileOptions &options, MultiFileLi
                                           MultiFileReaderBindData &bind_data) {
 }
 
+//! The field of a column that a scan reads, with the fields of a struct that it reads
+static bool TryGetProjectedColumn(const MultiFileColumnDefinition &column, const ColumnIndex &column_id,
+                                  DuckLakeProjectedColumn &result) {
+	auto &identifier = column.identifier;
+	if (identifier.IsNull() || identifier.type().id() != LogicalTypeId::INTEGER || IntegerValue::Get(identifier) < 0) {
+		return false;
+	}
+	result.field_index = FieldIndex(NumericCast<idx_t>(IntegerValue::Get(identifier)));
+	if (column.type.id() != LogicalTypeId::STRUCT) {
+		return true;
+	}
+	for (auto &child_id : column_id.GetChildIndexes()) {
+		auto child_index = child_id.GetPrimaryIndex();
+		DuckLakeProjectedColumn child(FieldIndex(0));
+		if (child_index >= column.children.size() ||
+		    !TryGetProjectedColumn(column.children[child_index], child_id, child)) {
+			// a field that cannot be identified: read the whole struct
+			result.children.clear();
+			return true;
+		}
+		result.children.push_back(std::move(child));
+	}
+	return true;
+}
+
 unique_ptr<MultiFileReaderGlobalState>
 DuckLakeMultiFileReader::InitializeGlobalState(ClientContext &context, const MultiFileOptions &file_options,
                                                const MultiFileReaderBindData &bind_data, const MultiFileList &file_list,
@@ -285,6 +315,19 @@ DuckLakeMultiFileReader::InitializeGlobalState(ClientContext &context, const Mul
 	// the scan tasks, where every worker piles into DuckLakeMultiFileList::GetFiles() and blocks on its lock
 	// while one of them runs the metadata query - which costs far more in scheduler churn than the scan itself.
 	file_list.Cast<DuckLakeMultiFileList>().SetScanColumns(global_columns, global_column_ids);
+	// The columns that the scan reads come along, so that the metadata manager can leave out the others.
+	vector<DuckLakeProjectedColumn> projection;
+	for (auto &column_id : global_column_ids) {
+		auto index = column_id.GetPrimaryIndex();
+		if (index >= global_columns.size()) {
+			continue;
+		}
+		DuckLakeProjectedColumn projected(FieldIndex(0));
+		if (TryGetProjectedColumn(global_columns[index], column_id, projected)) {
+			projection.push_back(std::move(projected));
+		}
+	}
+	file_list.Cast<DuckLakeMultiFileList>().SetProjection(std::move(projection));
 	file_list.Cast<DuckLakeMultiFileList>().GetFiles();
 
 	optional_idx deletion_scan_snapshot_col;
@@ -447,6 +490,15 @@ bool DuckLakeMultiFileReader::GetInlinedTableColumns(DuckLakeFunctionInfo &read_
 			// LCOV_EXCL_STOP
 		}
 		schema_table = *entry;
+	} else {
+		// the inlined data is in the schema of the table at the snapshot of the scan, without the changes of the
+		// transaction
+		auto transaction = read_info.GetTransaction();
+		auto entry =
+		    transaction->GetCatalog().GetEntryById(*transaction, read_info.snapshot, read_info.table.GetTableId());
+		if (entry) {
+			schema_table = entry->Cast<DuckLakeTableEntry>();
+		}
 	}
 	columns = DuckLakeMultiFileReader::ColumnsFromFieldData(schema_table.get().GetFieldData(), true);
 	columns.insert(columns.begin(), SnapshotIdColumn());

@@ -26,7 +26,7 @@ DETACH dl
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_dev1_to_v11_files')
 ----
-DuckLake catalog version mismatch: catalog version is 1.1-dev1, but the extension requires version 2.0-dev1.
+DuckLake catalog version mismatch: catalog version is 1.1-dev1, but the extension requires version 2.0-dev2.
 
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_dev1_to_v11_files', DUCKLAKE_VERSION '1.1')
@@ -36,7 +36,7 @@ DuckLake catalog version mismatch: catalog version is 1.1-dev1, but the extensio
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_dev1_to_v11_files', DUCKLAKE_VERSION '1.1-dev1')
 ----
-ducklake_version must be '1.0', '1.1' or '2.0-dev1', got '1.1-dev1'
+ducklake_version must be '1.0', '1.1' or '2.0-dev2', got '1.1-dev1'
 
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_dev1_to_v11_files', DUCKLAKE_VERSION '1.0', AUTOMATIC_MIGRATION TRUE)
@@ -49,7 +49,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_dev1_t
 query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
-2.0-dev1
+2.0-dev2
 
 query I
 SELECT * FROM dl.t

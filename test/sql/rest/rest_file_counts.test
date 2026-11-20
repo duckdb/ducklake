@@ -1,0 +1,52 @@
+# name: test/sql/rest/rest_file_counts.test
+# description: The files of a scan have their row count and row group count
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT i FROM range(1000) t(i)
+
+statement ok
+INSERT INTO dl.t SELECT i FROM range(50) t(i)
+
+query III
+SELECT file.row_count, file.row_group_count >= 1, delete_file IS NULL
+FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan', '{}', part := 'files') ORDER BY 1
+----
+50	true	true
+1000	true	true
+
+# a delete file has the number of deleted rows, a parquet delete file also its row groups
+statement ok
+DELETE FROM dl.t WHERE i < 10 AND i >= 5
+
+query III
+SELECT file.row_count, delete_file.row_count, delete_file.format = 'puffin' OR delete_file.row_group_count >= 1
+FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan', '{}', part := 'files') WHERE delete_file IS NOT NULL ORDER BY 1
+----
+50	5	true
+1000	5	true
+
+# the files of the extended list and of the changes
+query III
+SELECT row_count, file.row_count, delete_file.row_count
+FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/scan', '{"extended": true}', part := 'extended_files') ORDER BY 1
+----
+50	50	5
+1000	1000	5
+
+query III
+SELECT row_count, file.row_count, delete_file.row_count
+FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/tables/1/changes', '{"start_snapshot_id": 3, "changes": "deletions"}', part := 'deletions') ORDER BY 1
+----
+50	50	5
+1000	1000	5
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

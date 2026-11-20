@@ -13,7 +13,7 @@ defaults:
 jobs:
   ducklake-config-tests:
     name: DuckLake (Debug)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         arch: ['linux_amd64']

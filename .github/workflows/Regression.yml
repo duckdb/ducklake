@@ -22,7 +22,7 @@ jobs:
   regression:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 150
     # External catalog results are informational until their Linux comparisons are calibrated
     continue-on-error: ${{ matrix.catalog != 'duckdb' }}
@@ -88,15 +88,16 @@ jobs:
           submodules: 'true'
           persist-credentials: false
 
-      - name: Test the regression scripts
-        working-directory: pr/.github/regression
-        run: python3 -m unittest -v
-
       - name: Checkout DuckDB to version
         run: |
           for checkout in pr base; do
             git -C "$checkout/duckdb" checkout "$(cat "$checkout/.github/duckdb-version")"
           done
+
+      # After the DuckDB checkout, so the scripts are tested against the revision the benchmarks use
+      - name: Test the regression scripts
+        working-directory: pr/.github/regression
+        run: python3 -m unittest -v
 
       - name: Setup Ccache
         uses: hendrikmuhs/ccache-action@main

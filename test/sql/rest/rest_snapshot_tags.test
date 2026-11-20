@@ -1,0 +1,98 @@
+# name: test/sql/rest/rest_snapshot_tags.test
+# description: Snapshot tags and expired snapshots of a DuckLake served by a REST server
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(a INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+# the snapshots are listed through the REST API
+query I
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM ducklake_snapshots('dl')
+----
+[0, 1, 2, 3, 4]
+
+query II
+SELECT snapshot_id, changes FROM ducklake_snapshots('dl') WHERE snapshot_id = 2
+----
+2	{tables_inserted_into=[1]}
+
+# snapshot tags are managed on the server
+statement error
+CALL ducklake_create_tag('dl', 'v3', version => 3)
+----
+DuckLake REST catalogs do not support snapshot tags
+
+statement error
+FROM ducklake_tags('dl')
+----
+DuckLake REST catalogs do not support snapshot tags
+
+statement ok rest_db:rest_server_con
+CALL ducklake_create_tag('rest_lake', 'v3', version => 3)
+
+# a client time travels to a tag of the server
+query I
+SELECT list(a ORDER BY a) FROM dl.t AT (VERSION => 'v3')
+----
+[1, 2]
+
+query I
+SELECT list(a ORDER BY a) FROM dl.t AT (VERSION => '4')
+----
+[1, 2, 3]
+
+statement error
+SELECT * FROM dl.t AT (VERSION => 'unknown_tag')
+----
+unknown_tag
+
+# expiring snapshots is maintenance of the server
+statement error
+FROM ducklake_expire_snapshots('dl', versions => [2], dry_run => true)
+----
+DuckLake REST catalogs do not support expiring snapshots
+
+statement ok
+SET VARIABLE t1 = (SELECT snapshot_time FROM ducklake_snapshots('dl') WHERE snapshot_id = 1)
+
+query I
+SELECT count(*) FROM dl.t AT (TIMESTAMP => getvariable('t1'))
+----
+0
+
+statement ok rest_db:rest_server_con
+CALL ducklake_expire_snapshots('rest_lake', versions => [2])
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+# the server refuses time travel to a time before the expired snapshot
+statement error
+SELECT count(*) FROM dl.t AT (TIMESTAMP => getvariable('t1'))
+----
+snapshot 2 was expired and its commit time is not kept
+
+# the tagged snapshot remains
+query I
+SELECT list(a ORDER BY a) FROM dl.t AT (VERSION => 'v3')
+----
+[1, 2]
+
+include test/template/rest_teardown.test_template

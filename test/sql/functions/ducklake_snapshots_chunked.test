@@ -15,13 +15,13 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/snapshots_
 
 # Populate enough history to span several output chunks without thousands of commits.
 statement ok
-INSERT INTO meta.ducklake_snapshot
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id)
 SELECT i, to_timestamp(i), schema_version, next_catalog_id, next_file_id
 FROM range(1, 4098) r(i), meta.ducklake_snapshot
 WHERE snapshot_id = 0
 
 statement ok
-INSERT INTO meta.ducklake_snapshot_changes
+INSERT INTO meta.ducklake_snapshot_changes (snapshot_id, changes_made, author, commit_message, commit_extra_info)
 SELECT i,
        CASE WHEN i % 2 = 1 THEN 'inserted_into_table:' || i || ',deleted_from_table:' || (i + 1) END,
        CASE WHEN i % 2 = 1 THEN 'author ' || i END,
@@ -49,3 +49,27 @@ WHERE snapshot_id > 0 AND (
 )
 ----
 0
+
+query III
+SELECT changes, commit_message, snapshot_id FROM ducklake_snapshots('dl') WHERE snapshot_id = 4097
+----
+{tables_inserted_into=[4097], tables_deleted_from=[4098]}	message 4097	4097
+
+query IIII
+SELECT snapshot_id, author, commit_message, commit_extra_info
+FROM ducklake_expire_snapshots('dl', dry_run => true, versions => [4095])
+----
+4095	author 4095	message 4095	extra 4095
+
+statement ok
+UPDATE meta.ducklake_snapshot_changes SET changes_made = 'unknown:1' WHERE snapshot_id = 4097
+
+query I
+SELECT count(*) FROM ducklake_snapshots('dl')
+----
+4098
+
+statement error
+SELECT changes FROM ducklake_snapshots('dl') WHERE snapshot_id = 4097
+----
+Unsupported change type

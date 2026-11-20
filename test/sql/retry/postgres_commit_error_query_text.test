@@ -1,0 +1,58 @@
+# name: test/sql/retry/postgres_commit_error_query_text.test
+# description: A Postgres commit error is not retried because the failed query mentions unique or conflict
+# group: [retry]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/pg_query_text')
+
+statement ok
+CREATE TABLE dl.orders (a INTEGER)
+
+statement ok
+DETACH dl
+
+# every write of this attachment fails
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION} options=--default_transaction_read_only=on' AS dl
+
+statement ok
+SET ducklake_max_retry_count = 2
+
+statement ok
+SET ducklake_retry_wait_ms = 1
+
+statement error
+CREATE TABLE dl.unique_orders (a INTEGER)
+----
+<REGEX>:.*DuckLake transaction\.\nFailed to flush changes into DuckLake[\s\S]*read-only transaction[\s\S]*
+
+statement error
+ALTER TABLE dl.orders ADD COLUMN unique_id INTEGER
+----
+<REGEX>:.*DuckLake transaction\.\nFailed to flush changes into DuckLake[\s\S]*read-only transaction[\s\S]*
+
+statement ok
+BEGIN
+
+statement ok
+CALL dl.set_commit_message('me', 'resolve a merge conflict')
+
+statement ok
+INSERT INTO dl.orders VALUES (1)
+
+statement error
+COMMIT
+----
+<REGEX>:.*DuckLake transaction\.\nFailed to flush changes into DuckLake[\s\S]*read-only transaction[\s\S]*

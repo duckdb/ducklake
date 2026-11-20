@@ -18,7 +18,7 @@ jobs:
   rest:
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     name: Tests using SeaweedFS
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       VCPKG_TARGET_TRIPLET: 'x64-linux-release'
       GEN: ninja

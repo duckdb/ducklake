@@ -104,6 +104,8 @@ public:
 	void CopyMinFrom(const DuckLakeColumnStats &other);
 	void CopyMaxFrom(const DuckLakeColumnStats &other);
 	static bool BoundsSurviveTypePromotion(const LogicalType &source, const LogicalType &target);
+	//! Whether the statistics of a type are built from its min, max and NaN flag
+	static bool StatsFromBounds(const LogicalType &type);
 	unique_ptr<BaseStatistics> ToStats() const;
 	void MergeStats(const DuckLakeColumnStats &new_stats);
 

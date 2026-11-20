@@ -1,6 +1,7 @@
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
+#include "storage/ducklake_metadata_profile.hpp"
 
 namespace duckdb {
 
@@ -20,15 +21,15 @@ static unique_ptr<FunctionData> DuckLakeSettingsBind(ClientContext &context, Tab
 	auto result = make_uniq<MetadataBindData>();
 	vector<Value> row_values;
 
-	// catalog_type: normalize the metadata type to a user-friendly name
-	auto catalog_type = ducklake_catalog.MetadataType();
-	if (catalog_type == "postgres_scanner") {
-		catalog_type = "postgres";
-	} else if (catalog_type == "sqlite_scanner") {
-		catalog_type = "sqlite";
-	} else if (catalog_type.empty() || catalog_type == "motherduck" || catalog_type == "md_server") {
-		// default to "duckdb" since DuckDB is the default metadata storage
+	// catalog_type: the catalog type of the metadata database, unless its profile reports another
+	auto catalog_type = ducklake_catalog.MetadataCatalogType();
+	auto &metadata_type = ducklake_catalog.MetadataType();
+	if (metadata_type == "md" || metadata_type == "motherduck" || metadata_type == "md_server") {
 		catalog_type = "duckdb";
+	}
+	auto &reported_catalog_type = ducklake_catalog.MetadataProfile().reported_catalog_type;
+	if (!reported_catalog_type.empty()) {
+		catalog_type = reported_catalog_type;
 	}
 	row_values.push_back(Value(catalog_type));
 

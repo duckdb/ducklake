@@ -1,0 +1,73 @@
+# name: test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test
+# description: Time travel by timestamp in a Postgres transaction that sees a concurrent expiry under READ COMMITTED
+# group: [time_travel]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS l (DATA_PATH '{DATA_PATH}/at_timestamp_expired_rc', META_ISOLATION_LEVEL 'READ COMMITTED', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE l.t(a INT)
+
+statement ok
+INSERT INTO l.t VALUES (1)
+
+# a transaction whose newest snapshot is 2 resolves both timestamps
+statement ok con2
+BEGIN
+
+statement ok con2
+SET VARIABLE t1 = (SELECT snapshot_time FROM l.snapshots() WHERE snapshot_id = 1)
+
+statement ok con2
+SET VARIABLE t2 = (SELECT snapshot_time FROM l.snapshots() WHERE snapshot_id = 2)
+
+query I con2
+SELECT count(*) FROM l.t AT (TIMESTAMP => getvariable('t1'))
+----
+0
+
+query I con2
+SELECT list(a) FROM l.t AT (TIMESTAMP => getvariable('t2'))
+----
+[1]
+
+# meanwhile snapshots 3 and 4 are committed and snapshot 2 expired
+statement ok
+INSERT INTO l.t VALUES (2)
+
+statement ok
+INSERT INTO l.t VALUES (3)
+
+statement ok
+CALL ducklake_expire_snapshots('l', versions => [2])
+
+query I
+SELECT list(snapshot_id) FROM l.snapshots()
+----
+[0, 1, 3, 4, 5]
+
+# the metadata reads of the transaction see the expiry, so its cached timestamps are checked again
+statement error con2
+SELECT count(*) FROM l.t AT (TIMESTAMP => getvariable('t1'))
+----
+Cannot time travel to timestamp
+
+statement error con2
+SELECT list(a) FROM l.t AT (TIMESTAMP => getvariable('t2'))
+----
+snapshot 2 was expired
+
+statement ok con2
+ROLLBACK
