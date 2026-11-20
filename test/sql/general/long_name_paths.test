@@ -39,9 +39,7 @@ INSERT INTO lake.uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu
 
 query II
 SELECT length(path), path = repeat('u', 255) || '/' FROM meta.ducklake_table t
-WHERE NOT EXISTS (
-    SELECT 1 FROM meta.ducklake_table_visibility e
-    WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)
+WHERE t.begin_snapshot = (SELECT MAX(t2.begin_snapshot) FROM meta.ducklake_table t2 WHERE t2.table_id = t.table_id)
 ORDER BY table_id
 ----
 37	false

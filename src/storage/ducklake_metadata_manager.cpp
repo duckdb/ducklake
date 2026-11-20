@@ -1065,8 +1065,8 @@ DuckLakeMetadataManager::V2_0FileRanges DuckLakeMetadataManager::ProbeV2_0FileRa
 }
 
 bool DuckLakeMetadataManager::V2_0RowCompanion::Incomplete() const {
-	// the rename of the companion into place is the last statement of a kind, so the final companion alone proves it
-	return present && (!has_companion || has_pending);
+	// the rename of the companion into place is the last statement of a kind, the birth branch is probed on its own
+	return present && (!has_branch_column || !has_companion || has_pending);
 }
 
 bool DuckLakeMetadataManager::V2_0RowCompanions::Incomplete() const {
@@ -1143,6 +1143,10 @@ string DuckLakeMetadataManager::V2_0RowCompanionsSql(const V2_0RowCompanions &ro
 		}
 		// the SQLite scanner drops the default, so the update fills the branch of the existing rows
 		query += StringUtil::Format("UPDATE {METADATA_CATALOG}.%s SET branch_id = 0 WHERE branch_id IS NULL;\n", table);
+		if (row.has_companion && !row.has_pending) {
+			// the final companion stands, the kind lacked its birth branch alone
+			continue;
+		}
 		// the companion fills under its pending name, the rename into place proves the kind complete
 		if (!row.has_pending) {
 			query += RowVisibilityTableStatement(kind, pending) + "\n";

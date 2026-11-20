@@ -66,3 +66,18 @@ query I
 SELECT i FROM dl.t
 ----
 42
+
+statement ok
+DETACH dl
+
+statement ok
+DETACH fresh
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA row_companion_indexes CASCADE')
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA row_companion_indexes_fresh CASCADE')
+
+statement ok
+DETACH pg

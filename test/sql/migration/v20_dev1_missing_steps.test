@@ -880,6 +880,54 @@ SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_nam
 statement ok
 DETACH dl
 
+# a birth branch missing beside the final companion is added back, the companion stays in place
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+
+statement ok
+ALTER TABLE meta.ducklake_schema DROP COLUMN branch_id
+
+statement ok
+DETACH dl
+
+# the incomplete layout is refused without the migration option
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+----
+catalog version is 2.0-dev1, but the catalog lacks the catalog row companions
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE)
+
+query II
+SELECT schema_name, branch_id FROM meta.ducklake_schema ORDER BY begin_snapshot
+----
+main	0
+s	0
+
+query II
+SELECT row_snapshot, snapshot_id FROM meta.ducklake_schema_visibility
+----
+13	14
+
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name LIKE '%_visibility_pending'
+----
+0
+
+statement ok
+CREATE SCHEMA dl.s2
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_schema WHERE schema_name = 's2' AND branch_id = 0
+----
+1
+
+statement ok
+DETACH dl
+
 # a 2.0-dev1 attach of a complete layout probes the layout with one statement and runs no migration statement
 statement ok
 CALL truncate_duckdb_logs()
