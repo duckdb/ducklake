@@ -685,6 +685,14 @@ static string ColumnProbeSql(const vector<std::pair<string, string>> &columns) {
 	return "SELECT 1 FROM " + StringUtil::Join(sources, ", ");
 }
 
+bool DuckLakeMetadataManager::HasV1_1Layout() {
+	vector<std::pair<string, string>> tables {{"ducklake_snapshot", "snapshot_id"},
+	                                          {"ducklake_snapshot_changes", "snapshot_id"},
+	                                          {"ducklake_data_file", "data_file_id"},
+	                                          {"ducklake_delete_file", "delete_file_id"}};
+	return !Query(ColumnProbeSql(tables))->HasError();
+}
+
 bool DuckLakeMetadataManager::HasV1_1Additions() {
 	vector<std::pair<string, string>> columns {{"ducklake_view_column_tag", "*"}};
 	for (auto &added : V1_1_ADDED_COLUMNS) {

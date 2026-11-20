@@ -99,7 +99,7 @@ WHERE query LIKE '%RENAME TO ducklake_snapshot_old%' AND query NOT LIKE '%2.0-de
 ----
 1
 
-# the second batch bumps the version after it renames the rebuilt tables into place
+# the second batch writes the version after it renames the rebuilt tables into place
 query I
 SELECT instr(query, '2.0-dev1') > instr(query, 'RENAME TO ducklake_snapshot;')
 FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%RENAME TO ducklake_snapshot;%'

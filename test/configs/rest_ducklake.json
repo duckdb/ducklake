@@ -551,6 +551,7 @@
         "test/sql/migration/v20_ended_delete_file_migration.test",
         "test/sql/migration/v20_file_events_migration.test",
         "test/sql/migration/v20_file_events_migration_resume.test",
+        "test/sql/migration/v20_interrupted_first_batch_attach.test",
         "test/sql/migration/v20_file_events_migration_resume_events.test",
         "test/sql/migration/v20_file_events_migration_resume_columns.test",
         "test/sql/migration/v20_file_events_migration_resume_one_table.test",

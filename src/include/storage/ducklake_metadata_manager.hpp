@@ -791,6 +791,8 @@ public:
 	static string GetMainBranchRowStatement();
 	//! Whether the catalog already has every metadata table and column of v1.1
 	bool HasV1_1Additions();
+	//! Whether the tables a migration to 2.0 moves aside are under their names, false for an interrupted first batch
+	bool HasV1_1Layout();
 	//! The snapshot additions of 2.0 a catalog is missing, probed so an interrupted migration resumes
 	struct V2_0SnapshotAdditions {
 		bool snapshot_tag_table = true;
