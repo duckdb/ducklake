@@ -962,6 +962,8 @@ protected:
 	bool read_file_counts = false;
 	//! The rewrite snapshots of a (table, snapshot range), valid for the transaction as they are committed
 	map<pair<idx_t, pair<idx_t, idx_t>>, set<idx_t>> rewrite_snapshots_memo;
+	//! Guards the memo, held across a lookup
+	mutex rewrite_snapshots_memo_lock;
 };
 
 } // namespace duckdb

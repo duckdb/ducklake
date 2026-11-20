@@ -3193,7 +3193,8 @@ WHERE begin_snapshot < %d AND file_id IN (%s)
 
 set<idx_t> DuckLakeMetadataManager::GetTableRewriteSnapshots(TableIndex table_id, DuckLakeSnapshot start_snapshot,
                                                              DuckLakeSnapshot snapshot) {
-	// the macro behind table_changes binds the feed functions four times, so repeated lookups hit the memo
+	// the four feed scans of table_changes read their file lists concurrently, the lock makes them share one lookup
+	lock_guard<mutex> guard(rewrite_snapshots_memo_lock);
 	auto memo_key = make_pair(table_id.index, make_pair(start_snapshot.snapshot_id, snapshot.snapshot_id));
 	auto entry = rewrite_snapshots_memo.find(memo_key);
 	if (entry != rewrite_snapshots_memo.end()) {
@@ -3210,6 +3211,7 @@ set<idx_t> DuckLakeMetadataManager::GetTableRewriteSnapshots(TableIndex table_id
 }
 
 void DuckLakeMetadataManager::ClearRewriteSnapshotsMemo() {
+	lock_guard<mutex> guard(rewrite_snapshots_memo_lock);
 	rewrite_snapshots_memo.clear();
 }
 
