@@ -46,7 +46,10 @@
         "test/sql/stats/count_star_optimization_cache.test",
         "test/sql/general/ducklake_metadata_logging.test",
         "test/sql/transaction/commit_skips_catalog_load.test",
-        "test/sql/transaction/commit_retry_skips_catalog_load.test"
+        "test/sql/transaction/commit_retry_skips_catalog_load.test",
+        "test/sql/stats/read_after_commit_table_stats.test",
+        "test/sql/stats/read_after_commit_table_stats_concurrent.test",
+        "test/sql/stats/read_after_commit_table_stats_evicted.test"
       ]
     },
     {
