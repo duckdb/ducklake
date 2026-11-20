@@ -1,0 +1,63 @@
+# name: test/sql/rest/rest_partition_delete_fallback.test
+# description: Partition predicates use row deletion when REST lacks whole-file partition statistics
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok rest_db:rest_server_con
+CALL rest_lake.set_option('data_inlining_row_limit', 0)
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+statement ok
+CREATE TABLE dl.t(p INTEGER, i INTEGER)
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO dl.t VALUES (1, 10), (1, 11), (2, 20), (2, 21)
+
+query II
+EXPLAIN DELETE FROM dl.t WHERE p = 2
+----
+physical_plan	<!REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM dl.t WHERE p = 1 AND i = 10
+----
+1
+
+query I
+DELETE FROM dl.t WHERE p = 1
+----
+1
+
+query II
+SELECT * FROM dl.t ORDER BY i
+----
+2	20
+2	21
+
+statement ok
+BEGIN
+
+query I
+DELETE FROM dl.t WHERE p = 2
+----
+2
+
+statement ok
+ROLLBACK
+
+query II
+SELECT * FROM dl.t ORDER BY i
+----
+2	20
+2	21
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

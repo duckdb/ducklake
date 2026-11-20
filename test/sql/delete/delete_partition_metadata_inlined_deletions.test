@@ -1,0 +1,50 @@
+# name: test/sql/delete/delete_partition_metadata_inlined_deletions.test
+# description: Partition deletes count only live rows with local and committed inlined deletions
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/metadata_inlined_deletion', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE lake.t(id INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE lake.t SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO lake.t SELECT i, i % 2 FROM range(40) r(i)
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM lake.t WHERE id = 0
+
+query I
+DELETE FROM lake.t WHERE p = 0
+----
+19
+
+statement ok
+COMMIT
+
+statement ok
+DELETE FROM lake.t WHERE id = 1
+
+query I
+DELETE FROM lake.t WHERE p = 1
+----
+19
+
+query I
+SELECT count(*) FROM lake.t
+----
+0

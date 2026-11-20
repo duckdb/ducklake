@@ -627,14 +627,6 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 			// LCOV_EXCL_STOP
 		}
 		auto setting_index = option.setting_index.GetIndex();
-		// these change the types or values read from the metadata and data files
-		static const case_insensitive_set_t READ_SETTINGS {"binary_as_string",    "pg_use_text_protocol",
-		                                                   "pg_query_mode",       "pg_use_binary_copy",
-		                                                   "pg_array_as_varchar", "pg_numeric_as_varchar"};
-		if (READ_SETTINGS.count(entry.first.GetIdentifierName())) {
-			ClientConfig::GetConfig(to).user_settings.SetUserSetting(setting_index, option.default_value);
-			continue;
-		}
 		if (!ClientConfig::GetConfig(from).user_settings.IsSet(setting_index)) {
 			continue;
 		}
@@ -642,6 +634,12 @@ void DuckLakeUtil::CopyExtensionSettings(ClientContext &from, ClientContext &to)
 		from.TryGetCurrentUserSetting(setting_index, value);
 		ClientConfig::GetConfig(to).user_settings.SetUserSetting(setting_index, std::move(value));
 	}
+	SetNativeExtensionTypes(to);
+}
+
+void DuckLakeUtil::SetNativeExtensionTypes(ClientContext &context) {
+	ResetExtensionSettings(context, {"binary_as_string", "pg_use_text_protocol", "pg_query_mode", "pg_use_binary_copy",
+	                                 "pg_array_as_varchar", "pg_numeric_as_varchar"});
 }
 
 void DuckLakeUtil::ResetExtensionSettings(ClientContext &context, const vector<string> &names) {

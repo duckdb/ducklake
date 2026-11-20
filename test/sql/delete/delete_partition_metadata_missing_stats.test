@@ -1,0 +1,41 @@
+# name: test/sql/delete/delete_partition_metadata_missing_stats.test
+# description: Unknown per-file statistics prevent metadata-only partition deletes
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/partition_missing_stats', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+foreach stat min_value max_value null_count
+
+statement ok
+CREATE TABLE lake.missing_{stat}(id INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE lake.missing_{stat} SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO lake.missing_{stat} VALUES (1, 1), (2, 1)
+
+statement ok
+UPDATE meta.ducklake_file_column_stats SET {stat} = NULL
+WHERE column_id = 2 AND table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'missing_{stat}')
+
+query II
+EXPLAIN DELETE FROM lake.missing_{stat} WHERE p % 1 = 0
+----
+physical_plan	<!REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM lake.missing_{stat} WHERE p % 1 = 0
+----
+2
+
+endloop

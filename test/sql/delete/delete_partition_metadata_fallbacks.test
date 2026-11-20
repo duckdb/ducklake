@@ -1,0 +1,200 @@
+# name: test/sql/delete/delete_partition_metadata_fallbacks.test
+# description: Metadata deletes preserve row predicates and reject incomplete partition metadata
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (METADATA_CATALOG 'md', DATA_PATH '{DATA_PATH}/metadata_fallbacks', DATA_INLINING_ROW_LIMIT 0)
+
+# Small identity types retain exact partition values.
+foreach type BOOLEAN TINYINT SMALLINT
+
+statement ok
+CREATE TABLE lake.exact_{type}(id INTEGER, p {type})
+
+statement ok
+ALTER TABLE lake.exact_{type} SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO lake.exact_{type} VALUES (1, 0), (2, 1), (3, 1)
+
+query II
+EXPLAIN DELETE FROM lake.exact_{type} WHERE p = 1
+----
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM lake.exact_{type} WHERE p = 1
+----
+2
+
+query I
+SELECT id FROM lake.exact_{type}
+----
+1
+
+endloop
+
+statement ok
+CREATE TABLE lake.row_predicate(id INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE lake.row_predicate SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO lake.row_predicate VALUES (1, 1), (2, 1), (3, 1), (4, 1)
+
+# A virtual-column predicate must not delete its entire partition.
+statement ok
+BEGIN
+
+query II
+EXPLAIN DELETE FROM lake.row_predicate WHERE p = 1 AND rowid % 2 = 0
+----
+physical_plan	<!REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM lake.row_predicate WHERE p = 1 AND rowid % 2 = 0
+----
+2
+
+query I rowsort
+SELECT id FROM lake.row_predicate
+----
+2
+4
+
+statement ok
+ROLLBACK
+
+# The same predicate is safe when it remains above the scan.
+statement ok
+SET disabled_optimizers = 'filter_pushdown'
+
+query II
+EXPLAIN DELETE FROM lake.row_predicate WHERE p = 1 AND rowid % 2 = 0
+----
+physical_plan	<!REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM lake.row_predicate WHERE p = 1 AND rowid % 2 = 0
+----
+2
+
+query I rowsort
+SELECT id FROM lake.row_predicate
+----
+2
+4
+
+statement ok
+RESET disabled_optimizers
+
+# A projected MARK join still needs its row-level IN filter.
+statement ok
+CREATE TABLE lake.large_in(p INTEGER)
+
+statement ok
+ALTER TABLE lake.large_in SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO lake.large_in VALUES (1), (2), (3), (4)
+
+query II
+EXPLAIN DELETE FROM lake.large_in WHERE p IN (1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47,49,51)
+----
+physical_plan	<!REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM lake.large_in WHERE p IN (1,3,5,7,9,11,13,15,17,19,21,23,25,27,29,31,33,35,37,39,41,43,45,47,49,51)
+----
+2
+
+query I rowsort
+SELECT p FROM lake.large_in
+----
+2
+4
+
+# Missing, duplicate or invalid partition values cannot prove a whole-file match.
+foreach damage missing duplicate invalid
+
+statement ok
+CREATE TABLE lake.{damage}_value(id INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE lake.{damage}_value SET PARTITIONED BY (p)
+
+statement ok
+INSERT INTO lake.{damage}_value VALUES (1, 1), (2, 1), (3, 2)
+
+statement ok
+INSERT INTO md.ducklake_file_partition_value
+SELECT * FROM md.ducklake_file_partition_value
+WHERE table_id = (SELECT table_id FROM md.ducklake_table WHERE table_name = '{damage}_value')
+  AND '{damage}' = 'duplicate'
+
+statement ok
+UPDATE md.ducklake_file_partition_value SET partition_value = 'not_an_integer'
+WHERE table_id = (SELECT table_id FROM md.ducklake_table WHERE table_name = '{damage}_value')
+  AND '{damage}' = 'invalid'
+
+statement ok
+DELETE FROM md.ducklake_file_partition_value
+WHERE table_id = (SELECT table_id FROM md.ducklake_table WHERE table_name = '{damage}_value')
+  AND '{damage}' = 'missing'
+
+query II
+EXPLAIN DELETE FROM lake.{damage}_value WHERE p % 2 = 1
+----
+physical_plan	<!REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM lake.{damage}_value WHERE p % 2 = 1
+----
+2
+
+query I
+SELECT id FROM lake.{damage}_value
+----
+3
+
+endloop
+
+# An empty inlined table left after flushing must not hide its data files.
+statement ok
+CREATE TABLE lake.flushed(id INTEGER, p INTEGER)
+
+statement ok
+ALTER TABLE lake.flushed SET PARTITIONED BY (p)
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 100, table_name => 'flushed')
+
+statement ok
+INSERT INTO lake.flushed VALUES (1, 1), (2, 1), (3, 2)
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+query II
+EXPLAIN DELETE FROM lake.flushed WHERE p = 1
+----
+physical_plan	<REGEX>:.*Ducklake Metadata Delete.*
+
+query I
+DELETE FROM lake.flushed WHERE p = 1
+----
+2
+
+query I
+SELECT id FROM lake.flushed
+----
+3
