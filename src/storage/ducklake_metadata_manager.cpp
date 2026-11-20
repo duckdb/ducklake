@@ -4930,7 +4930,8 @@ string DuckLakeMetadataManager::FromRelativePath(TableIndex table_id, const Duck
 }
 
 string DuckLakeMetadataManager::StorePath(string path, const string &separator) {
-	if (separator.empty() || separator == "/") {
+	// a remote path is stored as it is, whatever separator the data path uses: its backslashes are part of the key
+	if (separator.empty() || separator == "/" || DuckLakeUtil::IsRemotePath(path)) {
 		return path;
 	}
 	// LCOV_EXCL_START
@@ -4939,7 +4940,8 @@ string DuckLakeMetadataManager::StorePath(string path, const string &separator) 
 }
 
 string DuckLakeMetadataManager::LoadPath(string path, const string &separator) {
-	if (separator.empty() || separator == "/") {
+	// a remote path, absolute or resolved against a remote parent, keeps its slashes whatever the data path uses
+	if (separator.empty() || separator == "/" || DuckLakeUtil::IsRemotePath(path)) {
 		return path;
 	}
 	// LCOV_EXCL_START
