@@ -399,7 +399,7 @@ string DuckLakeMetadataManager::GetDeleteFileVisibilityTableStatement(bool if_no
 //! A file table joined with the add event and the delete event each of its files has on the main branch
 static string FileSourceOverEvents(const string &prefix, const string &file_table, const string &visibility_table,
                                    const string &file_id_column, optional_idx table_id) {
-	// one aggregate row per file, Postgres rescanned a join per event for every file
+	// the aggregate gives the planners one row per file to join
 	string table_filter;
 	if (table_id.IsValid()) {
 		table_filter = StringUtil::Format(" AND table_id = %d", table_id.GetIndex());
@@ -4770,6 +4770,7 @@ string DuckLakeMetadataManager::WriteNewInlinedFileDeletesSqlBatch(
 void DuckLakeMetadataManager::ClearInlinedTableCaches() {
 	insert_inlined_table_name_cache.clear();
 	delete_inlined_table_cache.clear();
+	committed_inlined_deletion_tables.reset();
 	InvalidateFileListCache();
 }
 
@@ -4927,9 +4928,12 @@ bool DuckLakeMetadataManager::InlinedDeletionTableExists(const Identifier &table
 }
 
 bool DuckLakeMetadataManager::CommittedInlinedDeletionTableExists(const Identifier &table_name) {
-	// a writer of another process may have created the table after the listing of this snapshot
+	// one listing per commit attempt, another process may have created the table after this snapshot's listing
 	if (ListsInlinedDeletionTables()) {
-		return ListInlinedDeletionTables().count(table_name.GetIdentifierName()) > 0;
+		if (!committed_inlined_deletion_tables) {
+			committed_inlined_deletion_tables = make_uniq<unordered_set<string>>(ListInlinedDeletionTables());
+		}
+		return committed_inlined_deletion_tables->count(table_name.GetIdentifierName()) > 0;
 	}
 	return MetadataTableExists(transaction, table_name);
 }

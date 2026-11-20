@@ -1019,6 +1019,8 @@ private:
 	DuckLakeListingCache<vector<DuckLakeDeleteScanEntry>> delete_scan_cache;
 	DuckLakeListingCache<optional_idx> row_count_cache;
 	unordered_set<idx_t> delete_inlined_table_cache;
+	//! The inlined deletion tables listed for the running commit attempt
+	unique_ptr<unordered_set<string>> committed_inlined_deletion_tables;
 
 protected:
 	DuckLakeTransaction &transaction;
