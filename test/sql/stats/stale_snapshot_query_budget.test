@@ -1,0 +1,67 @@
+# name: test/sql/stats/stale_snapshot_query_budget.test
+# description: A reader whose snapshot cannot use global stats queries them only once
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/stale_snapshot_query_budget.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/stale_snapshot_query_budget', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.wide AS SELECT i AS a, i AS b, i AS c, i AS d, i AS e, i AS f, i AS g, i AS h FROM range(10) t(i)
+
+statement ok
+CREATE TABLE dl.other(i INTEGER)
+
+statement ok con1
+BEGIN
+
+# Bind the reader's snapshot without loading global statistics for wide.
+query I con1
+SELECT count(*) FROM duckdb_columns() WHERE database_name='dl' AND table_name='wide'
+----
+8
+
+statement ok
+INSERT INTO dl.other VALUES (1)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+loop repeat 0 2
+
+query IIIIIIII con1
+SELECT sum(a), sum(b), sum(c), sum(d), sum(e), sum(f), sum(g), sum(h) FROM dl.wide WHERE a > 0
+----
+45	45	45	45	45	45	45	45
+
+endloop
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs WHERE type='DuckLakeMetadata' AND message LIKE '%latest_snapshot_id%'
+----
+1
+
+# A reader-only memo must not stop a later write from retrying with fresh statistics.
+statement ok con1
+INSERT INTO dl.wide VALUES (10,10,10,10,10,10,10,10)
+
+statement ok con1
+COMMIT
+
+query III
+SELECT count(*), min(a), max(a) FROM dl.wide
+----
+11	0	10

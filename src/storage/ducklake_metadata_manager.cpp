@@ -1858,12 +1858,18 @@ static string TableStatsQuery(const string &select_list, bool include_column_sta
 	return query + ";\n";
 }
 
-string DuckLakeMetadataManager::GlobalTableStatsQuery(bool include_exactness, const vector<TableIndex> &table_ids) {
+string DuckLakeMetadataManager::GlobalTableStatsQuery(bool include_exactness, const vector<TableIndex> &table_ids,
+                                                      bool include_snapshot_id, bool keyed_scans) {
 	string select_list =
 	    "table_id, column_id, record_count, next_row_id, file_size_bytes, contains_null, contains_nan, min_value, "
 	    "max_value, extra_stats";
 	if (include_exactness) {
 		select_list += ", min_is_exact, max_is_exact";
+	}
+	if (include_snapshot_id) {
+		select_list += StringUtil::Format(
+		    ", (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot%s) AS latest_snapshot_id",
+		    keyed_scans ? " WHERE branch_id = 0" : "");
 	}
 	return TableStatsQuery(select_list, true, table_ids);
 }
@@ -1908,10 +1914,21 @@ GROUP BY table_id;)",
 	}
 }
 
+string DuckLakeMetadataManager::GetGlobalTableStatsQuery(const vector<TableIndex> &table_ids) const {
+	return GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata(), table_ids, true);
+}
+
 vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot,
+                                                                             idx_t &latest_snapshot_id,
                                                                              const vector<TableIndex> &table_ids) {
-	auto result = Query(snapshot, GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata(), table_ids));
-	auto global_stats = ParseGlobalTableStats(*result);
+	auto result = Query(snapshot, GetGlobalTableStatsQuery(table_ids));
+	result->ThrowIfError("Failed to get global stats information from DuckLake: ");
+	vector<DuckLakeGlobalStatsInfo> global_stats;
+	bool has_exactness = ResultHasColumn(*result, "min_is_exact");
+	for (auto &row : *result) {
+		latest_snapshot_id = row.GetValue<idx_t>(has_exactness ? 12 : 10);
+		TransformGlobalStatsRow(row, global_stats, 0, has_exactness);
+	}
 	FillMissingTableSizes(global_stats, [&](string query) { return Query(snapshot, query); });
 	return global_stats;
 }
@@ -6881,11 +6898,11 @@ WHERE NOT EXISTS (
 		result->ThrowIfError("Failed to delete from ducklake_name_mapping in DuckLake: ");
 	}
 
-	unordered_set<idx_t> expired_next_file_ids;
+	unordered_set<idx_t> expired_snapshot_ids;
 	for (auto &snapshot : snapshots) {
-		expired_next_file_ids.insert(snapshot.next_file_id);
+		expired_snapshot_ids.insert(snapshot.id);
 	}
-	catalog.InvalidateTableStatsCaches(expired_next_file_ids);
+	catalog.InvalidateTableStatsCaches(expired_snapshot_ids);
 	ClearCache();
 }
 

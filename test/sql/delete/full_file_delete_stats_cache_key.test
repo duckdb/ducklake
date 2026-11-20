@@ -1,0 +1,62 @@
+# name: test/sql/delete/full_file_delete_stats_cache_key.test
+# description: Narrowed bounds use a new file ID cache key for older readers
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/full_file_delete_stats_cache_key.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/full_file_delete_stats_cache_key', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t SELECT range FROM range(100)
+
+statement ok
+INSERT INTO ducklake.t SELECT range FROM range(1000, 1100)
+
+statement ok
+SET VARIABLE original_file_id = (SELECT max(next_file_id) FROM __ducklake_metadata_ducklake.ducklake_snapshot)
+
+# Establish a snapshot without caching its table statistics.
+statement ok con1
+BEGIN
+
+query I con1
+SELECT count(*) FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 't'
+----
+1
+
+statement ok
+DELETE FROM ducklake.t WHERE i >= 1000
+
+# Readers that key statistics by next_file_id must not reuse the narrowed bounds for the older snapshot.
+query I
+SELECT max(next_file_id) > getvariable('original_file_id') FROM __ducklake_metadata_ducklake.ducklake_snapshot
+----
+true
+
+query II
+SELECT min_value::BIGINT, max_value::BIGINT FROM __ducklake_metadata_ducklake.ducklake_table_column_stats
+----
+0	99
+
+query I con2
+SELECT count(*) FROM ducklake.t WHERE i >= 1000
+----
+0
+
+query I con1
+SELECT count(*) FROM ducklake.t WHERE i >= 1000
+----
+100
+
+statement ok con1
+ROLLBACK

@@ -1,0 +1,48 @@
+# name: benchmark/micro/write/delete_full_file_commits.benchmark
+# description: Commit 20 DELETEs that each remove one whole 2048-row file of a lake with 1000 small files
+# group: [write]
+
+name Delete Full File Commits
+group micro
+subgroup write
+
+require ducklake
+
+require parquet
+
+argument work delete_full_file_work
+
+include benchmark/micro/fixtures/compaction.benchmark.in
+
+include benchmark/micro/fixtures/restore_cleanup.benchmark.in
+
+run
+DELETE FROM lake.frag WHERE id >= 0 AND id < 2048;
+DELETE FROM lake.frag WHERE id >= 2048 AND id < 4096;
+DELETE FROM lake.frag WHERE id >= 4096 AND id < 6144;
+DELETE FROM lake.frag WHERE id >= 6144 AND id < 8192;
+DELETE FROM lake.frag WHERE id >= 8192 AND id < 10240;
+DELETE FROM lake.frag WHERE id >= 10240 AND id < 12288;
+DELETE FROM lake.frag WHERE id >= 12288 AND id < 14336;
+DELETE FROM lake.frag WHERE id >= 14336 AND id < 16384;
+DELETE FROM lake.frag WHERE id >= 16384 AND id < 18432;
+DELETE FROM lake.frag WHERE id >= 18432 AND id < 20480;
+DELETE FROM lake.frag WHERE id >= 20480 AND id < 22528;
+DELETE FROM lake.frag WHERE id >= 22528 AND id < 24576;
+DELETE FROM lake.frag WHERE id >= 24576 AND id < 26624;
+DELETE FROM lake.frag WHERE id >= 26624 AND id < 28672;
+DELETE FROM lake.frag WHERE id >= 28672 AND id < 30720;
+DELETE FROM lake.frag WHERE id >= 30720 AND id < 32768;
+DELETE FROM lake.frag WHERE id >= 32768 AND id < 34816;
+DELETE FROM lake.frag WHERE id >= 34816 AND id < 36864;
+DELETE FROM lake.frag WHERE id >= 36864 AND id < 38912;
+DELETE FROM lake.frag WHERE id >= 38912 AND id < 40960;
+
+# A missed reset leaves nothing for the deletes
+result_query III
+SELECT Count, (SELECT count(*) FROM lake.frag),
+(SELECT count(*) FROM __ducklake_metadata_lake.ducklake_data_file WHERE end_snapshot IS NULL AND table_id = (
+SELECT table_id FROM __ducklake_metadata_lake.ducklake_table WHERE table_name = 'frag' AND end_snapshot IS NULL))
+FROM __answer
+----
+2048	2007040	980

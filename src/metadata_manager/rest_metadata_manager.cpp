@@ -262,8 +262,10 @@ DuckLakeCatalogInfo RESTMetadataManager::GetCatalogForSnapshot(DuckLakeSnapshot 
 }
 
 vector<DuckLakeGlobalStatsInfo> RESTMetadataManager::GetGlobalTableStats(DuckLakeSnapshot snapshot,
+                                                                         idx_t &latest_snapshot_id,
                                                                          const vector<TableIndex> &table_ids) {
-	// table statistics are not versioned, a transaction keeps the statistics it read first
+	// The server omits mutable statistics that no longer describe the requested snapshot.
+	latest_snapshot_id = snapshot.snapshot_id;
 	{
 		lock_guard<mutex> guard(cache_lock);
 		auto entry = table_stats.find(snapshot.snapshot_id);
@@ -281,7 +283,8 @@ vector<DuckLakeGlobalStatsInfo> RESTMetadataManager::GetGlobalTableStats(DuckLak
 
 map<TableIndex, idx_t> RESTMetadataManager::GetTableRecordCounts(DuckLakeSnapshot snapshot) {
 	map<TableIndex, idx_t> result;
-	for (auto &stats : GetGlobalTableStats(snapshot)) {
+	idx_t latest_snapshot_id;
+	for (auto &stats : GetGlobalTableStats(snapshot, latest_snapshot_id)) {
 		if (!stats.record_count_unknown) {
 			result.emplace(stats.table_id, stats.record_count);
 		}
@@ -1199,7 +1202,7 @@ void RESTMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tran
 		catalog.SetConfigOption(option);
 	}
 	catalog.SetCommittedSnapshotId(response.snapshot.snapshot_id);
-	flush_transaction.ApplyServerSideCommit(response.snapshot.schema_version, response.snapshot.next_file_id);
+	flush_transaction.ApplyServerSideCommit(response.snapshot.schema_version);
 }
 
 } // namespace duckdb

@@ -78,6 +78,13 @@ WHERE query LIKE 'SELECT * FROM postgres_query(%'
 ----
 true
 
+# the snapshot paired with mutable table statistics uses the same key
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%MAX(snapshot_id) FROM %ducklake_snapshot WHERE branch_id = 0) AS latest_snapshot_id%'
+----
+true
+
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
 WHERE regexp_replace(query, '\s+', ' ', 'g') LIKE 'SELECT * FROM postgres_query(%c.branch_id = 0%'

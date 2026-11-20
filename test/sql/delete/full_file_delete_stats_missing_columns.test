@@ -1,0 +1,67 @@
+# name: test/sql/delete/full_file_delete_stats_missing_columns.test
+# description: Dropping a file does not invent statistics for added columns missing from the remaining files
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/full_file_delete_stats_missing_columns', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+statement ok
+INSERT INTO ducklake.t VALUES (2)
+
+# None of these columns are physically present in either data file.
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN g GEOMETRY DEFAULT 'POINT(1 1)'::GEOMETRY
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN v VARIANT DEFAULT 7
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN n INTEGER
+
+statement ok
+ALTER TABLE ducklake.t ADD COLUMN d INTEGER DEFAULT 42
+
+statement ok
+DELETE FROM ducklake.t WHERE i = 1
+
+query IIII
+SELECT vertex_extract(g, 'x'), v::INTEGER, n, d FROM ducklake.t
+----
+1.0	7	NULL	42
+
+query I
+SELECT count(*) FROM ducklake.t WHERE g && 'POINT(1 1)'::GEOMETRY
+----
+1
+
+query IIIII
+SELECT count(*), count(g), count(v), count(n), count(d) FROM ducklake.t
+----
+1	1	1	0	1
+
+query II
+SELECT count(*) FILTER (WHERE n IS NULL), count(*) FILTER (WHERE d = 42) FROM ducklake.t
+----
+1	1
+
+# An absent extended-statistics row must not turn into an empty geometry or VARIANT summary.
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s
+JOIN __ducklake_metadata_ducklake.ducklake_column c USING (table_id, column_id)
+WHERE c.column_name IN ('g', 'v') AND s.extra_stats IS NOT NULL
+----
+0

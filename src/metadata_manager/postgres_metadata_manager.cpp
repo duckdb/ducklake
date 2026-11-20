@@ -557,6 +557,16 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 	return PostgresQuery(remote_query);
 }
 
+string PostgresMetadataManager::GetGlobalTableStatsQuery(const vector<TableIndex> &table_ids) const {
+	// Separate scanner statements can observe narrowed bounds after reading an older snapshot ID at READ COMMITTED.
+	auto &catalog = transaction.GetCatalog();
+	auto remote_query =
+	    GlobalTableStatsQuery(catalog.SupportsV1_1Metadata(), table_ids, true, catalog.SupportsBranching());
+	SubstituteCatalogPlaceholders(remote_query,
+	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
+	return PostgresQuery(remote_query);
+}
+
 string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot,
                                                                    bool include_exactness) const {
 	// one statement reads the latest snapshot and the table stats from the same state at any isolation level
