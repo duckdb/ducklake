@@ -1,0 +1,103 @@
+# name: test/sql/catalog/snapshot_branch_key_statements.test
+# description: a DuckDB catalog of 2.0 keeps the snapshot statements of 1.x, DuckDB folds a branch conjunct away
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_files',
+    METADATA_CATALOG 'meta', DUCKLAKE_VERSION '2.0-dev2')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+INSERT INTO dl.t VALUES (43)
+
+statement ok
+SET immediate_transaction_mode = true
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+# a new transaction reads the head of main
+query I
+SELECT count(*) FROM dl.t
+----
+2
+
+query I
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
+----
+[0, 1, 2]
+
+query I
+SELECT count(*) FROM dl.t AT (VERSION => 1)
+----
+1
+
+# the second commit checks for conflicts with the first one
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (44)
+
+statement ok con2
+INSERT INTO dl.t VALUES (45)
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+# the head read, the listing, the version lookup, the conflict check and the expiry ran
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM %ducklake_snapshot);%'
+----
+true
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%LEFT JOIN %ducklake_snapshot_changes USING (snapshot_id)%'
+----
+true
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%WHERE snapshot_id = 1 AND snapshot_id <= 2;%'
+----
+true
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%STRING_AGG(changes_made%'
+----
+true
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%DELETE FROM %ducklake_snapshot WHERE snapshot_id IN (1);%'
+----
+true
+
+# no predicate names the branch, the texts are those of 1.x
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%branch_id = 0%'
+----
+0
+
+query I
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
+----
+[0, 2, 3, 4, 5]
