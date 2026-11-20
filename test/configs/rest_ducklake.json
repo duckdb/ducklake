@@ -669,6 +669,7 @@
         "test/sql/metadata/postgres_text_protocol.test",
         "test/sql/migration/postgres_concurrent_migration.test",
         "test/sql/migration/postgres_dev1_migration_skips_present_ddl.test",
+        "test/sql/migration/postgres_row_companions_index_names.test",
         "test/sql/migration/postgres_dev_migration_failure.test",
         "test/sql/migration/postgres_inlined_unknown_column.test",
         "test/sql/migration/postgres_v04_dev1_missing_inlined_table.test",

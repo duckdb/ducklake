@@ -182,6 +182,67 @@ SELECT y FROM dl.w AT (VERSION => 12)
 ----
 1
 
+# a committed table renamed and dropped in one transaction gets one end and no row of the new name, snapshot 14
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.b RENAME TO c
+
+statement ok
+DROP TABLE dl.c
+
+statement ok
+COMMIT
+
+query III
+SELECT table_name, begin_snapshot, (SELECT list(e.snapshot_id) FROM meta.ducklake_table_visibility e
+    WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)
+FROM meta.ducklake_table t WHERE t.table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'b')
+ORDER BY begin_snapshot
+----
+b	11	[14]
+
+statement error
+SELECT * FROM dl.c
+----
+does not exist
+
+# a table dropped and recreated under its name in one commit ends the old row and bears a new one, snapshots 15 and 16
+statement ok
+CREATE TABLE dl.d AS SELECT 1 AS i
+
+statement ok
+BEGIN
+
+statement ok
+DROP TABLE dl.d
+
+statement ok
+CREATE TABLE dl.d AS SELECT 2 AS j
+
+statement ok
+COMMIT
+
+query IIII
+SELECT table_name, begin_snapshot, table_id > (SELECT MIN(table_id) FROM meta.ducklake_table WHERE table_name = 'd'),
+    (SELECT e.snapshot_id FROM meta.ducklake_table_visibility e
+    WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)
+FROM meta.ducklake_table t WHERE table_name = 'd' ORDER BY begin_snapshot
+----
+d	15	false	16
+d	16	true	NULL
+
+query I
+SELECT j FROM dl.d
+----
+2
+
+query I
+SELECT i FROM dl.d AT (VERSION => 15)
+----
+1
+
 statement ok
 DETACH dl
 
@@ -193,7 +254,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST
 query I
 SELECT table_name FROM ducklake_table_info('dl')
 ----
-b
+d
 
 query I
 SELECT y FROM dl.w

@@ -477,6 +477,16 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 	}
 }
 
+string PostgresMetadataManager::RowCompanionRenameSql(const string &kind) const {
+	// a renamed table keeps the name of its primary key index, a fresh catalog names it after the final table
+	auto table = RowVisibilityTableName(kind);
+	auto schema = SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName());
+	auto rename_index =
+	    StringUtil::Format("ALTER INDEX IF EXISTS %s.%s_pending_pkey RENAME TO %s_pkey", schema, table, table);
+	return DuckLakeMetadataManager::RowCompanionRenameSql(kind) +
+	       StringUtil::Format("CALL postgres_execute({METADATA_CATALOG_NAME_LITERAL}, %s);\n", SQLString(rename_index));
+}
+
 string PostgresMetadataManager::ConfigOptionLockSql() const {
 	// every such commit updates the version row, so of two concurrent ones the later fails or waits for the other
 	return "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = value WHERE key = 'version' AND scope IS NULL;\n";

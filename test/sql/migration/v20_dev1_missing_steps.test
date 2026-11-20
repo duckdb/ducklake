@@ -920,3 +920,24 @@ SELECT list(i ORDER BY i) FROM dl.t
 
 statement ok
 DETACH dl
+
+# a missing companion of a kind whose end column is gone held the ends of its rows, so the migration refuses it
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+
+statement ok
+DROP TABLE meta.ducklake_view_visibility
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+----
+catalog version is 2.0-dev1, but the catalog lacks the catalog row companions
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE)
+----
+the end snapshots of the ducklake_view rows were dropped and the end rows that replaced them are missing

@@ -859,8 +859,14 @@ public:
 		bool Incomplete() const;
 	};
 	V2_0RowCompanions ProbeV2_0RowCompanions();
+	//! Refuses a kind whose end column and companion are both gone while its table holds rows
+	void VerifyV2_0RowCompanions(const V2_0RowCompanions &rows);
+	//! Whether a metadata table holds a row
+	bool TableHasRows(const string &table);
+	//! Renames the filled companion of a kind into place, the last statement of the step for the kind
+	virtual string RowCompanionRenameSql(const string &kind) const;
 	//! Adds the birth branch and the companion of every converted kind and turns its end column into end rows
-	static string V2_0RowCompanionsSql(const V2_0RowCompanions &rows);
+	string V2_0RowCompanionsSql(const V2_0RowCompanions &rows) const;
 	//! Turns the end column of a kind into end rows of its pending companion and drops the column
 	static string V2_0RowEndBackfillSql(const RowVisibilityKind &kind, const string &table, const string &pending);
 	//! The shape of the catalog against the steps of 2.0, one probe of the metadata schema
