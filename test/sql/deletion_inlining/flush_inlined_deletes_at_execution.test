@@ -1,0 +1,120 @@
+# name: test/sql/deletion_inlining/flush_inlined_deletes_at_execution.test
+# description: inlined file deletions are flushed when the flush runs, not when it is planned
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}__ducklake.db.files', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT i FROM range(20) t(i)
+
+statement ok
+DELETE FROM ducklake.t WHERE i < 3
+
+# the deletions are inlined, so there is no delete file yet
+query II
+SELECT count(*), count(delete_file) FROM ducklake_list_files('ducklake', 't')
+----
+1	0
+
+# explaining does not flush
+statement ok
+EXPLAIN CALL ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT count(*), count(delete_file) FROM ducklake_list_files('ducklake', 't')
+----
+1	0
+
+# neither does preparing
+statement ok
+PREPARE flush AS SELECT * FROM ducklake_flush_inlined_data('ducklake')
+
+query II
+SELECT count(*), count(delete_file) FROM ducklake_list_files('ducklake', 't')
+----
+1	0
+
+# an explain in a transaction leaves the flush to the call that follows
+statement ok
+BEGIN
+
+statement ok
+EXPLAIN CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
+statement ok
+COMMIT
+
+query II
+SELECT count(*), count(delete_file) FROM ducklake_list_files('ducklake', 't')
+----
+1	1
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+17
+
+# the prepared flush runs against the deletions inlined since it was prepared
+statement ok
+CREATE TEMP TABLE flushed AS SELECT delete_file FROM ducklake_list_files('ducklake', 't')
+
+statement ok
+DELETE FROM ducklake.t WHERE i BETWEEN 3 AND 5
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't') JOIN flushed USING (delete_file)
+----
+1
+
+statement ok
+EXECUTE flush
+
+query II
+SELECT count(*), count(delete_file) FROM ducklake_list_files('ducklake', 't')
+----
+1	1
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't') JOIN flushed USING (delete_file)
+----
+0
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+14
+
+# EXPLAIN ANALYZE runs the query, so it flushes
+statement ok
+CREATE OR REPLACE TEMP TABLE flushed AS SELECT delete_file FROM ducklake_list_files('ducklake', 't')
+
+statement ok
+DELETE FROM ducklake.t WHERE i BETWEEN 6 AND 8
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't') JOIN flushed USING (delete_file)
+----
+1
+
+statement ok
+EXPLAIN ANALYZE CALL ducklake_flush_inlined_data('ducklake')
+
+query I
+SELECT count(*) FROM ducklake_list_files('ducklake', 't') JOIN flushed USING (delete_file)
+----
+0
+
+query I
+SELECT count(*) FROM ducklake.t
+----
+11

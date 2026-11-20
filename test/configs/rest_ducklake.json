@@ -604,7 +604,8 @@
     {
       "reason": "Explains the plan of a compaction, which a REST client sends to the REST server",
       "paths": [
-        "test/sql/compaction/explain_compaction_and_flush.test"
+        "test/sql/compaction/explain_compaction_and_flush.test",
+        "test/sql/deletion_inlining/flush_inlined_deletes_plan.test"
       ]
     },
     {

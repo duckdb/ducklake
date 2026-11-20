@@ -56,4 +56,22 @@ public:
 	string GetName() const override;
 };
 
+//! Flushes the inlined file deletions of a table to delete files when the query runs
+class DuckLakeFlushDeletions : public PhysicalOperator {
+public:
+	DuckLakeFlushDeletions(PhysicalPlan &physical_plan, const vector<LogicalType> &types, DuckLakeTableEntry &table);
+
+	DuckLakeTableEntry &table;
+
+public:
+	SourceResultType GetDataInternal(ExecutionContext &context, DataChunk &chunk,
+	                                 OperatorSourceInput &input) const override;
+
+	bool IsSource() const override {
+		return true;
+	}
+
+	string GetName() const override;
+};
+
 } // namespace duckdb
