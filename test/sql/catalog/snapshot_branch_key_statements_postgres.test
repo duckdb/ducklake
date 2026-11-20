@@ -1,0 +1,117 @@
+# name: test/sql/catalog/snapshot_branch_key_statements_postgres.test
+# description: a Postgres catalog of 2.0 keeps every branch conjunct in its native statements and the scanner lookups
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev2
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+INSERT INTO dl.t VALUES (43)
+
+statement ok
+SET immediate_transaction_mode = true
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+# a new transaction reads the head of main
+query I
+SELECT count(*) FROM dl.t
+----
+2
+
+query I
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
+----
+[0, 1, 2]
+
+query I
+SELECT count(*) FROM dl.t AT (VERSION => 1)
+----
+1
+
+# the second commit checks for conflicts with the first one
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (44)
+
+statement ok con2
+INSERT INTO dl.t VALUES (45)
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+# the server plans the head read and the conflict check from the composite key, both keep every conjunct
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE 'SELECT * FROM postgres_query(%'
+  AND query LIKE '%MAX(snapshot_id) FROM %ducklake_snapshot WHERE branch_id = 0) AND branch_id = 0;%'
+----
+true
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE regexp_replace(query, '\s+', ' ', 'g') LIKE 'SELECT * FROM postgres_query(%c.branch_id = 0%'
+  AND regexp_replace(query, '\s+', ' ', 'g') LIKE '%ducklake_snapshot WHERE branch_id = 0) AND branch_id = 0 UNION ALL%'
+----
+true
+
+# the lookups through the scanner name the branch beside snapshot_id
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%WHERE snapshot_id = 1 AND snapshot_id <= 2 AND branch_id = 0;%'
+----
+true
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%DELETE FROM %ducklake_snapshot WHERE snapshot_id IN (1) AND branch_id = 0;%'
+----
+true
+
+# the listing and the existence checks of the expiry scan the tables as in 1.x
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%LEFT JOIN %ducklake_snapshot_changes USING (snapshot_id)%' AND query NOT LIKE '%branch_id%'
+----
+true
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%snapshot_id < end_snapshot AND branch_id%' OR query LIKE '%ASOF LEFT JOIN (SELECT%'
+----
+0
+
+query I
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
+----
+[0, 2, 3, 4, 5]

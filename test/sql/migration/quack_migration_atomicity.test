@@ -53,12 +53,28 @@ statement ok
 DETACH dl
 
 statement ok
+CALL enable_logging('DuckLakeMetadata', storage = 'memory')
+
+statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+CALL disable_logging()
 
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev1
+2.0-dev2
+
+# the rename of the snapshot tables commits before the copy, each batch in a server transaction of its own
+query I
+SELECT string_agg(CASE WHEN query LIKE '%''BEGIN TRANSACTION;'')' THEN 'begin' WHEN query LIKE '%''COMMIT;'')' THEN 'commit'
+    WHEN query LIKE '%RENAME TO ducklake_snapshot_old%' THEN 'rename' ELSE 'copy' END, ' ' ORDER BY timestamp)
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%''BEGIN TRANSACTION;'')' OR query LIKE '%''COMMIT;'')' OR query LIKE '%RENAME TO ducklake_snapshot_old%'
+    OR query LIKE '%2.0-dev2%'
+----
+begin rename commit begin copy commit
 
 query I
 SELECT * FROM dl.t

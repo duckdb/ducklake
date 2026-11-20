@@ -358,8 +358,13 @@ public:
 
 	//! Initialize a new DuckLake
 	virtual void InitializeDuckLake(bool has_explicit_schema, DuckLakeEncryption encryption);
-	//! Get the CREATE TABLE statements for all metadata tables
+	//! Get the statements that create and seed all metadata tables
 	virtual string GetCreateTableStatements();
+	virtual string GetSnapshotTableStatement();
+	virtual string GetSnapshotChangesTableStatement();
+	//! The columns of the snapshot tables keyed by branch and snapshot, from 2.0 on
+	static string BranchedSnapshotTableColumns();
+	static string BranchedSnapshotChangesTableColumns();
 	virtual string GetSchemaTableStatement();
 	virtual string GetDataFileTableStatement();
 	virtual string GetDeleteFileTableStatement();
@@ -398,7 +403,8 @@ public:
 	//! Pure SQL templates (use `{METADATA_CATALOG}` placeholder) — caller substitutes + executes.
 	//! Both used by the regular metadata-manager methods and by server-side commit, which runs the
 	//! SQL on a fresh Connection without going through the metadata-manager wrapper.
-	static string LatestSnapshotQuery();
+	//! keyed_lookups puts branch_id = 0 beside the predicates on snapshot_id, keyed_scans on a MAX over the table
+	static string LatestSnapshotQuery(bool keyed_lookups, bool keyed_scans);
 	//! With table ids only those tables' stats are read
 	static string GlobalTableStatsQuery(bool include_exactness, const vector<TableIndex> &table_ids = {});
 	//! Pure parsers for the results of the above queries.
@@ -631,9 +637,9 @@ public:
 	                               const vector<DuckLakePath> &resolved_paths);
 	//! SQL templates with {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders, shared with the
 	//! server-side commit path.
-	static string InsertSnapshotSql();
+	static string InsertSnapshotSql(bool write_branch_id);
 	static string WriteSnapshotChangesSql(const SnapshotChangeInfo &change_info,
-	                                      const DuckLakeSnapshotCommit &commit_info);
+	                                      const DuckLakeSnapshotCommit &commit_info, bool write_branch_id);
 	static string UpdateGlobalTableStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
 	static string InsertTableColumnStatsSql(const DuckLakeGlobalStatsInfo &stats, bool write_stats_exactness);
 	//! Set the stored table sizes to the size of the live data files, and the known record counts of the given tables
@@ -644,11 +650,15 @@ public:
 	static SnapshotChangeInfo
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor, const string &query);
-	static string SnapshotAndStatsAndChangesQuery(bool include_exactness);
+	static string SnapshotAndStatsAndChangesQuery(bool include_exactness, bool keyed_lookups, bool keyed_scans);
 	//! The query of the conflict check, which must read the latest snapshot and the table stats consistently
 	virtual string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const;
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
+	//! Whether the metadata statements run on DuckDB itself, rather than through the scanner of another database
+	static bool IsDuckDBMetadataType(const string &metadata_type);
+	//! Whether a lookup on snapshot_id names the branch of main, where the metadata engine serves it from the key
+	bool BranchKeyedLookups() const;
 	//! Throws when the newest expired snapshot a time travel by timestamp could see is its resolved snapshot or newer
 	void CheckSnapshotAfterExpiredGap(const DuckLakeSnapshot &snapshot, const Value &timestamp,
 	                                  idx_t newest_snapshot_id, const set<idx_t> &expired_in_transaction);
@@ -710,7 +720,7 @@ public:
 	                                      const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped);
 	//! Ends the row of a committed tag at the snapshot of the commit
 	static string EndSnapshotTagSql(const DuckLakeSnapshotTagInfo &tag);
-	static string DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots);
+	static string DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots, bool branch_keyed);
 	//! Deletes the snapshots once the caller checked the catalog version
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	//! Deletes the metadata that only the deleted snapshots referenced, once the caller checked the catalog version
@@ -722,7 +732,7 @@ public:
 	virtual idx_t SetConfigOption(const DuckLakeConfigOption &option);
 	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);
 	idx_t ConfigOptionRowCount(const DuckLakeConfigOption &option, optional_ptr<const string> value = nullptr);
-	//! Runs a migration in one metadata transaction on a catalog where each statement commits on its own
+	//! Runs a migration batch in one metadata transaction on a catalog where each statement commits on its own
 	virtual void BeginMigration() {
 	}
 	virtual void CommitMigration() {
@@ -738,10 +748,45 @@ public:
 	virtual void MigrateV10(bool from_dev1 = false);
 	virtual void MigrateV11();
 	static string GetSnapshotTagTableStatement();
+	static string GetBranchTableStatement();
+	//! Inserts the row of the main branch unless the table has it
+	static string GetMainBranchRowStatement();
 	//! The columns that v1.1 added to the metadata tables
 	static const vector<DuckLakeAddedColumn> &V1_1AddedColumns();
 	//! Whether the catalog already has every metadata table and column of v1.1
 	virtual bool HasV1_1Additions();
+	//! Migrates a 2.0-dev1 catalog of any dev build or interruption state to the layout of 2.0-dev2
+	virtual void MigrateV20Dev1();
+	//! The additions of 2.0-dev2 a catalog is missing, probed so an interrupted migration resumes
+	struct V2_0Dev2Additions {
+		bool snapshot_tag_table = true;
+		bool branch_table = true;
+		//! Rebuilt through a rebuild table and an old table so an interrupted rebuild resumes
+		bool rebuild_snapshots = true;
+		bool has_snapshot_table = true;
+		bool snapshot_has_branch_column = false;
+		bool has_snapshot_rebuild = false;
+		bool has_snapshot_old = false;
+		bool rebuild_snapshot_changes = true;
+		bool has_changes_table = true;
+		bool changes_has_branch_column = false;
+		bool has_changes_rebuild = false;
+		bool has_changes_old = false;
+	};
+	V2_0Dev2Additions ProbeV2_0Dev2Additions();
+	//! The first batch of a rebuild, which takes the snapshot tables away by name and commits
+	static string V2_0Dev2RenameSql(const V2_0Dev2Additions &add);
+	//! The other additions, the second batch of a rebuild copies from the renamed tables
+	static string V2_0Dev2AdditionsSql(const V2_0Dev2Additions &add);
+	bool HasMetadataColumn(const string &table, const string &column);
+	//! Scans the metadata schema into the memo, once per probe pass
+	void ProbeMetadataSchema();
+	//! Reads the columns of every table of the metadata schema into the memo, false when the catalog lists none
+	virtual bool ProbeMetadataColumns();
+	//! Fills the memo from the table and column names a listing returns, false when the metadata table is not listed
+	bool ProbeMetadataColumnsFromListing(string query);
+	//! Drops the memo of a probe pass
+	void ResetProbedColumns();
 	//! Renames inlined metadata columns to the prefixed variants, skipping already renamed tables
 	virtual void MigrateInlinedColumnNames(bool probe_renamed);
 	//! Renames the given (old name, new name) columns of each inlined table
@@ -769,6 +814,8 @@ protected:
 	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
 
 	virtual string GetLatestSnapshotQuery() const;
+	//! The branch conjunct of a lookup on snapshot_id, preceded by AND, empty where the engine would not use it
+	string MainSnapshotFilter() const;
 	//! The changes of the snapshots from first_snapshot to last_snapshot that recorded a rewrite
 	virtual string GetRewriteSnapshotsQuery(idx_t first_snapshot, idx_t last_snapshot) const;
 
@@ -923,6 +970,12 @@ protected:
 	mutex paths_lock;
 	map<TableIndex, string> table_paths;
 	bool pending_cache_clear = false;
+	//! The columns of the metadata tables probed in the current pass, a missing table has none
+	unordered_map<string, vector<Identifier>> probed_columns;
+	//! Whether the pass scanned the metadata schema, a scan that listed no tables leaves the probes in the memo
+	bool probed_metadata_schema = false;
+	//! Whether the pass read the columns of every metadata table at once
+	bool probed_all_columns = false;
 	bool read_file_counts = false;
 };
 

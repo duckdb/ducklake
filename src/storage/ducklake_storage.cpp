@@ -68,6 +68,8 @@ static void HandleDuckLakeOption(ClientContext &context, DuckLakeOptions &option
 		options.busy_timeout = UBigIntValue::Get(value.DefaultCastAs(LogicalType::UBIGINT));
 	} else if (lcase == "ducklake_version") {
 		options.ducklake_version = ParseWritableDuckLakeVersion(value.ToString(), "ducklake_version");
+	} else if (lcase == "branch") {
+		throw InvalidInputException("branches are not yet supported in this version of DuckLake");
 	} else {
 		throw NotImplementedException("Unsupported option %s for DuckLake", option);
 	}

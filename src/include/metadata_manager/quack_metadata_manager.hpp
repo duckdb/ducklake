@@ -30,6 +30,7 @@ public:
 		return true;
 	}
 	void ProbeServerCapabilities() override;
+	bool ProbeMetadataColumns() override;
 	bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const override;
 	void FlushChangesServerSide(DuckLakeTransaction &transaction, DuckLakeSnapshot transaction_snapshot,
 	                            const TransactionChangeInformation &transaction_changes,
