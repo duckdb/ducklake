@@ -3076,8 +3076,7 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 	}
 
 	auto query = GenerateFileListQuery(table, snapshot, filter_info, file_order, runtime_filter_stats_columns);
-	// the parsed rows serve this transaction until it writes and others under the same head, never where the
-	// commits of other transactions show through
+	// reused until the transaction writes, and by other transactions under the same head
 	bool cacheable = !ShowsConcurrentCommits();
 	auto cache_key = to_string(snapshot.snapshot_id) + "/" + to_string(snapshot.schema_version) + "\n" + query;
 	if (cacheable) {

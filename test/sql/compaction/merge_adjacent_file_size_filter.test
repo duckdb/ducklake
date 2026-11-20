@@ -45,12 +45,12 @@ SELECT coalesce(sum(file_count), 0)::BIGINT FROM ducklake_table_info('ducklake')
 
 # Verify small files are < 1000 bytes and medium files are >= 1000 bytes
 query I
-SELECT count(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM __ducklake_metadata_ducklake.ducklake_data_file f JOIN (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot, MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot FROM __ducklake_metadata_ducklake.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id) v ON v.data_file_id = f.data_file_id) WHERE end_snapshot IS NULL AND file_size_bytes < 1000
+SELECT count(*) FROM ducklake_list_files('ducklake', 'example') WHERE data_file_size_bytes < 1000
 ----
 2
 
 query I
-SELECT count(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM __ducklake_metadata_ducklake.ducklake_data_file f JOIN (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot, MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot FROM __ducklake_metadata_ducklake.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id) v ON v.data_file_id = f.data_file_id) WHERE end_snapshot IS NULL AND file_size_bytes >= 1000
+SELECT count(*) FROM ducklake_list_files('ducklake', 'example') WHERE data_file_size_bytes >= 1000
 ----
 2
 
@@ -68,7 +68,7 @@ SELECT coalesce(sum(file_count), 0)::BIGINT FROM ducklake_table_info('ducklake')
 
 # The small files should still exist (count of files < 1000 bytes should be 2)
 query I
-SELECT count(*) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM __ducklake_metadata_ducklake.ducklake_data_file f JOIN (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot, MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot FROM __ducklake_metadata_ducklake.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id) v ON v.data_file_id = f.data_file_id) WHERE end_snapshot IS NULL AND file_size_bytes < 1000
+SELECT count(*) FROM ducklake_list_files('ducklake', 'example') WHERE data_file_size_bytes < 1000
 ----
 2
 

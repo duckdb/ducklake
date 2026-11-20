@@ -500,13 +500,11 @@ public:
 	void InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id);
 	//! Invalidate the cached table stats entries of this DuckLake for the given next file ids.
 	void InvalidateTableStatsCaches(const unordered_set<idx_t> &next_file_ids);
-	//! Observes the head a transaction loaded, a moved head drops the listings
+	//! A moved head drops the listings
 	void ObserveListingHead(idx_t head);
-	//! Returns the cached parsed listing of a read under the observed head, nullptr otherwise
 	shared_ptr<vector<DuckLakeFileListEntry>> TryGetCachedListing(const string &key, idx_t head);
-	//! Stores a parsed listing read under the observed head
 	void StoreCachedListing(const string &key, idx_t head, shared_ptr<vector<DuckLakeFileListEntry>> entries);
-	//! Drops the cached listings, called when a transaction writes metadata
+	//! Called when a transaction writes metadata
 	void InvalidateListingCache();
 	//! Invalidate the cached schema entry for a given schema_version.
 	void InvalidateSchemaCache(idx_t schema_version);
