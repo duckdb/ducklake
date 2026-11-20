@@ -388,7 +388,6 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				catalog_version = DuckLakeVersion::V2_0_DEV1;
 			}
 			if (catalog_version == DuckLakeVersion::V2_0_DEV1 && !missing_step.empty()) {
-				// a dev build stopped short of a step, the sequence resumes there
 				metadata_manager.MigrateV11(true);
 			}
 			migrating = false;

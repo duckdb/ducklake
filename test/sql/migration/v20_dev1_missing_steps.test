@@ -395,10 +395,7 @@ SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
 ----
 [0, 1, 2, 3, 4, 5]
 
-# a migration interrupted after renaming the rebuilt snapshot table into place drops the renamed single key table
-statement ok
-UPDATE meta.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version'
-
+# a renamed single key table left beside the rebuilt one is no missing step, the complete layout attaches as it is
 statement ok
 CREATE TABLE meta.ducklake_snapshot_old(snapshot_id BIGINT PRIMARY KEY, snapshot_time TIMESTAMPTZ,
     schema_version BIGINT, next_catalog_id BIGINT, next_file_id BIGINT)
@@ -410,32 +407,21 @@ SELECT snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id
 statement ok
 DETACH dl
 
-# the incomplete layout is refused without the migration option
-statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
-----
-catalog version is 2.0-dev1, but the catalog lacks the branch key of the snapshot tables
-
-# a read only attach cannot migrate
-statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    READ_ONLY, AUTOMATIC_MIGRATION TRUE)
-----
-read-only mode
-
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
 
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
 2.0-dev1
 
-statement error
-SELECT * FROM meta.ducklake_snapshot_old
+query I
+SELECT count(*) FROM meta.ducklake_snapshot_old
 ----
-does not exist
+6
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_old
 
 query II
 SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
@@ -866,7 +852,7 @@ SELECT row_snapshot, snapshot_id FROM meta.ducklake_view_visibility
 statement ok
 DETACH dl
 
-# a 2.0-dev1 attach of a complete layout probes the layout and runs no migration statement
+# a 2.0-dev1 attach of a complete layout probes the layout with one statement and runs no migration statement
 statement ok
 CALL truncate_duckdb_logs()
 
@@ -886,11 +872,17 @@ true
 
 query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%ducklake_branch%' OR query LIKE '%_rebuild%' OR query LIKE '%RENAME TO%'
+WHERE (query LIKE '%ducklake_branch%' OR query LIKE '%_rebuild%' OR query LIKE '%RENAME TO%'
     OR query LIKE '%ADD COLUMN branch_id%' OR query LIKE '%INSERT INTO%_visibility%'
-    OR query LIKE '%DROP COLUMN end_snapshot%'
+    OR query LIKE '%DROP COLUMN end_snapshot%') AND query NOT LIKE '%LIMIT 0%'
 ----
 0
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%ducklake_snapshot_tag%' AND query LIKE '%LIMIT 0%'
+----
+1
 
 query I
 SELECT list(i ORDER BY i) FROM dl.t

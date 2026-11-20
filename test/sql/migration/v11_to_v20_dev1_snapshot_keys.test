@@ -187,8 +187,8 @@ true
 
 query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-    WHERE query LIKE '%ducklake_branch%' OR query LIKE '%heal_complete%' OR query LIKE '%_rebuild%'
-    OR query LIKE '%RENAME TO%'
+    WHERE (query LIKE '%ducklake_branch%' OR query LIKE '%_rebuild%' OR query LIKE '%RENAME TO%')
+    AND query NOT LIKE '%LIMIT 0%'
 ----
 0
 

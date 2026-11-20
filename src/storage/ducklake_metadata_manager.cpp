@@ -795,16 +795,24 @@ static string V1_1MigrationQuery(bool has_additions) {
 	return query;
 }
 
-bool DuckLakeMetadataManager::HasV1_1Additions() {
-	string probe = "SELECT 1 FROM (SELECT * FROM {METADATA_CATALOG}.ducklake_view_column_tag LIMIT 0)";
-	idx_t alias_index = 0;
-	for (auto &added : V1_1_ADDED_COLUMNS) {
+//! One statement that binds a column of every listed table, so one round trip tells whether the catalog has them all
+static string ColumnProbeSql(const vector<std::pair<string, string>> &columns) {
+	vector<string> sources;
+	for (idx_t i = 0; i < columns.size(); i++) {
 		// a qualified column cannot resolve to the same column of an earlier subquery
-		auto alias = "added_" + to_string(alias_index++);
-		probe += StringUtil::Format(", (SELECT %s.%s FROM {METADATA_CATALOG}.%s %s LIMIT 0)", alias, added.column,
-		                            added.table, alias);
+		auto alias = "probed_" + to_string(i);
+		sources.push_back(StringUtil::Format("(SELECT %s.%s FROM {METADATA_CATALOG}.%s %s LIMIT 0)", alias,
+		                                     columns[i].second, columns[i].first, alias));
 	}
-	return !Query(probe)->HasError();
+	return "SELECT 1 FROM " + StringUtil::Join(sources, ", ");
+}
+
+bool DuckLakeMetadataManager::HasV1_1Additions() {
+	vector<std::pair<string, string>> columns {{"ducklake_view_column_tag", "*"}};
+	for (auto &added : V1_1_ADDED_COLUMNS) {
+		columns.emplace_back(added.table, added.column);
+	}
+	return !Query(ColumnProbeSql(columns))->HasError();
 }
 
 void DuckLakeMetadataManager::MigrateInlinedSchemaVersions() {
@@ -1240,6 +1248,15 @@ DuckLakeMetadataManager::V2_0Layout DuckLakeMetadataManager::ProbeV2_0Layout() {
 }
 
 string DuckLakeMetadataManager::MissingV2_0Step() {
+	// one statement binds the tables and columns of a complete layout, the schema scan serves the other layouts
+	vector<std::pair<string, string>> complete_layout {
+	    {"ducklake_snapshot", "branch_id"},        {"ducklake_snapshot_changes", "branch_id"},
+	    {"ducklake_branch", "branch_id"},          {"ducklake_snapshot_tag", "tag_name"},
+	    {"ducklake_file_visibility", "branch_id"}, {"ducklake_delete_file_visibility", "branch_id"},
+	    {"ducklake_data_file", "data_file_id"},    {"ducklake_delete_file", "delete_file_id"}};
+	if (!Query(ColumnProbeSql(complete_layout))->HasError()) {
+		return string();
+	}
 	auto layout = ProbeV2_0Layout();
 	if (layout.additions.snapshot_tag_table) {
 		return "the snapshot tag table";
