@@ -3012,7 +3012,9 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			}
 			if (!retry_on_error || finished_retrying) {
 				// we abort after the max retry count
-				CleanupFiles();
+				if (!context.files_owned_by_client) {
+					CleanupFiles();
+				}
 				string error_message = "Failed to commit DuckLake transaction.\n";
 				// only an error that another retry could solve gets the advice to raise the retry count
 				if (retry_on_error) {

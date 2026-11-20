@@ -963,7 +963,9 @@ void DuckLakeTransaction::Rollback() {
 			// nothing references the written files, so they are removed also when the rollback fails
 			connection.reset();
 			try {
-				state->CleanupFiles();
+				if (!files_owned_by_client) {
+					state->CleanupFiles();
+				}
 			} catch (std::exception &) { // NOLINT
 			}
 			throw;
@@ -1903,6 +1905,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.write_snapshot = ChangesMade();
 	// a REST server commits from the snapshot of its client, its metadata transaction sees later commits
 	context.check_conflicts_first = files_owned_by_client;
+	context.files_owned_by_client = files_owned_by_client;
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
 	context.snapshot_and_stats_query =
