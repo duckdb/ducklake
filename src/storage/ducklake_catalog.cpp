@@ -1816,37 +1816,4 @@ bool DuckLakeCatalog::UnregisterCatalog() {
 	return metadata_catalog_unused;
 }
 
-void DuckLakeCatalog::ObserveListingHead(idx_t head) {
-	lock_guard<mutex> guard(listing_cache_lock);
-	if (listing_cache_head.IsValid() && listing_cache_head.GetIndex() == head) {
-		return;
-	}
-	listing_cache.Clear();
-	listing_cache_head = head;
-}
-
-shared_ptr<vector<DuckLakeFileListEntry>> DuckLakeCatalog::TryGetCachedListing(const string &key, idx_t head) {
-	lock_guard<mutex> guard(listing_cache_lock);
-	if (!listing_cache_head.IsValid() || listing_cache_head.GetIndex() != head) {
-		return nullptr;
-	}
-	return listing_cache.Find(key);
-}
-
-void DuckLakeCatalog::StoreCachedListing(const string &key, idx_t head,
-                                         shared_ptr<vector<DuckLakeFileListEntry>> entries) {
-	lock_guard<mutex> guard(listing_cache_lock);
-	if (!listing_cache_head.IsValid() || listing_cache_head.GetIndex() != head) {
-		return;
-	}
-	auto rows = entries->size();
-	listing_cache.Store(key, std::move(entries), rows);
-}
-
-void DuckLakeCatalog::InvalidateListingCache() {
-	lock_guard<mutex> guard(listing_cache_lock);
-	listing_cache.Clear();
-	listing_cache_head = optional_idx();
-}
-
 } // namespace duckdb

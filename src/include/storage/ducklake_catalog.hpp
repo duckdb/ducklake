@@ -499,11 +499,6 @@ public:
 	void InvalidateTableStatsCache(idx_t next_file_id, TableIndex table_id);
 	//! Invalidate the cached table stats entries of this DuckLake for the given next file ids.
 	void InvalidateTableStatsCaches(const unordered_set<idx_t> &next_file_ids);
-	//! A moved head drops the listings
-	void ObserveListingHead(idx_t head);
-	shared_ptr<vector<DuckLakeFileListEntry>> TryGetCachedListing(const string &key, idx_t head);
-	void StoreCachedListing(const string &key, idx_t head, shared_ptr<vector<DuckLakeFileListEntry>> entries);
-	void InvalidateListingCache();
 	//! Invalidate the cached schema entry for a given schema_version.
 	void InvalidateSchemaCache(idx_t schema_version);
 	//! Invalidate a cached name map for a deleted mapping ID.
@@ -590,10 +585,6 @@ private:
 	unordered_map<idx_t, idx_t> inlined_deletion_not_exists;
 	//! The rewrite snapshots of each table, read from the snapshot changes of committed snapshots
 	mutex rewrite_snapshots_lock;
-	//! Parsed listings of reads at or below the observed head, shared across transactions
-	mutex listing_cache_lock;
-	optional_idx listing_cache_head;
-	DuckLakeListingCache<vector<DuckLakeFileListEntry>> listing_cache;
 	optional_idx rewrite_snapshots_read_until;
 	unordered_map<idx_t, set<idx_t>> rewrite_snapshots;
 	//! The inlined deletion tables of the metadata catalog, listed per snapshot id for the latest snapshots

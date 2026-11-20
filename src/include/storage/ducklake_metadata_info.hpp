@@ -11,7 +11,6 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/common/unordered_map.hpp"
-#include "duckdb/common/lru_cache.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/reference_map.hpp"
@@ -651,49 +650,6 @@ struct DuckLakeColumnMappingInfo {
 	MappingIndex mapping_id;
 	string map_type;
 	vector<DuckLakeNameMapColumnInfo> map_columns;
-};
-
-//! The weight of a cached metadata read, its rows and one for the read itself
-struct DuckLakeListingWeight {
-	explicit DuckLakeListingWeight(idx_t rows) : rows(rows) {
-	}
-	idx_t GetWeight() const {
-		return rows + 1;
-	}
-	idx_t rows;
-};
-
-//! Parsed metadata reads by statement, bounded in reads and rows
-template <class T>
-class DuckLakeListingCache {
-public:
-	static constexpr idx_t MAX_LISTINGS = 256;
-	static constexpr idx_t MAX_ROWS = 1ULL << 16;
-
-	DuckLakeListingCache() : entries(MAX_ROWS) {
-	}
-
-	static bool Admits(idx_t rows) {
-		return rows < MAX_ROWS;
-	}
-	shared_ptr<T> Find(const string &key) {
-		return entries.Get(key);
-	}
-	void Store(const string &key, shared_ptr<T> value, idx_t rows) {
-		if (!Admits(rows)) {
-			return;
-		}
-		entries.Put(key, std::move(value), rows);
-		while (entries.Size() > MAX_LISTINGS) {
-			entries.EvictToReduceAtLeast(1);
-		}
-	}
-	void Clear() {
-		entries.Clear();
-	}
-
-private:
-	SharedLruCache<string, T, DuckLakeListingWeight> entries;
 };
 
 } // namespace duckdb

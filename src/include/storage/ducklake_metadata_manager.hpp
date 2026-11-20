@@ -451,10 +451,6 @@ public:
 	GetTableDeletions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot, DuckLakeSnapshot snapshot,
 	                  bool include_local_changes = true,
 	                  optional_ptr<const vector<DuckLakeProjectedColumn>> projection = nullptr);
-	void AttachInlinedFileDeletions(TableIndex table_id, DuckLakeSnapshot snapshot, bool include_local_changes,
-	                                vector<DuckLakeFileListEntry> &files);
-	vector<DuckLakeDeleteScanEntry> ReadTableDeletions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot,
-	                                                   DuckLakeSnapshot end_snapshot, bool include_local_changes);
 	//! The snapshots of the range that rewrote data files of the table without changing its rows
 	set<idx_t> GetTableRewriteSnapshots(TableIndex table_id, DuckLakeSnapshot start_snapshot,
 	                                    DuckLakeSnapshot snapshot);
@@ -683,8 +679,6 @@ public:
 	virtual string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const;
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
-	//! Drops the cached listings, deletion scans and row counts, called when the transaction writes metadata
-	void InvalidateFileListCache();
 	//! Whether the metadata statements run on DuckDB itself, rather than through the scanner of another database
 	static bool IsDuckDBMetadataType(const string &metadata_type);
 	//! Whether a lookup on snapshot_id names the branch of main, where the metadata engine serves it from the key
@@ -1008,12 +1002,6 @@ private:
 	                                               const Identifier &snapshot_column);
 
 	unordered_map<idx_t, Identifier> insert_inlined_table_name_cache;
-	//! Parsed reads a statement repeats, kept until the transaction writes, with the head they were read under
-	optional_idx listing_head;
-	mutex listing_cache_lock;
-	DuckLakeListingCache<vector<DuckLakeFileListEntry>> file_list_cache;
-	DuckLakeListingCache<vector<DuckLakeDeleteScanEntry>> delete_scan_cache;
-	DuckLakeListingCache<optional_idx> row_count_cache;
 	unordered_set<idx_t> delete_inlined_table_cache;
 	//! The inlined deletion tables listed for the running commit attempt
 	unique_ptr<unordered_set<string>> committed_inlined_deletion_tables;

@@ -548,8 +548,6 @@
         "test/sql/general/read_only_attach_create_migrate.test",
         "test/sql/types/timestamptz_ns_v10.test",
         "test/sql/migration/v11_to_v20_dev1.test",
-        "test/sql/time_travel/time_travel_listing_cache.test",
-        "test/sql/time_travel/time_travel_listing_cache_transaction.test",
         "test/sql/migration/v20_dev3_file_events_migration.test",
         "test/sql/migration/v20_dev3_file_events_migration_resume.test",
         "test/sql/migration/v20_dev3_file_events_migration_resume_events.test",
