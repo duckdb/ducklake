@@ -1,0 +1,79 @@
+# name: test/sql/delete/file_set_inlined_variant_totals.test
+# description: File drops count pending inlined rows even when their encoding runs after the commit SQL batch
+# group: [delete]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/file_set_inlined_variant_totals.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/file_set_inlined_variant_totals', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER, v VARIANT)
+
+statement ok
+INSERT INTO lake.t VALUES (1, 'first'), (2, 'second')
+
+statement ok
+INSERT INTO lake.t VALUES (3, 'third'), (4, 'fourth')
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM lake.t WHERE i <= 2
+
+statement ok
+INSERT INTO lake.t VALUES (5, 'fifth')
+
+statement ok
+COMMIT
+
+query II
+SELECT record_count, next_row_id FROM meta.ducklake_table_stats
+----
+3	5
+
+query IT
+SELECT i, v::VARCHAR FROM lake.t ORDER BY i
+----
+3	third
+4	fourth
+5	fifth
+
+# Existing inlined tables must not count their pending inserts twice.
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM lake.t WHERE i IN (3, 4)
+
+statement ok
+INSERT INTO lake.t VALUES (6, 'sixth')
+
+statement ok
+COMMIT
+
+query II
+SELECT record_count, next_row_id FROM meta.ducklake_table_stats
+----
+2	6
+
+query IT
+SELECT i, v::VARCHAR FROM lake.t ORDER BY i
+----
+5	fifth
+6	sixth
+
+query II
+SELECT count(*), count(DISTINCT rowid) FROM lake.t
+----
+2	2

@@ -1,0 +1,162 @@
+# name: test/sql/retry/postgres_cleanup_completed.test
+# description: Cleanup completed after a stale snapshot retries without depending on the server language
+# group: [retry]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS cleanup_completed CASCADE')
+
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/cleanup_completed', METADATA_SCHEMA 'cleanup_completed', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+SET ducklake_retry_wait_ms = 1
+
+statement ok
+SET ducklake_max_retry_count = 20
+
+statement ok
+CREATE TABLE dl.t (i INT, s STRUCT(a INT))
+
+statement ok
+INSERT INTO dl.t VALUES (1, {'a': 1}), (2, {'a': 2}), (3, {'a': 3}), (4, {'a': 4})
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN j INT
+
+statement ok
+INSERT INTO dl.t VALUES (5, {'a': 5}, 5), (6, {'a': 6}, 6), (7, {'a': 7}, 7), (8, {'a': 8}, 8)
+
+# Keep the empty superseded table registered until the concurrent cleanup below.
+statement ok
+CALL postgres_execute('pg', 'CREATE VIEW cleanup_completed.blocker AS SELECT * FROM cleanup_completed.ducklake_inlined_data_1_1')
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 0)
+
+statement ok
+INSERT INTO dl.t VALUES (100, {'a': 100}, 100), (101, {'a': 101}, 101)
+
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10)
+
+statement ok
+DELETE FROM dl.t WHERE i IN (1, 100)
+
+# Keep live inlined data in the row total.
+statement ok
+INSERT INTO dl.t VALUES (9, {'a': 9}, 9)
+
+statement ok
+CALL postgres_execute('pg', 'DROP VIEW cleanup_completed.blocker')
+
+query I
+SELECT count(*) FROM __ducklake_metadata_dl.cleanup_completed.ducklake_inlined_data_tables
+----
+2
+
+# Cleanup commits after the metadata snapshot but before the registration lock.
+# Report its serialization failure in another language, without an English retry keyword.
+statement ok
+CALL postgres_execute('pg', 'CREATE SEQUENCE cleanup_completed.attempts;
+CREATE SEQUENCE cleanup_completed.finished;
+CREATE SEQUENCE cleanup_completed.localized;
+CREATE FUNCTION cleanup_completed.pause_names() RETURNS boolean AS $$
+DECLARE deadline timestamptz := clock_timestamp() + interval ''15 seconds'';
+BEGIN
+    IF current_query() LIKE ''%FOR KEY SHARE%'' AND nextval(''cleanup_completed.attempts'') = 1 THEN
+        LOOP
+            EXIT WHEN (SELECT is_called FROM cleanup_completed.finished);
+            IF clock_timestamp() > deadline THEN
+                RAISE EXCEPTION ''cleanup did not finish dropping the inlined table'';
+            END IF;
+            PERFORM pg_sleep(0.01);
+        END LOOP;
+        PERFORM nextval(''cleanup_completed.localized'');
+        RAISE serialization_failure USING MESSAGE = ''nie mozna wykonac operacji'';
+    END IF;
+    RETURN TRUE;
+END $$ LANGUAGE plpgsql;
+ALTER TABLE cleanup_completed.ducklake_inlined_data_tables RENAME TO inline_registry;
+CREATE VIEW cleanup_completed.ducklake_inlined_data_tables AS
+SELECT * FROM cleanup_completed.inline_registry WHERE cleanup_completed.pause_names();
+CREATE FUNCTION cleanup_completed.clean_old() RETURNS integer AS $$
+DECLARE deadline timestamptz := clock_timestamp() + interval ''15 seconds'';
+BEGIN
+    PERFORM set_config(''lock_timeout'', ''15s'', true);
+    LOOP
+        EXIT WHEN (SELECT is_called FROM cleanup_completed.attempts);
+        IF clock_timestamp() > deadline THEN
+            RAISE EXCEPTION ''committer did not reach the registration lookup'';
+        END IF;
+        PERFORM pg_sleep(0.01);
+    END LOOP;
+    DELETE FROM cleanup_completed.inline_registry WHERE table_name = ''ducklake_inlined_data_1_1'';
+    DROP TABLE cleanup_completed.ducklake_inlined_data_1_1;
+    RETURN 1;
+END $$ LANGUAGE plpgsql', prepare = false)
+
+concurrentloop worker 0 2
+
+onlyif worker=0
+statement ok
+CALL ducklake_rewrite_data_files('dl', 't', delete_threshold => 0.4)
+
+onlyif worker=1
+query I
+SELECT * FROM postgres_query('pg', 'SELECT cleanup_completed.clean_old()')
+----
+1
+
+onlyif worker=1
+statement ok
+SELECT * FROM postgres_query('pg', 'SELECT nextval(''cleanup_completed.finished'')')
+
+endloop
+
+query I
+SELECT * FROM postgres_query('pg', 'SELECT last_value > 1 AND (SELECT is_called FROM cleanup_completed.localized) FROM cleanup_completed.attempts')
+----
+true
+
+query II
+SELECT record_count, next_row_id FROM __ducklake_metadata_dl.cleanup_completed.ducklake_table_stats
+----
+10	11
+
+query III
+SELECT count(DISTINCT rowid), min(i), max(i) FROM dl.t
+----
+9	2	101
+
+query I
+SELECT count(*) FROM __ducklake_metadata_dl.cleanup_completed.ducklake_inlined_data_tables
+----
+1
+
+query I
+SELECT * FROM postgres_query('pg', 'SELECT to_regclass(''cleanup_completed.ducklake_inlined_data_1_1'') IS NULL')
+----
+true
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA cleanup_completed CASCADE')

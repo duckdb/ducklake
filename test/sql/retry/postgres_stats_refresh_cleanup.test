@@ -1,0 +1,121 @@
+# name: test/sql/retry/postgres_stats_refresh_cleanup.test
+# description: A READ COMMITTED row-count refresh cannot make stale bounds exact during snapshot cleanup
+# group: [retry]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres)
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS stats_refresh_cleanup CASCADE')
+
+# v1.1 expiry reclaims inlined rows without committing a new DuckLake snapshot.
+statement ok
+ATTACH 'ducklake:postgres:dbname=ducklakedb' AS dl
+(DATA_PATH '{DATA_PATH}/stats_refresh_cleanup', METADATA_SCHEMA 'stats_refresh_cleanup',
+ DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 1,
+ METADATA_PARAMETERS MAP {'isolation_level': 'READ COMMITTED'})
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range(100, 200)
+
+statement ok
+INSERT INTO dl.t SELECT range FROM range(200, 300)
+
+statement ok
+INSERT INTO dl.t VALUES (0)
+
+statement ok
+DELETE FROM dl.t WHERE i=0
+
+query III
+SELECT count(*), min(i), max(i) FROM dl.t
+----
+200	100	299
+
+# Pause after deciding whether the bounds need clearing, even when the UPDATE affects no rows.
+# The other connection expires the snapshot that still needs the deleted inlined minimum.
+statement ok
+CALL postgres_execute('pg', 'CREATE SEQUENCE stats_refresh_cleanup.entered;
+CREATE SEQUENCE stats_refresh_cleanup.finished;
+CREATE FUNCTION stats_refresh_cleanup.pause_refresh() RETURNS trigger AS $$
+DECLARE deadline timestamptz := clock_timestamp() + interval ''15 seconds'';
+BEGIN
+    IF nextval(''stats_refresh_cleanup.entered'') = 1 THEN
+        LOOP
+            EXIT WHEN (SELECT is_called FROM stats_refresh_cleanup.finished);
+            IF clock_timestamp() > deadline THEN
+                RAISE EXCEPTION ''snapshot cleanup did not finish'';
+            END IF;
+            PERFORM pg_sleep(0.01);
+        END LOOP;
+    END IF;
+    RETURN NULL;
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER pause_refresh AFTER UPDATE ON stats_refresh_cleanup.ducklake_table_column_stats
+FOR EACH STATEMENT EXECUTE FUNCTION stats_refresh_cleanup.pause_refresh();
+CREATE FUNCTION stats_refresh_cleanup.wait_for_refresh() RETURNS integer AS $$
+DECLARE deadline timestamptz := clock_timestamp() + interval ''15 seconds'';
+BEGIN
+    LOOP
+        EXIT WHEN (SELECT is_called FROM stats_refresh_cleanup.entered);
+        IF clock_timestamp() > deadline THEN
+            RAISE EXCEPTION ''row-count refresh did not reach the bounds update'';
+        END IF;
+        PERFORM pg_sleep(0.01);
+    END LOOP;
+    RETURN 1;
+END $$ LANGUAGE plpgsql', prepare = false)
+
+concurrentloop worker 0 2
+
+onlyif worker=0
+statement ok
+CALL ducklake_merge_adjacent_files('dl')
+
+onlyif worker=1
+query I
+SELECT * FROM postgres_query('pg', 'SELECT stats_refresh_cleanup.wait_for_refresh()')
+----
+1
+
+onlyif worker=1
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [0, 1, 2, 3, 4])
+
+onlyif worker=1
+statement ok
+CALL postgres_execute('pg', 'SELECT setval(''stats_refresh_cleanup.finished'', 1)')
+
+endloop
+
+query III
+SELECT count(*), min(i), max(i) FROM dl.t
+----
+200	100	299
+
+statement ok
+SET disabled_optimizers='statistics_propagation'
+
+query III
+SELECT count(*), min(i), max(i) FROM dl.t
+----
+200	100	299
+
+statement ok
+DETACH dl
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA stats_refresh_cleanup CASCADE')
