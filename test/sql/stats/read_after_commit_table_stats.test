@@ -1,0 +1,269 @@
+# name: test/sql/stats/read_after_commit_table_stats.test
+# description: after a commit, reads keep the stats of the tables it did not change and read only the changed tables
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lk (DATA_PATH '{DATA_PATH}/read_after_commit_table_stats/', DATA_INLINING_ROW_LIMIT 0)
+
+loop i 0 6
+
+statement ok
+CREATE TABLE lk.t{i}(i INTEGER)
+
+statement ok
+INSERT INTO lk.t{i} VALUES ({i})
+
+endloop
+
+# the first read loads the stats of every table
+query I
+SELECT count(*) FROM lk.t4
+----
+1
+
+statement ok con2
+INSERT INTO lk.t2 VALUES (20), (21)
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+query I
+SELECT count(*) FROM lk.t4
+----
+1
+
+query I
+SELECT count(*) FROM lk.t2
+----
+3
+
+query I
+SELECT count(*) FROM lk.t2 WHERE i >= 20
+----
+2
+
+statement ok
+CALL disable_logging()
+
+# only the stats of the changed table are read again
+query III
+SELECT count(*) FILTER (WHERE NOT regexp_matches(message, 'WHERE\s+table_id\s+IN\s+\(')),
+	count(*) FILTER (WHERE regexp_matches(message, 'WHERE\s+table_id\s+IN\s+\(')),
+	coalesce(bool_and(regexp_extract(message, 'table_id\s+IN\s+\(([0-9, ]+)\)', 1) = (SELECT table_id::VARCHAR FROM __ducklake_metadata_lk.ducklake_table WHERE table_name = 't2' AND end_snapshot IS NULL)), true)
+FROM duckdb_logs
+WHERE type = 'QueryLog' AND regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count')
+----
+0	1	true
+
+# the tables changed by one commit are read together, also after a lookup of an unchanged table
+statement ok con2
+BEGIN
+
+statement ok con2
+INSERT INTO lk.t3 VALUES (30)
+
+statement ok con2
+INSERT INTO lk.t4 VALUES (40)
+
+statement ok con2
+COMMIT
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+query III
+SELECT (SELECT count(*) FROM lk.t5), (SELECT count(*) FROM lk.t3), (SELECT count(*) FROM lk.t4)
+----
+1	2	2
+
+statement ok
+CALL disable_logging()
+
+query II
+SELECT count(*) FILTER (WHERE NOT regexp_matches(message, 'WHERE\s+table_id\s+IN\s+\(')),
+	count(*) FILTER (WHERE regexp_matches(message, 'WHERE\s+table_id\s+IN\s+\('))
+FROM duckdb_logs
+WHERE type = 'QueryLog' AND regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count')
+----
+0	1
+
+# a commit that changes most tables reads the stats of every table again
+statement ok con2
+BEGIN
+
+loop i 0 4
+
+statement ok con2
+INSERT INTO lk.t{i} VALUES (100)
+
+endloop
+
+statement ok con2
+COMMIT
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+query II
+SELECT (SELECT count(*) FROM lk.t0), (SELECT count(*) FROM lk.t5)
+----
+2	1
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FILTER (WHERE NOT regexp_matches(message, 'WHERE\s+table_id\s+IN\s+\('))
+FROM duckdb_logs
+WHERE type = 'QueryLog' AND regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count')
+----
+1
+
+# a schema change reads the stats of every table again, and the counts stay right
+statement ok con2
+ALTER TABLE lk.t5 ADD COLUMN j INTEGER
+
+statement ok con2
+INSERT INTO lk.t3 VALUES (300)
+
+query III
+SELECT (SELECT count(*) FROM lk.t3), (SELECT count(*) FROM lk.t4), (SELECT count(*) FROM lk.t5)
+----
+4	2	1
+
+# reads after several commits since the last full load
+statement ok con2
+INSERT INTO lk.t4 VALUES (400)
+
+statement ok con2
+INSERT INTO lk.t5 VALUES (500, 5)
+
+query IIII
+SELECT (SELECT count(*) FROM lk.t3), (SELECT count(*) FROM lk.t4), (SELECT count(*) FROM lk.t5), (SELECT max(i) FROM lk.t5)
+----
+4	3	2	500
+
+# a snapshot without its changes, as when an older release expired them with the snapshot, is not trusted
+query I
+SELECT count(*) FROM lk.t1
+----
+2
+
+statement ok con2
+INSERT INTO lk.t1 VALUES (700)
+
+statement ok con2
+INSERT INTO lk.t0 VALUES (800)
+
+statement ok
+DELETE FROM __ducklake_metadata_lk.ducklake_snapshot_changes WHERE snapshot_id = (SELECT max(snapshot_id) - 1 FROM __ducklake_metadata_lk.ducklake_snapshot_changes)
+
+query II
+SELECT (SELECT count(*) FROM lk.t1 WHERE i = 700), (SELECT count(*) FROM lk.t0 WHERE i = 800)
+----
+1	1
+
+# concurrent reads after a commit read its changes once, none of them reads every table again
+statement ok con2
+INSERT INTO lk.t2 VALUES (900)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('QueryLog', storage = 'memory')
+
+concurrentloop i 0 6
+
+statement ok
+SELECT count(*) FROM lk.t{i}
+
+endloop
+
+statement ok
+CALL disable_logging()
+
+query II
+SELECT count(*) FILTER (WHERE regexp_matches(message, 'SELECT\s+table_id,\s*column_id,\s*record_count') AND NOT regexp_matches(message, 'WHERE\s+table_id\s+IN\s+\(')),
+	count(*) FILTER (WHERE regexp_matches(message, 'SELECT\s+snapshot_id,\s*changes_made\s+FROM'))
+FROM duckdb_logs
+WHERE type = 'QueryLog'
+----
+0	1
+
+query II
+SELECT (SELECT count(*) FROM lk.t2), (SELECT count(*) FROM lk.t0)
+----
+5	3
+
+# an older snapshot that shares the next_file_id of the last full load does not replace its stats
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/stale_base.db' AS sw (DATA_PATH '{TEST_DIR}/stale_base/', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE sw.a AS SELECT range::INTEGER AS i FROM range(10)
+
+statement ok
+CREATE TABLE sw.b AS SELECT 0::INTEGER AS i
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/stale_base.db' AS sr (METADATA_CATALOG '__ducklake_metadata_sw', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok con3
+BEGIN
+
+query I con3
+SELECT count(*) FROM duckdb_schemas() WHERE database_name = 'sr'
+----
+1
+
+# deleting every row of the only file writes no file, so the next_file_id stays
+statement ok
+DELETE FROM sw.a
+
+query I
+SELECT count(*) FROM sr.a
+----
+0
+
+statement ok
+CALL ducklake_expire_snapshots('sr', versions => [2])
+
+# the old transaction loads the stats of the deleted rows under the same key
+query I con3
+SELECT count(*) FROM sr.a
+----
+10
+
+statement ok
+INSERT INTO sr.b VALUES (99)
+
+query I
+SELECT count(*) FROM sr.a
+----
+0
+
+statement ok
+INSERT INTO sr.a VALUES (999)
+
+query II
+SELECT record_count, next_row_id FROM __ducklake_metadata_sw.ducklake_table_stats WHERE table_id = (SELECT table_id FROM __ducklake_metadata_sw.ducklake_table WHERE table_name = 'a' AND end_snapshot IS NULL)
+----
+1	11
+
+statement ok con3
+COMMIT

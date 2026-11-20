@@ -418,6 +418,8 @@ public:
 	BuildCatalogForSnapshot(DuckLakeSnapshot snapshot,
 	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
 	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata = false);
+	//! Adds the tables the snapshots after snapshot_id changed up to snapshot, false when their changes are not known
+	virtual bool GetTablesChangedSince(idx_t snapshot_id, DuckLakeSnapshot snapshot, set<TableIndex> &result);
 	//! The global stats of every table of the snapshot, or of the given tables
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot,
 	                                                            const vector<TableIndex> &table_ids = {});
@@ -799,6 +801,8 @@ protected:
 	virtual string GetLatestSnapshotQuery() const;
 	//! The branch conjunct of a lookup on snapshot_id, preceded by AND, empty where the engine would not use it
 	string MainSnapshotFilter() const;
+	//! The changes of the snapshots after snapshot_id up to snapshot
+	virtual string GetChangesSinceQuery(idx_t snapshot_id, DuckLakeSnapshot snapshot) const;
 	//! The changes of the snapshots from first_snapshot to last_snapshot that recorded a rewrite
 	virtual string GetRewriteSnapshotsQuery(idx_t first_snapshot, idx_t last_snapshot) const;
 
