@@ -447,6 +447,11 @@ string DuckLakeMetadataManager::DeleteFiles(TableIndex table_id) const {
 	return DeleteFileSource(WritesFileVisibilityEvents(), "{METADATA_CATALOG}", table_id.index);
 }
 
+//! The add event of a file on the main branch as a VALUES tuple
+static string AddEventTuple(idx_t table_id, idx_t file_id, const string &snapshot) {
+	return StringUtil::Format("(0, %d, %d, %s, FALSE)", table_id, file_id, snapshot);
+}
+
 string DuckLakeMetadataManager::FileEndEvents(const string &visibility_table, const string &file_id_column,
                                               const string &filter_column, const string &id_list,
                                               const string &snapshot) {
@@ -5515,8 +5520,7 @@ string DuckLakeMetadataManager::WriteNewDataFilesSqlBatch(const vector<DuckLakeF
 		// the range of the file is its add event of the main branch, or the two columns of the row
 		string range_columns = ", " + begin_snapshot + ", NULL";
 		if (file_events) {
-			visibility_values.push_back(
-			    StringUtil::Format("(0, %d, %d, %s, FALSE)", table_id, data_file_index, begin_snapshot));
+			visibility_values.push_back(AddEventTuple(table_id, data_file_index, begin_snapshot));
 			range_columns = string();
 		}
 		auto data_file_value = StringUtil::Format(
@@ -5756,8 +5760,7 @@ string DuckLakeMetadataManager::WriteNewDeleteFiles(const vector<DuckLakeDeleteF
 		string partial_max = DuckLakeUtil::OptionalIdxOrNull(file.max_snapshot);
 		string range_columns = ", " + begin_snapshot_str + ", NULL, ";
 		if (file_events) {
-			visibility_values.push_back(
-			    StringUtil::Format("(0, %d, %d, %s, FALSE)", table_id, delete_file_index, begin_snapshot_str));
+			visibility_values.push_back(AddEventTuple(table_id, delete_file_index, begin_snapshot_str));
 			range_columns = ",";
 		}
 		auto delete_file_value = StringUtil::Format(
@@ -6838,7 +6841,6 @@ string DuckLakeMetadataManager::WriteDeleteRewrites(const vector<DuckLakeCompact
 	}
 
 	if (file_events) {
-		// one statement per rewrite snapshot and file kind instead of one per file
 		map<idx_t, vector<DataFileIndex>> ended_delete_files;
 		map<idx_t, vector<DataFileIndex>> ended_data_files;
 		map<idx_t, vector<DataFileIndex>> new_data_files;

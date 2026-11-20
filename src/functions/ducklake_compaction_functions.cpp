@@ -1037,7 +1037,7 @@ static unique_ptr<LogicalOperator> BindCompaction(ClientContext &context, TableF
 	} else {
 		tables = DuckLakeBaseMetadataFunction::GetTablesInScope(context, ducklake_catalog, schema, string());
 	}
-	// one read over the file tables names the tables that can have something to compact
+	// the candidate tables, found before any table lists its files
 	bool skip_tables_without_files = tables.size() > 1;
 	unordered_set<idx_t> tables_with_files;
 	if (skip_tables_without_files && type == CompactionType::REWRITE_DELETES) {
