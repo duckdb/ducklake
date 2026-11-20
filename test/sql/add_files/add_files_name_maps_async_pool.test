@@ -1,0 +1,63 @@
+# name: test/sql/add_files/add_files_name_maps_async_pool.test
+# description: A scan loads the name maps of its files before the open tasks run on the async pool, which a remote catalog needs for its own reads
+# group: [add_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/add_files_name_maps_async_pool.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_files_name_maps_async_pool/', METADATA_CATALOG 'metadata');
+
+statement ok
+CREATE TABLE ducklake.t (id BIGINT, code INT, note VARCHAR);
+
+# twelve files, each with a name map
+loop i 0 12
+
+statement ok
+COPY (SELECT ({i} * 1000 + range)::BIGINT AS id, (range % 97)::INT AS code, 'x' || range AS note FROM range(1000)) TO '{DATA_PATH}/f{i}.parquet' (FORMAT parquet);
+
+statement ok
+CALL ducklake_add_data_files('ducklake', 't', '{DATA_PATH}/f{i}.parquet');
+
+endloop
+
+query I
+SELECT count(*) FROM ducklake.t;
+----
+12000
+
+statement ok
+DETACH ducklake;
+
+# the catalog reads its blocks through the async pool, like a catalog on HTTP or S3, and the pool has one thread
+statement ok
+SET storage_block_prefetch = 'debug_force_always';
+
+statement ok
+SET async_threads = 1;
+
+# a fresh attach has no name map cached, the first query opens more files than the pool has threads
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/add_files_name_maps_async_pool/', METADATA_CATALOG 'metadata', READ_ONLY);
+
+query II
+SELECT count(*), sum(code) FROM ducklake.t WHERE id < 12000;
+----
+12000	563940
+
+query I
+SELECT count(*) FROM ducklake.t WHERE id < 3000;
+----
+3000
+
+statement ok
+RESET storage_block_prefetch;
+
+statement ok
+RESET async_threads;
