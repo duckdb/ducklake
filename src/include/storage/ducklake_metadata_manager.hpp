@@ -763,7 +763,7 @@ public:
 	virtual void MigrateV03(bool allow_failures = false);
 	virtual void MigrateV04();
 	virtual void MigrateV10(bool from_dev1 = false);
-	//! Runs the steps from 1.1 to 2.0-dev1 the catalog lacks, from a 1.1 catalog or a 2.0-dev1 catalog that stopped
+	//! Completes the steps of 2.0 the catalog lacks
 	virtual void MigrateV11(bool from_dev1 = false);
 	//! A file table moved aside with the range columns it still holds
 	struct V2_0RangeTable {
