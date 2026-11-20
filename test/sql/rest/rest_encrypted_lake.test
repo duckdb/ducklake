@@ -1,0 +1,112 @@
+# name: test/sql/rest/rest_encrypted_lake.test
+# description: An encrypted DuckLake served by a REST server, change feeds without lists and missing parts of multipart responses
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+# an encrypted lake: the encryption keys of its files are in the Arrow lists of files
+statement ok
+SET force_mbedtls_unsafe = 'true'
+
+statement ok rest_db:rest_server_con
+SET force_mbedtls_unsafe = 'true'
+
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_encrypted.db' AS encrypted_lake (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_encrypted_files', ENCRYPTED, DATA_INLINING_ROW_LIMIT 0)
+
+statement ok rest_db:rest_server_con
+SET VARIABLE encrypted_listen_uri = (SELECT listen_uri FROM ducklake_rest_serve('encrypted_lake', port := regexp_extract(getvariable('rest_listen_uri'), ':([0-9]+)/', 1)::UBIGINT))
+
+set variable encrypted_server <variable:rest_server_con:encrypted_listen_uri>
+
+statement ok
+ATTACH 'ducklake:rest:{encrypted_server}' AS enc (DATA_INLINING_ROW_LIMIT 0)
+
+# files written by the server
+statement ok rest_db:rest_server_con
+CREATE TABLE encrypted_lake.t AS SELECT i, 'v' || i AS s FROM range(100) t(i)
+
+statement ok rest_db:rest_server_con
+DELETE FROM encrypted_lake.t WHERE i < 10
+
+query II
+SELECT count(*), sum(i) FROM enc.t
+----
+90	4905
+
+query I
+SELECT count(*) FROM ducklake_list_files('enc', 't') WHERE data_file_encryption_key IS NOT NULL AND delete_file_encryption_key IS NOT NULL
+----
+1
+
+query I
+SELECT count(*) FROM enc.table_insertions('t', 0, 2)
+----
+100
+
+query I
+SELECT count(*) FROM enc.table_deletions('t', 0, 2)
+----
+10
+
+# files written and deleted by the client, whose keys the server stores
+statement ok
+CREATE TABLE enc.c AS SELECT i FROM range(50) t(i)
+
+statement ok
+DELETE FROM enc.c WHERE i < 5
+
+query II
+SELECT count(*), sum(i) FROM enc.c
+----
+45	1215
+
+query II rest_db:rest_server_con
+SELECT count(*), sum(i) FROM encrypted_lake.c
+----
+45	1215
+
+# a JSON client gets the keys as base64
+query II
+SELECT status, from_base64(response->>'$.files[0].file.encryption_key') IS NOT NULL FROM ducklake_rest_request('{encrypted_server}', 'POST', '/v1/encrypted_lake/tables/1/scan', '{}')
+----
+200	true
+
+# a change feed without files or inlined rows is a JSON response
+statement ok rest_db:rest_server_con
+CREATE TABLE encrypted_lake.u(i INTEGER)
+
+query I
+SELECT count(*) FROM enc.table_insertions('t', 3, 3)
+----
+0
+
+query I
+SELECT count(*) FROM enc.table_deletions('t', 3, 3)
+----
+0
+
+statement ok
+DETACH enc
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2)
+
+# a part that the multipart response does not have
+statement error
+FROM ducklake_rest_rows('{rest_server}', 'POST', '/v1/rest_lake/tables/1/scan', '{}', part := 'no_such_part')
+----
+The multipart message has no part "no_such_part"
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

@@ -9,10 +9,12 @@ load
 @create snap100k
 @attach snap100k AS lake (DATA_PATH '${BENCHMARK_DIR}/snap100k_files')
 INSERT INTO __ducklake_metadata_lake.ducklake_snapshot
+(snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id)
 SELECT i, to_timestamp(i), schema_version, next_catalog_id, next_file_id
 FROM range(1, 100001) r(i), __ducklake_metadata_lake.ducklake_snapshot
 WHERE snapshot_id = 0;
 INSERT INTO __ducklake_metadata_lake.ducklake_snapshot_changes
+(snapshot_id, changes_made, author, commit_message, commit_extra_info)
 SELECT i,
 CASE i % 3
 WHEN 1 THEN 'inserted_into_table:' || ((i % 7) + 1)

@@ -492,9 +492,10 @@ OperatorFinalResultType DuckLakeInlineData::OperatorFinalize(Pipeline &pipeline,
 		VerifyParquetVariants(*result->data);
 	}
 	auto &catalog = table.ParentCatalog().Cast<DuckLakeCatalog>();
-	if (table.GetInlinedDataTables().empty() ||
-	    !table.HasCurrentInlinedDataTable(
-	        catalog.GetTableSchemaVersions(transaction, table.GetTableId()).last_change)) {
+	// the server of a REST catalog decides itself whether the rows need a new inlined table
+	if (!catalog.IsREST() && (table.GetInlinedDataTables().empty() ||
+	                          !table.HasCurrentInlinedDataTable(
+	                              catalog.GetTableSchemaVersions(transaction, table.GetTableId()).last_change))) {
 		transaction.SetRequiresNewInlinedTable(true);
 	}
 	transaction.AppendInlinedData(table.GetTableId(), std::move(result));

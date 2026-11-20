@@ -1,0 +1,141 @@
+# name: test/sql/rest/rest_prefix.test
+# description: A DuckLake REST server serves several catalogs, which are told apart by the prefix in their URLs
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_second.db' AS second_lake (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_second_files')
+
+# the second catalog is served by the same server
+statement ok rest_db:rest_server_con
+SET VARIABLE second_listen_uri = (SELECT listen_uri FROM ducklake_rest_serve('second_lake', port := regexp_extract(getvariable('rest_listen_uri'), ':([0-9]+)/', 1)::UBIGINT))
+
+set variable second_server <variable:rest_server_con:second_listen_uri>
+
+statement ok rest_db:rest_server_con
+SET VARIABLE rest_address_value = regexp_extract(getvariable('rest_listen_uri'), '^(.*://[^/]+)', 1)
+
+set variable rest_address <variable:rest_server_con:rest_address_value>
+
+query I
+SELECT '{rest_server}' LIKE '%/rest_lake' AND '{second_server}' LIKE '%/second_lake'
+----
+true
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS first (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+ATTACH 'ducklake:rest:{second_server}' AS second (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE first.t(i INTEGER)
+
+statement ok
+CREATE TABLE second.u(s VARCHAR)
+
+statement ok
+INSERT INTO first.t VALUES (1), (2)
+
+statement ok
+INSERT INTO second.u VALUES ('a')
+
+query I
+SELECT count(*) FROM first.t
+----
+2
+
+query I
+SELECT count(*) FROM second.u
+----
+1
+
+# each catalog only has its own tables
+statement error
+SELECT * FROM first.u
+----
+does not exist
+
+statement error
+SELECT * FROM second.t
+----
+does not exist
+
+# a client finds the prefix of a catalog with the name of the catalog
+statement ok
+ATTACH 'ducklake:rest:{rest_address}' AS by_name (META_CATALOG 'second_lake')
+
+query I
+SELECT count(*) FROM by_name.u
+----
+1
+
+statement ok
+DETACH by_name
+
+# the server can give clients properties: defaults, and overrides that win over the properties of the client
+statement ok rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('rest_lake', port := regexp_extract(getvariable('rest_listen_uri'), ':([0-9]+)/', 1)::UBIGINT, defaults := MAP {'read_ahead': '4'}, overrides := MAP {'region': 'eu', 'prefix': 'ignored'})
+
+query IIII
+SELECT status, response->>'$.defaults.read_ahead', response->>'$.overrides.region', response->>'$.overrides.prefix'
+FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/config?catalog=rest_lake', '')
+----
+200	4	eu	rest_lake
+
+# the prefix is in the path of the URL
+query II
+SELECT status, json_array_length(response->'$.snapshots') >= 1 FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/rest_lake/snapshots', '')
+----
+200	true
+
+query II
+SELECT status, json_array_length(response->'$.snapshots') >= 1 FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/second_lake/snapshots', '')
+----
+200	true
+
+query III
+SELECT status, response->>'$.error.type', response->>'$.error.message' LIKE '%no catalog under the prefix "missing"%' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/missing/snapshots', '')
+----
+404	Catalog	true
+
+# the URLs without a prefix need a server that serves exactly one catalog
+query III
+SELECT status, response->>'$.error.type', response->>'$.error.message' LIKE '%serves 2 catalogs%' FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots', '')
+----
+404	Catalog	true
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/second_lake/tables/1/scan', '{}')
+----
+200
+
+# a catalog stops being served on its own
+statement ok
+DETACH second
+
+statement ok rest_db:rest_server_con
+SELECT * FROM ducklake_rest_stop(getvariable('second_listen_uri'))
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/second_lake/snapshots', '')
+----
+404
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots', '')
+----
+200
+
+query I
+SELECT count(*) FROM first.t
+----
+2
+
+statement ok
+DETACH first
+
+include test/template/rest_teardown.test_template

@@ -9,12 +9,26 @@ template <typename Base>
 string DuckLakeMetadataManagerV2_0<Base>::GetCreateTableStatements() {
 	auto result = DuckLakeMetadataManagerV1_1<Base>::GetCreateTableStatements();
 	result += DuckLakeMetadataManager::GetSnapshotTagTableStatement() + "\n";
+	result += DuckLakeMetadataManager::GetBranchTableStatement() + "\n";
+	result += DuckLakeMetadataManager::GetMainBranchRowStatement() + "\n";
 	return result;
 }
 
 template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetSnapshotTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(" +
+	       DuckLakeMetadataManager::BranchedSnapshotTableColumns() + ");";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetSnapshotChangesTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_changes(" +
+	       DuckLakeMetadataManager::BranchedSnapshotChangesTableColumns() + ");";
+}
+
+template <typename Base>
 string DuckLakeMetadataManagerV2_0<Base>::GetVersionString() {
-	constexpr auto VERSION = DuckLakeVersion::V2_0_DEV1;
+	constexpr auto VERSION = DuckLakeVersion::V2_0_DEV2;
 	return DuckLakeVersionToString(VERSION);
 }
 

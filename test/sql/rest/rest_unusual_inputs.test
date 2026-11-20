@@ -1,0 +1,86 @@
+# name: test/sql/rest/rest_unusual_inputs.test
+# description: Inputs of the DuckLake REST server that reach its rarely taken branches
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok rest_db:rest_server_con
+SET VARIABLE rest_port = regexp_extract(getvariable('rest_listen_uri'), ':([0-9]+)/', 1)::UBIGINT
+
+# a server with properties for the clients that only have defaults
+statement ok rest_db:rest_server_con
+SELECT * FROM ducklake_rest_serve('rest_lake', port := getvariable('rest_port'), prefix := 'defaults_only', defaults := MAP {'read_ahead': '4'})
+
+query I rest_db:rest_server_con
+SELECT stopped FROM ducklake_rest_stop(regexp_extract(getvariable('rest_listen_uri'), '^(.*://[^/]+)', 1) || '/defaults_only')
+----
+true
+
+# a null request and a null alteration are refused
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [null]}')
+----
+400
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": 1, "alter": null}}]}')
+----
+400
+
+# a compaction of files that are not Parquet files is refused
+statement ok
+COPY (SELECT 1 AS i) TO '{TEST_DIR}/{BASE_TEST_NAME}_not_parquet_1.parquet'
+
+statement ok
+COPY (SELECT 2 AS i) TO '{TEST_DIR}/{BASE_TEST_NAME}_not_parquet_2.parquet'
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{TEST_DIR}/{BASE_TEST_NAME}_not_parquet_1.parquet')
+
+statement ok
+CALL ducklake_add_data_files('dl', 't', '{TEST_DIR}/{BASE_TEST_NAME}_not_parquet_2.parquet')
+
+statement ok
+COPY (SELECT 'not parquet' AS s) TO '{TEST_DIR}/{BASE_TEST_NAME}_not_parquet_1.parquet' (FORMAT CSV)
+
+statement ok
+COPY (SELECT 'not parquet' AS s) TO '{TEST_DIR}/{BASE_TEST_NAME}_not_parquet_2.parquet' (FORMAT CSV)
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/compactions', '{"type": "merge_adjacent", "table_name": "t"}')
+----
+400
+
+# a compaction of registered files that do not exist fails on the server
+statement ok
+CREATE TABLE dl.m(i INTEGER)
+
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests":[{"insert_files":{"table_id":2,"files":[{"path":' || to_json('{TEST_DIR}/{BASE_TEST_NAME}_absent1.parquet') || ',"record_count":1,"file_size_bytes":200},{"path":' || to_json('{TEST_DIR}/{BASE_TEST_NAME}_absent2.parquet') || ',"record_count":1,"file_size_bytes":200}]}}]}')
+----
+200
+
+query III
+SELECT status, response->>'$.error.type', response->>'$.error.message' LIKE '%Cannot open file%'
+FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/compactions', '{"type":"merge_adjacent","table_name":"m"}')
+----
+500	IO	true
+
+# the server stays usable
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest', '')
+----
+200
+
+statement ok
+DETACH dl
+
+include test/template/rest_teardown.test_template

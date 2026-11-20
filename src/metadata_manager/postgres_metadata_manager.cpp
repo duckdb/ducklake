@@ -534,8 +534,24 @@ static string PostgresQuery(const string &remote_query) {
 	                          SQLString(remote_query));
 }
 
+bool PostgresMetadataManager::ProbeMetadataColumns() {
+	// the scanner lists the tables it cached, so the server is asked for the ones a commit created since
+	auto schema = SQLString::ToString(transaction.GetCatalog().MetadataSchemaName().GetIdentifierName());
+	auto remote_query = StringUtil::Format(R"(
+SELECT c.relname, a.attname
+FROM pg_catalog.pg_class c
+JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid
+WHERE n.nspname = %s AND c.relkind IN ('r', 'v', 'm', 'f', 'p') AND a.attnum > 0 AND NOT a.attisdropped
+ORDER BY c.relname, a.attnum)",
+	                                       schema);
+	return ProbeMetadataColumnsFromListing(PostgresQuery(remote_query));
+}
+
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
-	auto remote_query = LatestSnapshotQuery();
+	// the server plans both conjuncts from the composite key
+	bool branch_keyed = transaction.GetCatalog().SupportsBranching();
+	auto remote_query = LatestSnapshotQuery(branch_keyed, branch_keyed);
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	return PostgresQuery(remote_query);
@@ -544,7 +560,8 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot,
                                                                    bool include_exactness) const {
 	// one statement reads the latest snapshot and the table stats from the same state at any isolation level
-	auto remote_query = SnapshotAndStatsAndChangesQuery(include_exactness);
+	bool branch_keyed = transaction.GetCatalog().SupportsBranching();
+	auto remote_query = SnapshotAndStatsAndChangesQuery(include_exactness, branch_keyed, branch_keyed);
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	SubstituteSnapshotPlaceholders(snapshot, remote_query);
@@ -558,12 +575,12 @@ bool PostgresMetadataManager::MaterializeStatsCTEs() const {
 
 string PostgresMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
                                                       const FilterPushdownInfo *filter_info,
-                                                      const vector<DuckLakeFileListDynamicFilter> &dynamic_filters,
+                                                      const vector<DuckLakeFileListOrder> &file_order,
                                                       vector<idx_t> &runtime_filter_stats_columns,
                                                       FileListType file_list_type, const string &) {
 	auto schema = SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName());
 	auto remote_query = DuckLakeMetadataManager::GenerateFileListQuery(
-	    table, snapshot, filter_info, dynamic_filters, runtime_filter_stats_columns, file_list_type, schema);
+	    table, snapshot, filter_info, file_order, runtime_filter_stats_columns, file_list_type, schema);
 	// placeholders inside the literal are not replaced later
 	SubstituteSnapshotPlaceholders(snapshot, remote_query);
 	return PostgresQuery(remote_query);

@@ -1,0 +1,119 @@
+# name: test/sql/rest/rest_initial_default.test
+# description: A REST client sends the initial default of a literal default, as the server does not know its time zone
+# group: [rest]
+
+require json
+
+require icu
+
+include test/template/rest_setup.test_template
+
+# the server reads a time zone in another zone than the client does
+statement ok rest_db:rest_server_con
+SET GLOBAL TimeZone = 'Asia/Tokyo'
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+statement ok
+SET TimeZone = 'America/Los_Angeles'
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+# the existing rows get the instant of the time zone of the client
+statement ok
+ALTER TABLE dl.t ADD COLUMN c TIMESTAMPTZ DEFAULT '2024-01-01 00:00:00'
+
+query I
+SELECT c = TIMESTAMPTZ '2024-01-01 08:00:00+00' FROM dl.t
+----
+true
+
+query I rest_db:rest_server_con
+SELECT initial_default FROM __ducklake_metadata_rest_lake.ducklake_column WHERE column_name = 'c' AND end_snapshot IS NULL
+----
+2024-01-01 08:00:00+00
+
+# a typed NULL does not depend on the time zone
+statement ok
+ALTER TABLE dl.t ADD COLUMN n TIMESTAMPTZ DEFAULT NULL::TIMESTAMPTZ
+
+query I
+SELECT n IS NULL FROM dl.t
+----
+true
+
+# a field added to a struct
+statement ok
+CREATE TABLE dl.s(st STRUCT(a INTEGER))
+
+statement ok
+INSERT INTO dl.s VALUES ({'a': 1})
+
+statement ok
+ALTER TABLE dl.s ADD COLUMN st.f TIMESTAMPTZ DEFAULT '2024-01-01 00:00:00'
+
+query I
+SELECT st.f = TIMESTAMPTZ '2024-01-01 08:00:00+00' FROM dl.s
+----
+true
+
+# a table created by the client
+statement ok
+CREATE TABLE dl.d(i INTEGER, d TIMESTAMPTZ DEFAULT '2024-01-01 00:00:00')
+
+query I rest_db:rest_server_con
+SELECT initial_default FROM __ducklake_metadata_rest_lake.ducklake_column WHERE column_name = 'd' AND end_snapshot IS NULL
+----
+2024-01-01 08:00:00+00
+
+# the definition of a column that exists is not evaluated
+statement ok
+ALTER TABLE dl.t ADD COLUMN IF NOT EXISTS i DATE DEFAULT 'not-a-date'
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN IF NOT EXISTS c TIMESTAMPTZ DEFAULT '2024-01-01 00:00:00'
+
+# a request without the initial default of a literal that depends on the time zone is rejected
+statement ok
+SET VARIABLE r_id = (SELECT (response->>'$.entry_ids[0].id')::BIGINT FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"create_table": {"placeholder_id": -1, "schema_id": 0, "table_name": "r", "columns": [{"column_name": "i", "column_type": {"id": "int32"}}]}}]}'))
+
+statement ok
+INSERT INTO dl.r VALUES (1)
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": ' || getvariable('r_id') || ', "alter": {"add_column": {"column": {"column_name": "c", "column_type": {"id": "timestamptz"}, "default": "CAST(''2024-01-01 00:00:00'' AS TIMESTAMPTZ)"}}}}}]}')
+----
+400	The default of column "c" depends on the time zone, send the initial_default of the column as well
+
+query II
+SELECT status, response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": ' || getvariable('r_id') || ', "alter": {"add_column": {"column": {"column_name": "c", "column_type": {"id": "timestamptz"}, "default": "''2024-01-01 00:00:00''"}}}}}]}')
+----
+400	The default of column "c" depends on the time zone, send the initial_default of the column as well
+
+# an initial default that is not a value of the type of the column is rejected
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": ' || getvariable('r_id') || ', "alter": {"add_column": {"column": {"column_name": "c", "column_type": {"id": "timestamptz"}, "default": "''2024-01-01 00:00:00''", "initial_default": "not a time"}}}}}]}')
+----
+400
+
+# the rows that exist get the initial default of the request
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": ' || getvariable('r_id') || ', "alter": {"add_column": {"column": {"column_name": "c", "column_type": {"id": "timestamptz"}, "default": "''2024-01-01 00:00:00''", "initial_default": "2024-01-01 08:00:00+00"}}}}}]}')
+----
+200
+
+query I
+SELECT c = TIMESTAMPTZ '2024-01-01 08:00:00+00' FROM dl.r
+----
+true
+
+# a typed NULL needs none
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests": [{"alter": {"entry_id": ' || getvariable('r_id') || ', "alter": {"add_column": {"column": {"column_name": "n", "column_type": {"id": "timestamptz"}, "default": "CAST(NULL AS TIMESTAMPTZ)"}}}}}]}')
+----
+200
