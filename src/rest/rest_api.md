@@ -77,6 +77,18 @@ maps the paths between its data path and the data path of the server (`DataPath`
 sees its own data path. Paths outside of the data path are not mapped. Data files are read and written by the
 client directly, so the data path has to be accessible from both the client and the server.
 
+### Commit scheduling
+
+The requests of `commit_transaction` and `group_commit_transaction` for the same attached catalog wait in one queue within the server process and run one at a time. The queue is shared across URL prefixes and listeners that serve that catalog. The metadata transaction of a commit starts when it is its turn, so it sees earlier publications.
+
+The commit at the front of the queue runs next. A `commit_transaction` runs alone and publishes a snapshot of its own. A `group_commit_transaction` that only appends rows or files runs together with the other such requests in the queue, also those behind requests that cannot join: they are published as one snapshot. A group has at most 256 requests. Its requests came in through the same listener and prefix and ask for the same response format (Arrow or JSON). Requests that differ in one of these wait for a group of their own. The responses of a group return the same snapshot, which has the commit information of the first of its requests. Conflicts of a group are checked against the oldest snapshot that one of its transactions started from. If the group cannot commit, its commits run one by one.
+
+A commit that was published is never run again. If the server fails after the publication, for example while it builds the response, the request fails with an IO error that says that the transaction was committed.
+
+Clients choose the endpoint with the `ducklake_rest_group_commit` setting. A plain `SET ducklake_rest_group_commit = true` changes it for all connections of the database. `SET SESSION` changes it for the connection only.
+
+Direct writers, Quack writers, maintenance calls, and separate attachments of the same metadata database do not participate in this queue. They can still cause metadata retries.
+
 ## Conventions
 
 * All endpoints live under `/v1/`, followed by the prefix of the catalog if there is one: `/v1/<prefix>/tables/{table_id}/scan`
@@ -457,23 +469,24 @@ based on the latest snapshot.
 
 `POST /v1/transactions/commit`
 
-Request:
+Request: [`CommitTransactionRequest`](#committransactionrequest).
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `snapshot` | [`Snapshot`](#snapshot) (optional) | The snapshot, as returned by `snapshots/latest` and `snapshots/at`. |
-| `snapshot_id` | `uint64` (optional) | The id of the snapshot. |
-| `commit_info` | [`CommitInfo`](#commitinfo) (optional) | The commit information of the snapshot. |
-| `retry` | [`RetryConfig`](#retryconfig) (optional) | How the server retries the commit on conflicts. |
-| `requests` | list of `commit_request` (default `[]`) | The changes, applied in order, e.g. `[{"create_table": {...}}, {"insert_rows": {...}}]`. |
+Response: [`CommitTransactionResponse`](#committransactionresponse).
 
-Response:
+### `group_commit_transaction`
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `snapshot` | [`Snapshot`](#snapshot) (optional) | The committed snapshot, absent if the requests did not create a snapshot (e.g. if they only set options). If other transactions created snapshots since the snapshot of the request, its id is more than one above the id of the snapshot of the request. |
-| `entry_ids` | list of [`CreatedEntry`](#createdentry) (default `[]`) | The entries the transaction created, with the ids the commit gave them. |
-| `table_options` | list of [`OptionSetting`](#optionsetting) (default `[]`) | The options of the tables the transaction created or altered, with the ids the commit gave the tables. |
+Commits a set of changes atomically, in a snapshot that it can share with other transactions.
+
+The request and the response are those of `commit_transaction`. The server can publish the transactions that wait
+for their commit at the same time as one snapshot, if they only insert rows or files: their responses then return
+that same snapshot, which has the commit information of one of them. A transaction with other changes is committed
+as `commit_transaction` commits it.
+
+`POST /v1/transactions/group-commit`
+
+Request: [`CommitTransactionRequest`](#committransactionrequest).
+
+Response: [`CommitTransactionResponse`](#committransactionresponse).
 
 ### `create_schema`
 
@@ -830,6 +843,28 @@ The commit information of a transaction.
 | `commit_message` | `text` (optional) | The commit message. |
 | `commit_extra_info` | `text` (optional) | Extra information of the commit. |
 | `is_commit_info_set` | `bool` (default `false`) | Whether the commit information was set. |
+
+### `CommitTransactionRequest`
+
+The changes of a transaction to commit.
+
+Has the fields of [`SnapshotReference`](#snapshotreference), and:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `commit_info` | [`CommitInfo`](#commitinfo) (optional) | The commit information of the snapshot. |
+| `retry` | [`RetryConfig`](#retryconfig) (optional) | How the server retries the commit on conflicts. |
+| `requests` | list of `commit_request` (default `[]`) | The changes, applied in order, e.g. `[{"create_table": {...}}, {"insert_rows": {...}}]`. |
+
+### `CommitTransactionResponse`
+
+The result of a commit.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `snapshot` | [`Snapshot`](#snapshot) (optional) | The committed snapshot, absent if the requests did not create a snapshot (e.g. if they only set options). If other transactions created snapshots since the snapshot of the request, its id is more than one above the id of the snapshot of the request. |
+| `entry_ids` | list of [`CreatedEntry`](#createdentry) (default `[]`) | The entries the transaction created, with the ids the commit gave them. |
+| `table_options` | list of [`OptionSetting`](#optionsetting) (default `[]`) | The options of the tables the transaction created or altered, with the ids the commit gave the tables. |
 
 ### `CompactionResult`
 

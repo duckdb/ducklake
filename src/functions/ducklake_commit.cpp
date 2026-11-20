@@ -9,6 +9,7 @@ struct DuckLakeCommitBindData : public TableFunctionData {
 	Identifier metadata_schema_name;
 	int64_t schema_version = 0;
 	DuckLakeRetryConfig retry_config;
+	bool files_owned_by_client = false;
 };
 
 static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctionBindInput &input,
@@ -31,6 +32,8 @@ static unique_ptr<FunctionData> DuckLakeCommitBind(ClientContext &, TableFunctio
 			result->retry_config.retry_wait_ms = entry.second.GetValue<uint64_t>();
 		} else if (entry.first == "retry_backoff") {
 			result->retry_config.retry_backoff = entry.second.GetValue<double>();
+		} else if (entry.first == "files_owned_by_client") {
+			result->files_owned_by_client = entry.second.GetValue<bool>();
 		}
 	}
 	names.emplace_back("committed_snapshot_id");
@@ -53,6 +56,7 @@ static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &da
 
 	DuckLakeServerSideCommit commit(context, data.metadata_schema_name, data.schema_version);
 	commit.SetRetryConfigOverride(data.retry_config);
+	commit.SetFilesOwnedByClient(data.files_owned_by_client);
 	DuckLakeServerSideCommitResult result;
 	try {
 		result = commit.Run();
@@ -81,7 +85,8 @@ DuckLakeCommitFunction::DuckLakeCommitFunction()
 	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
 		options.Add("max_retry_count", LogicalType::UBIGINT)
 		    .Add("retry_wait_ms", LogicalType::UBIGINT)
-		    .Add("retry_backoff", LogicalType::DOUBLE);
+		    .Add("retry_backoff", LogicalType::DOUBLE)
+		    .Add("files_owned_by_client", LogicalType::BOOLEAN);
 	});
 }
 

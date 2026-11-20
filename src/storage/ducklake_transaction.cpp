@@ -926,7 +926,9 @@ void DuckLakeTransaction::Commit() {
 		}
 	} catch (...) {
 		// a failed commit never reaches Rollback - the transaction manager only reports the error
-		UndoConfigOptions();
+		if (!published) {
+			UndoConfigOptions();
+		}
 		ClearMaintenanceChanges();
 		throw;
 	}
@@ -963,7 +965,9 @@ void DuckLakeTransaction::Rollback() {
 			// nothing references the written files, so they are removed also when the rollback fails
 			connection.reset();
 			try {
-				state->CleanupFiles();
+				if (!files_owned_by_client) {
+					state->CleanupFiles();
+				}
 			} catch (std::exception &) { // NOLINT
 			}
 			throw;
@@ -1601,6 +1605,10 @@ void DuckLakeTransaction::FlushChanges() {
 }
 
 void DuckLakeTransaction::CleanupFiles() {
+	if (files_owned_by_client) {
+		// the client that wrote the files removes them, also when the commit was passed on to another server
+		return;
+	}
 	state->CleanupFiles();
 }
 
@@ -1744,6 +1752,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.commit_connection = [&]() {
 		connection->Commit();
+	};
+	context.set_published = [&]() {
+		published = true;
 	};
 	context.try_rollback = [&]() {
 		if (connection->context->transaction.HasActiveTransaction()) {
@@ -1903,6 +1914,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.write_snapshot = ChangesMade();
 	// a REST server commits from the snapshot of its client, its metadata transaction sees later commits
 	context.check_conflicts_first = files_owned_by_client;
+	context.files_owned_by_client = files_owned_by_client;
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
 	context.supports_v2_0_metadata = ducklake_catalog.SupportsBranching();

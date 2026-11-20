@@ -9,6 +9,8 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/deque.hpp"
+#include "duckdb/common/error_data.hpp"
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/function/table_function.hpp"
@@ -16,6 +18,8 @@
 #include "rest/ducklake_rest_multipart.hpp"
 
 #include <chrono>
+#include <condition_variable>
+#include <functional>
 #include <thread>
 
 namespace duckdb_httplib {
@@ -28,6 +32,58 @@ class DuckLakeTransaction;
 class DuckLakeMetadataManager;
 class DuckLakeRESTServer;
 struct DuckLakeSnapshot;
+
+//! A commit request that waits in the queue of its catalog
+struct DuckLakeRESTPendingCommit {
+	//! The endpoint of the request: commit_transaction or group_commit_transaction
+	string endpoint;
+	string request_json;
+	shared_ptr<const string> request_data;
+	vector<RESTMultipartPart> request_parts;
+	optional_ptr<DuckLakeRESTServer> server;
+	string prefix;
+	bool accepts_arrow = false;
+	//! Whether the commit can share its snapshot with other commits: a group commit that only appends data
+	bool shares_snapshot = false;
+
+	bool done = false;
+	//! Whether the commit did not run to its end, so that it is unknown whether it published its changes
+	bool interrupted = false;
+	string response;
+	string content_type;
+	ErrorData error;
+
+	bool CanShareSnapshotWith(const DuckLakeRESTPendingCommit &other) const;
+};
+
+//! Runs the commit requests of a catalog one at a time. The request that finds no commit running runs the queued
+//! commits itself, the others wait for their result. The commit at the front of the queue runs next, together with all
+//! queued commits that can share its snapshot
+class DuckLakeRESTCommitQueue {
+public:
+	using run_commits_t = std::function<void(vector<reference<DuckLakeRESTPendingCommit>> &)>;
+
+	//! With a hold, the commits only start to run once that many wait in the queue (for tests)
+	void Submit(DuckLakeRESTPendingCommit &commit, idx_t hold, const run_commits_t &run_commits);
+
+private:
+	vector<reference<DuckLakeRESTPendingCommit>> TakeNext();
+
+private:
+	mutex lock;
+	std::condition_variable ready;
+	deque<reference<DuckLakeRESTPendingCommit>> pending;
+	bool running = false;
+	//! Whether the commits that a test held back can run
+	bool released = false;
+};
+
+struct DuckLakeRESTCommitGroup {
+	//! Whether the requests of a commit only append rows or files
+	static bool IsAppendOnly(const string &request_json);
+	//! Commits the appends of several requests as one snapshot, returns the response that they share
+	static string Commit(DuckLakeRESTRequest &request, const vector<reference<DuckLakeRESTPendingCommit>> &commits);
+};
 
 //! The state of a single REST request, which runs in its own transaction on the served catalog
 class DuckLakeRESTRequest {
@@ -53,6 +109,8 @@ public:
 	shared_ptr<const string> request_data;
 	//! The content type of the response, set by the endpoint if it is not JSON
 	string content_type = "application/json";
+	//! Whether the request committed its changes, a failure after that is not a reason to commit them again
+	bool published = false;
 };
 
 //! The pages of the scans that were split into pages, which the server keeps for a while
@@ -149,9 +207,15 @@ private:
 		string prefix;
 		shared_ptr<DatabaseInstance> db;
 		string catalog_name;
+		shared_ptr<DuckLakeRESTCommitQueue> commit_queue;
 	};
 	//! The catalog of a request, throws if there is none
 	ServedCatalog GetCatalog(optional_ptr<const string> prefix);
+	//! Runs a commit, or the commits that share a snapshot
+	static void RunCommits(const ServedCatalog &served, vector<reference<DuckLakeRESTPendingCommit>> &commits);
+	static void RunCommit(const ServedCatalog &served, DuckLakeRESTPendingCommit &commit);
+	//! Returns false if the group published nothing, its commits then run one by one
+	static bool RunCommitGroup(const ServedCatalog &served, vector<reference<DuckLakeRESTPendingCommit>> &group);
 
 private:
 	mutex catalog_lock;
@@ -178,10 +242,13 @@ public:
 	bool Stop(const string &listen_uri);
 	//! The server that listens on the address of a URI, which can have a prefix
 	optional_ptr<DuckLakeRESTServer> GetServer(const string &listen_uri);
+	//! All prefixes and listeners serving the same attached catalog share its publication queue
+	shared_ptr<DuckLakeRESTCommitQueue> GetCommitQueue(DatabaseInstance &db, const string &catalog_name);
 
 private:
 	mutex lock;
 	unordered_map<string, unique_ptr<DuckLakeRESTServer>> servers;
+	map<pair<DatabaseInstance *, string>, weak_ptr<DuckLakeRESTCommitQueue>> commit_queues;
 };
 
 struct DuckLakeRESTServeFunction : public TableFunction {

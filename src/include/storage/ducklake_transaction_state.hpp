@@ -45,6 +45,8 @@ struct DuckLakeCommitContext {
 	bool only_expires_snapshots = false;
 	//! The commit snapshot can be older than the metadata it reads, so even the first attempt checks conflicts
 	bool check_conflicts_first = false;
+	//! The files of the transaction belong to a client, which removes them itself if the commit fails
+	bool files_owned_by_client = false;
 	//! Rewrites the delete files whose new deletes are not dated to the commit snapshot.
 	std::function<void(idx_t)> set_delete_commit_snapshot = [](idx_t) {
 	};
@@ -69,6 +71,9 @@ struct DuckLakeCommitContext {
 	//! Commits the underlying metadata connection.
 	// LCOV_EXCL_START
 	std::function<void()> commit_connection = []() {
+	};
+	//! Tells the committer that its changes are in the metadata, whatever fails after that.
+	std::function<void()> set_published = []() {
 	};
 	//! Rolls back the metadata connection if a transaction is active.
 	std::function<void()> try_rollback = []() {
