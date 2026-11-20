@@ -557,6 +557,7 @@
         "test/sql/migration/v20_file_events_migration_resume_one_table.test",
         "test/sql/migration/v20_row_companions_migration.test",
         "test/sql/migration/v20_row_companions_migration_resume.test",
+        "test/sql/migration/v20_row_companions_migration_resume2.test",
         "test/sql/migration/v20_row_companions_superseded.test",
         "test/sql/catalog/catalog_row_companions.test",
         "test/sql/metadata/file_visibility_layout.test",
