@@ -73,6 +73,8 @@ private:
 	vector<DuckLakeFileListEntry>
 	ReadCommittedFiles(DuckLakeTransaction &transaction,
 	                   identifier_map_t<shared_ptr<DuckLakeCommittedInlinedRows>> &inlined_rows) const;
+	//! Whether the committed files can come from the file list cached for the snapshot of the scan
+	bool UseFileListCache(DuckLakeTransaction &transaction) const;
 	void GetTableInsertions() const;
 	void GetTableDeletions() const;
 	void AddInlinedDataTables(DuckLakeTransaction &transaction) const;

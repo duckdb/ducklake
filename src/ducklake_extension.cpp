@@ -48,6 +48,10 @@ static void LoadInternal(ExtensionLoader &loader) {
 	config.AddExtensionOption("ducklake_target_file_size", "Target file size for insertion and compaction",
 	                          LogicalType::VARCHAR, Value(), set_target_file_size, SetScope::GLOBAL);
 	config.AddExtensionOption(
+	    "ducklake_cache_file_lists",
+	    "Keep the committed file list of a table per snapshot for the unfiltered scans that read it",
+	    LogicalType::BOOLEAN, Value::BOOLEAN(true), nullptr, SetScope::GLOBAL);
+	config.AddExtensionOption(
 	    "ducklake_write_deletion_vectors",
 	    "[EXPERIMENTAL] Write Iceberg V3 deletion vectors (puffin) instead of positional delete files (parquet)",
 	    LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);

@@ -1031,6 +1031,7 @@ void DuckLakeTransaction::ReleaseMetadataTransaction() {
 	if (connection && connection->HasActiveTransaction()) {
 		connection->Commit();
 		metadata_transaction_released = true;
+		metadata_view_differs = true;
 	}
 }
 
@@ -1756,6 +1757,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		option_lock_failed = false;
 		inlined_inserts.clear();
 		metadata_manager->ClearInlinedTableCaches();
+		metadata_view_differs = true;
 		connection->BeginTransaction();
 		snapshot.reset();
 	};
@@ -2448,6 +2450,7 @@ DuckLakeSnapshot DuckLakeTransaction::GetLatestSnapshot() {
 void DuckLakeTransaction::SetSnapshot(DuckLakeSnapshot new_snapshot) {
 	lock_guard<mutex> guard(snapshot_lock);
 	snapshot = make_uniq<DuckLakeSnapshot>(new_snapshot);
+	metadata_view_differs = true;
 }
 
 DuckLakeSnapshot DuckLakeTransaction::GetCommittedSnapshot() const {

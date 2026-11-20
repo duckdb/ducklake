@@ -1,0 +1,25 @@
+# name: benchmark/micro/read/file_list_cached.benchmark
+# description: Repeat an unfiltered scan that reads one row of a table of 1000 files at one snapshot
+# group: [read]
+
+name File List Cached
+group micro
+subgroup read
+
+require ducklake
+
+require parquet
+
+argument work file_list_cached_work
+
+include benchmark/micro/fixtures/compaction.benchmark.in
+
+run
+@for i in range(50)
+SELECT count(*) FROM (SELECT id FROM lake.frag LIMIT 1);
+@end
+
+result_query I
+SELECT * FROM __answer
+----
+1

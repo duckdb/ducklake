@@ -1197,6 +1197,31 @@ optional_idx DuckLakeCatalog::GetTableNetRowCount(DuckLakeTransaction &transacti
 	return row_count;
 }
 
+shared_ptr<const vector<DuckLakeFileListEntry>> DuckLakeCatalog::GetCommittedFileList(DuckLakeTransaction &transaction,
+                                                                                      DuckLakeTableEntry &table,
+                                                                                      DuckLakeSnapshot snapshot) {
+	auto key = FileListCacheKey(table.GetTableId());
+	auto cached = GetObjectCacheInstance().Get<DuckLakeFileListCacheEntry>(key);
+	if (cached && cached->snapshot_id == snapshot.snapshot_id) {
+		return cached->files;
+	}
+	auto files = make_shared_ptr<const vector<DuckLakeFileListEntry>>(
+	    transaction.GetMetadataManager().GetFilesForTable(table, snapshot, nullptr, false));
+	// metadata read outside the view of the snapshot can hold commits made since
+	if (transaction.MetadataViewDiffers()) {
+		return files;
+	}
+	// a read at an older snapshot leaves the entry of a newer one alone, even one stored during its fetch
+	lock_guard<mutex> guard(cache_entries_lock);
+	auto current = GetObjectCacheInstance().Get<DuckLakeFileListCacheEntry>(key);
+	if (!current || current->snapshot_id < snapshot.snapshot_id) {
+		shared_ptr<ObjectCacheEntry> entry = make_shared_ptr<DuckLakeFileListCacheEntry>(snapshot.snapshot_id, files);
+		TrackCacheEntry(key, entry);
+		GetObjectCacheInstance().Put(std::move(key), std::move(entry));
+	}
+	return files;
+}
+
 idx_t DuckLakeCatalog::GetTableRecordCount(DuckLakeTransaction &transaction, TableIndex table_id) {
 	auto snapshot = transaction.GetSnapshot();
 	auto &cache = GetObjectCacheInstance();
@@ -1667,6 +1692,24 @@ string DuckLakeCatalog::RecordCountCacheKey(idx_t snapshot_id) const {
 
 string DuckLakeCatalog::NetRowCountCacheKey(TableIndex table_id) const {
 	return StringUtil::Format("ducklake:%s:net_row_count:table:%llu", instance_id, table_id.index);
+}
+
+string DuckLakeCatalog::FileListCacheKey(TableIndex table_id) const {
+	return StringUtil::Format("ducklake:%s:file_list:table:%llu", instance_id, table_id.index);
+}
+
+//! A node of a std::set<idx_t>: the value, three pointers and the color
+static constexpr idx_t SET_NODE_BYTES = 48;
+
+optional_idx DuckLakeFileListCacheEntry::GetEstimatedCacheMemory() const {
+	idx_t size = sizeof(DuckLakeFileListCacheEntry) + sizeof(vector<DuckLakeFileListEntry>);
+	for (auto &file : *files) {
+		size += sizeof(DuckLakeFileListEntry) + file.file.path.size() + file.file.encryption_key.size() +
+		        file.delete_file.path.size() + file.delete_file.encryption_key.size() +
+		        file.snapshot_filter_excluded.size() * sizeof(idx_t) +
+		        file.inlined_file_deletions.size() * SET_NODE_BYTES;
+	}
+	return size;
 }
 
 string DuckLakeCatalog::SchemaCacheKey(idx_t schema_version) const {
