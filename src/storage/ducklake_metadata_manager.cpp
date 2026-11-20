@@ -3076,8 +3076,8 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 	}
 
 	auto query = GenerateFileListQuery(table, snapshot, filter_info, file_order, runtime_filter_stats_columns);
-	// the parsed rows serve the statement again until the transaction writes, and other transactions under the same
-	// head, unless the backend shows the commits of other transactions
+	// the parsed rows serve this transaction until it writes and others under the same head, never where the
+	// commits of other transactions show through
 	bool cacheable = !ShowsConcurrentCommits();
 	auto cache_key = to_string(snapshot.snapshot_id) + "/" + to_string(snapshot.schema_version) + "\n" + query;
 	if (cacheable) {
@@ -4915,13 +4915,26 @@ shared_ptr<const unordered_set<string>> DuckLakeMetadataManager::InlinedDeletion
 	                                                         [&]() { return ListInlinedDeletionTables(); });
 }
 
+//! One table looked up in the catalog of the metadata database
+static bool MetadataTableExists(DuckLakeTransaction &transaction, const Identifier &table_name) {
+	auto &catalog = transaction.GetCatalog();
+	return transaction.GetConnection().TableInfo(catalog.MetadataDatabaseName(), catalog.MetadataSchemaName(),
+	                                             table_name) != nullptr;
+}
+
 bool DuckLakeMetadataManager::InlinedDeletionTableExists(const Identifier &table_name) {
-	return InlinedDeletionTables()->count(table_name.GetIdentifierName()) > 0;
+	if (ListsInlinedDeletionTables()) {
+		return InlinedDeletionTables()->count(table_name.GetIdentifierName()) > 0;
+	}
+	return MetadataTableExists(transaction, table_name);
 }
 
 bool DuckLakeMetadataManager::CommittedInlinedDeletionTableExists(const Identifier &table_name) {
 	// a writer of another process may have created the table after the listing of this snapshot
-	return ListInlinedDeletionTables().count(table_name.GetIdentifierName()) > 0;
+	if (ListsInlinedDeletionTables()) {
+		return ListInlinedDeletionTables().count(table_name.GetIdentifierName()) > 0;
+	}
+	return MetadataTableExists(transaction, table_name);
 }
 
 Identifier DuckLakeMetadataManager::GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,

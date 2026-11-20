@@ -43,6 +43,9 @@ public:
 	void ClearCache() override;
 
 	bool MetadataExists() override;
+	bool ListsInlinedDeletionTables() const override {
+		return true;
+	}
 	unordered_set<string> ListInlinedDeletionTables() override;
 
 protected:

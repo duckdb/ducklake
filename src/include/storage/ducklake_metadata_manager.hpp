@@ -593,10 +593,14 @@ public:
 	//! Get the name of the inlined deletion table for a given table ID
 	virtual Identifier GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
 	                                               bool include_local_changes = true);
-	//! Whether the inlined deletion table exists, answered from one listing per snapshot
+	//! Whether the inlined deletion table exists, for the reads of the transaction's snapshot
 	bool InlinedDeletionTableExists(const Identifier &table_name);
-	//! Whether the inlined deletion table exists now, read from the catalog for the checks of a commit
+	//! Whether the inlined deletion table exists now, for the checks of a commit
 	bool CommittedInlinedDeletionTableExists(const Identifier &table_name);
+	//! Whether a probe of one table costs a round trip, so that one listing per snapshot serves every probe
+	virtual bool ListsInlinedDeletionTables() const {
+		return false;
+	}
 	//! The inlined deletion tables of the metadata catalog
 	virtual unordered_set<string> ListInlinedDeletionTables();
 	//! The table names a listing returned

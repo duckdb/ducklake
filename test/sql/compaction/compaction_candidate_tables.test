@@ -55,9 +55,8 @@ SELECT sum(files_processed) FROM ducklake_rewrite_data_files('dl', delete_thresh
 statement ok
 CALL disable_logging()
 
-# one read of the delete files and at most one listing of the inlined deletion tables (a Postgres catalog lists them
-# on the server) name the candidates, the two candidate tables list their files; a quack catalog wraps every
-# statement in a call, so its log is not counted
+# one read of the delete files and at most one listing of the inlined deletion tables name the candidates, the two
+# candidate tables list their files (a quack catalog wraps every statement in a call, so its log is not counted)
 query III
 SELECT CASE WHEN counted THEN reads ELSE 1 END, CASE WHEN counted THEN listings <= 1 ELSE true END,
        CASE WHEN counted THEN lists ELSE 2 END
