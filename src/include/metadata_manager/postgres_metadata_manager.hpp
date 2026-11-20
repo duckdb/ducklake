@@ -47,6 +47,8 @@ public:
 	bool IsRetryableCommitError(const string &message) const override;
 	bool IsCommitOutcomeUnknown(const string &message) const override;
 	bool ProbeMetadataColumns() override;
+	bool ProbeMetadataColumns() override;
+	bool IsCommitOutcomeUnknown(const string &message) const override;
 	string CommitErrorWithoutQuery(const string &message) const override;
 	string ConfigOptionLockSql() const override;
 
