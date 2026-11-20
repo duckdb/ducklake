@@ -691,7 +691,7 @@ SELECT list(i ORDER BY i) FROM dl.t
 statement ok
 DETACH dl
 
-# a 2.0-dev1 attach of a complete layout runs no migration statement
+# a 2.0-dev1 attach of a complete layout probes the layout and runs no migration statement
 statement ok
 CALL truncate_duckdb_logs()
 
@@ -711,8 +711,7 @@ true
 
 query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%ducklake_branch%' OR query LIKE '%_rebuild%'
-    OR query LIKE '%RENAME TO%' OR query LIKE '%pg_attribute%' OR query LIKE '%duckdb_columns()%'
+WHERE query LIKE '%ducklake_branch%' OR query LIKE '%_rebuild%' OR query LIKE '%RENAME TO%'
 ----
 0
 
