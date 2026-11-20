@@ -31,7 +31,9 @@ bool SQLiteMetadataManager::TypeIsNativelySupported(const LogicalType &type) {
 }
 
 static bool IsLockedCommit(const string &lower_message) {
-	return StringUtil::Contains(lower_message, "failed to execute query \"commit\": database is locked");
+	// the older scanner quotes the query, the newer one wraps it in "failed to commit"
+	return StringUtil::Contains(lower_message, "failed to execute query \"commit\": database is locked") ||
+	       StringUtil::Contains(lower_message, "failed to commit: failed to execute query: database is locked");
 }
 
 bool SQLiteMetadataManager::IsRetryableCommitError(const string &message) const {

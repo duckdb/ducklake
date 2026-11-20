@@ -10,6 +10,15 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 
 test-env DATA_PATH {TEST_DIR}
 
+# DuckDB's test data, from a DuckDB build or from an extension build with a duckdb submodule
+statement ok
+SET VARIABLE parquet_testing = (
+	SELECT parse_dirpath(file) FROM glob('{BUILD_DIR}/../../data/parquet-testing/fixed.parquet')
+	UNION ALL
+	SELECT parse_dirpath(file) FROM glob('{BUILD_DIR}/../../duckdb/data/parquet-testing/fixed.parquet')
+	LIMIT 1
+)
+
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/add_files_json_without_extension')
 
@@ -22,7 +31,7 @@ statement ok
 CREATE TABLE dl.t (BLOCK_NUMBER INTEGER)
 
 statement ok
-CALL ducklake_add_data_files('dl', 't', 'duckdb/data/parquet-testing/json_convertedtype.parquet',
+CALL ducklake_add_data_files('dl', 't', getvariable('parquet_testing') || '/json_convertedtype.parquet',
     ignore_extra_columns => true)
 
 query II
@@ -34,7 +43,7 @@ statement ok
 CREATE TABLE dl.json_as_varchar (field1 VARCHAR, field2 VARCHAR)
 
 statement error
-CALL ducklake_add_data_files('dl', 'json_as_varchar', 'duckdb/data/parquet-testing/parquet_with_json.parquet')
+CALL ducklake_add_data_files('dl', 'json_as_varchar', getvariable('parquet_testing') || '/parquet_with_json.parquet')
 ----
 Expected VARCHAR, found type JSON
 

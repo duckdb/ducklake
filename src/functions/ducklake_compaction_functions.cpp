@@ -85,9 +85,6 @@ PhysicalOperator &DuckLakeLogicalCompaction::CreatePlan(ClientContext &context, 
 		}
 		transaction.ReleaseMetadataTransaction();
 	}
-	if (ordered_input) {
-		DuckLakeInsert::PreserveSortedOrder(child.Cast<PhysicalCopyToFile>());
-	}
 	return planner.Make<DuckLakeCompaction>(types, table, std::move(source_files), std::move(encryption_key),
 	                                        partition_id, std::move(partition_values), row_id_start, child, type);
 }
@@ -768,7 +765,9 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	bool merge_in_order = type == CompactionType::MERGE_ADJACENT_TABLES && files_are_adjacent;
 	copy->table_index = binder.GenerateTableIndex();
 	if (!merge_in_order) {
-		copy->preserve_order = PreserveOrderType::DONT_PRESERVE_ORDER;
+		// a sorted rewrite keeps its order across the files it rotates
+		copy->preserve_order =
+		    sort_applied ? PreserveOrderType::PRESERVE_ORDER : PreserveOrderType::DONT_PRESERVE_ORDER;
 	} else {
 		auto &fs = FileSystem::GetFileSystem(context);
 		copy->file_path = copy->filename_pattern.CreateFilename(fs, copy->file_path, "parquet", 0);
@@ -788,7 +787,6 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	auto compaction = make_uniq<DuckLakeLogicalCompaction>(
 	    binder.GenerateTableIndex(), table, std::move(actionable_source_files), std::move(copy_input.encryption_key),
 	    partition_id, std::move(partition_values), target_row_id_start, type);
-	compaction->ordered_input = sort_applied && !merge_in_order;
 	compaction->children.push_back(std::move(copy));
 	return std::move(compaction);
 }

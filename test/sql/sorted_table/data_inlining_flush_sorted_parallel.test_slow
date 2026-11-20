@@ -6,6 +6,8 @@ require ducklake
 
 require parquet
 
+require notmusl
+
 test-env DUCKLAKE_CONNECTION {TEST_DIR}/flush_sorted_parallel.db
 
 test-env DATA_PATH {TEST_DIR}

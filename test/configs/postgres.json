@@ -1,6 +1,6 @@
 {
   "description": "Run DuckLake tests using Postgres as a catalog DBMS.",
-  "on_init": "ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres); USE pg; DROP SCHEMA public CASCADE; DROP SCHEMA IF EXISTS metadata_s1 CASCADE; DROP SCHEMA IF EXISTS metadata_s2 CASCADE; DROP SCHEMA IF EXISTS junk_1064 CASCADE; DROP SCHEMA IF EXISTS scoped_meta_1064 CASCADE; DROP SCHEMA IF EXISTS read_only_new_lake CASCADE; DROP SCHEMA IF EXISTS read_only_v10_lake CASCADE; CREATE SCHEMA public;USE memory; DETACH pg;",
+  "on_init": "ATTACH 'dbname=ducklakedb' AS pg (TYPE postgres); DROP SCHEMA pg.public CASCADE; DROP SCHEMA IF EXISTS pg.metadata_s1 CASCADE; DROP SCHEMA IF EXISTS pg.metadata_s2 CASCADE; DROP SCHEMA IF EXISTS pg.junk_1064 CASCADE; DROP SCHEMA IF EXISTS pg.scoped_meta_1064 CASCADE; DROP SCHEMA IF EXISTS pg.read_only_new_lake CASCADE; DROP SCHEMA IF EXISTS pg.read_only_v10_lake CASCADE; CREATE SCHEMA pg.public; DETACH pg;",
   "autoloading": "none",
   "statically_loaded_extensions": [
     "core_functions",
@@ -69,13 +69,6 @@
       "paths": [
         "test/sql/migration/v01_partitioned.test",
         "test/sql/migration/v01.test"
-      ]
-    },
-    {
-      "reason": "on_init ends with USE memory, which a DuckLake opened as the main database does not have",
-      "paths": [
-        "test/sql/attach/ducklake_main_database.test",
-        "test/sql/attach/ducklake_main_database_reopen.test"
       ]
     },
     {
