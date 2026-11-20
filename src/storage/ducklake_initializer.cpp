@@ -364,7 +364,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				resolved_version = catalog_version;
 				continue;
 			}
-			// one metadata transaction, also where each statement commits on its own
+			// one metadata transaction per batch, also where each statement commits on its own
 			metadata_manager.BeginMigration();
 			try {
 				if (catalog_version == DuckLakeVersion::V1_0 || catalog_version == DuckLakeVersion::V1_1_DEV_1) {

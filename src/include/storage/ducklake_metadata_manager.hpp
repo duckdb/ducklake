@@ -728,7 +728,7 @@ public:
 	virtual idx_t SetConfigOption(const DuckLakeConfigOption &option);
 	virtual bool ResetConfigOption(const DuckLakeConfigOption &option);
 	idx_t ConfigOptionRowCount(const DuckLakeConfigOption &option, optional_ptr<const string> value = nullptr);
-	//! Runs a migration in one metadata transaction on a catalog where each statement commits on its own
+	//! Runs a migration batch in one metadata transaction on a catalog where each statement commits on its own
 	virtual void BeginMigration() {
 	}
 	virtual void CommitMigration() {
