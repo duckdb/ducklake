@@ -59,14 +59,12 @@ SELECT count(*), sum(i) FROM dl.regular
 ----
 1	42
 
+# two group commits that share a snapshot: the server holds them back until both wait
 statement ok
 SET ducklake_rest_group_commit=true
 
-statement ok
-BEGIN
-
-statement ok
-INSERT INTO dl.grouped VALUES (43)
+statement ok rest_db:rest_server_con
+SET ducklake_debug_rest_commit_hold = 2
 
 statement ok rest_db:rest_server_con
 SET wal_autocheckpoint_entries = 1
@@ -74,13 +72,26 @@ SET wal_autocheckpoint_entries = 1
 statement ok rest_db:rest_server_con
 PRAGMA debug_checkpoint_abort = 'before_header_non_fatal'
 
+concurrentloop i 0 2
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.grouped VALUES (43 + {i})
+
 statement error
 COMMIT
 ----
 Transaction COMMIT succeeded
 
+endloop
+
 statement ok rest_db:rest_server_con
 PRAGMA debug_checkpoint_abort = 'none'
+
+statement ok rest_db:rest_server_con
+SET ducklake_debug_rest_commit_hold = 0
 
 statement ok rest_db:rest_server_con
 SET wal_autocheckpoint_entries = 0
@@ -96,18 +107,23 @@ DETACH rest_lake
 statement ok rest_db:rest_server_con
 ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_rest_server.db' AS reopened (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_rest_files')
 
-# both commits are published once, and their files are still there
+# the commits are published once, the group as one snapshot, and their files are still there
 query II rest_db:rest_server_con
 SELECT (SELECT count(*) FROM ducklake_list_files('reopened', 'regular')), (SELECT count(*) FROM ducklake_list_files('reopened', 'grouped'))
 ----
-1	1
+1	2
 
 query I
 SELECT count(*) FROM glob('{TEST_DIR}/{BASE_TEST_NAME}_rest_files/**/*.parquet')
 ----
-2
+3
 
-query II rest_db:rest_server_con
-SELECT (SELECT sum(i) FROM reopened.regular), (SELECT sum(i) FROM reopened.grouped)
+query III rest_db:rest_server_con
+SELECT (SELECT sum(i) FROM reopened.regular), (SELECT count(*) FROM reopened.grouped), (SELECT sum(i) FROM reopened.grouped)
 ----
-42	43
+42	2	87
+
+query I rest_db:rest_server_con
+SELECT count(DISTINCT snapshot_id) FROM reopened.grouped
+----
+1

@@ -23,6 +23,9 @@ namespace duckdb {
 
 //! The number of commits that share a snapshot at most
 static constexpr idx_t MAX_COMMIT_GROUP = 256;
+//! How long a test holds its commits back at most, so that a hold that is never met fails the test instead of
+//! hanging it
+static constexpr int64_t MAX_COMMIT_HOLD_SECONDS = 60;
 
 bool DuckLakeRESTPendingCommit::CanShareSnapshotWith(const DuckLakeRESTPendingCommit &other) const {
 	return shares_snapshot && other.shares_snapshot && server == other.server && prefix == other.prefix &&
@@ -48,9 +51,18 @@ vector<reference<DuckLakeRESTPendingCommit>> DuckLakeRESTCommitQueue::TakeNext()
 	return result;
 }
 
-void DuckLakeRESTCommitQueue::Submit(DuckLakeRESTPendingCommit &commit, const run_commits_t &run_commits) {
+void DuckLakeRESTCommitQueue::Submit(DuckLakeRESTPendingCommit &commit, idx_t hold, const run_commits_t &run_commits) {
 	unique_lock<mutex> guard(lock);
 	pending.push_back(commit);
+	if (hold > 0) {
+		// a test holds its commits back until they all wait, so that they form the groups it expects
+		released = released || pending.size() >= hold;
+		ready.notify_all();
+		bool met = ready.wait_for(guard, std::chrono::seconds(MAX_COMMIT_HOLD_SECONDS),
+		                          [&] { return released || commit.done; });
+		released = released || !met;
+		ready.notify_all();
+	}
 	ready.wait(guard, [&] { return commit.done || !running; });
 	if (commit.done) {
 		return;
@@ -70,6 +82,7 @@ void DuckLakeRESTCommitQueue::Submit(DuckLakeRESTPendingCommit &commit, const ru
 			ready.notify_all();
 		}
 	} catch (...) {
+		// LCOV_EXCL_START: the commits catch their errors, only a failure outside of them gets here
 		// the queue must not stay blocked, and it must not keep the commit of a request that leaves
 		if (!guard.owns_lock()) {
 			guard.lock();
@@ -90,8 +103,9 @@ void DuckLakeRESTCommitQueue::Submit(DuckLakeRESTPendingCommit &commit, const ru
 			commit.interrupted = true;
 			commit.done = true;
 		}
-	}
+	} // LCOV_EXCL_STOP
 	running = false;
+	released = released && !pending.empty();
 	ready.notify_all();
 }
 
@@ -266,6 +280,13 @@ static string ErrorBody(ExceptionType type, const string &message, int32_t statu
 	return DuckLakeRESTSerializer::ToJSON(response);
 }
 
+//! The number of commits that a test holds back until they all wait in the queue
+static idx_t CommitHold(DatabaseInstance &db) {
+	Value hold;
+	db.TryGetCurrentSetting(Identifier("ducklake_debug_rest_commit_hold"), hold);
+	return hold.IsNull() ? 0 : hold.GetValue<idx_t>();
+}
+
 int32_t DuckLakeRESTServer::HandleRequest(const RESTRoute &route, optional_ptr<const string> prefix,
                                           const vector<string> &path_values, const vector<pair<string, string>> &query,
                                           const string &body, const string &request_content_type, const string &accept,
@@ -315,11 +336,13 @@ int32_t DuckLakeRESTServer::HandleRequest(const RESTRoute &route, optional_ptr<c
 			commit.prefix = served.prefix;
 			commit.accepts_arrow = accepts_arrow;
 			served.commit_queue->Submit(
-			    commit, [&](vector<reference<DuckLakeRESTPendingCommit>> &commits) { RunCommits(served, commits); });
+			    commit, CommitHold(*served.db),
+			    [&](vector<reference<DuckLakeRESTPendingCommit>> &commits) { RunCommits(served, commits); });
 			if (commit.interrupted) {
+				// LCOV_EXCL_START: only the failure of the queue itself interrupts a commit
 				// an IO error, as for a lost response: the client must not remove the files of the transaction
 				throw IOException("The commit did not run to its end, it is unknown whether it was published");
-			}
+			} // LCOV_EXCL_STOP
 			if (commit.error.HasError()) {
 				auto status = StatusCodeForError(commit.error.Type());
 				response = ErrorBody(commit.error.Type(), commit.error.RawMessage(), status);
@@ -378,11 +401,9 @@ void DuckLakeRESTServer::RunCommit(const ServedCatalog &served, DuckLakeRESTPend
 		DuckLakeRESTRequest request(*served.db, served.catalog_name);
 		InitializeCommitRequest(request, commit);
 		try {
+			// the endpoint commits the transaction of the request
 			commit.response = endpoint(request, commit.request_json);
 			commit.content_type = request.content_type;
-			if (request.connection.HasActiveTransaction()) {
-				request.connection.Commit();
-			}
 		} catch (...) {
 			published = request.published;
 			if (request.connection.HasActiveTransaction()) {
@@ -408,9 +429,6 @@ bool DuckLakeRESTServer::RunCommitGroup(const ServedCatalog &served,
 		try {
 			response = DuckLakeRESTCommitGroup::Commit(request, group);
 			content_type = request.content_type;
-			if (request.connection.HasActiveTransaction()) {
-				request.connection.Commit();
-			}
 		} catch (...) {
 			published = request.published;
 			if (request.connection.HasActiveTransaction()) {
@@ -425,18 +443,15 @@ bool DuckLakeRESTServer::RunCommitGroup(const ServedCatalog &served,
 		// the commits of a published group never run again
 		error = ErrorAfterPublication(ErrorData(ex));
 	}
+	// a failure here does not reach the fallback either: the queue answers the commits that have no result
 	for (auto &entry : group) {
 		auto &commit = entry.get();
 		if (error.HasError()) {
 			commit.error = error;
 			continue;
 		}
-		try {
-			commit.response = response;
-			commit.content_type = content_type;
-		} catch (std::exception &ex) {
-			commit.error = ErrorAfterPublication(ErrorData(ex));
-		}
+		commit.response = response;
+		commit.content_type = content_type;
 	}
 	return true;
 }

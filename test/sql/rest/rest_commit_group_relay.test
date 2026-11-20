@@ -34,7 +34,7 @@ CREATE TABLE ids AS SELECT j->>'$.table_name' AS name, (j->>'$.table_id')::BIGIN
 statement ok rest_db:rest_server_con
 DROP TABLE rest_lake.bad
 
-loop i 0 24
+loop i 0 6
 
 statement ok
 COPY (SELECT {i}::INTEGER AS i) TO '{TEST_DIR}/{BASE_TEST_NAME}_member_{i}.parquet' (FORMAT PARQUET, FIELD_IDS {i: 1})
@@ -44,25 +44,40 @@ endloop
 statement ok
 CREATE TABLE outcomes(i INTEGER, status INTEGER, response VARCHAR)
 
-# a large regular commit keeps the queue busy, so that the group commits wait together
-# every third group commit appends to the dropped table
-concurrentloop i 0 24
+# the server holds the commits back until all of them wait: a regular commit and one group of five
+# two of the group commits append to the dropped table
+statement ok rest_db:rest_server_con
+SET VARIABLE snapshots_before = (SELECT count(*) FROM ducklake_snapshots('rest_lake'))
+
+statement ok relay_db:relay_con
+SET ducklake_debug_rest_commit_hold=6
+
+concurrentloop i 0 6
 
 statement ok
 SET VARIABLE file_size = (SELECT size FROM read_blob('{TEST_DIR}/{BASE_TEST_NAME}_member_{i}.parquet'))
 
 statement ok
-SET VARIABLE body = json_object('snapshot_id', (SELECT old_snapshot::UBIGINT FROM requests), 'requests', (SELECT list(json_object('insert_files', json_object('table_id', (SELECT id FROM ids WHERE name = CASE WHEN {i}%3=1 THEN 'bad' ELSE 'good' END), 'files', [json_object('path', '{TEST_DIR}/{BASE_TEST_NAME}_member_{i}.parquet', 'record_count', 1, 'file_size_bytes', getvariable('file_size'))]))) FROM range(CASE WHEN {i}=0 THEN 3000 ELSE 1 END)))
+SET VARIABLE body = json_object('snapshot_id', (SELECT old_snapshot::UBIGINT FROM requests), 'requests', [json_object('insert_files', json_object('table_id', (SELECT id FROM ids WHERE name = CASE WHEN {i}%3=1 THEN 'bad' ELSE 'good' END), 'files', [json_object('path', '{TEST_DIR}/{BASE_TEST_NAME}_member_{i}.parquet', 'record_count', 1, 'file_size_bytes', getvariable('file_size'))]))])
 
 statement ok
 INSERT INTO outcomes SELECT {i}, status, response FROM ducklake_rest_request('{relay_server}', 'POST', CASE WHEN {i}=0 THEN '/v1/transactions/commit' ELSE '/v1/transactions/group-commit' END, getvariable('body'))
 
 endloop
 
+statement ok relay_db:relay_con
+SET ducklake_debug_rest_commit_hold=0
+
 query II
 SELECT count(*) FILTER (WHERE status=200), count(*) FILTER (WHERE status=409) FROM outcomes
 ----
-16	8
+4	2
+
+# the group failed on its stale commits, so each of the others committed a snapshot of its own
+query I rest_db:rest_server_con
+SELECT count(*) - getvariable('snapshots_before') FROM ducklake_snapshots('rest_lake')
+----
+4
 
 # the appends that committed still have their files
 query I
@@ -70,11 +85,11 @@ SELECT count(*) FROM outcomes o WHERE status=200 AND NOT EXISTS (SELECT 1 FROM g
 ----
 0
 
-# the first commit registered its file 3000 times
+# the rows of the appends that committed are in the table once
 query II rest_db:rest_server_con
 SELECT count(*), count(DISTINCT i) FROM rest_lake.good
 ----
-3015	16
+4	4
 
 statement ok
 DETACH dl

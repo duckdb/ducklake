@@ -63,7 +63,8 @@ class DuckLakeRESTCommitQueue {
 public:
 	using run_commits_t = std::function<void(vector<reference<DuckLakeRESTPendingCommit>> &)>;
 
-	void Submit(DuckLakeRESTPendingCommit &commit, const run_commits_t &run_commits);
+	//! With a hold, the commits only start to run once that many wait in the queue (for tests)
+	void Submit(DuckLakeRESTPendingCommit &commit, idx_t hold, const run_commits_t &run_commits);
 
 private:
 	vector<reference<DuckLakeRESTPendingCommit>> TakeNext();
@@ -73,6 +74,8 @@ private:
 	std::condition_variable ready;
 	deque<reference<DuckLakeRESTPendingCommit>> pending;
 	bool running = false;
+	//! Whether the commits that a test held back can run
+	bool released = false;
 };
 
 struct DuckLakeRESTCommitGroup {

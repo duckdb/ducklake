@@ -6,19 +6,17 @@ require ducklake
 
 require parquet
 
+require json
+
 # the server runs in the database of the test, so that a connection of a concurrent loop can write to its lake
 statement ok
 ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_rest_server.db' AS direct (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_rest_files')
 
 statement ok
-SET VARIABLE rest_uri = (SELECT listen_uri FROM ducklake_rest_serve('direct'))
-
-loop i 0 8
+CREATE TABLE server AS SELECT listen_uri AS uri FROM ducklake_rest_serve('direct')
 
 statement ok
-ATTACH 'ducklake:rest:' || getvariable('rest_uri') AS dl{i} (DATA_INLINING_ROW_LIMIT 1000)
-
-endloop
+SET VARIABLE rest_uri = (SELECT uri FROM server)
 
 statement ok
 CREATE TABLE direct.t(i INTEGER, w INTEGER)
@@ -27,10 +25,28 @@ statement ok
 INSERT INTO direct.t VALUES (-1, -1)
 
 statement ok
-SET ducklake_rest_group_commit=true
+CREATE TABLE ids AS SELECT (j->>'$.table_id')::BIGINT AS id FROM (SELECT unnest(from_json(response->'$.catalog.tables', '["JSON"]')) AS j FROM ducklake_rest_request(getvariable('rest_uri'), 'GET', '/v1/snapshots/latest?include_catalog=true', '')) WHERE j->>'$.table_name' = 't'
 
-# the direct writer is not in the queue of the server: an append conflicts with its ALTER or is in the table once
+loop i 1 9
+
+loop j 0 6
+
+statement ok
+COPY (SELECT {j}::INTEGER AS i, {i}::INTEGER AS w) TO '{TEST_DIR}/{BASE_TEST_NAME}_append_{i}_{j}.parquet' (FORMAT PARQUET, FIELD_IDS {i: 1, w: 2})
+
+endloop
+
+endloop
+
+# the answer of the server to every append
+statement ok
+CREATE TABLE outcomes(i INTEGER, w INTEGER, status INTEGER)
+
+# the direct writer is not in the queue of the server: an append from a snapshot before its ALTER conflicts
 concurrentloop i 0 8
+
+statement ok
+SET VARIABLE rest_uri = (SELECT uri FROM server)
 
 loop j 0 6
 
@@ -39,19 +55,58 @@ statement ok
 ALTER TABLE direct.t ADD COLUMN c{j} INTEGER
 
 skipif i=0
-statement maybe
-INSERT INTO dl{i}.t (i, w) VALUES ({j}, {i})
+statement ok
+SET VARIABLE snapshot_id = (SELECT (response->>'$.snapshot.snapshot_id')::UBIGINT FROM ducklake_rest_request(getvariable('rest_uri'), 'GET', '/v1/snapshots/latest', ''))
+
+skipif i=0
+statement ok
+SET VARIABLE body = json_object('snapshot_id', getvariable('snapshot_id'), 'requests', [json_object('insert_files', json_object('table_id', (SELECT id FROM ids), 'files', [json_object('path', '{TEST_DIR}/{BASE_TEST_NAME}_append_{i}_{j}.parquet', 'record_count', 1, 'file_size_bytes', (SELECT size FROM read_blob('{TEST_DIR}/{BASE_TEST_NAME}_append_{i}_{j}.parquet')))]))])
+
+skipif i=0
+statement ok
+INSERT INTO outcomes SELECT {j}, {i}, status FROM ducklake_rest_request(getvariable('rest_uri'), 'POST', '/v1/transactions/group-commit', getvariable('body'))
+
+endloop
+
+endloop
+
+# with the table at rest, an append is always acknowledged
+statement ok
+SET VARIABLE body = json_object('requests', [json_object('insert_files', json_object('table_id', (SELECT id FROM ids), 'files', [json_object('path', '{TEST_DIR}/{BASE_TEST_NAME}_append_8_0.parquet', 'record_count', 1, 'file_size_bytes', (SELECT size FROM read_blob('{TEST_DIR}/{BASE_TEST_NAME}_append_8_0.parquet')))]))])
+
+statement ok
+INSERT INTO outcomes SELECT 0, 8, status FROM ducklake_rest_request(getvariable('rest_uri'), 'POST', '/v1/transactions/group-commit', getvariable('body'))
+
+query I
+SELECT status FROM outcomes WHERE w = 8
 ----
-Transaction conflict
+200
 
-endloop
-
-endloop
-
+# an append is acknowledged or rejected as a conflict
 query II
-SELECT count(*) = count(DISTINCT (i, w)), count(*) >= 1 FROM direct.t
+SELECT count(*), count(*) FILTER (WHERE status NOT IN (200, 409)) FROM outcomes
 ----
-true	true
+43	0
+
+# the file of every acknowledged append is in the table once, and the file of no rejected one is
+# (the appends send no column statistics, so the files are compared and not the values of the rows)
+statement ok
+CREATE TABLE files AS SELECT regexp_extract(data_file, '_append_([0-9]+)_([0-9]+)[.]parquet$', ['w', 'i']) AS append FROM ducklake_list_files('direct', 't') WHERE data_file LIKE '%_append_%'
+
+query I
+SELECT count(*) FROM outcomes o WHERE status = 200 AND (SELECT count(*) FROM files f WHERE f.append.i::INTEGER = o.i AND f.append.w::INTEGER = o.w) <> 1
+----
+0
+
+query I
+SELECT count(*) FROM files f WHERE NOT EXISTS (SELECT 1 FROM outcomes o WHERE o.status = 200 AND f.append.i::INTEGER = o.i AND f.append.w::INTEGER = o.w)
+----
+0
+
+query I
+SELECT (SELECT count(*) FROM direct.t) = 1 + (SELECT count(*) FROM outcomes WHERE status = 200)
+----
+true
 
 query I
 SELECT count(*) FROM duckdb_columns() WHERE database_name = 'direct' AND table_name = 't'
@@ -59,17 +114,16 @@ SELECT count(*) FROM duckdb_columns() WHERE database_name = 'direct' AND table_n
 8
 
 # a client reads the same rows as the direct writer
+statement ok
+ATTACH 'ducklake:rest:' || getvariable('rest_uri') AS dl
+
 query I
-SELECT (SELECT count(*) FROM dl0.t) = (SELECT count(*) FROM direct.t)
+SELECT (SELECT count(*) FROM dl.t) = (SELECT count(*) FROM direct.t)
 ----
 true
 
-loop i 0 8
-
 statement ok
-DETACH dl{i}
-
-endloop
+DETACH dl
 
 statement ok
 SELECT * FROM ducklake_rest_stop(regexp_extract(getvariable('rest_uri'), '^(.*://[^/]+)', 1))
