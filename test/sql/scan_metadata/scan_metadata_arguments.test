@@ -1,0 +1,50 @@
+# name: test/sql/scan_metadata/scan_metadata_arguments.test
+# description: The arguments of ducklake_scan_metadata
+# group: [scan_metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/scan_metadata_arguments', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE SCHEMA lake.s
+
+statement ok
+CREATE TABLE lake.s.t AS SELECT range a FROM range(10)
+
+query I
+SELECT count(*) FROM ducklake_scan_metadata('lake', 't', schema => 's')
+----
+1
+
+statement error
+SELECT * FROM ducklake_scan_metadata('lake', 't')
+----
+<REGEX>:.*Table with name t does not exist.*
+
+statement error
+SELECT * FROM ducklake_scan_metadata('lake', 't', schema => 's', scan_type => 'flush')
+----
+The scan_type option must be one of table, insertions or deletions, not 'flush'
+
+statement error
+SELECT * FROM ducklake_scan_metadata('lake', 't', schema => 's', scan_type => 'insertions')
+----
+The start_snapshot option is required for scans of table changes, and only for them
+
+statement error
+SELECT * FROM ducklake_scan_metadata('lake', 't', schema => 's', start_snapshot => 0)
+----
+The start_snapshot option is required for scans of table changes, and only for them
+
+statement error
+SELECT * FROM ducklake_scan_metadata('lake', 't', schema => 's', scan_type => 'insertions', start_snapshot => NULL)
+----
+The start_snapshot option must be a non-null snapshot id, tag name or timestamp.

@@ -10,6 +10,7 @@
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "storage/ducklake_table_entry.hpp"
+#include "storage/ducklake_transaction.hpp"
 
 namespace duckdb {
 
@@ -104,6 +105,32 @@ BoundAtClause DuckLakeTableFunctionUtil::VersionAtClauseFromValue(const Value &i
 		return BoundAtClause("version", *snapshot_id);
 	}
 	}
+}
+
+unique_ptr<BoundAtClause> DuckLakeTableFunctionUtil::GetSnapshotAtClause(const TableFunctionBindInput &input) {
+	unique_ptr<BoundAtClause> at_clause;
+	Value snapshot_version;
+	if (TryGetNonNullOption(input, "snapshot_version", "snapshot id or tag name", snapshot_version)) {
+		if (snapshot_version.type().id() == LogicalTypeId::TIMESTAMP_TZ) {
+			throw BinderException("The snapshot_version option must be a snapshot id or a tag name, snapshot_time "
+			                      "takes a timestamp");
+		}
+		at_clause = make_uniq<BoundAtClause>(VersionAtClauseFromValue(snapshot_version));
+	}
+	Value snapshot_time;
+	if (TryGetNonNullOption(input, "snapshot_time", "timestamp", snapshot_time)) {
+		if (at_clause) {
+			throw InvalidInputException("Either snapshot_version OR snapshot_time must be specified - not both");
+		}
+		at_clause = make_uniq<BoundAtClause>(AtClauseFromValue(snapshot_time));
+	}
+	return at_clause;
+}
+
+BoundAtClause DuckLakeTableFunctionUtil::ChangesEndAtClause(DuckLakeTransaction &transaction,
+                                                            optional_ptr<BoundAtClause> end) {
+	auto end_snapshot = transaction.GetSnapshot(end, SnapshotBound::UPPER_BOUND);
+	return BoundAtClause("version", Value::BIGINT(NumericCast<int64_t>(end_snapshot.snapshot_id)));
 }
 
 DuckLakeCatalog &DuckLakeBaseMetadataFunction::GetCatalog(ClientContext &context, TableFunctionBindInput &input) {
