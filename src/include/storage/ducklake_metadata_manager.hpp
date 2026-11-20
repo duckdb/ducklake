@@ -741,7 +741,7 @@ public:
 	//! The additions of 2.0-dev2 a catalog is missing, probed so an interrupted migration resumes
 	struct V2_0Dev2Additions {
 		bool snapshot_tag_table = true;
-		//! The expiry time of tags, which the first 2.0-dev1 builds wrote the tag table without
+		//! The expiry time of tags, which a 2.0-dev1 tag table can lack
 		bool snapshot_tag_expiry = false;
 		bool branch_table = true;
 		//! Rebuilt through a rebuild table and an old table so an interrupted rebuild resumes
