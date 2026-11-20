@@ -691,6 +691,181 @@ SELECT list(i ORDER BY i) FROM dl.t
 statement ok
 DETACH dl
 
+# a dev build ended its catalog rows in place and knew no birth branch, the step adds the companions and the ends
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+
+# snapshots 9 and 10 create and drop a view, 11 and 12 rename the table and back, 13 and 14 create and drop a schema
+statement ok
+CREATE VIEW dl.v AS SELECT 1 AS x
+
+statement ok
+DROP VIEW dl.v
+
+statement ok
+ALTER TABLE dl.t RENAME TO t2
+
+statement ok
+ALTER TABLE dl.t2 RENAME TO t
+
+statement ok
+CREATE SCHEMA dl.s
+
+statement ok
+DROP SCHEMA dl.s
+
+statement ok
+ALTER TABLE meta.ducklake_table ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_table SET end_snapshot = (SELECT e.snapshot_id FROM meta.ducklake_table_visibility e
+    WHERE e.table_id = ducklake_table.table_id AND e.row_snapshot = ducklake_table.begin_snapshot)
+
+statement ok
+DROP TABLE meta.ducklake_table_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_table DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_view ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_view SET end_snapshot = (SELECT e.snapshot_id FROM meta.ducklake_view_visibility e
+    WHERE e.view_id = ducklake_view.view_id AND e.row_snapshot = ducklake_view.begin_snapshot)
+
+statement ok
+DROP TABLE meta.ducklake_view_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_view DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_schema ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_schema SET end_snapshot = (SELECT e.snapshot_id FROM meta.ducklake_schema_visibility e
+    WHERE e.schema_id = ducklake_schema.schema_id AND e.row_snapshot = ducklake_schema.begin_snapshot)
+
+statement ok
+DROP TABLE meta.ducklake_schema_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_schema DROP COLUMN branch_id
+
+statement ok
+DETACH dl
+
+# the incomplete layout is refused without the migration option
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+----
+catalog version is 2.0-dev1, but the catalog lacks the catalog row companions
+
+# a read only attach cannot migrate
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    READ_ONLY, AUTOMATIC_MIGRATION TRUE)
+----
+read-only mode
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+# the ends are rebuilt from the end snapshots and the end column is gone
+query IIII
+SELECT t.table_name, t.branch_id, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_table t
+LEFT JOIN meta.ducklake_table_visibility e ON e.table_id = t.table_id AND e.row_branch_id = t.branch_id
+    AND e.row_snapshot = t.begin_snapshot
+ORDER BY t.begin_snapshot
+----
+t	0	1	11
+t2	0	11	12
+t	0	NULL	NULL
+
+query IIII
+SELECT v.view_name, v.branch_id, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_view v
+JOIN meta.ducklake_view_visibility e ON e.view_id = v.view_id AND e.row_branch_id = v.branch_id
+    AND e.row_snapshot = v.begin_snapshot
+----
+v	0	9	10
+
+query IIII
+SELECT s.schema_name, s.branch_id, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_schema s
+JOIN meta.ducklake_schema_visibility e ON e.schema_id = s.schema_id AND e.row_branch_id = s.branch_id
+    AND e.row_snapshot = s.begin_snapshot
+----
+s	0	13	14
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name IN ('ducklake_schema', 'ducklake_table', 'ducklake_view') AND column_name = 'end_snapshot'
+----
+0
+
+query I
+SELECT list(i ORDER BY i) FROM dl.t
+----
+[42, 43, 44, 45, 46, 47, 48, 49]
+
+statement error
+SELECT * FROM dl.v
+----
+does not exist
+
+query I
+SELECT x FROM dl.v AT (VERSION => 9)
+----
+1
+
+# a companion a dev build never created is added, the catalog holds no view whose end it would hold
+statement ok
+DELETE FROM meta.ducklake_view WHERE view_name = 'v'
+
+statement ok
+DROP TABLE meta.ducklake_view_visibility
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+----
+catalog version is 2.0-dev1, but the catalog lacks the catalog row companions
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_view_visibility
+----
+0
+
+# snapshots 15 and 16 create and drop a view, which ends in the new companion
+statement ok
+CREATE VIEW dl.w AS SELECT 2 AS y
+
+statement ok
+DROP VIEW dl.w
+
+query II
+SELECT row_snapshot, snapshot_id FROM meta.ducklake_view_visibility
+----
+15	16
+
+statement ok
+DETACH dl
+
 # a 2.0-dev1 attach of a complete layout probes the layout and runs no migration statement
 statement ok
 CALL truncate_duckdb_logs()
@@ -712,6 +887,8 @@ true
 query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
 WHERE query LIKE '%ducklake_branch%' OR query LIKE '%_rebuild%' OR query LIKE '%RENAME TO%'
+    OR query LIKE '%ADD COLUMN branch_id%' OR query LIKE '%INSERT INTO%_visibility%'
+    OR query LIKE '%DROP COLUMN end_snapshot%'
 ----
 0
 

@@ -1,0 +1,145 @@
+# name: test/sql/migration/v20_row_companions_migration_resume.test
+# description: the migration to 2.0-dev1 resumes the catalog row companions from the state an interrupted step left
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
+
+# snapshot 1 creates s, 2 creates t, 3 creates v, 4 renames t, 5 drops v, 6 drops s
+statement ok
+CREATE SCHEMA dl.s
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+CREATE VIEW dl.v AS SELECT 1 AS x
+
+statement ok
+ALTER TABLE dl.t RENAME TO t2
+
+statement ok
+DROP VIEW dl.v
+
+statement ok
+DROP SCHEMA dl.s
+
+statement ok
+DETACH dl
+
+# the interrupted step converted the table rows, created the companion of the views and copied their end, and left
+# the schema rows untouched
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS meta
+
+statement ok
+ALTER TABLE meta.ducklake_table ADD COLUMN branch_id BIGINT DEFAULT 0
+
+statement ok
+UPDATE meta.ducklake_table SET branch_id = 0 WHERE branch_id IS NULL
+
+statement ok
+CREATE TABLE meta.ducklake_table_visibility(branch_id BIGINT, table_id BIGINT, row_branch_id BIGINT,
+    row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, table_id, row_branch_id, row_snapshot))
+
+statement ok
+INSERT INTO meta.ducklake_table_visibility
+SELECT 0, table_id, 0, begin_snapshot, end_snapshot FROM meta.ducklake_table WHERE end_snapshot IS NOT NULL
+
+statement ok
+ALTER TABLE meta.ducklake_table DROP COLUMN end_snapshot
+
+statement ok
+ALTER TABLE meta.ducklake_view ADD COLUMN branch_id BIGINT DEFAULT 0
+
+statement ok
+UPDATE meta.ducklake_view SET branch_id = 0 WHERE branch_id IS NULL
+
+statement ok
+CREATE TABLE meta.ducklake_view_visibility(branch_id BIGINT, view_id BIGINT, row_branch_id BIGINT,
+    row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, view_id, row_branch_id, row_snapshot))
+
+statement ok
+INSERT INTO meta.ducklake_view_visibility
+SELECT 0, view_id, 0, begin_snapshot, end_snapshot FROM meta.ducklake_view WHERE end_snapshot IS NOT NULL
+
+statement ok
+DETACH meta
+
+# the resumed step copies no end twice and finishes the views and the schemas
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query IIII
+SELECT t.table_name, e.branch_id, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_table_visibility e
+JOIN meta.ducklake_table t ON t.table_id = e.table_id AND t.branch_id = e.row_branch_id
+    AND t.begin_snapshot = e.row_snapshot
+----
+t	0	2	4
+
+query IIII
+SELECT v.view_name, e.branch_id, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_view_visibility e
+JOIN meta.ducklake_view v ON v.view_id = e.view_id AND v.branch_id = e.row_branch_id
+    AND v.begin_snapshot = e.row_snapshot
+----
+v	0	3	5
+
+query IIII
+SELECT s.schema_name, e.branch_id, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_schema_visibility e
+JOIN meta.ducklake_schema s ON s.schema_id = e.schema_id AND s.branch_id = e.row_branch_id
+    AND s.begin_snapshot = e.row_snapshot
+----
+s	0	1	6
+
+query II
+SELECT schema_name, branch_id FROM meta.ducklake_schema ORDER BY begin_snapshot
+----
+main	0
+s	0
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name IN ('ducklake_schema', 'ducklake_table', 'ducklake_view') AND column_name = 'end_snapshot'
+----
+0
+
+query I
+SELECT table_name FROM ducklake_table_info('dl')
+----
+t2
+
+statement error
+SELECT * FROM dl.v
+----
+does not exist
+
+query I
+SELECT x FROM dl.v AT (VERSION => 4)
+----
+1
+
+query I
+SELECT COUNT(*) FROM duckdb_schemas() WHERE database_name = 'dl' AND schema_name = 's'
+----
+0
+
+statement ok
+DETACH dl

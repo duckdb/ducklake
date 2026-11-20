@@ -1,0 +1,85 @@
+# name: test/sql/migration/v20_row_companions_superseded.test
+# description: the migration drops a row superseded at its birth, so no end hides the live row of the same birth
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+CREATE VIEW dl.v AS SELECT 1 AS x
+
+# the 1.x writers leave a row ended at its own birth next to the live row of the same entity and birth
+statement ok
+INSERT INTO meta.ducklake_table (table_id, table_uuid, begin_snapshot, end_snapshot, schema_id, table_name, path,
+    path_is_relative)
+SELECT table_id, table_uuid, begin_snapshot, begin_snapshot, schema_id, 'old_t', path, path_is_relative
+FROM meta.ducklake_table WHERE table_name = 't'
+
+statement ok
+INSERT INTO meta.ducklake_view (view_id, view_uuid, begin_snapshot, end_snapshot, schema_id, view_name, dialect, sql,
+    column_aliases)
+SELECT view_id, view_uuid, begin_snapshot, begin_snapshot, schema_id, 'old_v', dialect, sql, column_aliases
+FROM meta.ducklake_view WHERE view_name = 'v'
+
+query III
+SELECT table_name, begin_snapshot, end_snapshot FROM meta.ducklake_table ORDER BY table_name
+----
+old_t	1	1
+t	1	NULL
+
+query III
+SELECT view_name, begin_snapshot, end_snapshot FROM meta.ducklake_view ORDER BY view_name
+----
+old_v	3	3
+v	3	NULL
+
+statement ok
+DETACH dl
+
+# the superseded rows go, an end taken from them would name the live rows of their birth
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 0)
+
+query III
+SELECT table_name, begin_snapshot, branch_id FROM meta.ducklake_table
+----
+t	1	0
+
+query III
+SELECT view_name, begin_snapshot, branch_id FROM meta.ducklake_view
+----
+v	3	0
+
+query II
+SELECT (SELECT COUNT(*) FROM meta.ducklake_table_visibility), (SELECT COUNT(*) FROM meta.ducklake_view_visibility)
+----
+0	0
+
+query I
+SELECT i FROM dl.t
+----
+1
+
+query I
+SELECT x FROM dl.v
+----
+1
+
+statement ok
+DETACH dl

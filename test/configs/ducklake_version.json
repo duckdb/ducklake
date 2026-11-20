@@ -248,6 +248,8 @@
         "test/sql/stats/skip_stats_columns.test",
         "test/sql/stats/table_stats_null_totals.test",
         "test/sql/stats/table_stats_null_totals_retry.test",
+        "test/sql/catalog/catalog_row_companions.test",
+        "test/sql/compaction/expire_snapshots_catalog_rows.test",
         "test/sql/general/long_name_paths.test",
         "test/sql/issues/issue_1332.test",
         "test/sql/partitioning/partition_rename_in_transaction.test",

@@ -1,0 +1,297 @@
+# name: test/sql/migration/v20_row_companions_migration.test
+# description: the migration to 2.0-dev1 turns the end snapshots of the schema, table and view rows into end rows
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
+
+# snapshot 1 creates s, 2 creates t, 3 fills it, 4 creates v
+statement ok
+CREATE SCHEMA dl.s
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+CREATE VIEW dl.v AS SELECT 1 AS x
+
+# snapshot 5 renames t, 6 creates s.u, 7 drops v, 8 drops s with u
+statement ok
+ALTER TABLE dl.t RENAME TO t2
+
+statement ok
+CREATE TABLE dl.s.u AS SELECT 2 AS j
+
+statement ok
+DROP VIEW dl.v
+
+statement ok
+DROP SCHEMA dl.s CASCADE
+
+# the 1.1 catalog ends its rows in place
+query III
+SELECT table_name, begin_snapshot, end_snapshot FROM meta.ducklake_table ORDER BY begin_snapshot
+----
+t	2	5
+t2	5	NULL
+u	6	8
+
+query III
+SELECT view_name, begin_snapshot, end_snapshot FROM meta.ducklake_view
+----
+v	4	7
+
+query III
+SELECT schema_name, begin_snapshot, end_snapshot FROM meta.ducklake_schema ORDER BY begin_snapshot
+----
+main	0	NULL
+s	1	8
+
+statement error
+SELECT * FROM meta.ducklake_table_visibility
+----
+does not exist
+
+statement ok
+DETACH dl
+
+# the migration adds the birth branch, backfills the ends from the end snapshots and drops the end column
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query IIIII
+SELECT t.table_name, e.branch_id, e.row_branch_id, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_table_visibility e
+JOIN meta.ducklake_table t ON t.table_id = e.table_id AND t.branch_id = e.row_branch_id
+    AND t.begin_snapshot = e.row_snapshot
+ORDER BY e.snapshot_id
+----
+t	0	0	2	5
+u	0	0	6	8
+
+query IIIII
+SELECT v.view_name, e.branch_id, e.row_branch_id, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_view_visibility e
+JOIN meta.ducklake_view v ON v.view_id = e.view_id AND v.branch_id = e.row_branch_id
+    AND v.begin_snapshot = e.row_snapshot
+----
+v	0	0	4	7
+
+query IIIII
+SELECT s.schema_name, e.branch_id, e.row_branch_id, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_schema_visibility e
+JOIN meta.ducklake_schema s ON s.schema_id = e.schema_id AND s.branch_id = e.row_branch_id
+    AND s.begin_snapshot = e.row_snapshot
+----
+s	0	0	1	8
+
+query III
+SELECT table_name, begin_snapshot, branch_id FROM meta.ducklake_table ORDER BY begin_snapshot
+----
+t	2	0
+t2	5	0
+u	6	0
+
+# the rows keep their birth and gain the branch column last, like a fresh catalog
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_table')
+ORDER BY column_index
+----
+table_id
+table_uuid
+begin_snapshot
+schema_id
+table_name
+path
+path_is_relative
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_schema')
+ORDER BY column_index
+----
+schema_id
+schema_uuid
+begin_snapshot
+schema_name
+path
+path_is_relative
+parent_schema_id
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_view')
+ORDER BY column_index
+----
+view_id
+view_uuid
+begin_snapshot
+schema_id
+view_name
+dialect
+sql
+column_aliases
+branch_id
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_table_visibility')
+ORDER BY column_index
+----
+branch_id	BIGINT
+table_id	BIGINT
+row_branch_id	BIGINT
+row_snapshot	BIGINT
+snapshot_id	BIGINT
+
+# the migrated catalog reads the ends as it read the ranges
+query I
+SELECT i FROM dl.t2
+----
+1
+
+statement error
+SELECT * FROM dl.t
+----
+does not exist
+
+query I
+SELECT i FROM dl.t AT (VERSION => 4)
+----
+1
+
+query I
+SELECT x FROM dl.v AT (VERSION => 6)
+----
+1
+
+query I
+SELECT j FROM dl.s.u AT (VERSION => 7)
+----
+2
+
+query I
+SELECT COUNT(*) FROM duckdb_schemas() WHERE database_name = 'dl' AND schema_name = 's'
+----
+0
+
+query I
+SELECT table_name FROM ducklake_table_info('dl')
+----
+t2
+
+# the migrated catalog keeps writing ends, snapshot 9 renames t2, 10 and 11 create and drop a view, 12 and 13 a schema
+statement ok
+ALTER TABLE dl.t2 RENAME TO t3
+
+statement ok
+CREATE VIEW dl.w AS SELECT 2 AS y
+
+statement ok
+DROP VIEW dl.w
+
+statement ok
+CREATE SCHEMA dl.s2
+
+statement ok
+DROP SCHEMA dl.s2
+
+query IIII
+SELECT t.table_name, t.branch_id, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_table t
+LEFT JOIN meta.ducklake_table_visibility e ON e.table_id = t.table_id AND e.row_branch_id = t.branch_id
+    AND e.row_snapshot = t.begin_snapshot
+ORDER BY t.begin_snapshot
+----
+t	0	2	5
+t2	0	5	9
+u	0	6	8
+t3	0	NULL	NULL
+
+query III
+SELECT v.view_name, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_view_visibility e
+JOIN meta.ducklake_view v ON v.view_id = e.view_id AND v.branch_id = e.row_branch_id
+    AND v.begin_snapshot = e.row_snapshot
+ORDER BY e.snapshot_id
+----
+v	4	7
+w	10	11
+
+query III
+SELECT s.schema_name, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_schema_visibility e
+JOIN meta.ducklake_schema s ON s.schema_id = e.schema_id AND s.branch_id = e.row_branch_id
+    AND s.begin_snapshot = e.row_snapshot
+ORDER BY e.snapshot_id
+----
+s	1	8
+s2	12	13
+
+# the expiry removes the rows no snapshot reads anymore with their ends
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [1, 2, 3, 4, 5, 6, 7])
+
+query I
+SELECT schema_name FROM meta.ducklake_schema ORDER BY begin_snapshot
+----
+main
+s2
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_schema_visibility
+----
+1
+
+query I
+SELECT view_name FROM meta.ducklake_view
+----
+w
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_view_visibility
+----
+1
+
+# the table of t3 keeps its history, u is gone with its end
+query I
+SELECT table_name FROM meta.ducklake_table ORDER BY begin_snapshot
+----
+t
+t2
+t3
+
+query II
+SELECT row_snapshot, snapshot_id FROM meta.ducklake_table_visibility ORDER BY snapshot_id
+----
+2	5
+5	9
+
+query I
+SELECT i FROM dl.t3
+----
+1
+
+statement ok
+DETACH dl
