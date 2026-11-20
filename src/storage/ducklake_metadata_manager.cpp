@@ -42,6 +42,8 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/storage/statistics/base_statistics.hpp"
 
+#include <numeric>
+
 namespace duckdb {
 
 DuckLakeMetadataManager::DuckLakeMetadataManager(DuckLakeTransaction &transaction) : transaction(transaction) {
@@ -395,7 +397,6 @@ string DuckLakeMetadataManager::GetDeleteFileVisibilityTableStatement(bool if_no
 	return FileVisibilityTableStatement("ducklake_delete_file_visibility", "delete_file_id", if_not_exists);
 }
 
-//! A file table joined with the add event and the delete event each of its files has on the main branch
 static string FileSourceOverEvents(const string &prefix, const string &file_table, const string &visibility_table,
                                    const string &file_id_column, optional_idx table_id) {
 	// the aggregate gives the planners one row per file to join
@@ -2898,9 +2899,7 @@ static void RestoreFileIdOrder(vector<DuckLakeFileListEntry> &files) {
 	}
 	// sort the positions so that every entry moves once
 	vector<idx_t> positions(files.size());
-	for (idx_t i = 0; i < files.size(); i++) {
-		positions[i] = i;
-	}
+	std::iota(positions.begin(), positions.end(), idx_t(0));
 	std::stable_sort(positions.begin(), positions.end(), [&](idx_t a, idx_t b) { return by_id(files[a], files[b]); });
 	vector<DuckLakeFileListEntry> ordered;
 	ordered.reserve(files.size());
@@ -4904,8 +4903,7 @@ unordered_set<string> DuckLakeMetadataManager::ListInlinedDeletionTables() {
 }
 
 shared_ptr<const unordered_set<string>> DuckLakeMetadataManager::InlinedDeletionTables() {
-	// the listing is keyed by the newest snapshot of the transaction, which a catalog attached at an older snapshot
-	// can read too
+	// keyed by the transaction's newest snapshot, which an attach at an older snapshot reads too
 	return transaction.GetCatalog().GetInlinedDeletionTables(transaction.GetNewestVisibleSnapshotId(),
 	                                                         [&]() { return ListInlinedDeletionTables(); });
 }

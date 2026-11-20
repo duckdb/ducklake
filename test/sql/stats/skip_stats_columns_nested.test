@@ -77,7 +77,7 @@ query II
 SELECT c.column_name, f.min_value IS NULL
 FROM ducklake_meta.ducklake_file_column_stats f
 JOIN ducklake_meta.ducklake_column c ON c.column_id=f.column_id AND c.end_snapshot IS NULL
-WHERE f.data_file_id=(SELECT max(data_file_id) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_meta.ducklake_data_file f JOIN (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot, MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot FROM ducklake_meta.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id) v ON v.data_file_id = f.data_file_id))
+WHERE f.data_file_id=(SELECT max(data_file_id) FROM ducklake_meta.ducklake_data_file)
 ORDER BY c.column_name
 ----
 id	false
