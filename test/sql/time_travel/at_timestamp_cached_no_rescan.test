@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS l (DATA_PATH '{DATA_PATH}/at_timestamp_cached_no_rescan', DUCKLAKE_VERSION '2.0-dev1')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS l (DATA_PATH '{DATA_PATH}/at_timestamp_cached_no_rescan', DUCKLAKE_VERSION '2.0-dev2')
 
 statement ok
 CREATE TABLE l.t(i INTEGER)
