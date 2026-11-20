@@ -370,6 +370,8 @@ public:
 	static const RowVisibilityKind &RowKind(const string &kind);
 	//! The row table of a kind, the partition and sort specs keep their info suffix
 	static string RowTableName(const string &kind);
+	//! The companion table of a kind, ducklake_<kind>_visibility
+	static string RowVisibilityTableName(const string &kind);
 	//! The type of a key column, the tag keys and names are text
 	static string RowKeyType(const string &key);
 	//! The companion table holding the ends of the version rows of a kind, one end per row per branch
@@ -844,6 +846,8 @@ public:
 		//! Whether the row table exists, a catalog without it gets no statement for the kind
 		bool present = false;
 		bool has_branch_column = false;
+		//! Whether the companion still stands under its pending name, the rename into place closes the kind
+		bool has_pending = false;
 		bool has_companion = false;
 		bool has_end_column = false;
 		//! Whether the kind still lacks a part of the step
@@ -857,6 +861,8 @@ public:
 	V2_0RowCompanions ProbeV2_0RowCompanions();
 	//! Adds the birth branch and the companion of every converted kind and turns its end column into end rows
 	static string V2_0RowCompanionsSql(const V2_0RowCompanions &rows);
+	//! Turns the end column of a kind into end rows of its pending companion and drops the column
+	static string V2_0RowEndBackfillSql(const RowVisibilityKind &kind, const string &table, const string &pending);
 	//! The shape of the catalog against the steps of 2.0, one probe of the metadata schema
 	struct V2_0Layout {
 		V2_0SnapshotAdditions additions;

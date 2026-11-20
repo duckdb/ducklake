@@ -849,6 +849,34 @@ SELECT row_snapshot, snapshot_id FROM meta.ducklake_view_visibility
 ----
 15	16
 
+# a companion left under its pending name waits for the rename into place, the last statement of the step for its kind
+statement ok
+ALTER TABLE meta.ducklake_schema_visibility RENAME TO ducklake_schema_visibility_pending
+
+statement ok
+DETACH dl
+
+# the incomplete layout is refused without the migration option
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+----
+catalog version is 2.0-dev1, but the catalog lacks the catalog row companions
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE)
+
+query II
+SELECT row_snapshot, snapshot_id FROM meta.ducklake_schema_visibility
+----
+13	14
+
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name LIKE '%_visibility_pending'
+----
+0
+
 statement ok
 DETACH dl
 
@@ -874,13 +902,14 @@ query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
 WHERE (query LIKE '%ducklake_branch%' OR query LIKE '%_rebuild%' OR query LIKE '%RENAME TO%'
     OR query LIKE '%ADD COLUMN branch_id%' OR query LIKE '%INSERT INTO%_visibility%'
-    OR query LIKE '%DROP COLUMN end_snapshot%') AND query NOT LIKE '%LIMIT 0%'
+    OR query LIKE '%DROP COLUMN end_snapshot%' OR query LIKE '%_visibility_pending%') AND query NOT LIKE '%LIMIT 0%'
 ----
 0
 
+# the one statement binds the snapshot tag table and the row companions, so it fails until the step renamed them
 query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%ducklake_snapshot_tag%' AND query LIKE '%LIMIT 0%'
+WHERE query LIKE '%ducklake_snapshot_tag%' AND query LIKE '%ducklake_schema_visibility%' AND query LIKE '%LIMIT 0%'
 ----
 1
 

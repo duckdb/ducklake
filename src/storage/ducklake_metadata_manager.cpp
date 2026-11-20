@@ -405,6 +405,15 @@ string DuckLakeMetadataManager::RowTableName(const string &kind) {
 	return "ducklake_" + kind;
 }
 
+string DuckLakeMetadataManager::RowVisibilityTableName(const string &kind) {
+	return "ducklake_" + kind + "_visibility";
+}
+
+//! The name a companion is created under while the step runs, the rename into place is the last statement of a kind
+static string PendingRowVisibilityTableName(const string &kind) {
+	return DuckLakeMetadataManager::RowVisibilityTableName(kind) + "_pending";
+}
+
 string DuckLakeMetadataManager::RowKeyType(const string &key) {
 	if (key == "key" || key == "column_name" || key == "tag_name") {
 		return "VARCHAR";
@@ -431,17 +440,21 @@ static string KeyMatches(const DuckLakeMetadataManager::RowVisibilityKind &kind,
 	return StringUtil::Join(matches, " AND ");
 }
 
-string DuckLakeMetadataManager::GetRowVisibilityTableStatement(const RowVisibilityKind &kind) {
+//! The companion of a kind under the given table name
+static string RowVisibilityTableStatement(const DuckLakeMetadataManager::RowVisibilityKind &kind, const string &table) {
 	// (row_branch_id, row_snapshot) name the version row by its birth, branch_id the branch whose lineage ends it
 	string key_definitions;
 	for (auto &key : kind.key_columns) {
-		key_definitions += key + " " + RowKeyType(key) + ", ";
+		key_definitions += key + " " + DuckLakeMetadataManager::RowKeyType(key) + ", ";
 	}
-	return StringUtil::Format(
-	    "CREATE TABLE {METADATA_CATALOG}.ducklake_%s_visibility(branch_id BIGINT, %srow_branch_id "
-	    "BIGINT, row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, %s, "
-	    "row_branch_id, row_snapshot));",
-	    kind.kind, key_definitions, StringUtil::Join(kind.key_columns, ", "));
+	return StringUtil::Format("CREATE TABLE {METADATA_CATALOG}.%s(branch_id BIGINT, %srow_branch_id BIGINT, "
+	                          "row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, %s, row_branch_id, "
+	                          "row_snapshot));",
+	                          table, key_definitions, StringUtil::Join(kind.key_columns, ", "));
+}
+
+string DuckLakeMetadataManager::GetRowVisibilityTableStatement(const RowVisibilityKind &kind) {
+	return RowVisibilityTableStatement(kind, RowVisibilityTableName(kind.kind));
 }
 
 string DuckLakeMetadataManager::RowVisibility(const string &alias, const RowVisibilityKind &kind,
@@ -1051,7 +1064,8 @@ DuckLakeMetadataManager::V2_0FileRanges DuckLakeMetadataManager::ProbeV2_0FileRa
 }
 
 bool DuckLakeMetadataManager::V2_0RowCompanion::Incomplete() const {
-	return present && (!has_branch_column || !has_companion || has_end_column);
+	// the rename of the companion into place is the last statement of a kind, so the final companion alone proves it
+	return present && (!has_companion || has_pending);
 }
 
 bool DuckLakeMetadataManager::V2_0RowCompanions::Incomplete() const {
@@ -1072,7 +1086,8 @@ DuckLakeMetadataManager::V2_0RowCompanions DuckLakeMetadataManager::ProbeV2_0Row
 		row.kind = kind.kind;
 		row.present = HasMetadataColumn(table, "begin_snapshot");
 		row.has_branch_column = HasMetadataColumn(table, "branch_id");
-		row.has_companion = HasMetadataColumn("ducklake_" + kind.kind + "_visibility", "branch_id");
+		row.has_pending = HasMetadataColumn(PendingRowVisibilityTableName(kind.kind), "branch_id");
+		row.has_companion = HasMetadataColumn(RowVisibilityTableName(kind.kind), "branch_id");
 		row.has_end_column = HasMetadataColumn(table, "end_snapshot");
 		rows.kinds.push_back(std::move(row));
 	}
@@ -1088,34 +1103,44 @@ string DuckLakeMetadataManager::V2_0RowCompanionsSql(const V2_0RowCompanions &ro
 		}
 		auto &kind = RowKind(row.kind);
 		auto table = RowTableName(kind.kind);
-		auto visibility = "ducklake_" + kind.kind + "_visibility";
+		auto pending = PendingRowVisibilityTableName(kind.kind);
 		if (!row.has_branch_column) {
 			query +=
 			    StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s ADD COLUMN branch_id BIGINT DEFAULT 0;\n", table);
 		}
 		// the SQLite scanner drops the default, so the update fills the branch of the existing rows
 		query += StringUtil::Format("UPDATE {METADATA_CATALOG}.%s SET branch_id = 0 WHERE branch_id IS NULL;\n", table);
-		if (!row.has_companion) {
-			query += GetRowVisibilityTableStatement(kind) + "\n";
+		// the companion fills under its pending name, the rename into place proves the kind complete
+		if (!row.has_pending) {
+			query += RowVisibilityTableStatement(kind, pending) + "\n";
 		}
-		if (!row.has_end_column) {
-			continue;
+		if (row.has_end_column) {
+			query += V2_0RowEndBackfillSql(kind, table, pending);
 		}
-		vector<string> keys;
-		for (auto &key : kind.key_columns) {
-			keys.push_back(KeyColumn("t", key));
-		}
-		// a row superseded in its birth transaction goes, as an end it would hide the live row of the same birth
-		query += StringUtil::Format(R"(
+		query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME TO %s;\n", pending,
+		                            RowVisibilityTableName(kind.kind));
+	}
+	return query;
+}
+
+string DuckLakeMetadataManager::V2_0RowEndBackfillSql(const RowVisibilityKind &kind, const string &table,
+                                                      const string &pending) {
+	string query;
+	vector<string> keys;
+	for (auto &key : kind.key_columns) {
+		keys.push_back(KeyColumn("t", key));
+	}
+	// a row superseded in its birth transaction goes, as an end it would hide the live row of the same birth
+	query += StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
 WHERE end_snapshot = begin_snapshot AND EXISTS (
     SELECT 1 FROM {METADATA_CATALOG}.%s live
     WHERE %s AND live.begin_snapshot = %s.begin_snapshot
     AND (live.end_snapshot IS NULL OR live.end_snapshot > live.begin_snapshot));
 )",
-		                            table, table, KeyMatches(kind, "live", table), table);
-		// the ranges of main become its end rows before the column goes away, a resumed backfill copies none twice
-		query += StringUtil::Format(R"(
+	                            table, table, KeyMatches(kind, "live", table), table);
+	// the ranges of main become its end rows before the column goes away, a resumed backfill copies none twice
+	query += StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.%s
     (branch_id, %s, row_branch_id, row_snapshot, snapshot_id)
 SELECT DISTINCT 0, %s, 0, t.begin_snapshot, t.end_snapshot
@@ -1125,9 +1150,8 @@ WHERE t.end_snapshot IS NOT NULL AND NOT EXISTS (
     WHERE e.branch_id = 0 AND %s AND e.row_branch_id = 0 AND e.row_snapshot = t.begin_snapshot);
 ALTER TABLE {METADATA_CATALOG}.%s DROP COLUMN end_snapshot;
 )",
-		                            visibility, StringUtil::Join(kind.key_columns, ", "), StringUtil::Join(keys, ", "),
-		                            table, visibility, KeyMatches(kind, "e", "t"), table);
-	}
+	                            pending, StringUtil::Join(kind.key_columns, ", "), StringUtil::Join(keys, ", "), table,
+	                            pending, KeyMatches(kind, "e", "t"), table);
 	return query;
 }
 
@@ -1254,6 +1278,11 @@ string DuckLakeMetadataManager::MissingV2_0Step() {
 	    {"ducklake_branch", "branch_id"},          {"ducklake_snapshot_tag", "tag_name"},
 	    {"ducklake_file_visibility", "branch_id"}, {"ducklake_delete_file_visibility", "branch_id"},
 	    {"ducklake_data_file", "data_file_id"},    {"ducklake_delete_file", "delete_file_id"}};
+	for (auto &kind : V2_0RowCompanionKinds()) {
+		// a companion binds under its final name only once the step renamed it into place
+		complete_layout.emplace_back(RowTableName(kind), "branch_id");
+		complete_layout.emplace_back(RowVisibilityTableName(kind), "branch_id");
+	}
 	if (!Query(ColumnProbeSql(complete_layout))->HasError()) {
 		return string();
 	}
