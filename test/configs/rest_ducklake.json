@@ -205,6 +205,7 @@
         "test/sql/remove_orphans/orphan_after_expire.test",
         "test/sql/settings/parquet_row_group_size_above_bigint.test",
         "test/sql/stats/rewrite_global_stats_recompute.test",
+        "test/sql/stats/retype_in_creating_transaction_bounds.test",
         "test/sql/table_changes/ducklake_table_deletions_flushed_deletion_vector.test",
         "test/sql/table_changes/table_changes_rewrite_data_files.test",
         "test/sql/table_changes/table_changes_rewrite_merged_twice.test",
