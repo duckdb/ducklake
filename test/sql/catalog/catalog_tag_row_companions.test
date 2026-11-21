@@ -1,0 +1,250 @@
+# name: test/sql/catalog/catalog_tag_row_companions.test
+# description: the version rows of tags, column tags, view column tags and snapshot tags keep their birth and end in companion tables
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 0)
+
+# snapshot 1 creates t, 2 comments it, 3 and 4 comment its columns, 5 creates v, 6 and 7 comment it and its column
+statement ok
+CREATE TABLE dl.t(i INTEGER, j INTEGER, k INTEGER)
+
+statement ok
+COMMENT ON TABLE dl.t IS 'first'
+
+statement ok
+COMMENT ON COLUMN dl.t.j IS 'col j'
+
+statement ok
+COMMENT ON COLUMN dl.t.k IS 'col k'
+
+statement ok
+CREATE VIEW dl.v AS SELECT 1 AS x
+
+statement ok
+COMMENT ON VIEW dl.v IS 'view first'
+
+statement ok
+COMMENT ON COLUMN dl.v.x IS 'view col first'
+
+# snapshot 8 changes the table comment, 9 clears the comment of j, 10 drops k, 11 replaces the view
+statement ok
+COMMENT ON TABLE dl.t IS 'second'
+
+statement ok
+COMMENT ON COLUMN dl.t.j IS NULL
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN k
+
+statement ok
+CREATE OR REPLACE VIEW dl.v AS SELECT 2 AS x
+
+# a changed value writes a new version row and ends the old one, a cleared comment is a row with a NULL value
+query IIIIII
+SELECT object_id, key, value, begin_snapshot, branch_id, (SELECT e.snapshot_id FROM meta.ducklake_tag_visibility e
+    WHERE e.object_id = t.object_id AND e.key = t.key AND e.row_branch_id = t.branch_id
+    AND e.row_snapshot = t.begin_snapshot)
+FROM meta.ducklake_tag t ORDER BY begin_snapshot
+----
+1	comment	first	2	0	8
+2	comment	view first	6	0	11
+1	comment	second	8	0	NULL
+
+query IIIIII
+SELECT column_id, key, value, begin_snapshot, branch_id,
+    (SELECT e.snapshot_id FROM meta.ducklake_column_tag_visibility e
+    WHERE e.table_id = t.table_id AND e.column_id = t.column_id AND e.key = t.key AND e.row_branch_id = t.branch_id
+    AND e.row_snapshot = t.begin_snapshot)
+FROM meta.ducklake_column_tag t ORDER BY begin_snapshot
+----
+2	comment	col j	3	0	9
+3	comment	col k	4	0	10
+2	comment	NULL	9	0	NULL
+
+# the replaced view is a new view, the tags of the old one end with it
+query IIIII
+SELECT column_name, value, begin_snapshot, branch_id,
+    (SELECT e.snapshot_id FROM meta.ducklake_view_column_tag_visibility e
+    WHERE e.view_id = t.view_id AND e.column_name = t.column_name AND e.key = t.key AND e.row_branch_id = t.branch_id
+    AND e.row_snapshot = t.begin_snapshot)
+FROM meta.ducklake_view_column_tag t
+----
+x	view col first	7	0	11
+
+# an end names the row by its birth and carries the branch that ended it
+query IIII
+SELECT e.branch_id, t.value, e.row_snapshot, e.snapshot_id FROM meta.ducklake_tag_visibility e
+JOIN meta.ducklake_tag t ON t.object_id = e.object_id AND t.key = e.key AND t.branch_id = e.row_branch_id
+    AND t.begin_snapshot = e.row_snapshot
+ORDER BY e.snapshot_id
+----
+0	first	2	8
+0	view first	6	11
+
+# one end per row per branch
+statement error
+INSERT INTO meta.ducklake_tag_visibility SELECT * FROM meta.ducklake_tag_visibility WHERE snapshot_id = 8
+----
+constraint
+
+# the head reads the new values
+query I
+SELECT comment FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 't'
+----
+second
+
+query II
+SELECT column_name, comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 't' ORDER BY column_index
+----
+i	NULL
+j	NULL
+
+query II
+SELECT comment, (SELECT comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 'v')
+FROM duckdb_views() WHERE database_name = 'dl' AND view_name = 'v'
+----
+NULL	NULL
+
+query I
+SELECT x FROM dl.v
+----
+2
+
+query I
+SELECT x FROM dl.v AT (VERSION => 10)
+----
+1
+
+# snapshot 12 fills t, 13 tags it, 14 fills t again
+statement ok
+INSERT INTO dl.t VALUES (1, 2)
+
+statement ok
+CALL ducklake_create_tag('dl', 'early', version => 12)
+
+statement ok
+INSERT INTO dl.t VALUES (3, 4)
+
+# snapshot 15 moves the tag, 16 creates one with an expiry, 17 changes the expiry
+statement ok
+CALL ducklake_replace_tag('dl', 'early', version => 14)
+
+statement ok
+CALL ducklake_create_tag('dl', 'late', version => 14, expires_at => TIMESTAMPTZ '2100-01-01 00:00:00+00')
+
+statement ok
+CALL ducklake_set_tag_expiry('dl', 'late', TIMESTAMPTZ '2200-01-01 00:00:00+00')
+
+# snapshot 18 drops a tag and recreates it in one commit, the old row ends and the new one is the visible one
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_drop_tag('dl', 'late')
+
+statement ok
+CALL ducklake_create_tag('dl', 'late', version => 12)
+
+statement ok
+COMMIT
+
+# a move, a new expiry or a recreation writes a new row and ends the old one in the same commit
+query IIIIII
+SELECT t.tag_name, t.snapshot_id, t.branch_id, t.begin_snapshot, e.branch_id, e.snapshot_id
+FROM meta.ducklake_snapshot_tag t
+LEFT JOIN meta.ducklake_snapshot_tag_visibility e ON e.tag_name = t.tag_name AND e.row_branch_id = t.branch_id
+    AND e.row_snapshot = t.begin_snapshot
+ORDER BY t.begin_snapshot, t.tag_name
+----
+early	12	0	13	0	15
+early	14	0	15	NULL	NULL
+late	14	0	16	0	17
+late	14	0	17	0	18
+late	12	0	18	NULL	NULL
+
+query IIII
+SELECT tag_name, snapshot_id, created_snapshot_id, expires_at IS NULL FROM ducklake_tags('dl') ORDER BY tag_name
+----
+early	14	15	true
+late	12	18	true
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'early')
+----
+2
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'late')
+----
+1
+
+statement error
+INSERT INTO meta.ducklake_snapshot_tag_visibility SELECT * FROM meta.ducklake_snapshot_tag_visibility
+WHERE snapshot_id = 15
+----
+constraint
+
+# snapshot 19 drops t, which ends its live tag and column tag
+statement ok
+DROP TABLE dl.t
+
+query III
+SELECT t.key, t.value, e.snapshot_id FROM meta.ducklake_tag t
+JOIN meta.ducklake_tag_visibility e ON e.object_id = t.object_id AND e.key = t.key AND e.row_branch_id = t.branch_id
+    AND e.row_snapshot = t.begin_snapshot
+WHERE t.object_id = 1 ORDER BY t.begin_snapshot
+----
+comment	first	8
+comment	second	19
+
+query III
+SELECT t.column_id, t.value, e.snapshot_id FROM meta.ducklake_column_tag t
+JOIN meta.ducklake_column_tag_visibility e ON e.table_id = t.table_id AND e.column_id = t.column_id
+    AND e.key = t.key AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot
+ORDER BY t.begin_snapshot
+----
+2	col j	9
+3	col k	10
+2	NULL	19
+
+statement ok
+DETACH dl
+
+# a fresh attach reads the same catalog
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 0)
+
+query III
+SELECT tag_name, snapshot_id, created_snapshot_id FROM ducklake_tags('dl') ORDER BY tag_name
+----
+early	14	15
+late	12	18
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'early')
+----
+2
+
+query I
+SELECT x FROM dl.v
+----
+2
+
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'dl' AND comment IS NOT NULL
+----
+0
+
+statement ok
+DETACH dl

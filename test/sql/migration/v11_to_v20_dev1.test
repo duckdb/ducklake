@@ -56,8 +56,8 @@ ORDER BY column_index
 tag_name	VARCHAR
 snapshot_id	BIGINT
 begin_snapshot	BIGINT
-end_snapshot	BIGINT
 expires_at	TIMESTAMP WITH TIME ZONE
+branch_id	BIGINT
 
 query I
 SELECT COUNT(*) FROM meta.ducklake_snapshot_tag

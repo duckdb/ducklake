@@ -1,0 +1,254 @@
+# name: test/sql/migration/v20_tag_row_companions_migration.test
+# description: the migration to 2.0-dev1 turns the end snapshots of the tag rows into end rows and creates the snapshot tag companion
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
+
+# snapshot 1 creates t, 2 comments it, 3 comments j, 4 creates v, 5 comments its column, 6 fills t
+statement ok
+CREATE TABLE dl.t(i INTEGER, j INTEGER)
+
+statement ok
+COMMENT ON TABLE dl.t IS 'first'
+
+statement ok
+COMMENT ON COLUMN dl.t.j IS 'col j'
+
+statement ok
+CREATE VIEW dl.v AS SELECT 1 AS x
+
+statement ok
+COMMENT ON COLUMN dl.v.x IS 'first x'
+
+statement ok
+INSERT INTO dl.t VALUES (1, 2)
+
+# snapshot 7 changes the table comment, 8 drops j, 9 changes the view column comment
+statement ok
+COMMENT ON TABLE dl.t IS 'second'
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN j
+
+statement ok
+COMMENT ON COLUMN dl.v.x IS 'second x'
+
+# the 1.1 catalog ends its rows in place and has no snapshot tags
+query III
+SELECT value, begin_snapshot, end_snapshot FROM meta.ducklake_tag ORDER BY begin_snapshot
+----
+first	2	7
+second	7	NULL
+
+query III
+SELECT value, begin_snapshot, end_snapshot FROM meta.ducklake_column_tag
+----
+col j	3	8
+
+query III
+SELECT value, begin_snapshot, end_snapshot FROM meta.ducklake_view_column_tag ORDER BY begin_snapshot
+----
+first x	5	9
+second x	9	NULL
+
+statement error
+SELECT * FROM meta.ducklake_snapshot_tag
+----
+does not exist
+
+statement ok
+DETACH dl
+
+# the migration adds the birth branch, backfills the ends from the end snapshots and drops the end column
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query IIIII
+SELECT t.value, e.branch_id, e.row_branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_tag_visibility e
+JOIN meta.ducklake_tag t ON t.object_id = e.object_id AND t.key = e.key AND t.branch_id = e.row_branch_id
+    AND t.begin_snapshot = e.row_snapshot
+----
+first	0	0	2	7
+
+query IIIII
+SELECT t.value, e.branch_id, e.row_branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_column_tag_visibility e
+JOIN meta.ducklake_column_tag t ON t.table_id = e.table_id AND t.column_id = e.column_id AND t.key = e.key
+    AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+----
+col j	0	0	3	8
+
+query IIIII
+SELECT t.value, e.branch_id, e.row_branch_id, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_view_column_tag_visibility e
+JOIN meta.ducklake_view_column_tag t ON t.view_id = e.view_id AND t.column_name = e.column_name AND t.key = e.key
+    AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+----
+first x	0	0	5	9
+
+query II
+SELECT value, branch_id FROM meta.ducklake_tag ORDER BY begin_snapshot
+----
+first	0
+second	0
+
+# the snapshot tag table is created in the shape of 2.0 with its companion
+query II
+SELECT (SELECT COUNT(*) FROM meta.ducklake_snapshot_tag), (SELECT COUNT(*) FROM meta.ducklake_snapshot_tag_visibility)
+----
+0	0
+
+# the rows keep their birth and gain the branch column last, like a fresh catalog
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_tag')
+ORDER BY column_index
+----
+object_id
+begin_snapshot
+key
+value
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_column_tag')
+ORDER BY column_index
+----
+table_id
+column_id
+begin_snapshot
+key
+value
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_view_column_tag')
+ORDER BY column_index
+----
+view_id
+column_name
+begin_snapshot
+key
+value
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_snapshot_tag')
+ORDER BY column_index
+----
+tag_name
+snapshot_id
+begin_snapshot
+expires_at
+branch_id
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_tag_visibility')
+ORDER BY column_index
+----
+branch_id	BIGINT
+object_id	BIGINT
+key	VARCHAR
+row_branch_id	BIGINT
+row_snapshot	BIGINT
+snapshot_id	BIGINT
+
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name LIKE '%_visibility_pending'
+----
+0
+
+# the migrated catalog reads the ends as it read the ranges
+query I
+SELECT comment FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 't'
+----
+second
+
+query II
+SELECT column_name, comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 't'
+----
+i	NULL
+
+query I
+SELECT comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 'v'
+----
+second x
+
+# the migrated catalog keeps writing ends, snapshot 10 comments t again, 11 tags a snapshot and 12 drops the tag
+statement ok
+COMMENT ON TABLE dl.t IS 'third'
+
+statement ok
+CALL ducklake_create_tag('dl', 'release', version => 6)
+
+query III
+SELECT tag_name, snapshot_id, created_snapshot_id FROM ducklake_tags('dl')
+----
+release	6	11
+
+query I
+SELECT COUNT(*) FROM dl.t AT (VERSION => 'release')
+----
+1
+
+statement ok
+CALL ducklake_drop_tag('dl', 'release')
+
+query III
+SELECT t.value, e.row_snapshot, e.snapshot_id FROM meta.ducklake_tag_visibility e
+JOIN meta.ducklake_tag t ON t.object_id = e.object_id AND t.key = e.key AND t.branch_id = e.row_branch_id
+    AND t.begin_snapshot = e.row_snapshot
+ORDER BY e.snapshot_id
+----
+first	2	7
+second	7	10
+
+query IIII
+SELECT t.tag_name, t.snapshot_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_snapshot_tag_visibility e
+JOIN meta.ducklake_snapshot_tag t ON t.tag_name = e.tag_name AND t.branch_id = e.row_branch_id
+    AND t.begin_snapshot = e.row_snapshot
+----
+release	6	11	12
+
+# the expiry removes the comment no snapshot reads anymore with its end
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [2, 3, 4, 5, 6])
+
+query I
+SELECT value FROM meta.ducklake_tag ORDER BY begin_snapshot
+----
+second
+third
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_tag_visibility
+----
+1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_column_tag_visibility
+----
+1
+
+statement ok
+DETACH dl

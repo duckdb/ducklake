@@ -24,12 +24,26 @@ COMMENT ON COLUMN ducklake.test.b IS 'drop me'
 statement ok
 ALTER TABLE ducklake.test DROP COLUMN b
 
+# the tag row stays and one end row names its birth, so no column comment is live
 query I
 SELECT count(*)
-FROM metadata.ducklake_column_tag
-WHERE end_snapshot IS NULL
+FROM metadata.ducklake_column_tag t
+WHERE NOT EXISTS (SELECT 1 FROM metadata.ducklake_column_tag_visibility e
+    WHERE e.table_id = t.table_id AND e.column_id = t.column_id AND e.key = t.key
+    AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)
 ----
 0
+
+query IIIIII
+SELECT table_id, column_id, key, value, branch_id, begin_snapshot FROM metadata.ducklake_column_tag
+----
+1	2	comment	drop me	0	2
+
+query IIIIIII
+SELECT branch_id, table_id, column_id, key, row_branch_id, row_snapshot, snapshot_id
+FROM metadata.ducklake_column_tag_visibility
+----
+0	1	2	comment	0	2	3
 
 # Adding, commenting on, and dropping a column in one transaction must not
 # commit a tag for a column that never becomes visible.
@@ -53,8 +67,10 @@ COMMIT
 
 query I
 SELECT count(*)
-FROM metadata.ducklake_column_tag
-WHERE end_snapshot IS NULL
+FROM metadata.ducklake_column_tag t
+WHERE NOT EXISTS (SELECT 1 FROM metadata.ducklake_column_tag_visibility e
+    WHERE e.table_id = t.table_id AND e.column_id = t.column_id AND e.key = t.key
+    AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)
 ----
 0
 
@@ -77,8 +93,10 @@ COMMIT
 
 query I
 SELECT count(*)
-FROM metadata.ducklake_column_tag
-WHERE end_snapshot IS NULL AND value = 'gone'
+FROM metadata.ducklake_column_tag t
+WHERE NOT EXISTS (SELECT 1 FROM metadata.ducklake_column_tag_visibility e
+    WHERE e.table_id = t.table_id AND e.column_id = t.column_id AND e.key = t.key
+    AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot) AND value = 'gone'
 ----
 0
 
@@ -95,8 +113,10 @@ ALTER TABLE ducklake.renamed RENAME COLUMN c TO d
 
 query I
 SELECT count(*)
-FROM metadata.ducklake_column_tag
-WHERE end_snapshot IS NULL AND value = 'keep me'
+FROM metadata.ducklake_column_tag t
+WHERE NOT EXISTS (SELECT 1 FROM metadata.ducklake_column_tag_visibility e
+    WHERE e.table_id = t.table_id AND e.column_id = t.column_id AND e.key = t.key
+    AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot) AND value = 'keep me'
 ----
 1
 
@@ -118,7 +138,9 @@ COMMIT
 
 query I
 SELECT count(*)
-FROM metadata.ducklake_column_tag
-WHERE end_snapshot IS NULL AND value = 'survives rename'
+FROM metadata.ducklake_column_tag t
+WHERE NOT EXISTS (SELECT 1 FROM metadata.ducklake_column_tag_visibility e
+    WHERE e.table_id = t.table_id AND e.column_id = t.column_id AND e.key = t.key
+    AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot) AND value = 'survives rename'
 ----
 1

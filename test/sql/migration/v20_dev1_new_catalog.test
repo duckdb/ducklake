@@ -29,8 +29,8 @@ ORDER BY column_index
 tag_name	VARCHAR
 snapshot_id	BIGINT
 begin_snapshot	BIGINT
-end_snapshot	BIGINT
 expires_at	TIMESTAMP WITH TIME ZONE
+branch_id	BIGINT
 
 query I
 SELECT COUNT(*) FROM meta.ducklake_snapshot_tag
@@ -157,6 +157,60 @@ snapshot_id	BIGINT
 query I
 SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
     AND table_name IN ('ducklake_partition_visibility', 'ducklake_sort_visibility', 'ducklake_macro_visibility')
+----
+3
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_tag')
+ORDER BY column_index
+----
+object_id
+begin_snapshot
+key
+value
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_column_tag')
+ORDER BY column_index
+----
+table_id
+column_id
+begin_snapshot
+key
+value
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_view_column_tag')
+ORDER BY column_index
+----
+view_id
+column_name
+begin_snapshot
+key
+value
+branch_id
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name = 'ducklake_snapshot_tag_visibility')
+ORDER BY column_index
+----
+branch_id	BIGINT
+tag_name	VARCHAR
+row_branch_id	BIGINT
+row_snapshot	BIGINT
+snapshot_id	BIGINT
+
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name IN ('ducklake_tag_visibility', 'ducklake_column_tag_visibility',
+        'ducklake_view_column_tag_visibility')
 ----
 3
 

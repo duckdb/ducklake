@@ -1028,6 +1028,171 @@ SELECT COUNT(*) FROM duckdb_functions() WHERE database_name = 'dl' AND function_
 statement ok
 DETACH dl
 
+# the tags of an older dev build ended in place and knew no birth branch, they migrate like the tables
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+
+statement ok
+COMMENT ON TABLE dl.tc IS 'tagged'
+
+statement ok
+COMMENT ON TABLE dl.tc IS 'retagged'
+
+statement ok
+COMMENT ON COLUMN dl.tc.a IS 'col a'
+
+statement ok
+ALTER TABLE dl.tc DROP COLUMN a
+
+statement ok
+CREATE VIEW dl.vt AS SELECT 1 AS x
+
+statement ok
+COMMENT ON COLUMN dl.vt.x IS 'x'
+
+statement ok
+COMMENT ON COLUMN dl.vt.x IS 'x again'
+
+statement ok
+CALL ducklake_create_tag('dl', 'steps')
+
+statement ok
+CALL ducklake_drop_tag('dl', 'steps')
+
+statement ok
+ALTER TABLE meta.ducklake_tag ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_tag SET end_snapshot = (SELECT e.snapshot_id FROM meta.ducklake_tag_visibility e
+    WHERE e.object_id = ducklake_tag.object_id AND e.key = ducklake_tag.key
+    AND e.row_snapshot = ducklake_tag.begin_snapshot)
+
+statement ok
+DROP TABLE meta.ducklake_tag_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_tag DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_column_tag ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_column_tag SET end_snapshot = (SELECT e.snapshot_id FROM meta.ducklake_column_tag_visibility e
+    WHERE e.table_id = ducklake_column_tag.table_id AND e.column_id = ducklake_column_tag.column_id
+    AND e.key = ducklake_column_tag.key AND e.row_snapshot = ducklake_column_tag.begin_snapshot)
+
+statement ok
+DROP TABLE meta.ducklake_column_tag_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_column_tag DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_view_column_tag ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_view_column_tag SET end_snapshot = (SELECT e.snapshot_id
+    FROM meta.ducklake_view_column_tag_visibility e
+    WHERE e.view_id = ducklake_view_column_tag.view_id AND e.column_name = ducklake_view_column_tag.column_name
+    AND e.key = ducklake_view_column_tag.key AND e.row_snapshot = ducklake_view_column_tag.begin_snapshot)
+
+statement ok
+DROP TABLE meta.ducklake_view_column_tag_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_view_column_tag DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_tag ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_snapshot_tag SET end_snapshot = (SELECT e.snapshot_id FROM meta.ducklake_snapshot_tag_visibility e
+    WHERE e.tag_name = ducklake_snapshot_tag.tag_name AND e.row_snapshot = ducklake_snapshot_tag.begin_snapshot)
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_tag_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_tag DROP COLUMN branch_id
+
+statement ok
+DETACH dl
+
+# the incomplete layout is refused without the migration option
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+----
+catalog version is 2.0-dev1, but the catalog lacks the catalog row companions
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE)
+
+# the ends are rebuilt from the end snapshots, a replaced tag ends where its successor is born
+query II
+SELECT t.value, e.snapshot_id = (SELECT t2.begin_snapshot FROM meta.ducklake_tag t2 WHERE t2.value = 'retagged')
+FROM meta.ducklake_tag_visibility e
+JOIN meta.ducklake_tag t ON t.object_id = e.object_id AND t.key = e.key AND t.branch_id = e.row_branch_id
+    AND t.begin_snapshot = e.row_snapshot
+----
+tagged	true
+
+query II
+SELECT t.value, e.snapshot_id > t.begin_snapshot
+FROM meta.ducklake_column_tag_visibility e
+JOIN meta.ducklake_column_tag t ON t.table_id = e.table_id AND t.column_id = e.column_id AND t.key = e.key
+    AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+----
+col a	true
+
+query II
+SELECT t.value, e.snapshot_id = (SELECT t2.begin_snapshot FROM meta.ducklake_view_column_tag t2
+    WHERE t2.value = 'x again')
+FROM meta.ducklake_view_column_tag_visibility e
+JOIN meta.ducklake_view_column_tag t ON t.view_id = e.view_id AND t.column_name = e.column_name AND t.key = e.key
+    AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+----
+x	true
+
+query II
+SELECT t.tag_name, e.snapshot_id > t.begin_snapshot
+FROM meta.ducklake_snapshot_tag_visibility e
+JOIN meta.ducklake_snapshot_tag t ON t.tag_name = e.tag_name AND t.branch_id = e.row_branch_id
+    AND t.begin_snapshot = e.row_snapshot
+----
+steps	true
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name IN ('ducklake_tag', 'ducklake_column_tag', 'ducklake_view_column_tag', 'ducklake_snapshot_tag')
+    AND column_name = 'end_snapshot'
+----
+0
+
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name LIKE '%_visibility_pending'
+----
+0
+
+query I
+SELECT comment FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 'tc'
+----
+retagged
+
+query I
+SELECT comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 'vt'
+----
+x again
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl')
+----
+0
+
+statement ok
+DETACH dl
+
 # a 2.0-dev1 attach of a complete layout probes the layout with one statement and runs no migration statement
 statement ok
 CALL truncate_duckdb_logs()
@@ -1057,7 +1222,8 @@ WHERE (query LIKE '%ducklake_branch%' OR query LIKE '%_rebuild%' OR query LIKE '
 # the one statement binds the snapshot tag table and the row companions, so it fails until the step renamed them
 query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%ducklake_snapshot_tag%' AND query LIKE '%ducklake_schema_visibility%' AND query LIKE '%LIMIT 0%'
+WHERE query LIKE '%ducklake_snapshot_tag_visibility%' AND query LIKE '%ducklake_schema_visibility%'
+    AND query LIKE '%LIMIT 0%'
 ----
 1
 

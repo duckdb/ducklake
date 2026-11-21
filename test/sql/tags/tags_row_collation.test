@@ -1,0 +1,121 @@
+# name: test/sql/tags/tags_row_collation.test
+# description: the snapshot tag writers and the row step match tag names byte for byte under a case folding collation
+# group: [tags]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# names differ in case like identifiers, so only ASCII letters fold, whatever the collation of the session
+statement ok
+SET GLOBAL default_collation = 'nocase'
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+# snapshot 3 bears two tags whose names differ in case alone
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_create_tag('dl', 'Ö', version => 2)
+
+statement ok
+CALL ducklake_create_tag('dl', 'ö', version => 2)
+
+statement ok
+COMMIT
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl')
+----
+2
+
+# snapshot 4 drops one tag, which ends its row alone
+statement ok
+CALL ducklake_drop_tag('dl', 'Ö')
+
+query I
+SELECT tag_name FROM ducklake_tags('dl')
+----
+ö
+
+query III
+SELECT t.tag_name, e.row_snapshot, e.snapshot_id FROM meta.ducklake_snapshot_tag_visibility e
+JOIN meta.ducklake_snapshot_tag t ON (t.tag_name COLLATE "C") = (e.tag_name COLLATE "C")
+    AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+----
+Ö	3	4
+
+# snapshot 5 drops the other
+statement ok
+CALL ducklake_drop_tag('dl', 'ö')
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl')
+----
+0
+
+# a dev build ended its rows in place and knew no birth branch, the step rebuilds the ends one per tag
+statement ok
+ALTER TABLE meta.ducklake_snapshot_tag ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_snapshot_tag SET end_snapshot = (SELECT e.snapshot_id FROM meta.ducklake_snapshot_tag_visibility e
+    WHERE (e.tag_name COLLATE "C") = (ducklake_snapshot_tag.tag_name COLLATE "C")
+    AND e.row_snapshot = ducklake_snapshot_tag.begin_snapshot)
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_tag_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_tag DROP COLUMN branch_id
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+----
+catalog version is 2.0-dev1, but the catalog lacks the catalog row companions
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl')
+----
+0
+
+query III
+SELECT t.tag_name, e.row_snapshot, e.snapshot_id FROM meta.ducklake_snapshot_tag_visibility e
+JOIN meta.ducklake_snapshot_tag t ON (t.tag_name COLLATE "C") = (e.tag_name COLLATE "C")
+    AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+ORDER BY e.snapshot_id
+----
+Ö	3	4
+ö	3	5
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name = 'ducklake_snapshot_tag' AND column_name = 'end_snapshot'
+----
+0
+
+statement ok
+RESET GLOBAL default_collation
+
+statement ok
+DETACH dl
