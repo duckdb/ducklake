@@ -1,0 +1,306 @@
+# name: test/sql/catalog/catalog_entity_row_companions.test
+# description: the version rows of columns, specs and macros keep their birth and end in companion tables
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 0)
+
+# snapshot 1 creates t, 2 partitions it, 3 sorts it, 4 creates the macro, 5 fills t
+statement ok
+CREATE TABLE dl.t(i INTEGER, j INTEGER)
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (i)
+
+statement ok
+ALTER TABLE dl.t SET SORTED BY (j)
+
+statement ok
+CREATE MACRO dl.add_one(x) AS x + 1
+
+statement ok
+INSERT INTO dl.t VALUES (1, 2)
+
+# snapshot 6 renames j, which rewrites the sort key, 7 replaces the partition spec, 8 resets the sort, 9 drops the macro
+statement ok
+ALTER TABLE dl.t RENAME COLUMN j TO j2
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (j2)
+
+statement ok
+ALTER TABLE dl.t RESET SORTED BY
+
+statement ok
+DROP MACRO dl.add_one
+
+# a replaced row ends in the commit that bears its successor, a dropped row ends alone
+query IIII
+SELECT c.column_name, c.begin_snapshot, c.branch_id, (SELECT e.snapshot_id FROM meta.ducklake_column_visibility e
+    WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id
+    AND e.row_snapshot = c.begin_snapshot)
+FROM meta.ducklake_column c ORDER BY c.column_id, c.begin_snapshot
+----
+i	1	0	NULL
+j	1	0	6
+j2	6	0	NULL
+
+query III
+SELECT p.begin_snapshot, p.branch_id, (SELECT e.snapshot_id FROM meta.ducklake_partition_visibility e
+    WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot)
+FROM meta.ducklake_partition_info p ORDER BY p.begin_snapshot
+----
+2	0	7
+7	0	NULL
+
+query III
+SELECT s.begin_snapshot, s.branch_id, (SELECT e.snapshot_id FROM meta.ducklake_sort_visibility e
+    WHERE e.sort_id = s.sort_id AND e.row_branch_id = s.branch_id AND e.row_snapshot = s.begin_snapshot)
+FROM meta.ducklake_sort_info s ORDER BY s.begin_snapshot
+----
+3	0	6
+6	0	8
+
+query IIII
+SELECT m.macro_name, m.begin_snapshot, m.branch_id, (SELECT e.snapshot_id FROM meta.ducklake_macro_visibility e
+    WHERE e.macro_id = m.macro_id AND e.row_branch_id = m.branch_id AND e.row_snapshot = m.begin_snapshot)
+FROM meta.ducklake_macro m
+----
+add_one	4	0	9
+
+# an end names the row by its birth and carries the branch that ended it
+query IIII
+SELECT e.branch_id, c.column_name, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_column_visibility e
+JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id AND c.branch_id = e.row_branch_id
+    AND c.begin_snapshot = e.row_snapshot
+----
+0	j	1	6
+
+# the head reads the live rows, time travel reads the earlier states
+query I
+SELECT column_name FROM (DESCRIBE dl.t)
+----
+i
+j2
+
+query I
+SELECT column_name FROM (DESCRIBE FROM dl.t AT (VERSION => 5))
+----
+i
+j
+
+query I
+SELECT j FROM dl.t AT (VERSION => 5)
+----
+2
+
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE database_name = 'dl' AND function_name = 'add_one'
+----
+0
+
+# snapshot 10, a column added and dropped in one transaction is born and ended at its snapshot, its field id stays taken
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN k INTEGER
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN k
+
+statement ok
+COMMIT
+
+query III
+SELECT c.column_name, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_column_visibility e
+JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id AND c.branch_id = e.row_branch_id
+    AND c.begin_snapshot = e.row_snapshot
+WHERE c.column_name = 'k'
+----
+k	10	10
+
+query I
+SELECT column_name FROM (DESCRIBE dl.t)
+----
+i
+j2
+
+# snapshot 11 adds a column under a new field id
+statement ok
+ALTER TABLE dl.t ADD COLUMN m INTEGER
+
+query I
+SELECT column_id > (SELECT column_id FROM meta.ducklake_column WHERE column_name = 'k')
+FROM meta.ducklake_column WHERE column_name = 'm'
+----
+true
+
+# snapshot 12, a column of a table created in the same transaction and altered again is replaced in place
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE dl.u(a INTEGER, b INTEGER)
+
+statement ok
+ALTER TABLE dl.u RENAME COLUMN b TO c
+
+statement ok
+ALTER TABLE dl.u ALTER COLUMN a SET DEFAULT 7
+
+statement ok
+COMMIT
+
+query IIII
+SELECT c.column_name, c.begin_snapshot, c.default_value,
+    (SELECT COUNT(*) FROM meta.ducklake_column_visibility e WHERE e.table_id = c.table_id)
+FROM meta.ducklake_column c WHERE c.table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'u')
+ORDER BY c.column_id
+----
+a	12	7	0
+c	12	NULL	0
+
+statement ok
+INSERT INTO dl.u (c) VALUES (1)
+
+query II
+SELECT a, c FROM dl.u
+----
+7	1
+
+# snapshot 14, a spec replaced in the transaction that set it is born and ended at its snapshot under its own id
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.u SET PARTITIONED BY (a)
+
+statement ok
+ALTER TABLE dl.u SET PARTITIONED BY (c)
+
+statement ok
+COMMIT
+
+query III
+SELECT p.begin_snapshot, e.row_snapshot, e.snapshot_id FROM meta.ducklake_partition_info p
+LEFT JOIN meta.ducklake_partition_visibility e ON e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id
+    AND e.row_snapshot = p.begin_snapshot
+WHERE p.table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'u') ORDER BY p.partition_id
+----
+14	14	14
+14	NULL	NULL
+
+query I
+SELECT column_id FROM meta.ducklake_partition_column WHERE partition_id = (SELECT p.partition_id
+    FROM meta.ducklake_partition_info p
+    WHERE p.table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'u')
+    AND NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_visibility e WHERE e.partition_id = p.partition_id))
+----
+2
+
+# snapshots 15 and 16 create and replace a macro, the old row ends in the commit that bears the new one
+statement ok
+CREATE MACRO dl.twice(x) AS x * 2
+
+statement ok
+CREATE OR REPLACE MACRO dl.twice(x) AS x + x
+
+query III
+SELECT m.begin_snapshot, e.row_snapshot, e.snapshot_id FROM meta.ducklake_macro m
+LEFT JOIN meta.ducklake_macro_visibility e ON e.macro_id = m.macro_id AND e.row_branch_id = m.branch_id
+    AND e.row_snapshot = m.begin_snapshot
+WHERE m.macro_name = 'twice' ORDER BY m.begin_snapshot
+----
+15	15	16
+16	NULL	NULL
+
+query I
+SELECT dl.twice(3)
+----
+6
+
+# snapshot 17 drops t, which ends its live columns and its live spec, the reset sort has its end already
+statement ok
+DROP TABLE dl.t
+
+query II
+SELECT c.column_name, e.snapshot_id
+FROM meta.ducklake_column_visibility e
+JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id AND c.branch_id = e.row_branch_id
+    AND c.begin_snapshot = e.row_snapshot
+WHERE c.table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't')
+ORDER BY c.column_id, c.begin_snapshot
+----
+i	17
+j	6
+j2	17
+k	10
+m	17
+
+query II
+SELECT p.begin_snapshot, e.snapshot_id FROM meta.ducklake_partition_info p
+JOIN meta.ducklake_partition_visibility e ON e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id
+    AND e.row_snapshot = p.begin_snapshot
+WHERE p.table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't') ORDER BY p.begin_snapshot
+----
+2	7
+7	17
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_sort_visibility
+----
+2
+
+statement error
+SELECT * FROM dl.t
+----
+does not exist
+
+query II
+SELECT i, j2 FROM dl.t AT (VERSION => 16)
+----
+1	2
+
+statement ok
+DETACH dl
+
+# a fresh attach reads the same catalog
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT column_name FROM (DESCRIBE dl.u)
+----
+a
+c
+
+query I
+SELECT dl.twice(3)
+----
+6
+
+query I
+SELECT j FROM dl.t AT (VERSION => 5)
+----
+2
+
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE database_name = 'dl' AND function_name IN ('add_one', 'twice')
+----
+1
+
+statement ok
+DETACH dl

@@ -1,0 +1,178 @@
+# name: test/sql/migration/v20_entity_row_companions_resume.test
+# description: the migration to 2.0-dev1 resumes the companions of columns, specs and macros from an interrupted step
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
+
+# snapshot 1 creates t, 2 partitions it, 3 sorts it, 4 creates the macro
+statement ok
+CREATE TABLE dl.t(i INTEGER, j INTEGER)
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (i)
+
+statement ok
+ALTER TABLE dl.t SET SORTED BY (i)
+
+statement ok
+CREATE MACRO dl.add_one(x) AS x + 1
+
+# snapshot 5 renames j, 6 replaces the partition spec twice, 7 resets the sort, 8 drops the macro
+statement ok
+ALTER TABLE dl.t RENAME COLUMN j TO j2
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (j2)
+
+statement ok
+ALTER TABLE dl.t RESET SORTED BY
+
+statement ok
+DROP MACRO dl.add_one
+
+statement ok
+DETACH dl
+
+# the interrupted step converted the column rows, copied no end of the specs into their pending companion, added the
+# birth branch of the sorts alone and left the macro rows untouched
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS meta
+
+statement ok
+ALTER TABLE meta.ducklake_column ADD COLUMN branch_id BIGINT DEFAULT 0
+
+statement ok
+UPDATE meta.ducklake_column SET branch_id = 0 WHERE branch_id IS NULL
+
+statement ok
+CREATE TABLE meta.ducklake_column_visibility(branch_id BIGINT, table_id BIGINT, column_id BIGINT, row_branch_id BIGINT,
+    row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, table_id, column_id, row_branch_id, row_snapshot))
+
+statement ok
+INSERT INTO meta.ducklake_column_visibility
+SELECT 0, table_id, column_id, 0, begin_snapshot, end_snapshot FROM meta.ducklake_column WHERE end_snapshot IS NOT NULL
+
+statement ok
+ALTER TABLE meta.ducklake_column DROP COLUMN end_snapshot
+
+statement ok
+ALTER TABLE meta.ducklake_partition_info ADD COLUMN branch_id BIGINT DEFAULT 0
+
+statement ok
+UPDATE meta.ducklake_partition_info SET branch_id = 0 WHERE branch_id IS NULL
+
+statement ok
+CREATE TABLE meta.ducklake_partition_visibility_pending(branch_id BIGINT, partition_id BIGINT, row_branch_id BIGINT,
+    row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, partition_id, row_branch_id, row_snapshot))
+
+statement ok
+ALTER TABLE meta.ducklake_sort_info ADD COLUMN branch_id BIGINT DEFAULT 0
+
+statement ok
+DETACH meta
+
+# the resumed step fills and renames the pending companion, converts the sorts and the macros and copies no end twice
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query IIII
+SELECT c.column_name, e.branch_id, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_column_visibility e
+JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id AND c.branch_id = e.row_branch_id
+    AND c.begin_snapshot = e.row_snapshot
+----
+j	0	1	5
+
+query III
+SELECT e.branch_id, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_partition_visibility e
+JOIN meta.ducklake_partition_info p ON p.partition_id = e.partition_id AND p.branch_id = e.row_branch_id
+    AND p.begin_snapshot = e.row_snapshot
+----
+0	2	6
+
+query III
+SELECT e.branch_id, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_sort_visibility e
+JOIN meta.ducklake_sort_info s ON s.sort_id = e.sort_id AND s.branch_id = e.row_branch_id
+    AND s.begin_snapshot = e.row_snapshot
+----
+0	3	7
+
+query IIII
+SELECT m.macro_name, e.branch_id, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_macro_visibility e
+JOIN meta.ducklake_macro m ON m.macro_id = e.macro_id AND m.branch_id = e.row_branch_id
+    AND m.begin_snapshot = e.row_snapshot
+----
+add_one	0	4	8
+
+query II
+SELECT begin_snapshot, branch_id FROM meta.ducklake_sort_info
+----
+3	0
+
+query II
+SELECT begin_snapshot, branch_id FROM meta.ducklake_partition_info ORDER BY begin_snapshot
+----
+2	0
+6	0
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name IN ('ducklake_column', 'ducklake_partition_info', 'ducklake_sort_info', 'ducklake_macro')
+    AND column_name = 'end_snapshot'
+----
+0
+
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name LIKE '%_visibility_pending'
+----
+0
+
+query I
+SELECT column_name FROM (DESCRIBE dl.t)
+----
+i
+j2
+
+query I
+SELECT column_name FROM (DESCRIBE FROM dl.t AT (VERSION => 4))
+----
+i
+j
+
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE database_name = 'dl' AND function_name = 'add_one'
+----
+0
+
+# the migrated catalog keeps ending its rows in the renamed companions, snapshot 9 replaces the spec again
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (i)
+
+query II
+SELECT row_snapshot, snapshot_id FROM meta.ducklake_partition_visibility ORDER BY snapshot_id
+----
+2	6
+6	9
+
+statement ok
+DETACH dl

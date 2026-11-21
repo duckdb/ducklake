@@ -1,0 +1,303 @@
+# name: test/sql/migration/v20_entity_row_companions_migration.test
+# description: the migration to 2.0-dev1 turns the end snapshots of the column, spec and macro rows into end rows
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
+
+# snapshot 1 creates t, 2 partitions it, 3 sorts it, 4 creates the macro, 5 fills t
+statement ok
+CREATE TABLE dl.t(i INTEGER, j INTEGER)
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (i)
+
+statement ok
+ALTER TABLE dl.t SET SORTED BY (j)
+
+statement ok
+CREATE MACRO dl.add_one(x) AS x + 1
+
+statement ok
+INSERT INTO dl.t VALUES (1, 2)
+
+# snapshot 6 renames j, which rewrites the sort key, 7 replaces the partition spec, 8 resets the sort, 9 drops the macro
+statement ok
+ALTER TABLE dl.t RENAME COLUMN j TO j2
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (j2)
+
+statement ok
+ALTER TABLE dl.t RESET SORTED BY
+
+statement ok
+DROP MACRO dl.add_one
+
+# snapshot 10 creates u, 11 replaces its spec in the transaction that set it, which closes the first spec at its birth
+statement ok
+CREATE TABLE dl.u(a INTEGER, b INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.u SET PARTITIONED BY (a)
+
+statement ok
+ALTER TABLE dl.u SET PARTITIONED BY (b)
+
+statement ok
+COMMIT
+
+# the 1.x writers of main leave a column superseded at its birth next to the live row of the same field and birth
+statement ok
+INSERT INTO meta.ducklake_column (column_id, begin_snapshot, end_snapshot, table_id, column_order, column_name,
+    column_type, initial_default, default_value, nulls_allowed, parent_column, default_value_type,
+    default_value_dialect)
+SELECT column_id, begin_snapshot, begin_snapshot, table_id, column_order, 'old_a', column_type, initial_default,
+    default_value, nulls_allowed, parent_column, default_value_type, default_value_dialect
+FROM meta.ducklake_column WHERE column_name = 'a'
+
+# the 1.1 catalog ends its rows in place
+query III
+SELECT column_name, begin_snapshot, end_snapshot FROM meta.ducklake_column ORDER BY table_id, column_id, column_name
+----
+i	1	NULL
+j	1	6
+j2	6	NULL
+a	10	NULL
+old_a	10	10
+b	10	NULL
+
+query II
+SELECT begin_snapshot, end_snapshot FROM meta.ducklake_partition_info ORDER BY partition_id
+----
+2	7
+7	NULL
+11	11
+11	NULL
+
+query II
+SELECT begin_snapshot, end_snapshot FROM meta.ducklake_sort_info ORDER BY sort_id
+----
+3	6
+6	8
+
+query III
+SELECT macro_name, begin_snapshot, end_snapshot FROM meta.ducklake_macro
+----
+add_one	4	9
+
+statement ok
+DETACH dl
+
+# the migration adds the birth branch, backfills the ends from the end snapshots and drops the end column
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+# the superseded row is gone, an end taken from it would name the live row of its birth
+query III
+SELECT column_name, begin_snapshot, branch_id FROM meta.ducklake_column ORDER BY table_id, column_id, begin_snapshot
+----
+i	1	0
+j	1	0
+j2	6	0
+a	10	0
+b	10	0
+
+query IIIII
+SELECT c.column_name, e.branch_id, e.row_branch_id, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_column_visibility e
+JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id AND c.branch_id = e.row_branch_id
+    AND c.begin_snapshot = e.row_snapshot
+----
+j	0	0	1	6
+
+# the spec closed at its birth has a key of its own, so it keeps its row and its end
+query IIII
+SELECT p.begin_snapshot, p.branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_partition_info p
+LEFT JOIN meta.ducklake_partition_visibility e ON e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id
+    AND e.row_snapshot = p.begin_snapshot
+ORDER BY p.partition_id
+----
+2	0	2	7
+7	0	NULL	NULL
+11	0	11	11
+11	0	NULL	NULL
+
+query IIII
+SELECT s.begin_snapshot, s.branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_sort_info s
+JOIN meta.ducklake_sort_visibility e ON e.sort_id = s.sort_id AND e.row_branch_id = s.branch_id
+    AND e.row_snapshot = s.begin_snapshot
+ORDER BY s.sort_id
+----
+3	0	3	6
+6	0	6	8
+
+query IIII
+SELECT m.macro_name, m.branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_macro m
+JOIN meta.ducklake_macro_visibility e ON e.macro_id = m.macro_id AND e.row_branch_id = m.branch_id
+    AND e.row_snapshot = m.begin_snapshot
+----
+add_one	0	4	9
+
+# the rows keep their birth and gain the branch column last, like a fresh catalog
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_column')
+ORDER BY column_index
+----
+column_id
+begin_snapshot
+table_id
+column_order
+column_name
+column_type
+initial_default
+default_value
+nulls_allowed
+parent_column
+default_value_type
+default_value_dialect
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_partition_info')
+ORDER BY column_index
+----
+partition_id
+table_id
+begin_snapshot
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_sort_info')
+ORDER BY column_index
+----
+sort_id
+table_id
+begin_snapshot
+branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_macro')
+ORDER BY column_index
+----
+schema_id
+macro_id
+macro_name
+begin_snapshot
+branch_id
+
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_column_visibility')
+ORDER BY column_index
+----
+branch_id	BIGINT
+table_id	BIGINT
+column_id	BIGINT
+row_branch_id	BIGINT
+row_snapshot	BIGINT
+snapshot_id	BIGINT
+
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name LIKE '%_visibility_pending'
+----
+0
+
+# the migrated catalog reads the ends as it read the ranges
+query I
+SELECT column_name FROM (DESCRIBE dl.t)
+----
+i
+j2
+
+query I
+SELECT column_name FROM (DESCRIBE FROM dl.t AT (VERSION => 5))
+----
+i
+j
+
+query I
+SELECT j FROM dl.t AT (VERSION => 5)
+----
+2
+
+query II
+SELECT i, j2 FROM dl.t
+----
+1	2
+
+query I
+SELECT column_name FROM (DESCRIBE dl.u)
+----
+a
+b
+
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE database_name = 'dl' AND function_name = 'add_one'
+----
+0
+
+# the migrated catalog commits under the live spec and keeps writing ends, snapshot 12 fills t, 13 drops a column
+statement ok
+INSERT INTO dl.t VALUES (3, 4)
+
+query II
+SELECT partition_key_index, partition_value FROM meta.ducklake_file_partition_value
+WHERE data_file_id = (SELECT MAX(data_file_id) FROM meta.ducklake_data_file)
+----
+0	4
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN i
+
+query III
+SELECT c.column_name, e.row_snapshot, e.snapshot_id
+FROM meta.ducklake_column_visibility e
+JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id AND c.branch_id = e.row_branch_id
+    AND c.begin_snapshot = e.row_snapshot
+ORDER BY e.snapshot_id
+----
+j	1	6
+i	1	13
+
+query I
+SELECT j2 FROM dl.t ORDER BY j2
+----
+2
+4
+
+# the expiry removes the macro no snapshot reads anymore with its implementation and its end
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [1, 2, 3, 4, 5, 6, 7, 8])
+
+query III
+SELECT (SELECT COUNT(*) FROM meta.ducklake_macro), (SELECT COUNT(*) FROM meta.ducklake_macro_impl),
+    (SELECT COUNT(*) FROM meta.ducklake_macro_visibility)
+----
+0	0	0
+
+statement ok
+DETACH dl
