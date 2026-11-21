@@ -28,26 +28,38 @@ statement ok
 CREATE MACRO test.xt(a,_name) as TABLE SELECT * FROM test.test_tbl WHERE(id>=a or name=_name);
 
 # Check Macro Tables
-query IIIII
-SELECT m.schema_id, m.macro_id, m.macro_name, m.begin_snapshot, e.snapshot_id
-FROM __ducklake_metadata_ducklake.ducklake_macro m
-LEFT JOIN __ducklake_metadata_ducklake.ducklake_macro_visibility e ON e.macro_id = m.macro_id
-    AND e.row_branch_id = m.branch_id AND e.row_snapshot = m.begin_snapshot
-ORDER BY m.macro_id;
+query IIII
+SELECT schema_id, macro_id, macro_name, begin_snapshot FROM __ducklake_metadata_ducklake.ducklake_macro
+ORDER BY macro_id;
 ----
-1	2	simple	2	NULL
-1	4	xt	4	NULL
+1	2	simple	2
+1	4	xt	4
+
+# both macros are live in the schema
+query III
+SELECT schema_name, function_name, function_type FROM duckdb_functions() WHERE database_name = 'ducklake'
+ORDER BY function_name
+----
+test	simple	macro
+test	xt	table_macro
 
 statement ok
 DROP SCHEMA test CASCADE;
 
-# dropping the schema ends the macro rows
-query IIIII
-SELECT m.schema_id, m.macro_id, m.macro_name, m.begin_snapshot, e.snapshot_id
-FROM __ducklake_metadata_ducklake.ducklake_macro m
-LEFT JOIN __ducklake_metadata_ducklake.ducklake_macro_visibility e ON e.macro_id = m.macro_id
-    AND e.row_branch_id = m.branch_id AND e.row_snapshot = m.begin_snapshot
-ORDER BY m.macro_id;
+# dropping the schema keeps the version rows and drops both macros in snapshot 5
+query IIII
+SELECT schema_id, macro_id, macro_name, begin_snapshot FROM __ducklake_metadata_ducklake.ducklake_macro
+ORDER BY macro_id;
 ----
-1	2	simple	2	5
-1	4	xt	4	5
+1	2	simple	2
+1	4	xt	4
+
+query I
+SELECT count(*) FROM duckdb_functions() WHERE database_name = 'ducklake'
+----
+0
+
+query II
+SELECT snapshot_id, changes FROM snapshots() WHERE snapshot_id = 5
+----
+5	{schemas_dropped=[1], tables_dropped=[3], scalar_macros_dropped=[2], table_macros_dropped=[4]}

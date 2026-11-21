@@ -23,9 +23,8 @@ SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_ver
 # Verify no sort info exists initially
 query I
 SELECT COUNT(*)
-FROM __ducklake_metadata_ducklake.ducklake_sort_info si
-WHERE table_id = 1 AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_sort_visibility e
-    WHERE e.sort_id = si.sort_id AND e.row_branch_id = si.branch_id AND e.row_snapshot = si.begin_snapshot)
+FROM __ducklake_metadata_ducklake.ducklake_sort_info
+WHERE table_id = 1
 ----
 0
 
@@ -49,9 +48,8 @@ SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_ver
 # Verify sort info does NOT exist after rollback
 query I
 SELECT COUNT(*)
-FROM __ducklake_metadata_ducklake.ducklake_sort_info si
-WHERE table_id = 1 AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_sort_visibility e
-    WHERE e.sort_id = si.sort_id AND e.row_branch_id = si.branch_id AND e.row_snapshot = si.begin_snapshot)
+FROM __ducklake_metadata_ducklake.ducklake_sort_info
+WHERE table_id = 1
 ----
 0
 
@@ -82,9 +80,8 @@ SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_ver
 
 query I
 SELECT COUNT(*)
-FROM __ducklake_metadata_ducklake.ducklake_sort_info si
-WHERE table_id = 1 AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_sort_visibility e
-    WHERE e.sort_id = si.sort_id AND e.row_branch_id = si.branch_id AND e.row_snapshot = si.begin_snapshot)
+FROM __ducklake_metadata_ducklake.ducklake_sort_info
+WHERE table_id = 1
 ----
 0
 
@@ -95,13 +92,19 @@ WHERE table_id = 1 AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.du
 statement ok
 ALTER TABLE ducklake.test SET SORTED BY (a ASC NULLS LAST, b DESC NULLS LAST);
 
-# This should now have sort info committed
+# This should now have sort info committed, the only sort row of the table
+query I
+SELECT COUNT(*)
+FROM __ducklake_metadata_ducklake.ducklake_sort_info
+WHERE table_id = 1
+----
+1
+
 query III
 SELECT expression, sort_direction, null_order
 FROM __ducklake_metadata_ducklake.ducklake_sort_expression se
 JOIN __ducklake_metadata_ducklake.ducklake_sort_info si USING (sort_id)
-WHERE si.table_id = 1 AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_sort_visibility e
-    WHERE e.sort_id = si.sort_id AND e.row_branch_id = si.branch_id AND e.row_snapshot = si.begin_snapshot)
+WHERE si.table_id = 1
 ORDER BY se.sort_key_index
 ----
 a	ASC	NULLS_LAST

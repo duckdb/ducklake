@@ -37,11 +37,11 @@ ALTER TABLE partitioned_tbl RENAME TO partitioned_tbl_renamed
 statement ok
 CALL ducklake_flush_inlined_data('ducklake')
 
-# check if rename causes partition info to get dropped, an ended spec has a row in the companion table
+# check if rename causes partition info to get dropped, the table keeps its single spec row
 query I
-SELECT COUNT(*) FROM ducklake_metadata.ducklake_partition_visibility
+SELECT COUNT(*) FROM ducklake_metadata.ducklake_partition_info
 ----
-0
+1
 
 statement ok
 ALTER TABLE partitioned_tbl_renamed RENAME TO partitioned_tbl
@@ -76,7 +76,7 @@ SELECT table_id, partition_key_index, partition_value FROM ducklake_metadata.duc
 1	0	0
 1	0	1
 
-# append to partition
+# append to partition, the spec survived both renames
 statement ok
 INSERT INTO partitioned_tbl SELECT (i%2) + 1, concat('thisisanotherstring_', i) FROM range(10000) t(i)
 

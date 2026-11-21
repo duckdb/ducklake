@@ -17,30 +17,36 @@ CREATE VIEW ducklake.v AS SELECT 1 AS c
 statement ok
 COMMENT ON VIEW ducklake.v IS 'my view comment'
 
-# verify view tag row is active, no end row names it
-query II
-SELECT key, value FROM __ducklake_metadata_ducklake.ducklake_tag t
-WHERE NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_tag_visibility e
-    WHERE e.object_id = t.object_id AND e.key = t.key AND e.row_branch_id = t.branch_id
-    AND e.row_snapshot = t.begin_snapshot);
+# the comment of the view is live and has one version row
+query I
+SELECT comment FROM duckdb_views() WHERE database_name = 'ducklake' AND view_name = 'v'
 ----
-comment	my view comment
+my view comment
+
+query IITT
+SELECT object_id, begin_snapshot, key, value FROM __ducklake_metadata_ducklake.ducklake_tag;
+----
+1	2	comment	my view comment
 
 statement ok
 DROP VIEW ducklake.v
 
-# after DROP VIEW, the row of the tag has an end at the snapshot of the drop (DropViews ends ducklake_tag)
+# after DROP VIEW the view is gone and the tag row stays as history
 query I
-SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_tag t
-WHERE NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_tag_visibility e
-    WHERE e.object_id = t.object_id AND e.key = t.key AND e.row_branch_id = t.branch_id
-    AND e.row_snapshot = t.begin_snapshot);
+SELECT count(*) FROM duckdb_views() WHERE database_name = 'ducklake';
 ----
 0
 
-query IIII
-SELECT e.branch_id, t.value, e.row_snapshot, e.snapshot_id FROM __ducklake_metadata_ducklake.ducklake_tag_visibility e
-JOIN __ducklake_metadata_ducklake.ducklake_tag t ON t.object_id = e.object_id AND t.key = e.key
-    AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot;
+query IITT
+SELECT object_id, begin_snapshot, key, value FROM __ducklake_metadata_ducklake.ducklake_tag;
 ----
-0	my view comment	2	3
+1	2	comment	my view comment
+
+# the drop ended the tag, so expiring the snapshots it was live in removes its row (a live row would stay)
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [1, 2])
+
+query I
+SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_tag;
+----
+0

@@ -1217,7 +1217,8 @@ UPDATE {METADATA_CATALOG}.%s AS stats SET min_value = NULL, max_value = NULL
 WHERE EXISTS (
     SELECT 1 FROM {METADATA_CATALOG}.ducklake_column gone
     JOIN {METADATA_CATALOG}.ducklake_column live ON live.table_id = gone.table_id AND live.column_id = gone.column_id
-        AND live.begin_snapshot = gone.begin_snapshot AND (live.end_snapshot IS NULL OR live.end_snapshot > live.begin_snapshot)
+        AND live.begin_snapshot = gone.begin_snapshot
+        AND (live.end_snapshot IS NULL OR live.end_snapshot > live.begin_snapshot)
     WHERE gone.end_snapshot = gone.begin_snapshot AND gone.column_type <> live.column_type
         AND gone.table_id = stats.table_id AND gone.column_id = stats.column_id);
 )",

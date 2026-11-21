@@ -41,15 +41,14 @@ SELECT min(i), max(i), count(*), min(d), max(d) FROM ducklake.dropped
 0	149	150	0.0	74.5
 
 # the bounds are exact again after the deletes are rewritten away
+# the dropped column keeps a stats row, so only the columns the catalog lists are read
 query IIII
 SELECT c.column_name, s.min_value, s.max_value, s.contains_nan::BOOLEAN
 FROM rewrite_stats_meta.ducklake_table_column_stats s
 JOIN rewrite_stats_meta.ducklake_table t ON t.table_id = s.table_id
 JOIN rewrite_stats_meta.ducklake_column c ON c.table_id = s.table_id AND c.column_id = s.column_id
-    AND NOT EXISTS (SELECT 1 FROM rewrite_stats_meta.ducklake_column_visibility e
-        WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id
-        AND e.row_snapshot = c.begin_snapshot)
-WHERE t.table_name = 'dropped'
+WHERE t.table_name = 'dropped' AND c.column_name IN (
+    SELECT column_name FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'dropped')
 ORDER BY ALL
 ----
 d	0.0	74.5	false
@@ -115,10 +114,8 @@ SELECT c.column_name, s.min_value, s.max_value
 FROM rewrite_stats_meta.ducklake_table_column_stats s
 JOIN rewrite_stats_meta.ducklake_table t ON t.table_id = s.table_id
 JOIN rewrite_stats_meta.ducklake_column c ON c.table_id = s.table_id AND c.column_id = s.column_id
-    AND NOT EXISTS (SELECT 1 FROM rewrite_stats_meta.ducklake_column_visibility e
-        WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id
-        AND e.row_snapshot = c.begin_snapshot)
-WHERE t.table_name = 'inlined'
+WHERE t.table_name = 'inlined' AND c.column_name IN (
+    SELECT column_name FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'inlined')
 ORDER BY ALL
 ----
 i	50	2001

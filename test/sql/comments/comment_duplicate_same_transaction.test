@@ -32,20 +32,12 @@ SELECT comment FROM duckdb_tables() WHERE table_name = 'test'
 ----
 second
 
-# one version row, no end names it
-query II
-SELECT key, value FROM __ducklake_metadata_ducklake.ducklake_tag t
-WHERE object_id = 1 AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_tag_visibility e
-    WHERE e.object_id = t.object_id AND e.key = t.key AND e.row_branch_id = t.branch_id
-    AND e.row_snapshot = t.begin_snapshot)
+# the transaction writes one version row of the tag, with the value it ended on
+query TTI
+SELECT key, value, begin_snapshot FROM __ducklake_metadata_ducklake.ducklake_tag WHERE object_id = 1
+ORDER BY begin_snapshot
 ----
-comment	second
-
-query II
-SELECT (SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_tag WHERE object_id = 1),
-    (SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_tag_visibility)
-----
-1	0
+comment	second	2
 
 # Check column-wise comment.
 statement ok
@@ -65,19 +57,11 @@ SELECT column_name, comment FROM duckdb_columns() WHERE table_name = 'test' AND 
 ----
 a	col second
 
-query II
-SELECT key, value FROM __ducklake_metadata_ducklake.ducklake_column_tag t
-WHERE table_id = 1 AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_column_tag_visibility e
-    WHERE e.table_id = t.table_id AND e.column_id = t.column_id AND e.key = t.key AND e.row_branch_id = t.branch_id
-    AND e.row_snapshot = t.begin_snapshot)
+query TTI
+SELECT key, value, begin_snapshot FROM __ducklake_metadata_ducklake.ducklake_column_tag WHERE table_id = 1
+ORDER BY begin_snapshot
 ----
-comment	col second
-
-query II
-SELECT (SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_column_tag WHERE table_id = 1),
-    (SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_column_tag_visibility)
-----
-1	0
+comment	col second	3
 
 # Check view-wise comment.
 statement ok
@@ -99,3 +83,9 @@ query I
 SELECT comment FROM duckdb_views() WHERE view_name = 'test_view'
 ----
 view second
+
+query TTI
+SELECT key, value, begin_snapshot FROM __ducklake_metadata_ducklake.ducklake_tag WHERE object_id = 2
+ORDER BY begin_snapshot
+----
+comment	view second	5

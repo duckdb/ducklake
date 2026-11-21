@@ -513,20 +513,60 @@ SELECT comment FROM duckdb_views() WHERE view_name = 'v_same'
 ----
 hello
 
-# every renamed table has exactly one live row in ducklake_table (the pre-rename rows were closed)
+# the catalog lists each renamed table once, under its final name
+query I
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'dl' ORDER BY table_name
+----
+T_CASE
+t_add2
+t_chain3
+t_col2
+t_data2
+t_def2
+t_local2
+t_rb
+t_rev2
+t_rr2
+t_same
+t_same_add
+t_same_local
+t_type2
+vbase
+
 statement ok
 DETACH dl
 
 statement ok
 ATTACH '{DUCKLAKE_CONNECTION}' AS meta
 
-query I
-SELECT count(*) FROM meta.ducklake_table t
-WHERE NOT EXISTS (
-    SELECT 1 FROM meta.ducklake_table_visibility e
-    WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)
-AND table_name IN ('t_add', 't_add2', 't_def', 't_def2', 't_col', 't_col2', 't_type', 't_type2', 't_rr', 't_rr_mid',
-    't_rr2', 't_rev', 't_rev2', 't_chain', 't_chain2', 't_chain3', 't_local', 't_local2', 't_data', 't_data2', 't_rb',
-    't_rb2', 't_same', 't_same_add', 't_case', 'T_CASE', 't_same_local')
+# a committed table renamed later has a row per name, a rolled back or intermediate rename leaves none
+query ITI
+SELECT table_id, table_name, begin_snapshot FROM meta.ducklake_table
+WHERE table_name IN ('t_add', 't_add2', 't_def', 't_def2', 't_col', 't_col2', 't_type', 't_type2', 't_rr', 't_rr_mid',
+    't_rr2', 't_rev', 't_rev2', 't_chain', 't_chain2', 't_chain3', 't_data', 't_data2', 't_rb', 't_rb2', 't_same',
+    't_same_add', 't_case', 'T_CASE')
+ORDER BY table_id, begin_snapshot
 ----
-14
+1	t_add	1
+1	t_add2	2
+2	t_def	3
+2	t_def2	4
+3	t_col	6
+3	t_col2	7
+4	t_type	8
+4	t_type2	9
+5	t_rr	10
+5	t_rr2	11
+6	t_same	12
+6	t_same	14
+7	t_same_add	15
+7	t_same_add	17
+8	t_case	19
+8	T_CASE	21
+10	t_rev	23
+10	t_rev2	24
+11	t_chain	25
+11	t_chain3	26
+13	t_data	28
+13	t_data2	30
+14	t_rb	32

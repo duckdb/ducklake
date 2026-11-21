@@ -31,9 +31,9 @@ ALTER TABLE lake.t SET SORTED BY (a);
 statement ok
 COMMIT
 
+# the transaction committed a single sort spec row
 query I
-SELECT count(*) FROM meta.ducklake_sort_info si WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_sort_visibility e
-    WHERE e.sort_id = si.sort_id AND e.row_branch_id = si.branch_id AND e.row_snapshot = si.begin_snapshot)
+SELECT count(*) FROM meta.ducklake_sort_info
 ----
 1
 
@@ -66,20 +66,20 @@ INSERT INTO lake.u VALUES (1);
 statement ok
 COMMIT
 
-query I
-SELECT count(*) FROM meta.ducklake_partition_info p WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_visibility e
-    WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot)
+# the first set spec and the last one are both rows of the one snapshot
+query II
+SELECT count(*), count(DISTINCT begin_snapshot) FROM meta.ducklake_partition_info
 ----
-1
+2	1
 
 statement ok
 INSERT INTO lake.u VALUES (2);
 
+# the file of the transaction and the later one both reference the last spec row
 query II
-SELECT count(*), bool_and(partition_id IN (SELECT partition_id FROM meta.ducklake_partition_info p
-    WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_visibility e
-        WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot)))
-FROM meta.ducklake_data_file WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'u')
+SELECT count(*), bool_and(partition_id = (SELECT max(partition_id) FROM meta.ducklake_partition_info p
+    WHERE p.table_id = f.table_id))
+FROM meta.ducklake_data_file f WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'u')
 ----
 2	true
 
@@ -110,11 +110,25 @@ ALTER TABLE lake.v RESET PARTITIONED BY;
 statement ok
 COMMIT
 
+# v has no sort row, its single partition row is the set spec that the reset ended
 query II
-SELECT (SELECT count(*) FROM meta.ducklake_sort_info si WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_sort_visibility e
-        WHERE e.sort_id = si.sort_id AND e.row_branch_id = si.branch_id AND e.row_snapshot = si.begin_snapshot)),
-    (SELECT count(*) FROM meta.ducklake_partition_info p
-        WHERE NOT EXISTS (SELECT 1 FROM meta.ducklake_partition_visibility e
-        WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot))
+SELECT (SELECT count(*) FROM meta.ducklake_sort_info WHERE table_id = v.table_id),
+    (SELECT count(*) FROM meta.ducklake_partition_info WHERE table_id = v.table_id)
+FROM meta.ducklake_table v WHERE table_name = 'v'
 ----
-1	1
+0	1
+
+statement ok
+INSERT INTO lake.v VALUES (3), (1), (2);
+
+# the file of v is written without a spec, unpartitioned and in insertion order
+query II
+SELECT partition_id IS NULL, path NOT LIKE '%a=%' FROM meta.ducklake_data_file
+WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'v')
+----
+true	true
+
+query I
+SELECT list(a ORDER BY file_row_number) FROM lake.v
+----
+[3, 1, 2]

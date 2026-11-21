@@ -64,16 +64,21 @@ SELECT s FROM ducklake.test
 {'i': 1, 'j': NULL}
 {'i': 2, 'j': 20}
 
-query TIT
-SELECT column_name, column_id, CASE WHEN NOT EXISTS (SELECT 1 FROM metadata.ducklake_column_visibility e
-    WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id
-    AND e.row_snapshot = c.begin_snapshot) THEN 'live' ELSE 'dropped' END
-FROM metadata.ducklake_column c
+# The dropped field keeps its row, the re-added field is a new one born at the ADD COLUMN snapshot.
+query TII
+SELECT column_name, column_id, begin_snapshot
+FROM metadata.ducklake_column
 WHERE column_name = 'j'
-ORDER BY column_id
+ORDER BY begin_snapshot
 ----
-j	3	dropped
-j	4	live
+j	3	1
+j	4	5
+
+# Between the drop and the re-add the struct has no field j.
+query I
+SELECT s FROM ducklake.test AT (VERSION => 4)
+----
+{'i': 1}
 
 statement error
 CALL ducklake_add_data_files(
