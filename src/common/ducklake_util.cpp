@@ -247,8 +247,13 @@ void DuckLakeUtil::EnsureDirectoryExists(FileSystem &fs, const string &data_path
 	}
 }
 
+bool DuckLakeUtil::IsRemotePath(const string &path) {
+	// the file systems take their scheme in any case, e.g. S3A://, which FileSystem::IsRemoteFile does not
+	return FileSystem::IsRemoteFile(StringUtil::Lower(path));
+}
+
 string DuckLakeUtil::PathSeparator(FileSystem &fs, const string &path) {
-	if (FileSystem::IsRemoteFile(path)) {
+	if (IsRemotePath(path)) {
 		return "/";
 	}
 	return fs.PathSeparator(path);

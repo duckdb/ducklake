@@ -271,6 +271,8 @@ public:
 	virtual bool ShowsConcurrentCommits() const {
 		return CommitsEachStatement();
 	}
+	//! The type of a metadata column that a migration adds for a timestamp with time zone
+	string TimestampTzColumnType() const;
 	//! Whether transactions that started before a metadata table was dropped still read it
 	virtual bool DroppedTablesStayReadable() const;
 	//! Whether a commit inserts inlined rows after its batch instead of sending them as VALUES text in it
@@ -416,6 +418,8 @@ public:
 	BuildCatalogForSnapshot(DuckLakeSnapshot snapshot,
 	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
 	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata = false);
+	//! Adds the tables the snapshots after snapshot_id changed up to snapshot, false when their changes are not known
+	virtual bool GetTablesChangedSince(idx_t snapshot_id, DuckLakeSnapshot snapshot, set<TableIndex> &result);
 	//! The global stats of every table of the snapshot, or of the given tables
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot,
 	                                                            const vector<TableIndex> &table_ids = {});
@@ -739,6 +743,8 @@ public:
 	//! The additions of 2.0-dev2 a catalog is missing, probed so an interrupted migration resumes
 	struct V2_0Dev2Additions {
 		bool snapshot_tag_table = true;
+		//! The expiry time of tags, which a 2.0-dev1 tag table can lack
+		bool snapshot_tag_expiry = false;
 		bool branch_table = true;
 		//! Rebuilt through a rebuild table and an old table so an interrupted rebuild resumes
 		bool rebuild_snapshots = true;
@@ -756,7 +762,7 @@ public:
 	//! The first batch of a rebuild, which takes the snapshot tables away by name and commits
 	static string V2_0Dev2RenameSql(const V2_0Dev2Additions &add);
 	//! The other additions, the second batch of a rebuild copies from the renamed tables
-	static string V2_0Dev2AdditionsSql(const V2_0Dev2Additions &add);
+	string V2_0Dev2AdditionsSql(const V2_0Dev2Additions &add) const;
 	bool HasMetadataColumn(const string &table, const string &column);
 	//! Scans the metadata schema into the memo, once per probe pass
 	void ProbeMetadataSchema();
@@ -795,6 +801,8 @@ protected:
 	virtual string GetLatestSnapshotQuery() const;
 	//! The branch conjunct of a lookup on snapshot_id, preceded by AND, empty where the engine would not use it
 	string MainSnapshotFilter() const;
+	//! The changes of the snapshots after snapshot_id up to snapshot
+	virtual string GetChangesSinceQuery(idx_t snapshot_id, DuckLakeSnapshot snapshot) const;
 	//! The changes of the snapshots from first_snapshot to last_snapshot that recorded a rewrite
 	virtual string GetRewriteSnapshotsQuery(idx_t first_snapshot, idx_t last_snapshot) const;
 

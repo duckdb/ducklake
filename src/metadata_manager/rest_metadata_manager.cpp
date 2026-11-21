@@ -289,6 +289,11 @@ map<TableIndex, idx_t> RESTMetadataManager::GetTableRecordCounts(DuckLakeSnapsho
 	return result;
 }
 
+bool RESTMetadataManager::GetTablesChangedSince(idx_t, DuckLakeSnapshot, set<TableIndex> &) {
+	// the server keeps the change log, so the stats of every table are read again
+	return false;
+}
+
 //! Fetches the pages of a response in parallel. The column mappings of the pages are added to the catalog, and the
 //! files of the pages are added to the response in the order of the pages.
 template <class RESPONSE, class FETCH, class APPEND>

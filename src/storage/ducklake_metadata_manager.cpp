@@ -108,6 +108,16 @@ vector<string> DuckLakeMetadataManager::SystemColumnNames() const {
 	return GetMetadataProfile().system_column_names;
 }
 
+string DuckLakeMetadataManager::TimestampTzColumnType() const {
+	auto &profile = GetMetadataProfile();
+	auto entry = profile.column_type_overrides.find(LogicalTypeId::TIMESTAMP_TZ);
+	if (entry != profile.column_type_overrides.end()) {
+		return entry->second;
+	}
+	// a catalog without the type stores it as text, like the tag table it creates
+	return profile.natively_unsupported_types.count(LogicalTypeId::TIMESTAMP_TZ) ? "VARCHAR" : "TIMESTAMPTZ";
+}
+
 bool DuckLakeMetadataManager::IsRetryableCommitError(const string &message) const {
 	auto rule = GetMetadataProfile().FindCommitErrorRule(message);
 	return rule && rule->retryable;
@@ -819,10 +829,14 @@ string DuckLakeMetadataManager::V2_0Dev2RenameSql(const V2_0Dev2Additions &add) 
 	return result;
 }
 
-string DuckLakeMetadataManager::V2_0Dev2AdditionsSql(const V2_0Dev2Additions &add) {
+string DuckLakeMetadataManager::V2_0Dev2AdditionsSql(const V2_0Dev2Additions &add) const {
 	string result;
 	if (add.snapshot_tag_table) {
 		result += GetSnapshotTagTableStatement() + "\n";
+	}
+	if (add.snapshot_tag_expiry) {
+		result += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_tag ADD COLUMN expires_at %s;\n",
+		                             TimestampTzColumnType());
 	}
 	if (add.branch_table) {
 		result += GetBranchTableStatement() + "\n";
@@ -847,6 +861,8 @@ DuckLakeMetadataManager::V2_0Dev2Additions DuckLakeMetadataManager::ProbeV2_0Dev
 	ResetProbedColumns();
 	V2_0Dev2Additions missing;
 	missing.snapshot_tag_table = !HasMetadataColumn("ducklake_snapshot_tag", "tag_name");
+	missing.snapshot_tag_expiry =
+	    !missing.snapshot_tag_table && !HasMetadataColumn("ducklake_snapshot_tag", "expires_at");
 	missing.branch_table = !HasMetadataColumn("ducklake_branch", "branch_id");
 	missing.has_snapshot_table = HasMetadataColumn("ducklake_snapshot", "snapshot_id");
 	missing.snapshot_has_branch_column = HasMetadataColumn("ducklake_snapshot", "branch_id");
@@ -1914,6 +1930,34 @@ vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(Duc
 	auto global_stats = ParseGlobalTableStats(*result);
 	FillMissingTableSizes(global_stats, [&](string query) { return Query(snapshot, query); });
 	return global_stats;
+}
+
+string DuckLakeMetadataManager::GetChangesSinceQuery(idx_t snapshot_id, DuckLakeSnapshot snapshot) const {
+	return StringUtil::Format("SELECT snapshot_id, changes_made FROM {METADATA_CATALOG}.ducklake_snapshot_changes "
+	                          "WHERE snapshot_id > %d AND snapshot_id <= %d%s",
+	                          snapshot_id, snapshot.snapshot_id, MainSnapshotFilter());
+}
+
+bool DuckLakeMetadataManager::GetTablesChangedSince(idx_t snapshot_id, DuckLakeSnapshot snapshot,
+                                                    set<TableIndex> &result) {
+	auto changes = Query(GetChangesSinceQuery(snapshot_id, snapshot));
+	changes->ThrowIfError("Failed to get the tables changed since a snapshot from DuckLake: ");
+	idx_t change_count = 0;
+	for (auto &row : *changes) {
+		if (row.IsNull(1)) {
+			return false;
+		}
+		change_count++;
+		auto info = SnapshotChangeInformation::ParseChangesMade(row.GetValue<string>(1));
+		for (auto tables :
+		     {&info.altered_tables, &info.dropped_tables, &info.inserted_tables, &info.tables_deleted_from,
+		      &info.tables_compacted, &info.tables_merge_adjacent, &info.tables_rewrite_delete,
+		      &info.tables_inserted_inlined, &info.tables_deleted_inlined, &info.tables_flushed_inlined}) {
+			result.insert(tables->begin(), tables->end());
+		}
+	}
+	// every snapshot has its changes, unless an older release expired them with the snapshot
+	return change_count == snapshot.snapshot_id - snapshot_id;
 }
 
 map<TableIndex, idx_t> DuckLakeMetadataManager::GetTableRecordCounts(DuckLakeSnapshot snapshot) {
@@ -4914,7 +4958,8 @@ string DuckLakeMetadataManager::FromRelativePath(TableIndex table_id, const Duck
 }
 
 string DuckLakeMetadataManager::StorePath(string path, const string &separator) {
-	if (separator.empty() || separator == "/") {
+	// a remote path is stored as it is, whatever separator the data path uses: its backslashes are part of the key
+	if (separator.empty() || separator == "/" || DuckLakeUtil::IsRemotePath(path)) {
 		return path;
 	}
 	// LCOV_EXCL_START
@@ -4923,7 +4968,8 @@ string DuckLakeMetadataManager::StorePath(string path, const string &separator) 
 }
 
 string DuckLakeMetadataManager::LoadPath(string path, const string &separator) {
-	if (separator.empty() || separator == "/") {
+	// a remote path, absolute or resolved against a remote parent, keeps its slashes whatever the data path uses
+	if (separator.empty() || separator == "/" || DuckLakeUtil::IsRemotePath(path)) {
 		return path;
 	}
 	// LCOV_EXCL_START
