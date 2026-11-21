@@ -24,14 +24,10 @@ CREATE MACRO multi_add
 	(a, b, c, d) AS  a + b + c + d,
 	(a, b, c, d, e) AS  a + b + c + d + e
 
-query IIIII
-SELECT m.schema_id, m.macro_id, m.macro_name, m.begin_snapshot, e.snapshot_id
-FROM __ducklake_metadata_ducklake.ducklake_macro m
-LEFT JOIN __ducklake_metadata_ducklake.ducklake_macro_visibility e ON e.macro_id = m.macro_id
-    AND e.row_branch_id = m.branch_id AND e.row_snapshot = m.begin_snapshot
-ORDER BY m.macro_id;
+query IIII
+SELECT schema_id, macro_id, macro_name, begin_snapshot FROM __ducklake_metadata_ducklake.ducklake_macro;
 ----
-0	1	multi_add	1	NULL
+0	1	multi_add	1
 
 query IIIII
 FROM __ducklake_metadata_ducklake.ducklake_macro_impl;

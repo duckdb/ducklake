@@ -2331,16 +2331,23 @@ static FloatWidenedBounds GetFloatBoundsToRewrite(DuckLakeCommitState &commit_st
 	if (column_pairs.empty()) {
 		return result;
 	}
-	// the live version rows are those no end of main closes at the commit snapshot
-	string live = "c.end_snapshot IS NULL";
+	unique_ptr<QueryResult> query_result;
 	if (context.supports_row_visibility) {
-		live = DuckLakeMetadataManager::RowVisibility("c", DuckLakeMetadataManager::RowKind("column"), "{SNAPSHOT_ID}");
-	}
-	auto query = StringUtil::Format(R"(
+		// the live version rows are those no end of main closes at the commit snapshot
+		auto live =
+		    DuckLakeMetadataManager::RowVisibility("c", DuckLakeMetadataManager::RowKind("column"), "{SNAPSHOT_ID}");
+		auto query = StringUtil::Format(R"(
 SELECT c.table_id, c.column_id, c.column_type, %s
 FROM {METADATA_CATALOG}.ducklake_column c WHERE (c.table_id, c.column_id) IN (%s))",
-	                                live, column_pairs);
-	auto query_result = context.query_metadata_with_snapshot(commit_state.commit_snapshot, query);
+		                                live, column_pairs);
+		query_result = context.query_metadata_with_snapshot(commit_state.commit_snapshot, query);
+	} else {
+		auto query = StringUtil::Format(R"(
+SELECT table_id, column_id, column_type, end_snapshot
+FROM {METADATA_CATALOG}.ducklake_column WHERE (table_id, column_id) IN (%s))",
+		                                column_pairs);
+		query_result = context.query_metadata(query);
+	}
 	query_result->ThrowIfError("Failed to read column types before widening FLOAT bounds: ");
 	auto float_type = DuckLakeTypes::ToString(LogicalType::FLOAT);
 	map<TableIndex, set<FieldIndex>> live_float;
@@ -2350,7 +2357,7 @@ FROM {METADATA_CATALOG}.ducklake_column c WHERE (c.table_id, c.column_id) IN (%s
 		auto field_index = FieldIndex(row.GetValue<idx_t>(1));
 		if (row.GetValue<string>(2) != float_type) {
 			older_type[table_id].insert(field_index);
-		} else if (row.GetValue<bool>(3)) {
+		} else if (context.supports_row_visibility ? row.GetValue<bool>(3) : row.IsNull(3)) {
 			live_float[table_id].insert(field_index);
 		}
 	}

@@ -1479,12 +1479,10 @@ bool DuckLakeMetadataManager::HasMetadataColumn(const string &table, const strin
 }
 
 void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {
-	// the latest version row names the table, a catalog migrated again has no end column to pick the live row by
 	auto tables = Query(R"(
-SELECT idt.table_name AS inlined_table_name,
-	(SELECT tbl.table_name FROM {METADATA_CATALOG}.ducklake_table tbl
-	 WHERE tbl.table_id = idt.table_id ORDER BY tbl.begin_snapshot DESC LIMIT 1) AS user_table_name
-FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt)");
+SELECT idt.table_name AS inlined_table_name, tbl.table_name AS user_table_name
+FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id AND tbl.end_snapshot IS NULL)");
 	tables->ThrowIfError("Failed to list inlined-data tables while migrating to v1.1: ");
 	DuckLakeInlinedColNames old_names(false);
 	DuckLakeInlinedColNames new_names(true);
