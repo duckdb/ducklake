@@ -362,6 +362,9 @@ public:
 	virtual string GetPartitionInfoTableStatement();
 	virtual string GetSortInfoTableStatement();
 	virtual string GetMacroTableStatement();
+	virtual string GetTagTableStatement();
+	virtual string GetColumnTagTableStatement();
+	virtual string GetViewColumnTagTableStatement();
 	//! A catalog table whose version rows end in a companion table, with the key columns naming an entity
 	struct RowVisibilityKind {
 		string kind;
@@ -369,7 +372,7 @@ public:
 	};
 	//! The versioned catalog kinds, the companion of a kind is ducklake_<kind>_visibility
 	static const vector<RowVisibilityKind> &RowVisibilityKinds();
-	//! The kinds whose readers and writers end rows in a companion, the later pull requests extend the list
+	//! The kinds whose readers and writers end rows in a companion, the step of the migration converts them
 	static const vector<string> &V2_0RowCompanionKinds();
 	static const RowVisibilityKind &RowKind(const string &kind);
 	//! The row table of a kind, the partition and sort specs keep their info suffix
@@ -380,7 +383,7 @@ public:
 	static string RowKeyType(const string &key);
 	//! The companion table holding the ends of the version rows of a kind, one end per row per branch
 	static string GetRowVisibilityTableStatement(const RowVisibilityKind &kind);
-	//! Whether a version row of the alias is visible at the read snapshot on the main branch
+	//! Whether a version row of the alias is visible on the main branch at the read snapshot, latest when empty
 	static string RowVisibility(const string &alias, const RowVisibilityKind &kind, const string &read_snapshot);
 	//! Ends the version rows of a kind the filter selects, live at the commit snapshot, in its companion
 	static string EndRows(const string &kind, const string &filter);
@@ -576,14 +579,14 @@ public:
 	//! Clear the bounds of added files of the columns retyped to a finer timestamp unit, and of their tables
 	static string WriteRefinedTimestampStats(const map<TableIndex, set<FieldIndex>> &refined_columns,
 	                                         idx_t next_file_id);
-	static string WriteExpiredColumnTags(const vector<DuckLakeDroppedColumn> &dropped_columns);
+	static string WriteExpiredColumnTags(const vector<DuckLakeDroppedColumn> &dropped_columns, bool row_visibility);
 	static string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns, bool row_visibility);
 	//! Columns added and dropped in the same commit, which begin and end in its snapshot
 	static string WriteDroppedNewColumns(const vector<DuckLakeNewColumn> &columns, bool row_visibility);
-	static string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);
+	static string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags, bool row_visibility);
 	static string WriteNewTableOptions(const vector<DuckLakeConfigOption> &new_options);
-	static string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags);
-	static string WriteNewViewColumnTags(const vector<DuckLakeViewColumnTagInfo> &new_tags);
+	static string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags, bool row_visibility);
+	static string WriteNewViewColumnTags(const vector<DuckLakeViewColumnTagInfo> &new_tags, bool row_visibility);
 	//! SQL that writes new data files, shared with the server-side commit path. Returns SQL with
 	//! {METADATA_CATALOG} / {SNAPSHOT_ID} placeholders. Caller supplies resolved paths (one per file,
 	//! same order) since path policy differs across callers (schema-relative vs. always-absolute).
@@ -856,6 +859,8 @@ public:
 		bool has_pending = false;
 		bool has_companion = false;
 		bool has_end_column = false;
+		//! Whether the snapshot tag step creates the row table, empty and in its 2.0 shape, before this step runs
+		bool created_by_migration = false;
 		//! Whether the kind still lacks a part of the step
 		bool Incomplete() const;
 	};

@@ -2503,10 +2503,12 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			}
 		}
 		batch_queries += DuckLakeMetadataManager::WriteNewViews(result.new_views, context.supports_row_visibility);
-		batch_queries += DuckLakeMetadataManager::WriteNewTags(result.new_tags);
-		batch_queries += DuckLakeMetadataManager::WriteNewColumnTags(result.new_column_tags);
+		batch_queries += DuckLakeMetadataManager::WriteNewTags(result.new_tags, context.supports_row_visibility);
+		batch_queries +=
+		    DuckLakeMetadataManager::WriteNewColumnTags(result.new_column_tags, context.supports_row_visibility);
 		if (context.supports_v1_1_metadata) {
-			batch_queries += DuckLakeMetadataManager::WriteNewViewColumnTags(result.new_view_column_tags);
+			batch_queries += DuckLakeMetadataManager::WriteNewViewColumnTags(result.new_view_column_tags,
+			                                                                 context.supports_row_visibility);
 		}
 		batch_queries += DuckLakeMetadataManager::WriteFloatWidenedStats(float_bounds.widened, float_bounds.cleared,
 		                                                                 commit_snapshot.next_file_id);
@@ -2525,7 +2527,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 				expired_column_tags.push_back(dropped_col);
 			}
 		}
-		batch_queries += DuckLakeMetadataManager::WriteExpiredColumnTags(expired_column_tags);
+		batch_queries +=
+		    DuckLakeMetadataManager::WriteExpiredColumnTags(expired_column_tags, context.supports_row_visibility);
 		batch_queries += DuckLakeMetadataManager::WriteNewColumns(result.new_columns, context.supports_row_visibility);
 		batch_queries += DuckLakeMetadataManager::WriteDroppedNewColumns(result.dropped_new_columns,
 		                                                                 context.supports_row_visibility);
