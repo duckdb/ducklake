@@ -2333,15 +2333,13 @@ static FloatWidenedBounds GetFloatBoundsToRewrite(DuckLakeCommitState &commit_st
 	}
 	// the live version rows are those no end of main closes at the commit snapshot
 	string live = "c.end_snapshot IS NULL";
-	string main_filter;
 	if (context.supports_row_visibility) {
 		live = DuckLakeMetadataManager::RowVisibility("c", DuckLakeMetadataManager::RowKind("column"), "{SNAPSHOT_ID}");
-		main_filter = " AND c.branch_id = 0";
 	}
 	auto query = StringUtil::Format(R"(
 SELECT c.table_id, c.column_id, c.column_type, %s
-FROM {METADATA_CATALOG}.ducklake_column c WHERE (c.table_id, c.column_id) IN (%s)%s)",
-	                                live, column_pairs, main_filter);
+FROM {METADATA_CATALOG}.ducklake_column c WHERE (c.table_id, c.column_id) IN (%s))",
+	                                live, column_pairs);
 	auto query_result = context.query_metadata_with_snapshot(commit_state.commit_snapshot, query);
 	query_result->ThrowIfError("Failed to read column types before widening FLOAT bounds: ");
 	auto float_type = DuckLakeTypes::ToString(LogicalType::FLOAT);
