@@ -1,5 +1,5 @@
 # name: test/sql/tags/tags_row_collation.test
-# description: the snapshot tag writers and the row step match tag names byte for byte under a case folding collation
+# description: the tag writers, the row step and its resumed backfill match tag names byte for byte under nocase
 # group: [tags]
 
 require ducklake
@@ -107,6 +107,55 @@ ORDER BY e.snapshot_id
 ----
 Ö	3	4
 ö	3	5
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name = 'ducklake_snapshot_tag' AND column_name = 'end_snapshot'
+----
+0
+
+# a pending companion already holds the end of one tag, the resumed backfill copies the other one byte for byte
+statement ok
+ALTER TABLE meta.ducklake_snapshot_tag ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_snapshot_tag SET end_snapshot = (SELECT e.snapshot_id FROM meta.ducklake_snapshot_tag_visibility e
+    WHERE (e.tag_name COLLATE "C") = (ducklake_snapshot_tag.tag_name COLLATE "C")
+    AND e.row_snapshot = ducklake_snapshot_tag.begin_snapshot)
+
+statement ok
+CREATE TABLE meta.ducklake_snapshot_tag_visibility_pending(branch_id BIGINT, tag_name VARCHAR, row_branch_id BIGINT,
+    row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, tag_name, row_branch_id, row_snapshot))
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_tag_visibility_pending
+SELECT branch_id, tag_name, row_branch_id, row_snapshot, snapshot_id FROM meta.ducklake_snapshot_tag_visibility
+WHERE snapshot_id = 4
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_tag_visibility
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 0)
+
+query III
+SELECT t.tag_name, e.row_snapshot, e.snapshot_id FROM meta.ducklake_snapshot_tag_visibility e
+JOIN meta.ducklake_snapshot_tag t ON (t.tag_name COLLATE "C") = (e.tag_name COLLATE "C")
+    AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+ORDER BY e.snapshot_id
+----
+Ö	3	4
+ö	3	5
+
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name LIKE 'ducklake_snapshot_tag_visibility%'
+----
+1
 
 query I
 SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')

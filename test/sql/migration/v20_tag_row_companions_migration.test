@@ -1,5 +1,5 @@
 # name: test/sql/migration/v20_tag_row_companions_migration.test
-# description: the migration to 2.0-dev1 turns the end snapshots of the tag rows into end rows and creates the snapshot tag companion
+# description: the migration to 2.0-dev1 turns the end snapshots of the tag rows into end rows, snapshot tags included
 # group: [migration]
 
 require ducklake

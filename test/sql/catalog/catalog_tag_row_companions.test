@@ -1,5 +1,5 @@
 # name: test/sql/catalog/catalog_tag_row_companions.test
-# description: the version rows of tags, column tags, view column tags and snapshot tags keep their birth and end in companion tables
+# description: the tag, column tag, view column tag and snapshot tag rows keep their birth and end in companion tables
 # group: [catalog]
 
 require ducklake

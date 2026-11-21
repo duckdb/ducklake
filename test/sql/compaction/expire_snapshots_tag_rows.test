@@ -1,5 +1,5 @@
 # name: test/sql/compaction/expire_snapshots_tag_rows.test
-# description: expiring the snapshots of a dropped table, a dropped view and a dropped snapshot tag removes their tag rows with their ends
+# description: expiring the snapshots of a dropped table, view and snapshot tag removes their tag rows with their ends
 # group: [compaction]
 
 require ducklake
