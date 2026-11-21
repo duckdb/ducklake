@@ -310,22 +310,23 @@ INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes (snapshot_id, changes_m
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot VALUES (0, NOW(), 0, 1, 0);
 INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_changes VALUES (0, 'created_schema:"main"',  NULL, NULL, NULL);)";
 	}
-	initialize_query +=
-	    StringUtil::Format(R"(
-INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '%s'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
-	)",
-	                       GetVersionString(), DuckDB::SourceID(), SQLString(data_path), encryption_str);
 	if (ducklake_catalog.SupportsRowVisibility()) {
-		initialize_query +=
-		    StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_schema (schema_id, schema_uuid, "
-		                       "begin_snapshot, schema_name, path, "
-		                       "path_is_relative, branch_id) VALUES (0, '%s'::UUID, 0, 'main', 'main/', true, 0);",
-		                       initial_schema_uuid);
+		// the schema row names its branch and has no end column, an end would be a companion row
+		initialize_query += StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '%s'), ('created_by', 'DuckDB %s'),
+	('data_path', %s), ('encrypted', '%s');
+INSERT INTO {METADATA_CATALOG}.ducklake_schema (schema_id, schema_uuid, begin_snapshot, schema_name, path,
+	path_is_relative, branch_id) VALUES (0, '%s'::UUID, 0, 'main', 'main/', true, 0);
+	)",
+		                                       GetVersionString(), DuckDB::SourceID(), SQLString(data_path),
+		                                       encryption_str, initial_schema_uuid);
 	} else {
-		initialize_query += StringUtil::Format(
-		    "INSERT INTO {METADATA_CATALOG}.ducklake_schema (schema_id, schema_uuid, begin_snapshot, end_snapshot, "
-		    "schema_name, path, path_is_relative) VALUES (0, '%s'::UUID, 0, NULL, 'main', 'main/', true);",
-		    initial_schema_uuid);
+		initialize_query += StringUtil::Format(R"(
+INSERT INTO {METADATA_CATALOG}.ducklake_metadata (key, value) VALUES ('version', '%s'), ('created_by', 'DuckDB %s'), ('data_path', %s), ('encrypted', '%s');
+INSERT INTO {METADATA_CATALOG}.ducklake_schema (schema_id, schema_uuid, begin_snapshot, end_snapshot, schema_name, path, path_is_relative) VALUES (0, '%s'::UUID, 0, NULL, 'main', 'main/', true);
+	)",
+		                                       GetVersionString(), DuckDB::SourceID(), SQLString(data_path),
+		                                       encryption_str, initial_schema_uuid);
 	}
 	auto result = Execute(initialize_query);
 	result->ThrowIfError("Failed to initialize DuckLake: ");
@@ -1479,10 +1480,21 @@ bool DuckLakeMetadataManager::HasMetadataColumn(const string &table, const strin
 }
 
 void DuckLakeMetadataManager::MigrateInlinedColumnNames(bool probe_renamed) {
-	auto tables = Query(R"(
+	// a dev catalog may have lost its end column already, so its latest version row names the table
+	string tables_query;
+	if (probe_renamed) {
+		tables_query = R"(
+SELECT idt.table_name AS inlined_table_name,
+	(SELECT tbl.table_name FROM {METADATA_CATALOG}.ducklake_table tbl
+	 WHERE tbl.table_id = idt.table_id ORDER BY tbl.begin_snapshot DESC LIMIT 1) AS user_table_name
+FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt)";
+	} else {
+		tables_query = R"(
 SELECT idt.table_name AS inlined_table_name, tbl.table_name AS user_table_name
 FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
-LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id AND tbl.end_snapshot IS NULL)");
+LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id AND tbl.end_snapshot IS NULL)";
+	}
+	auto tables = Query(tables_query);
 	tables->ThrowIfError("Failed to list inlined-data tables while migrating to v1.1: ");
 	DuckLakeInlinedColNames old_names(false);
 	DuckLakeInlinedColNames new_names(true);
