@@ -29,7 +29,10 @@ statement ok
 INSERT INTO __ducklake_metadata_lake.ducklake_column_tag
 SELECT c.table_id, c.column_id, c.begin_snapshot, NULL, 'owner', 'maintenance'
 FROM __ducklake_metadata_lake.ducklake_column c JOIN __ducklake_metadata_lake.ducklake_table t USING (table_id)
-WHERE t.table_name = 'tagged' AND c.column_name = 'id' AND c.end_snapshot IS NULL
+WHERE t.table_name = 'tagged' AND c.column_name = 'id'
+    AND NOT EXISTS (SELECT 1 FROM __ducklake_metadata_lake.ducklake_column_visibility e
+        WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id
+        AND e.row_snapshot = c.begin_snapshot)
 
 statement ok
 DETACH lake

@@ -1,5 +1,5 @@
 # name: test/sql/catalog/catalog_load_columns_postgres.test
-# description: Postgres catalogs receive the snapshot filter of the column rows when loading the catalog
+# description: Postgres catalogs receive the branch and snapshot filter of the column rows when loading the catalog
 # group: [catalog]
 
 require ducklake
@@ -53,16 +53,26 @@ x
 statement ok
 USE ducklake
 
-# Every scan of ducklake_column sent to Postgres has the snapshot filter of a loaded catalog
+# Every scan of ducklake_column sent to Postgres has the branch and snapshot filter of a loaded catalog
 query I
 SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
-	(SELECT bool_or(contains(query, printf('"begin_snapshot" <= %d AND ("end_snapshot" > %d OR "end_snapshot" IS NULL)',
-	                                       getvariable('latest'), getvariable('latest'))))
-	    AND bool_or(contains(query, printf('"begin_snapshot" <= %d AND ("end_snapshot" > %d OR "end_snapshot" IS NULL)',
-	                                       getvariable('with_x'), getvariable('with_x'))))
-	    AND bool_and(contains(query, '"begin_snapshot" <= '))
+	(SELECT bool_or(contains(query, printf('"branch_id" = 0 AND "begin_snapshot" <= %d', getvariable('latest'))))
+	    AND bool_or(contains(query, printf('"branch_id" = 0 AND "begin_snapshot" <= %d', getvariable('with_x'))))
+	    AND bool_and(contains(query, '"branch_id" = 0 AND "begin_snapshot" <= '))
 	 FROM (SELECT message AS query FROM duckdb_logs WHERE type = 'PostgresQueryLog') logs
 	 WHERE contains(query, '"ducklake_column" '))
+	ELSE true END
+----
+true
+
+# Every scan of the column ends has the branch and snapshot filter as well
+query I
+SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
+	(SELECT bool_or(contains(query, printf('"branch_id" = 0 AND "snapshot_id" <= %d', getvariable('latest'))))
+	    AND bool_or(contains(query, printf('"branch_id" = 0 AND "snapshot_id" <= %d', getvariable('with_x'))))
+	    AND bool_and(contains(query, '"branch_id" = 0 AND "snapshot_id" <= '))
+	 FROM (SELECT message AS query FROM duckdb_logs WHERE type = 'PostgresQueryLog') logs
+	 WHERE contains(query, '"ducklake_column_visibility" '))
 	ELSE true END
 ----
 true

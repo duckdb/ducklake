@@ -31,7 +31,10 @@ id	INTEGER
 n	"NULL"
 
 query I
-SELECT column_type FROM ducklake_meta.ducklake_column WHERE column_name = 'n' AND end_snapshot IS NULL
+SELECT column_type FROM ducklake_meta.ducklake_column c WHERE column_name = 'n'
+    AND NOT EXISTS (SELECT 1 FROM ducklake_meta.ducklake_column_visibility e
+    WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id
+    AND e.row_snapshot = c.begin_snapshot)
 ----
 null
 
@@ -166,7 +169,10 @@ WHERE s.table_id = (SELECT table_id FROM ducklake_meta.ducklake_table t WHERE ta
         SELECT 1 FROM ducklake_meta.ducklake_table_visibility e
         WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot))
   AND s.column_id = (SELECT column_id FROM ducklake_meta.ducklake_column c
-      WHERE c.column_name = 'n' AND c.end_snapshot IS NULL AND c.table_id = s.table_id)
+      WHERE c.column_name = 'n' AND c.table_id = s.table_id
+          AND NOT EXISTS (SELECT 1 FROM ducklake_meta.ducklake_column_visibility e
+          WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id
+          AND e.row_snapshot = c.begin_snapshot))
 ----
 0	true
 
@@ -177,7 +183,10 @@ WHERE s.table_id = (SELECT table_id FROM ducklake_meta.ducklake_table t WHERE ta
         SELECT 1 FROM ducklake_meta.ducklake_table_visibility e
         WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot))
   AND s.column_id = (SELECT column_id FROM ducklake_meta.ducklake_column c
-      WHERE c.column_name = 'n' AND c.end_snapshot IS NULL AND c.table_id = s.table_id)
+      WHERE c.column_name = 'n' AND c.table_id = s.table_id
+          AND NOT EXISTS (SELECT 1 FROM ducklake_meta.ducklake_column_visibility e
+          WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id
+          AND e.row_snapshot = c.begin_snapshot))
 ----
 1	NULL	NULL
 

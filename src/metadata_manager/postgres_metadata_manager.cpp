@@ -409,7 +409,9 @@ unordered_set<string> PostgresMetadataManager::ListInlinedDeletionTables() {
 }
 
 void PostgresMetadataManager::MigrateInlinedDataTypes() {
-	auto columns = DuckLakeMetadataManager::Query(GetInlinedTableColumnsSql());
+	// a 2.0 catalog whose version string was rewound reaches this step with the column rows already converted
+	auto columns = DuckLakeMetadataManager::Query(
+	    GetInlinedTableColumnsSql(optional_idx(), HasMetadataColumn("ducklake_column", "branch_id")));
 	columns->ThrowIfError("Failed to read the columns of inlined-data tables while migrating: ");
 	map<Identifier, identifier_map_t<string>> inlined_tables;
 	for (auto &row : *columns) {

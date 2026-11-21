@@ -358,6 +358,10 @@ public:
 	virtual string GetSchemaTableStatement();
 	virtual string GetTableTableStatement();
 	virtual string GetViewTableStatement();
+	virtual string GetColumnTableStatement();
+	virtual string GetPartitionInfoTableStatement();
+	virtual string GetSortInfoTableStatement();
+	virtual string GetMacroTableStatement();
 	//! A catalog table whose version rows end in a companion table, with the key columns naming an entity
 	struct RowVisibilityKind {
 		string kind;
@@ -509,11 +513,11 @@ public:
 	//! The rows that are stored, deleted ones included, and the rows that are live
 	static string GetInlinedRowCountsSql(const Identifier &inlined_table_name,
 	                                     const DuckLakeInlinedColNames &col_names);
-	static string GetTableColumnSchemaSql(TableIndex table_id);
+	static string GetTableColumnSchemaSql(TableIndex table_id, bool row_visibility);
 	static string GetInlinedTableNamesSql(TableIndex table_id);
 	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id);
 	//! The top-level columns of each inlined data table at the schema version of that table
-	static string GetInlinedTableColumnsSql(optional_idx table_id = optional_idx());
+	static string GetInlinedTableColumnsSql(optional_idx table_id, bool row_visibility);
 	//! The inserts of the given rows, in batches
 	static string InsertValuesSql(const string &table_name, const vector<string> &values);
 	//! The inserts of the given rows into the given table, in batches
@@ -539,7 +543,7 @@ public:
 	static string DropSchemas(const set<SchemaIndex> &ids, bool row_visibility);
 	static string DropTables(const set<TableIndex> &ids, bool renamed, bool file_events, bool row_visibility);
 	static string DropViews(const set<TableIndex> &ids, bool renamed, bool drop_view_column_tags, bool row_visibility);
-	static string DropMacros(const set<MacroIndex> &ids);
+	static string DropMacros(const set<MacroIndex> &ids, bool row_visibility);
 
 	//! Emits the INSERT for new schemas. Caller supplies resolved paths (one per schema, same order)
 	//! since path resolution depends on the catalog's data_path / separator (instance state).
@@ -554,7 +558,7 @@ public:
 	//! Emits the partition-key diff SQL. Caller supplies the existing partition state (fetched
 	//! via GetCatalogForSnapshot) since the diff is computed against it.
 	static string WriteNewPartitionKeys(const vector<DuckLakePartitionInfo> &existing_partitions,
-	                                    const vector<DuckLakePartitionInfo> &new_partitions);
+	                                    const vector<DuckLakePartitionInfo> &new_partitions, bool row_visibility);
 	//! Maps the id of a last new spec that equals the committed spec, which is not written, to the committed id
 	static unordered_map<idx_t, idx_t>
 	GetUnchangedPartitionIds(const vector<DuckLakePartitionInfo> &existing_partitions,
@@ -562,8 +566,8 @@ public:
 	//! Emits the sort-key diff SQL. Caller supplies the existing sort state (fetched via
 	//! GetCatalogForSnapshot) since the diff is computed against it.
 	static string WriteNewSortKeys(const vector<DuckLakeSortInfo> &existing_sorts,
-	                               const vector<DuckLakeSortInfo> &new_sorts);
-	static string WriteDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns);
+	                               const vector<DuckLakeSortInfo> &new_sorts, bool row_visibility);
+	static string WriteDroppedColumns(const vector<DuckLakeDroppedColumn> &dropped_columns, bool row_visibility);
 	//! Formats a column set as a SQL list of (table_id, column_id) rows
 	static string WriteColumnIdPairs(const map<TableIndex, set<FieldIndex>> &columns);
 	//! Rewrite the bounds of committed files and tables written while a widened column was FLOAT
@@ -573,9 +577,9 @@ public:
 	static string WriteRefinedTimestampStats(const map<TableIndex, set<FieldIndex>> &refined_columns,
 	                                         idx_t next_file_id);
 	static string WriteExpiredColumnTags(const vector<DuckLakeDroppedColumn> &dropped_columns);
-	static string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns);
+	static string WriteNewColumns(const vector<DuckLakeNewColumn> &new_columns, bool row_visibility);
 	//! Columns added and dropped in the same commit, which begin and end in its snapshot
-	static string WriteDroppedNewColumns(const vector<DuckLakeNewColumn> &columns);
+	static string WriteDroppedNewColumns(const vector<DuckLakeNewColumn> &columns, bool row_visibility);
 	static string WriteNewTags(const vector<DuckLakeTagInfo> &new_tags);
 	static string WriteNewTableOptions(const vector<DuckLakeConfigOption> &new_options);
 	static string WriteNewColumnTags(const vector<DuckLakeColumnTagInfo> &new_tags);
@@ -669,7 +673,7 @@ public:
 	static string WriteNewDeleteFiles(const vector<DuckLakeDeleteFileInfo> &new_delete_files,
 	                                  const vector<DuckLakePath> &resolved_paths, bool write_row_group_count,
 	                                  bool file_events);
-	static string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros);
+	static string WriteNewMacros(const vector<DuckLakeMacroInfo> &new_macros, bool row_visibility);
 
 	virtual vector<DuckLakeColumnMappingInfo> GetColumnMappings(optional_idx start_from);
 	//! The column mappings with the ids

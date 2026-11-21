@@ -928,6 +928,106 @@ SELECT COUNT(*) FROM meta.ducklake_schema WHERE schema_name = 's2' AND branch_id
 statement ok
 DETACH dl
 
+# the columns and macros of an older dev build ended in place and knew no birth branch, they migrate like the tables
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+
+statement ok
+CREATE TABLE dl.tc(a INTEGER, b INTEGER)
+
+statement ok
+ALTER TABLE dl.tc RENAME COLUMN b TO b2
+
+statement ok
+CREATE MACRO dl.mc(x) AS x
+
+statement ok
+DROP MACRO dl.mc
+
+statement ok
+ALTER TABLE meta.ducklake_column ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_column SET end_snapshot = (SELECT e.snapshot_id FROM meta.ducklake_column_visibility e
+    WHERE e.table_id = ducklake_column.table_id AND e.column_id = ducklake_column.column_id
+    AND e.row_snapshot = ducklake_column.begin_snapshot)
+
+statement ok
+DROP TABLE meta.ducklake_column_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_column DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_macro ADD COLUMN end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_macro SET end_snapshot = (SELECT e.snapshot_id FROM meta.ducklake_macro_visibility e
+    WHERE e.macro_id = ducklake_macro.macro_id AND e.row_snapshot = ducklake_macro.begin_snapshot)
+
+statement ok
+DROP TABLE meta.ducklake_macro_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_macro DROP COLUMN branch_id
+
+statement ok
+DETACH dl
+
+# the incomplete layout is refused without the migration option
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+----
+catalog version is 2.0-dev1, but the catalog lacks the catalog row companions
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE)
+
+# the ends are rebuilt from the end snapshots, the renamed column ends where its successor is born
+query II
+SELECT c.column_name,
+    e.snapshot_id = (SELECT c2.begin_snapshot FROM meta.ducklake_column c2 WHERE c2.column_name = 'b2')
+FROM meta.ducklake_column_visibility e
+JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id AND c.branch_id = e.row_branch_id
+    AND c.begin_snapshot = e.row_snapshot
+----
+b	true
+
+query II
+SELECT m.macro_name, e.snapshot_id > m.begin_snapshot
+FROM meta.ducklake_macro_visibility e
+JOIN meta.ducklake_macro m ON m.macro_id = e.macro_id AND m.branch_id = e.row_branch_id
+    AND m.begin_snapshot = e.row_snapshot
+----
+mc	true
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name IN ('ducklake_column', 'ducklake_macro') AND column_name = 'end_snapshot'
+----
+0
+
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name LIKE '%_visibility_pending'
+----
+0
+
+query I
+SELECT column_name FROM (DESCRIBE dl.tc)
+----
+a
+b2
+
+query I
+SELECT COUNT(*) FROM duckdb_functions() WHERE database_name = 'dl' AND function_name = 'mc'
+----
+0
+
+statement ok
+DETACH dl
+
 # a 2.0-dev1 attach of a complete layout probes the layout with one statement and runs no migration statement
 statement ok
 CALL truncate_duckdb_logs()

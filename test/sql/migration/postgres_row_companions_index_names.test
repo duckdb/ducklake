@@ -46,9 +46,13 @@ query I
 SELECT indexname FROM postgres_query('pg', 'SELECT indexname FROM pg_indexes
     WHERE schemaname = ''row_companion_indexes'' AND tablename LIKE ''ducklake_%_visibility'' ORDER BY indexname')
 ----
+ducklake_column_visibility_pkey
 ducklake_delete_file_visibility_pkey
 ducklake_file_visibility_pkey
+ducklake_macro_visibility_pkey
+ducklake_partition_visibility_pkey
 ducklake_schema_visibility_pkey
+ducklake_sort_visibility_pkey
 ducklake_table_visibility_pkey
 ducklake_view_visibility_pkey
 
@@ -56,9 +60,13 @@ query I
 SELECT indexname FROM postgres_query('pg', 'SELECT indexname FROM pg_indexes
     WHERE schemaname = ''row_companion_indexes_fresh'' AND tablename LIKE ''ducklake_%_visibility'' ORDER BY indexname')
 ----
+ducklake_column_visibility_pkey
 ducklake_delete_file_visibility_pkey
 ducklake_file_visibility_pkey
+ducklake_macro_visibility_pkey
+ducklake_partition_visibility_pkey
 ducklake_schema_visibility_pkey
+ducklake_sort_visibility_pkey
 ducklake_table_visibility_pkey
 ducklake_view_visibility_pkey
 

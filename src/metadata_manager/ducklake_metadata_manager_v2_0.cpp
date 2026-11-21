@@ -42,6 +42,32 @@ string DuckLakeMetadataManagerV2_0<Base>::GetViewTableStatement() {
 }
 
 template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetColumnTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_column(column_id BIGINT, begin_snapshot BIGINT, table_id BIGINT, "
+	       "column_order BIGINT, column_name VARCHAR, column_type VARCHAR, initial_default VARCHAR, default_value "
+	       "VARCHAR, nulls_allowed BOOLEAN, parent_column BIGINT, default_value_type VARCHAR, default_value_dialect "
+	       "VARCHAR, branch_id BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetPartitionInfoTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_partition_info(partition_id BIGINT, table_id BIGINT, "
+	       "begin_snapshot BIGINT, branch_id BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetSortInfoTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_sort_info(sort_id BIGINT, table_id BIGINT, begin_snapshot BIGINT, "
+	       "branch_id BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetMacroTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_macro(schema_id BIGINT, macro_id BIGINT, macro_name VARCHAR, "
+	       "begin_snapshot BIGINT, branch_id BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
 string DuckLakeMetadataManagerV2_0<Base>::GetDataFileTableStatement() {
 	return "CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(" +
 	       DuckLakeMetadataManager::DataFileTableColumns(false, true) + ");";
