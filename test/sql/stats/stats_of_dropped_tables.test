@@ -1,5 +1,5 @@
 # name: test/sql/stats/stats_of_dropped_tables.test
-# description: Loading the stats of a snapshot reads the stats rows of the tables it sees, and skips those of dropped ones
+# description: The stats of a snapshot are read from the rows of the tables it sees, not of dropped ones
 # group: [stats]
 
 require ducklake

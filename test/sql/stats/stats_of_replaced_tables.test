@@ -1,5 +1,5 @@
 # name: test/sql/stats/stats_of_replaced_tables.test
-# description: A table's stats are read from the snapshot that creates it, after it replaces a dropped table and after a rename
+# description: A table's stats are read at its first snapshot, after it replaces a dropped table and after a rename
 # group: [stats]
 
 require ducklake
