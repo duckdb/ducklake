@@ -257,6 +257,7 @@
         "test/sql/add_files/add_file_partitioned.test",
         "test/sql/add_files/add_file_repeated_bucket.test",
         "test/sql/add_files/add_files.test",
+        "test/sql/add_files/add_files_absolute_remote_path_local_data_path.test",
         "test/sql/add_files/add_files_allow_missing_stats.test",
         "test/sql/add_files/add_files_complex_nested_stats_mre.test",
         "test/sql/add_files/add_files_equivalent_path_duplicate.test",
