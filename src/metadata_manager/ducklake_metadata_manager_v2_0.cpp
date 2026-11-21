@@ -13,9 +13,8 @@ string DuckLakeMetadataManagerV2_0<Base>::GetCreateTableStatements() {
 	result += DuckLakeMetadataManager::GetMainBranchRowStatement() + "\n";
 	result += DuckLakeMetadataManager::GetFileVisibilityTableStatement() + "\n";
 	result += DuckLakeMetadataManager::GetDeleteFileVisibilityTableStatement() + "\n";
-	for (auto &kind : DuckLakeMetadataManager::V2_0RowCompanionKinds()) {
-		result +=
-		    DuckLakeMetadataManager::GetRowVisibilityTableStatement(DuckLakeMetadataManager::RowKind(kind)) + "\n";
+	for (auto &kind : DuckLakeMetadataManager::RowVisibilityKinds()) {
+		result += DuckLakeMetadataManager::GetRowVisibilityTableStatement(kind) + "\n";
 	}
 	return result;
 }

@@ -420,12 +420,6 @@ const vector<DuckLakeMetadataManager::RowVisibilityKind> &DuckLakeMetadataManage
 	return KINDS;
 }
 
-const vector<string> &DuckLakeMetadataManager::V2_0RowCompanionKinds() {
-	static const vector<string> KINDS = {"schema", "table", "view",       "column",          "partition",   "sort",
-	                                     "macro",  "tag",   "column_tag", "view_column_tag", "snapshot_tag"};
-	return KINDS;
-}
-
 const DuckLakeMetadataManager::RowVisibilityKind &DuckLakeMetadataManager::RowKind(const string &kind) {
 	for (auto &entry : RowVisibilityKinds()) {
 		if (entry.kind == kind) {
@@ -1123,8 +1117,7 @@ bool DuckLakeMetadataManager::V2_0RowCompanions::Incomplete() const {
 
 DuckLakeMetadataManager::V2_0RowCompanions DuckLakeMetadataManager::ProbeV2_0RowCompanions() {
 	V2_0RowCompanions rows;
-	for (auto &kind_name : V2_0RowCompanionKinds()) {
-		auto &kind = RowKind(kind_name);
+	for (auto &kind : RowVisibilityKinds()) {
 		auto table = RowTableName(kind.kind);
 		V2_0RowCompanion row;
 		row.kind = kind.kind;
@@ -1363,10 +1356,10 @@ string DuckLakeMetadataManager::MissingV2_0Step() {
 	    {"ducklake_branch", "branch_id"},          {"ducklake_snapshot_tag", "tag_name"},
 	    {"ducklake_file_visibility", "branch_id"}, {"ducklake_delete_file_visibility", "branch_id"},
 	    {"ducklake_data_file", "data_file_id"},    {"ducklake_delete_file", "delete_file_id"}};
-	for (auto &kind : V2_0RowCompanionKinds()) {
+	for (auto &kind : RowVisibilityKinds()) {
 		// a companion binds under its final name only once the step renamed it into place
-		complete_layout.emplace_back(RowTableName(kind), "branch_id");
-		complete_layout.emplace_back(RowVisibilityTableName(kind), "branch_id");
+		complete_layout.emplace_back(RowTableName(kind.kind), "branch_id");
+		complete_layout.emplace_back(RowVisibilityTableName(kind.kind), "branch_id");
 	}
 	if (!Query(ColumnProbeSql(complete_layout))->HasError()) {
 		return string();
@@ -7670,11 +7663,11 @@ WHERE NOT EXISTS (
 	ends->ThrowIfError(StringUtil::Format("Failed to delete from ducklake_%s_visibility in DuckLake: ", kind.kind));
 }
 
-//! The converted kind whose version rows a catalog table holds, none for an unconverted table
+//! The kind whose version rows a catalog table holds, none for a table without versioned rows
 static optional_ptr<const DuckLakeMetadataManager::RowVisibilityKind> V2_0RowCompanionKind(const string &table) {
-	for (auto &kind_name : DuckLakeMetadataManager::V2_0RowCompanionKinds()) {
-		if (DuckLakeMetadataManager::RowTableName(kind_name) == table) {
-			return DuckLakeMetadataManager::RowKind(kind_name);
+	for (auto &kind : DuckLakeMetadataManager::RowVisibilityKinds()) {
+		if (DuckLakeMetadataManager::RowTableName(kind.kind) == table) {
+			return kind;
 		}
 	}
 	return nullptr;

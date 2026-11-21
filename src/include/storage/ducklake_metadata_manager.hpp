@@ -372,8 +372,6 @@ public:
 	};
 	//! The versioned catalog kinds, the companion of a kind is ducklake_<kind>_visibility
 	static const vector<RowVisibilityKind> &RowVisibilityKinds();
-	//! The kinds whose readers and writers end rows in a companion, the step of the migration converts them
-	static const vector<string> &V2_0RowCompanionKinds();
 	static const RowVisibilityKind &RowKind(const string &kind);
 	//! The row table of a kind, the partition and sort specs keep their info suffix
 	static string RowTableName(const string &kind);
