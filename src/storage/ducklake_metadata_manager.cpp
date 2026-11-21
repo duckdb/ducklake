@@ -1209,6 +1209,21 @@ string DuckLakeMetadataManager::V2_0RowEndBackfillSql(const RowVisibilityKind &k
 	for (auto &key : kind.key_columns) {
 		keys.push_back(KeyColumn("t", key));
 	}
+	if (kind.kind == "column") {
+		// the version row that goes may hold the type the column's files were written with, so their bounds are unknown
+		for (auto stats_table : {"ducklake_file_column_stats", "ducklake_table_column_stats"}) {
+			query += StringUtil::Format(R"(
+UPDATE {METADATA_CATALOG}.%s AS stats SET min_value = NULL, max_value = NULL
+WHERE EXISTS (
+    SELECT 1 FROM {METADATA_CATALOG}.ducklake_column gone
+    JOIN {METADATA_CATALOG}.ducklake_column live ON live.table_id = gone.table_id AND live.column_id = gone.column_id
+        AND live.begin_snapshot = gone.begin_snapshot AND (live.end_snapshot IS NULL OR live.end_snapshot > live.begin_snapshot)
+    WHERE gone.end_snapshot = gone.begin_snapshot AND gone.column_type <> live.column_type
+        AND gone.table_id = stats.table_id AND gone.column_id = stats.column_id);
+)",
+			                            stats_table);
+		}
+	}
 	// a row superseded in its birth transaction goes, as an end it would hide the live row of the same birth
 	query += StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s

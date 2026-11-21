@@ -302,5 +302,40 @@ SELECT COUNT(*) FROM duckdb_functions() WHERE database_name = 'dl' AND function_
 ----
 1
 
+# a column retyped in the transaction that creates its table has one version row, which no longer shows the type
+# of the file written before the change, so the bounds of that file are unknown instead of read as the new type
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE dl.r (v INTEGER)
+
+statement ok
+INSERT INTO dl.r VALUES (16777219)
+
+statement ok
+ALTER TABLE dl.r ALTER COLUMN v TYPE FLOAT
+
+statement ok
+COMMIT
+
+query II
+SELECT c.column_type, c.branch_id FROM meta.ducklake_column c
+JOIN meta.ducklake_table t USING (table_id) WHERE t.table_name = 'r'
+----
+float32	0
+
+query II
+SELECT s.min_value, s.max_value FROM meta.ducklake_table_column_stats s
+JOIN meta.ducklake_table t USING (table_id) WHERE t.table_name = 'r'
+----
+NULL	NULL
+
+query II
+SELECT s.min_value, s.max_value FROM meta.ducklake_file_column_stats s
+JOIN meta.ducklake_table t USING (table_id) WHERE t.table_name = 'r'
+----
+NULL	NULL
+
 statement ok
 DETACH dl

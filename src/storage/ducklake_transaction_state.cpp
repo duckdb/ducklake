@@ -27,6 +27,22 @@
 
 namespace duckdb {
 
+void DuckLakeCommitState::ClearRetypedCreatedBounds(TableIndex table_id,
+                                                    map<FieldIndex, DuckLakeColumnStats> &column_stats) const {
+	auto entry = retyped_created_columns.find(table_id);
+	if (entry == retyped_created_columns.end()) {
+		return;
+	}
+	for (const auto &field_index : entry->second) {
+		auto column_entry = column_stats.find(field_index);
+		if (column_entry == column_stats.end()) {
+			continue;
+		}
+		column_entry->second.ClearBounds();
+		column_entry->second.bounds_unknown = true;
+	}
+}
+
 bool DuckLakeCommitState::WidensFloatColumns(TableIndex table_id) const {
 	return float_widened_columns.find(table_id) != float_widened_columns.end();
 }
@@ -533,6 +549,45 @@ static bool UpdateNestedAddedField(NewTableInfo &result, const unordered_map<idx
 	return false;
 }
 
+//! Finds a field of a column list by its id
+static optional_ptr<const DuckLakeColumnInfo> FindNestedField(const vector<DuckLakeColumnInfo> &fields,
+                                                              FieldIndex field_id) {
+	for (auto &field : fields) {
+		if (field.id == field_id) {
+			return &field;
+		}
+		auto nested = FindNestedField(field.children, field_id);
+		if (nested) {
+			return nested;
+		}
+	}
+	return nullptr;
+}
+
+//! A column of a created table is replaced in place, so its files can hold a type no version row records any more
+static void RecordRetypedCreatedColumns(DuckLakeCommitState &commit_state, const NewTableInfo &result,
+                                        optional_idx created_table, TableIndex table_id,
+                                        const ColumnChangeInfo &change_info) {
+	auto &columns = result.new_tables[created_table.GetIndex()].columns;
+	auto float_type = DuckLakeTypes::ToString(LogicalType::FLOAT);
+	auto double_type = DuckLakeTypes::ToString(LogicalType::DOUBLE);
+	for (auto &new_field : change_info.new_fields) {
+		auto old_field = FindNestedField(columns, new_field.column_info.id);
+		if (!old_field || old_field->type == new_field.column_info.type) {
+			continue;
+		}
+		// the bounds of a widened FLOAT column are rewritten with its files
+		if (old_field->type == float_type && new_field.column_info.type == double_type) {
+			continue;
+		}
+		if (DuckLakeColumnStats::BoundsSurviveTypePromotion(DuckLakeTypes::FromString(old_field->type),
+		                                                    DuckLakeTypes::FromString(new_field.column_info.type))) {
+			continue;
+		}
+		commit_state.retyped_created_columns[table_id].insert(new_field.column_info.id);
+	}
+}
+
 //! Replaces or removes a field of a table the transaction creates, since it is written with that table
 static bool UpdateCreatedTableField(NewTableInfo &result, optional_idx created_table, FieldIndex field_id,
                                     optional_ptr<const DuckLakeColumnInfo> replacement,
@@ -725,6 +780,7 @@ DuckLakeFileInfo DuckLakeTransactionState::GetNewDataFile(const DuckLakeDataFile
                                                           optional_idx row_id_start) {
 	auto data_file = DuckLakeTransaction::BuildDataFileInfo(file, commit_state.commit_snapshot, table_id, row_id_start);
 	commit_state.PrepareFloatBounds(table_id, data_file.column_stats);
+	commit_state.ClearRetypedCreatedBounds(table_id, data_file.column_stats);
 	commit_state.RemapPartitionId(data_file.partition_id);
 	if (data_file.partition_id.IsValid() &&
 	    data_file.partition_id.GetIndex() >= DuckLakeConstants::TRANSACTION_LOCAL_ID_START) {
@@ -2008,6 +2064,10 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			// drop the indicated column
 			// note that in case of nested types we might be dropping multiple columns here
 			auto &changed_fields = table.GetChangedFields();
+			if (created_table.IsValid()) {
+				RecordRetypedCreatedColumns(commit_state, result, created_table, commit_state.GetTableId(table),
+				                            changed_fields);
+			}
 			HandleChangedFields(commit_state.GetTableId(table), changed_fields, result, txn_added_fields,
 			                    created_table);
 			for (auto &field_index : changed_fields.refined_timestamp_fields) {
@@ -2065,7 +2125,9 @@ void DuckLakeTransactionState::GetNewTableInfo(DuckLakeCommitState &commit_state
 			auto new_table = DuckLakeTransaction::GetNewTable(commit_state, table);
 			auto new_table_id = new_table.id;
 			result.new_tables.push_back(std::move(new_table));
-			if (local_change.type == LocalChangeType::CREATED) {
+			// a 2.0 row has one version per birth, so later changes of this transaction rewrite the created table's
+			// fields, while a 1.x catalog keeps a version row per change
+			if (local_change.type == LocalChangeType::CREATED && commit_state.supports_row_visibility) {
 				created_table = result.new_tables.size() - 1;
 			}
 
@@ -3043,6 +3105,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			}
 			context.set_delete_commit_snapshot(commit_snapshot.snapshot_id);
 			DuckLakeCommitState commit_state(commit_snapshot);
+			commit_state.supports_row_visibility = context.supports_row_visibility;
 			string batch_queries;
 			if (wrote_snapshot) {
 				// write the new snapshot
