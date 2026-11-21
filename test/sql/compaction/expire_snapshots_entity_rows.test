@@ -63,7 +63,7 @@ SELECT table_name FROM metadata.ducklake_table
 kept
 
 query I
-SELECT list(column_name ORDER BY column_id) FROM metadata.ducklake_column
+SELECT list(column_name ORDER BY column_id, begin_snapshot) FROM metadata.ducklake_column
 ----
 [i, j, j2]
 

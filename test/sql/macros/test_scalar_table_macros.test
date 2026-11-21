@@ -29,11 +29,15 @@ statement ok
 CREATE MACRO xt(a) as 1;
 
 # Check Macro Tables
-query IIII
-SELECT schema_id, macro_id, macro_name, begin_snapshot FROM __ducklake_metadata_ducklake.ducklake_macro;
+query IIIII
+SELECT m.schema_id, m.macro_id, m.macro_name, m.begin_snapshot, e.snapshot_id
+FROM __ducklake_metadata_ducklake.ducklake_macro m
+LEFT JOIN __ducklake_metadata_ducklake.ducklake_macro_visibility e ON e.macro_id = m.macro_id
+    AND e.row_branch_id = m.branch_id AND e.row_snapshot = m.begin_snapshot
+ORDER BY m.macro_id;
 ----
-0	2	xt	3
-0	3	xt	4
+0	2	xt	3	NULL
+0	3	xt	4	NULL
 
 query IIIII
 FROM __ducklake_metadata_ducklake.ducklake_macro_impl;

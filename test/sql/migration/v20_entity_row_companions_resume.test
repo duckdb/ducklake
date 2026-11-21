@@ -27,7 +27,7 @@ ALTER TABLE dl.t SET SORTED BY (i)
 statement ok
 CREATE MACRO dl.add_one(x) AS x + 1
 
-# snapshot 5 renames j, 6 replaces the partition spec twice, 7 resets the sort, 8 drops the macro
+# snapshot 5 renames j, 6 replaces the partition spec, 7 resets the sort, 8 drops the macro
 statement ok
 ALTER TABLE dl.t RENAME COLUMN j TO j2
 
@@ -43,8 +43,7 @@ DROP MACRO dl.add_one
 statement ok
 DETACH dl
 
-# the interrupted step converted the column rows, copied no end of the specs into their pending companion, added the
-# birth branch of the sorts alone and left the macro rows untouched
+# an interrupted step, columns converted, an empty pending spec companion, the sort birth branch alone, macros untouched
 statement ok
 ATTACH '{DUCKLAKE_CONNECTION}' AS meta
 
