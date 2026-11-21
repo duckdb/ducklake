@@ -21,11 +21,16 @@ class DuckLakeTableEntry;
 class DuckLakeTransaction;
 class Serializer;
 class Deserializer;
+class TableFunctionCatalogEntry;
 
 class DuckLakeFunctions {
 public:
 	//! Table Functions
 	static TableFunction GetDuckLakeScanFunction(DatabaseInstance &instance);
+	//! The parquet_scan entry, autoloading the parquet extension when allowed; null when it is not loaded
+	static optional_ptr<TableFunctionCatalogEntry> TryGetParquetScan(DatabaseInstance &instance);
+	//! The error for an operation that needs parquet_scan while the parquet extension is not loaded
+	[[noreturn]] static void ThrowMissingParquet();
 
 	static unique_ptr<FunctionData> BindDuckLakeScan(ClientContext &context, const TableFunction &function);
 	static unique_ptr<FunctionData> BindDuckLakeScan(ClientContext &context, BoundTableFunction &function);
