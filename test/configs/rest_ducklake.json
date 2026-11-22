@@ -423,6 +423,7 @@
         "test/sql/partitioning/bucket_pruning.test",
         "test/sql/partitioning/bucket_pruning_type_promotion.test",
         "test/sql/partitioning/data_inlining_disable_hive_partitioning.test",
+        "test/sql/partitioning/disable_hive_partitioning.test",
         "test/sql/partitioning/epoch_timestamptz.test",
         "test/sql/partitioning/epoch_transforms.test",
         "test/sql/partitioning/merge_adjacent_null_partition.test",

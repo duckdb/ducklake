@@ -344,6 +344,7 @@ public:
 		                                                 default_value ? "true" : "false", table_options);
 		return hive_file_pattern == "true";
 	}
+	bool UseHiveFilePattern(bool default_value, DuckLakeTableEntry &table) const;
 
 	bool WriteDeletionVectors(SchemaIndex schema_id, TableIndex table_id,
 	                          optional_ptr<const map<string, string>> table_options = nullptr) const {
