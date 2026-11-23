@@ -716,6 +716,19 @@
       ]
     },
     {
+      "reason": "Attaches a BRANCH of the DuckLake, which a REST client cannot",
+      "paths": [
+        "test/sql/branches/branch_attach_read.test",
+        "test/sql/branches/branch_chain_corrupt.test",
+        "test/sql/branches/branch_nested_chain.test",
+        "test/sql/branches/branch_root_without_parent.test",
+        "test/sql/branches/branch_same_snapshot_id.test",
+        "test/sql/branches/branch_snapshot_changes_key.test",
+        "test/sql/branches/branch_version_gate.test",
+        "test/sql/branches/branch_version_space.test"
+      ]
+    },
+    {
       "reason": "Attaches an encrypted DuckLake, but the REST server creates the DuckLake without encryption",
       "paths": [
         "test/sql/compaction/compaction_encrypted.test",

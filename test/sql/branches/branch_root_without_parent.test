@@ -1,0 +1,54 @@
+# name: test/sql/branches/branch_root_without_parent.test
+# description: a branch row without a parent is a root of its own, it inherits no snapshot of main
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files',
+    METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+DELETE FROM dl.t
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'island', NULL, NULL)
+
+# the expiry of main does not reach the root
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+query I
+SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+1
+
+query I
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
+----
+[0, 2, 3]
+
+statement ok
+DETACH dl
+
+# the root has no snapshots of its own and inherits none
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files',
+    METADATA_CATALOG 'meta', BRANCH 'island')
+
+statement error
+SELECT id FROM dl.current_snapshot()
+----
+No snapshot found in DuckLake
+
+statement ok
+DETACH dl
