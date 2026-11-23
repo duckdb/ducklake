@@ -788,8 +788,7 @@ public:
 	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types,
 	                                                     const Identifier &inlined_table_name);
 
-	//! The statements deleting the inlined rows and inlined file deletions that the transaction flushed, the
-	//! payloads the transaction deleted from keep the versions it ended
+	//! Deletes the inlined rows and inlined file deletions the transaction flushed, not the versions it deleted
 	static string GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
 	                                               const map<TableIndex, idx_t> &flushed_file_deletions,
 	                                               const identifier_set_t &deleted_payloads,
@@ -910,8 +909,7 @@ public:
 	virtual string RowCompanionRenameSql(const string &kind) const;
 	//! Adds the birth branch and the companion of every converted kind and turns its end column into end rows
 	string V2_0RowCompanionsSql(const V2_0RowCompanions &rows) const;
-	//! Deletes the rows a kind superseded within their birth and turns its end column into end rows of its pending
-	//! companion
+	//! Deletes the rows a kind superseded within their birth, then folds its end column into the pending companion
 	static string V2_0RowEndBackfillSql(const RowVisibilityKind &kind, const string &pending);
 	//! Turns the end column of a kind into end rows of the companion and drops the column
 	static string V2_0EndColumnSql(const RowVisibilityKind &kind, const string &companion);

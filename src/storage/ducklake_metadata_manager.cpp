@@ -920,8 +920,7 @@ static string ColumnProbeSql(const vector<std::pair<string, string>> &columns) {
 }
 
 bool DuckLakeMetadataManager::HasV1_1Layout() {
-	// the first batch of the migration takes the tables away by name, the next rebuilds the snapshot table with its
-	// branch key, and the version follows the last batch
+	// the first batch takes the tables away by name, the next rebuilds the snapshot table with its branch key
 	vector<std::pair<string, string>> tables {{"ducklake_snapshot", "snapshot_id"},
 	                                          {"ducklake_snapshot_changes", "snapshot_id"},
 	                                          {"ducklake_data_file", "data_file_id"},
@@ -1257,8 +1256,7 @@ string DuckLakeMetadataManager::RowCompanionRenameSql(const string &kind) const 
 	                          RowVisibilityTableName(kind));
 }
 
-//! Adds the birth branch to a table unless it has it, the update fills the rows of a SQLite catalog, which drops the
-//! default
+//! Adds the birth branch unless the table has it and fills the rows, since a SQLite catalog drops the default
 static string BranchColumnSql(const string &table, const string &column, bool has_column) {
 	string query;
 	if (!has_column) {
@@ -2173,13 +2171,7 @@ optional_idx DuckLakeMetadataManager::GetNetDataFileRowCountForStats(TableIndex 
 string DuckLakeMetadataManager::GetNetInlinedRowCountSql(const Identifier &inlined_table_name,
                                                          const DuckLakeInlinedColNames &col_names,
                                                          bool row_visibility) {
-	return StringUtil::Format(R"(
-SELECT COUNT(*)
-FROM %s inlined_data
-WHERE {SNAPSHOT_ID} >= %s
-  AND ({SNAPSHOT_ID} < %s OR %s IS NULL))",
-	                          InlinedRowSource(inlined_table_name, col_names, row_visibility), col_names.begin_snapshot,
-	                          col_names.end_snapshot, col_names.end_snapshot);
+	return ReadInlinedDataAggregatesSql(inlined_table_name, "COUNT(*)", col_names, row_visibility);
 }
 
 string DuckLakeMetadataManager::GetInlinedRowCountsSql(const Identifier &inlined_table_name,
