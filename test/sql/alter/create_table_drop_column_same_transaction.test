@@ -69,7 +69,7 @@ d	1	0	NULL
 
 # the dropped columns and the fields of the dropped struct end in the commit snapshot
 query III
-SELECT c.column_name, e.row_snapshot, e.snapshot_id FROM meta.ducklake_column_visibility e
+SELECT c.column_name, e.row_snapshot, e.end_snapshot FROM meta.ducklake_column_visibility e
 JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id AND c.branch_id = e.row_branch_id
     AND c.begin_snapshot = e.row_snapshot
 ORDER BY c.column_id

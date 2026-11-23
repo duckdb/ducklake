@@ -386,8 +386,6 @@ public:
 		string begin_column = "begin_snapshot";
 		//! The end column of the range rows before the kind took its companion
 		string end_column = "end_snapshot";
-		//! The end column of the companion, the shared inlined companion is born as end_snapshot
-		string companion_end_column = "snapshot_id";
 	};
 	//! The versioned catalog kinds, the companion of a kind is ducklake_<kind>_visibility
 	static const vector<RowVisibilityKind> &RowVisibilityKinds();
