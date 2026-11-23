@@ -1353,7 +1353,6 @@ ALTER TABLE {METADATA_CATALOG}.%s DROP COLUMN %s;
 }
 
 bool DuckLakeMetadataManager::V2_0InlinedCompanion::Incomplete() const {
-	// the rename of the companion into place is the last statement of the step
 	if (!has_companion || has_pending) {
 		return true;
 	}
@@ -1508,7 +1507,6 @@ vector<string> DuckLakeMetadataManager::V2_0InlinedCompanionSql(const V2_0Inline
 	}
 	DuckLakeInlinedColNames col_names(true);
 	auto pending = PendingRowVisibilityTableName("inlined_data");
-	// the companion fills under its pending name, the rename into place proves the step complete
 	auto target = inlined.has_companion ? RowVisibilityTableName("inlined_data") : pending;
 	string query;
 	if (!inlined.has_companion && !inlined.has_pending) {
@@ -1526,14 +1524,15 @@ vector<string> DuckLakeMetadataManager::V2_0InlinedCompanionSql(const V2_0Inline
 	for (auto &payload : inlined.payloads) {
 		next_table();
 		auto &table = payload.table;
-		query += BranchColumnSql(table.GetIdentifierName(), col_names.branch_id.GetIdentifierName(),
-		                         payload.has_branch_column);
 		if (payload.has_old_end_column) {
 			// the renames committed before, so the fold reads every end a rename waited for
 			auto kind = InlinedRowKind(table, col_names);
 			kind.end_column = col_names.end_snapshot.GetIdentifierName() + "_old";
 			query += V2_0EndColumnSql(kind, target);
 		}
+		// the end column goes before the branch column comes, a payload at the column limit of the backend stays there
+		query += BranchColumnSql(table.GetIdentifierName(), col_names.branch_id.GetIdentifierName(),
+		                         payload.has_branch_column);
 	}
 	for (auto &table : inlined.deletion_tables) {
 		next_table();
