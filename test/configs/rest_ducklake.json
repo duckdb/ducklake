@@ -716,18 +716,31 @@
         "test/sql/data_inlining/data_inlining_variant_sql_rollback.test",
         "test/sql/catalog/snapshot_branch_key_statements_postgres.test",
         "test/sql/catalog/snapshot_v11_statements.test",
-        "test/sql/branches/branch_main_commit_beside_branch_rows.test"
+        "test/sql/branches/branch_main_commit_beside_branch_rows.test",
+        "test/sql/branches/schema_versions_branch_column.test",
+        "test/sql/migration/v20_lineage_columns_migration.test"
       ]
     },
     {
       "reason": "Attaches a BRANCH of the DuckLake, which a REST client cannot",
       "paths": [
         "test/sql/branches/branch_attach_read.test",
+        "test/sql/branches/branch_catalog_rows.test",
         "test/sql/branches/branch_chain_corrupt.test",
+        "test/sql/branches/branch_column_rows.test",
+        "test/sql/branches/branch_inlined_after_rename.test",
+        "test/sql/branches/branch_macro_rows.test",
         "test/sql/branches/branch_nested_chain.test",
+        "test/sql/branches/branch_nested_fork_below_parent.test",
+        "test/sql/branches/branch_nested_segment_cap.test",
         "test/sql/branches/branch_root_without_parent.test",
         "test/sql/branches/branch_same_snapshot_id.test",
+        "test/sql/branches/branch_schema_versions_lineage.test",
         "test/sql/branches/branch_snapshot_changes_key.test",
+        "test/sql/branches/branch_snapshot_tag_rows.test",
+        "test/sql/branches/branch_spec_rows.test",
+        "test/sql/branches/branch_tag_above_fork.test",
+        "test/sql/branches/branch_tag_rows.test",
         "test/sql/branches/branch_version_gate.test",
         "test/sql/branches/branch_version_space.test"
       ]
