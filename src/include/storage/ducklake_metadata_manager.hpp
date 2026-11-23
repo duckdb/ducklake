@@ -71,8 +71,8 @@ struct DuckLakeInlinedColNames {
 	//! Number of metadata columns an inlined data table adds
 	static constexpr idx_t COLUMN_COUNT = 3;
 
-	explicit DuckLakeInlinedColNames(bool prefixed_inlined_columns) {
-		if (prefixed_inlined_columns) {
+	explicit DuckLakeInlinedColNames(bool prefixed_inlined_columns) : prefixed(prefixed_inlined_columns) {
+		if (prefixed) {
 			row_id = Identifier(PREFIX + row_id);
 			begin_snapshot = Identifier(PREFIX + begin_snapshot);
 			end_snapshot = Identifier(PREFIX + end_snapshot);
@@ -83,9 +83,11 @@ struct DuckLakeInlinedColNames {
 	//! Whether a user column name collides with the metadata columns written for inlining
 	bool ConflictsWith(const Identifier &name) const;
 
+	//! Whether the names carry the reserved prefix, from 1.1 on
+	bool prefixed;
 	Identifier row_id = "row_id";
 	Identifier begin_snapshot = "begin_snapshot";
-	//! The end column before 2.0, the alias of the end of main the row sources project from 2.0 on
+	//! The end column before 2.0, the name the row sources give the end of main from 2.0 on
 	Identifier end_snapshot = "end_snapshot";
 	//! The birth branch of a version from 2.0 on
 	Identifier branch_id = "branch_id";
@@ -917,7 +919,7 @@ public:
 		idx_t table_id = 0;
 		bool has_branch_column = false;
 		bool has_end_column = false;
-		//! Whether the end column stands renamed for its fold, the state of an interrupted step
+		//! Whether the end column is renamed for its fold, an interrupted step
 		bool has_old_end_column = false;
 	};
 	struct V2_0InlinedDeletionTable {
@@ -936,6 +938,8 @@ public:
 	V2_0InlinedCompanion ProbeV2_0InlinedCompanion();
 	//! Refuses a payload whose end column is gone while no companion holds its ends and it holds rows
 	void VerifyV2_0InlinedCompanion(const V2_0InlinedCompanion &inlined);
+	//! The renames of the end columns of the payloads, batches that commit before the fold reads them
+	static vector<string> V2_0InlinedRenameSql(const V2_0InlinedCompanion &inlined);
 	//! The batches of the step, one metadata transaction each, the rename into place closes the last one
 	vector<string> V2_0InlinedCompanionSql(const V2_0InlinedCompanion &inlined) const;
 	//! The shape of the catalog against the steps of 2.0, one probe of the metadata schema

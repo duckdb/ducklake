@@ -170,7 +170,7 @@ bool DuckLakeMetadataManager::CanInlineValues(DataChunk &chunk) {
 }
 
 bool DuckLakeInlinedColNames::ConflictsWith(const Identifier &name) const {
-	return name == row_id || name == begin_snapshot || name == end_snapshot ||
+	return name == row_id || name == begin_snapshot || name == end_snapshot || (prefixed && name == branch_id) ||
 	       name == "_ducklake_internal_snapshot_id" || name == "_ducklake_internal_row_id";
 }
 
@@ -446,7 +446,7 @@ static idx_t InlinedTableId(const Identifier &inlined_table_name) {
 	return table_id.GetIndex();
 }
 
-//! The shared companion of the inlined rows names a version by its table and row id, the table id leads the key
+//! The kind of the shared inlined companion
 static DuckLakeMetadataManager::RowVisibilityKind InlinedCompanionKind() {
 	DuckLakeMetadataManager::RowVisibilityKind kind {"inlined_data", {"table_id", "row_id"}};
 	kind.key_leads = true;
@@ -1093,6 +1093,13 @@ void DuckLakeMetadataManager::MigrateV11(bool from_dev1) {
 	VerifyV2_0RowCompanions(layout.rows);
 	VerifyV2_0InlinedCompanion(layout.inlined);
 	auto rename_query = V2_0SnapshotRenameSql(layout.additions) + V2_0FileRenameSql(layout.ranges);
+	for (auto &batch : V2_0InlinedRenameSql(layout.inlined)) {
+		if (!rename_query.empty()) {
+			ExecuteMigration(rename_query, false, from_version, "2.0-dev1");
+			transaction.ReleaseMetadataTransaction();
+		}
+		rename_query = batch;
+	}
 	if (!rename_query.empty()) {
 		ExecuteMigration(rename_query, false, from_version, "2.0-dev1");
 		transaction.ReleaseMetadataTransaction();
@@ -1438,36 +1445,60 @@ void DuckLakeMetadataManager::VerifyV2_0InlinedCompanion(const V2_0InlinedCompan
 			                            "ducklake_inlined_data_<table>_<version>",
 			                            name, payload.table_id);
 		}
-		if (started) {
-			continue;
-		}
 		// without the end column only a companion holds the ends, so a payload without one has to be empty
-		if (!payload.has_end_column && !payload.has_old_end_column && TableHasRows(name)) {
+		if (!started && !payload.has_end_column && !payload.has_old_end_column && TableHasRows(name)) {
 			throw InvalidInputException("Cannot migrate this DuckLake catalog: the end snapshots of the inlined rows "
 			                            "of %s were dropped and the end rows that replaced them are missing",
 			                            name);
 		}
-		if (!payload.has_branch_column) {
-			continue;
-		}
-		// a 1.0 catalog reserved the three bare names alone, so a user column can be named like the branch column
-		bool row_visibility = !HasMetadataColumn("ducklake_column", "end_snapshot");
-		auto columns = Query(GetInlinedTableColumnsSql(payload.table_id, row_visibility));
-		columns->ThrowIfError("Failed to read the columns of the inlined data tables of DuckLake while probing the "
-		                      "layout: ");
-		for (auto &row : *columns) {
-			if (row.GetValue<Identifier>(0) == payload.table && row.GetValue<Identifier>(1) == col_names.branch_id) {
-				throw InvalidInputException("Cannot migrate this DuckLake catalog: table %d has a column %s colliding "
-				                            "with the branch column of the inlined data tables. Rename the column and "
-				                            "call ducklake_flush_inlined_data() before migrating",
-				                            payload.table_id, col_names.branch_id.GetIdentifierName());
-			}
+	}
+	if (started || inlined.payloads.empty()) {
+		return;
+	}
+	// a 1.0 catalog reserved the three bare names alone, so a user column can be named like a column the step adds
+	identifier_set_t reserved {col_names.branch_id, Identifier(col_names.end_snapshot.GetIdentifierName() + "_old")};
+	bool row_visibility = !HasMetadataColumn("ducklake_column", "end_snapshot");
+	auto columns = Query(GetInlinedTableColumnsSql(optional_idx(), row_visibility));
+	columns->ThrowIfError(
+	    "Failed to read the columns of the inlined data tables of DuckLake while probing the layout: ");
+	for (auto &row : *columns) {
+		auto column = row.GetValue<Identifier>(1);
+		if (reserved.count(column)) {
+			throw InvalidInputException("Cannot migrate this DuckLake catalog: inlined data table %s has a column %s, "
+			                            "which the inlined data tables of 2.0 reserve. Rename the column and call "
+			                            "ducklake_flush_inlined_data() before migrating",
+			                            row.GetValue<Identifier>(0).GetIdentifierName(), column.GetIdentifierName());
 		}
 	}
 }
 
 //! The tables one batch of the inlined step converts, a batch is one transaction within the lock table of Postgres
 static constexpr idx_t INLINED_STEP_PAYLOADS = 500;
+
+vector<string> DuckLakeMetadataManager::V2_0InlinedRenameSql(const V2_0InlinedCompanion &inlined) {
+	// a writer of the previous layout fails on the renamed column instead of ending a row the fold misses
+	DuckLakeInlinedColNames col_names(true);
+	vector<string> batches;
+	string query;
+	idx_t renamed = 0;
+	for (auto &payload : inlined.payloads) {
+		if (!payload.has_end_column) {
+			continue;
+		}
+		auto &end = col_names.end_snapshot.GetIdentifierName();
+		query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN %s TO %s_old;\n", payload.table,
+		                            end, end);
+		if (++renamed == INLINED_STEP_PAYLOADS) {
+			batches.push_back(std::move(query));
+			query.clear();
+			renamed = 0;
+		}
+	}
+	if (!query.empty()) {
+		batches.push_back(std::move(query));
+	}
+	return batches;
+}
 
 vector<string> DuckLakeMetadataManager::V2_0InlinedCompanionSql(const V2_0InlinedCompanion &inlined) const {
 	// every statement leaves a state the probes recognize, so the step resumes on a backend that commits each one
@@ -1497,15 +1528,10 @@ vector<string> DuckLakeMetadataManager::V2_0InlinedCompanionSql(const V2_0Inline
 		auto &table = payload.table;
 		query += BranchColumnSql(table.GetIdentifierName(), col_names.branch_id.GetIdentifierName(),
 		                         payload.has_branch_column);
-		auto old_end = col_names.end_snapshot.GetIdentifierName() + "_old";
-		if (payload.has_end_column) {
-			// a writer of the previous layout fails on the renamed column instead of ending a row the fold misses
-			query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN %s TO %s;\n", table,
-			                            col_names.end_snapshot, old_end);
-		}
-		if (payload.has_end_column || payload.has_old_end_column) {
+		if (payload.has_old_end_column) {
+			// the renames committed before, so the fold reads every end a rename waited for
 			auto kind = InlinedRowKind(table, col_names);
-			kind.end_column = old_end;
+			kind.end_column = col_names.end_snapshot.GetIdentifierName() + "_old";
 			query += V2_0EndColumnSql(kind, target);
 		}
 	}
