@@ -45,7 +45,7 @@ DROP MACRO dl.add_one
 
 # a replaced row ends in the commit that bears its successor, a dropped row ends alone
 query IIII
-SELECT c.column_name, c.begin_snapshot, c.branch_id, (SELECT e.snapshot_id FROM meta.ducklake_column_visibility e
+SELECT c.column_name, c.begin_snapshot, c.branch_id, (SELECT e.end_snapshot FROM meta.ducklake_column_visibility e
     WHERE e.table_id = c.table_id AND e.column_id = c.column_id AND e.row_branch_id = c.branch_id
     AND e.row_snapshot = c.begin_snapshot)
 FROM meta.ducklake_column c ORDER BY c.column_id, c.begin_snapshot
@@ -55,7 +55,7 @@ j	1	0	6
 j2	6	0	NULL
 
 query III
-SELECT p.begin_snapshot, p.branch_id, (SELECT e.snapshot_id FROM meta.ducklake_partition_visibility e
+SELECT p.begin_snapshot, p.branch_id, (SELECT e.end_snapshot FROM meta.ducklake_partition_visibility e
     WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot)
 FROM meta.ducklake_partition_info p ORDER BY p.begin_snapshot
 ----
@@ -63,7 +63,7 @@ FROM meta.ducklake_partition_info p ORDER BY p.begin_snapshot
 7	0	NULL
 
 query III
-SELECT s.begin_snapshot, s.branch_id, (SELECT e.snapshot_id FROM meta.ducklake_sort_visibility e
+SELECT s.begin_snapshot, s.branch_id, (SELECT e.end_snapshot FROM meta.ducklake_sort_visibility e
     WHERE e.sort_id = s.sort_id AND e.row_branch_id = s.branch_id AND e.row_snapshot = s.begin_snapshot)
 FROM meta.ducklake_sort_info s ORDER BY s.begin_snapshot
 ----
@@ -71,7 +71,7 @@ FROM meta.ducklake_sort_info s ORDER BY s.begin_snapshot
 6	0	8
 
 query IIII
-SELECT m.macro_name, m.begin_snapshot, m.branch_id, (SELECT e.snapshot_id FROM meta.ducklake_macro_visibility e
+SELECT m.macro_name, m.begin_snapshot, m.branch_id, (SELECT e.end_snapshot FROM meta.ducklake_macro_visibility e
     WHERE e.macro_id = m.macro_id AND e.row_branch_id = m.branch_id AND e.row_snapshot = m.begin_snapshot)
 FROM meta.ducklake_macro m
 ----
@@ -79,7 +79,7 @@ add_one	4	0	9
 
 # an end names the row by its birth and carries the branch that ended it
 query IIII
-SELECT e.branch_id, c.column_name, e.row_snapshot, e.snapshot_id
+SELECT e.branch_id, c.column_name, e.row_snapshot, e.end_snapshot
 FROM meta.ducklake_column_visibility e
 JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id AND c.branch_id = e.row_branch_id
     AND c.begin_snapshot = e.row_snapshot
@@ -123,7 +123,7 @@ statement ok
 COMMIT
 
 query III
-SELECT c.column_name, e.row_snapshot, e.snapshot_id
+SELECT c.column_name, e.row_snapshot, e.end_snapshot
 FROM meta.ducklake_column_visibility e
 JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id AND c.branch_id = e.row_branch_id
     AND c.begin_snapshot = e.row_snapshot
@@ -194,7 +194,7 @@ statement ok
 COMMIT
 
 query III
-SELECT p.begin_snapshot, e.row_snapshot, e.snapshot_id FROM meta.ducklake_partition_info p
+SELECT p.begin_snapshot, e.row_snapshot, e.end_snapshot FROM meta.ducklake_partition_info p
 LEFT JOIN meta.ducklake_partition_visibility e ON e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id
     AND e.row_snapshot = p.begin_snapshot
 WHERE p.table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'u') ORDER BY p.partition_id
@@ -218,7 +218,7 @@ statement ok
 CREATE OR REPLACE MACRO dl.twice(x) AS x + x
 
 query III
-SELECT m.begin_snapshot, e.row_snapshot, e.snapshot_id FROM meta.ducklake_macro m
+SELECT m.begin_snapshot, e.row_snapshot, e.end_snapshot FROM meta.ducklake_macro m
 LEFT JOIN meta.ducklake_macro_visibility e ON e.macro_id = m.macro_id AND e.row_branch_id = m.branch_id
     AND e.row_snapshot = m.begin_snapshot
 WHERE m.macro_name = 'twice' ORDER BY m.begin_snapshot
@@ -236,7 +236,7 @@ statement ok
 DROP TABLE dl.t
 
 query II
-SELECT c.column_name, e.snapshot_id
+SELECT c.column_name, e.end_snapshot
 FROM meta.ducklake_column_visibility e
 JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id AND c.branch_id = e.row_branch_id
     AND c.begin_snapshot = e.row_snapshot
@@ -250,7 +250,7 @@ k	10
 m	17
 
 query II
-SELECT p.begin_snapshot, e.snapshot_id FROM meta.ducklake_partition_info p
+SELECT p.begin_snapshot, e.end_snapshot FROM meta.ducklake_partition_info p
 JOIN meta.ducklake_partition_visibility e ON e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id
     AND e.row_snapshot = p.begin_snapshot
 WHERE p.table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 't') ORDER BY p.begin_snapshot

@@ -563,6 +563,8 @@
         "test/sql/migration/v20_row_companions_migration_resume.test",
         "test/sql/migration/v20_row_companions_migration_resume2.test",
         "test/sql/migration/v20_row_companions_superseded.test",
+        "test/sql/migration/v20_row_companions_interleaved_drop_refused.test",
+        "test/sql/migration/v20_row_companions_interleaved_drop_absorbed.test",
         "test/sql/migration/v20_row_companions_superseded_stats.test",
         "test/sql/catalog/catalog_row_companions.test",
         "test/sql/migration/v20_entity_row_companions_migration.test",

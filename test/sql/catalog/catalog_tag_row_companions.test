@@ -51,7 +51,7 @@ CREATE OR REPLACE VIEW dl.v AS SELECT 2 AS x
 
 # a changed value writes a new version row and ends the old one, a cleared comment is a row with a NULL value
 query IIIIII
-SELECT object_id, key, value, begin_snapshot, branch_id, (SELECT e.snapshot_id FROM meta.ducklake_tag_visibility e
+SELECT object_id, key, value, begin_snapshot, branch_id, (SELECT e.end_snapshot FROM meta.ducklake_tag_visibility e
     WHERE e.object_id = t.object_id AND e.key = t.key AND e.row_branch_id = t.branch_id
     AND e.row_snapshot = t.begin_snapshot)
 FROM meta.ducklake_tag t ORDER BY begin_snapshot
@@ -62,7 +62,7 @@ FROM meta.ducklake_tag t ORDER BY begin_snapshot
 
 query IIIIII
 SELECT column_id, key, value, begin_snapshot, branch_id,
-    (SELECT e.snapshot_id FROM meta.ducklake_column_tag_visibility e
+    (SELECT e.end_snapshot FROM meta.ducklake_column_tag_visibility e
     WHERE e.table_id = t.table_id AND e.column_id = t.column_id AND e.key = t.key AND e.row_branch_id = t.branch_id
     AND e.row_snapshot = t.begin_snapshot)
 FROM meta.ducklake_column_tag t ORDER BY begin_snapshot
@@ -74,7 +74,7 @@ FROM meta.ducklake_column_tag t ORDER BY begin_snapshot
 # the replaced view is a new view, the tags of the old one end with it
 query IIIII
 SELECT column_name, value, begin_snapshot, branch_id,
-    (SELECT e.snapshot_id FROM meta.ducklake_view_column_tag_visibility e
+    (SELECT e.end_snapshot FROM meta.ducklake_view_column_tag_visibility e
     WHERE e.view_id = t.view_id AND e.column_name = t.column_name AND e.key = t.key AND e.row_branch_id = t.branch_id
     AND e.row_snapshot = t.begin_snapshot)
 FROM meta.ducklake_view_column_tag t
@@ -83,17 +83,17 @@ x	view col first	7	0	11
 
 # an end names the row by its birth and carries the branch that ended it
 query IIII
-SELECT e.branch_id, t.value, e.row_snapshot, e.snapshot_id FROM meta.ducklake_tag_visibility e
+SELECT e.branch_id, t.value, e.row_snapshot, e.end_snapshot FROM meta.ducklake_tag_visibility e
 JOIN meta.ducklake_tag t ON t.object_id = e.object_id AND t.key = e.key AND t.branch_id = e.row_branch_id
     AND t.begin_snapshot = e.row_snapshot
-ORDER BY e.snapshot_id
+ORDER BY e.end_snapshot
 ----
 0	first	2	8
 0	view first	6	11
 
 # one end per row per branch
 statement error
-INSERT INTO meta.ducklake_tag_visibility SELECT * FROM meta.ducklake_tag_visibility WHERE snapshot_id = 8
+INSERT INTO meta.ducklake_tag_visibility SELECT * FROM meta.ducklake_tag_visibility WHERE end_snapshot = 8
 ----
 constraint
 
@@ -160,7 +160,7 @@ COMMIT
 
 # a move, a new expiry or a recreation writes a new row and ends the old one in the same commit
 query IIIIII
-SELECT t.tag_name, t.snapshot_id, t.branch_id, t.begin_snapshot, e.branch_id, e.snapshot_id
+SELECT t.tag_name, t.snapshot_id, t.branch_id, t.begin_snapshot, e.branch_id, e.end_snapshot
 FROM meta.ducklake_snapshot_tag t
 LEFT JOIN meta.ducklake_snapshot_tag_visibility e ON e.tag_name = t.tag_name AND e.row_branch_id = t.branch_id
     AND e.row_snapshot = t.begin_snapshot
@@ -190,7 +190,7 @@ SELECT COUNT(*) FROM dl.t AT (VERSION => 'late')
 
 statement error
 INSERT INTO meta.ducklake_snapshot_tag_visibility SELECT * FROM meta.ducklake_snapshot_tag_visibility
-WHERE snapshot_id = 15
+WHERE end_snapshot = 15
 ----
 constraint
 
@@ -199,7 +199,7 @@ statement ok
 DROP TABLE dl.t
 
 query III
-SELECT t.key, t.value, e.snapshot_id FROM meta.ducklake_tag t
+SELECT t.key, t.value, e.end_snapshot FROM meta.ducklake_tag t
 JOIN meta.ducklake_tag_visibility e ON e.object_id = t.object_id AND e.key = t.key AND e.row_branch_id = t.branch_id
     AND e.row_snapshot = t.begin_snapshot
 WHERE t.object_id = 1 ORDER BY t.begin_snapshot
@@ -208,7 +208,7 @@ comment	first	8
 comment	second	19
 
 query III
-SELECT t.column_id, t.value, e.snapshot_id FROM meta.ducklake_column_tag t
+SELECT t.column_id, t.value, e.end_snapshot FROM meta.ducklake_column_tag t
 JOIN meta.ducklake_column_tag_visibility e ON e.table_id = t.table_id AND e.column_id = t.column_id
     AND e.key = t.key AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot
 ORDER BY t.begin_snapshot

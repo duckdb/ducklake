@@ -39,7 +39,7 @@ WHERE NOT EXISTS (SELECT 1 FROM __ducklake_metadata_ducklake.ducklake_view_colum
 0
 
 query IIII
-SELECT e.branch_id, t.value, e.row_snapshot, e.snapshot_id
+SELECT e.branch_id, t.value, e.row_snapshot, e.end_snapshot
 FROM __ducklake_metadata_ducklake.ducklake_view_column_tag_visibility e
 JOIN __ducklake_metadata_ducklake.ducklake_view_column_tag t ON t.view_id = e.view_id AND t.column_name = e.column_name
     AND t.key = e.key AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot;

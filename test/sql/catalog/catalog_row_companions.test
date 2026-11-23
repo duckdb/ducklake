@@ -48,7 +48,7 @@ DROP SCHEMA dl.s CASCADE
 
 # a rename writes a new version row and ends the old one, a drop ends the live row
 query IIII
-SELECT table_name, begin_snapshot, branch_id, (SELECT e.snapshot_id FROM meta.ducklake_table_visibility e
+SELECT table_name, begin_snapshot, branch_id, (SELECT e.end_snapshot FROM meta.ducklake_table_visibility e
     WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)
 FROM meta.ducklake_table t ORDER BY begin_snapshot
 ----
@@ -57,7 +57,7 @@ t2	5	0	8
 u	7	0	10
 
 query IIII
-SELECT view_name, begin_snapshot, branch_id, (SELECT e.snapshot_id FROM meta.ducklake_view_visibility e
+SELECT view_name, begin_snapshot, branch_id, (SELECT e.end_snapshot FROM meta.ducklake_view_visibility e
     WHERE e.view_id = v.view_id AND e.row_branch_id = v.branch_id AND e.row_snapshot = v.begin_snapshot)
 FROM meta.ducklake_view v ORDER BY begin_snapshot
 ----
@@ -65,7 +65,7 @@ v	3	0	6
 v2	6	0	9
 
 query IIII
-SELECT schema_name, begin_snapshot, branch_id, (SELECT e.snapshot_id FROM meta.ducklake_schema_visibility e
+SELECT schema_name, begin_snapshot, branch_id, (SELECT e.end_snapshot FROM meta.ducklake_schema_visibility e
     WHERE e.schema_id = s.schema_id AND e.row_branch_id = s.branch_id AND e.row_snapshot = s.begin_snapshot)
 FROM meta.ducklake_schema s ORDER BY begin_snapshot
 ----
@@ -74,11 +74,11 @@ s	1	0	10
 
 # an end names the row by its birth and carries the branch that ended it
 query IIII
-SELECT e.branch_id, t.table_name, e.row_snapshot, e.snapshot_id
+SELECT e.branch_id, t.table_name, e.row_snapshot, e.end_snapshot
 FROM meta.ducklake_table_visibility e
 JOIN meta.ducklake_table t ON t.table_id = e.table_id AND t.branch_id = e.row_branch_id
     AND t.begin_snapshot = e.row_snapshot
-ORDER BY e.snapshot_id
+ORDER BY e.end_snapshot
 ----
 0	t	2	5
 0	t2	5	8
@@ -86,7 +86,7 @@ ORDER BY e.snapshot_id
 
 # one end per row per branch
 statement error
-INSERT INTO meta.ducklake_table_visibility SELECT * FROM meta.ducklake_table_visibility WHERE snapshot_id = 5
+INSERT INTO meta.ducklake_table_visibility SELECT * FROM meta.ducklake_table_visibility WHERE end_snapshot = 5
 ----
 constraint
 
@@ -163,7 +163,7 @@ statement ok
 CREATE OR REPLACE VIEW dl.w AS SELECT 2 AS y
 
 query III
-SELECT v.begin_snapshot, e.row_snapshot, e.snapshot_id
+SELECT v.begin_snapshot, e.row_snapshot, e.end_snapshot
 FROM meta.ducklake_view v
 LEFT JOIN meta.ducklake_view_visibility e ON e.view_id = v.view_id AND e.row_branch_id = v.branch_id
     AND e.row_snapshot = v.begin_snapshot
@@ -196,7 +196,7 @@ statement ok
 COMMIT
 
 query III
-SELECT table_name, begin_snapshot, (SELECT list(e.snapshot_id) FROM meta.ducklake_table_visibility e
+SELECT table_name, begin_snapshot, (SELECT list(e.end_snapshot) FROM meta.ducklake_table_visibility e
     WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)
 FROM meta.ducklake_table t WHERE t.table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'b')
 ORDER BY begin_snapshot
@@ -226,7 +226,7 @@ COMMIT
 
 query IIII
 SELECT table_name, begin_snapshot, table_id > (SELECT MIN(table_id) FROM meta.ducklake_table WHERE table_name = 'd'),
-    (SELECT e.snapshot_id FROM meta.ducklake_table_visibility e
+    (SELECT e.end_snapshot FROM meta.ducklake_table_visibility e
     WHERE e.table_id = t.table_id AND e.row_branch_id = t.branch_id AND e.row_snapshot = t.begin_snapshot)
 FROM meta.ducklake_table t WHERE table_name = 'd' ORDER BY begin_snapshot
 ----

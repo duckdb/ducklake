@@ -91,7 +91,7 @@ kept_vw	5
 kept_vw2	10
 
 query III
-SELECT v.view_name, e.row_snapshot, e.snapshot_id
+SELECT v.view_name, e.row_snapshot, e.end_snapshot
 FROM metadata.ducklake_view_visibility e
 LEFT JOIN metadata.ducklake_view v ON v.view_id = e.view_id AND v.branch_id = e.row_branch_id
     AND v.begin_snapshot = e.row_snapshot
@@ -105,7 +105,7 @@ kept	1
 kept2	9
 
 query III
-SELECT t.table_name, e.row_snapshot, e.snapshot_id
+SELECT t.table_name, e.row_snapshot, e.end_snapshot
 FROM metadata.ducklake_table_visibility e
 LEFT JOIN metadata.ducklake_table t ON t.table_id = e.table_id AND t.branch_id = e.row_branch_id
     AND t.begin_snapshot = e.row_snapshot
@@ -133,7 +133,7 @@ kept	1
 kept2	9
 
 query III
-SELECT t.table_name, e.row_snapshot, e.snapshot_id
+SELECT t.table_name, e.row_snapshot, e.end_snapshot
 FROM metadata.ducklake_table_visibility e
 LEFT JOIN metadata.ducklake_table t ON t.table_id = e.table_id AND t.branch_id = e.row_branch_id
     AND t.begin_snapshot = e.row_snapshot
@@ -143,3 +143,29 @@ kept	1	9
 query I
 SELECT i FROM ducklake.kept2
 ----
+
+# an expiry interrupted between the rows of a table and their ends leaves orphan ends, the next expiry sweeps them
+statement ok
+INSERT INTO metadata.ducklake_table_visibility VALUES (0, 999, 0, 1, 2)
+
+statement ok
+INSERT INTO metadata.ducklake_column_visibility VALUES (0, 999, 1, 0, 1, 2)
+
+statement ok
+INSERT INTO metadata.ducklake_partition_visibility VALUES (0, 999, 0, 1, 2)
+
+statement ok
+CREATE TABLE ducklake.swept(i INTEGER)
+
+statement ok
+DROP TABLE ducklake.swept
+
+statement ok
+CALL ducklake_expire_snapshots('ducklake', versions => [11])
+
+query III
+SELECT (SELECT COUNT(*) FROM metadata.ducklake_table_visibility WHERE table_id = 999),
+    (SELECT COUNT(*) FROM metadata.ducklake_column_visibility WHERE table_id = 999),
+    (SELECT COUNT(*) FROM metadata.ducklake_partition_visibility WHERE partition_id = 999)
+----
+0	0	0
