@@ -70,7 +70,7 @@ COMMIT
 statement ok
 CALL ducklake_expire_snapshots('dl', versions => [1])
 
-# the server runs the head read with the chain predicate of main and the conflict check with every conjunct
+# the server runs the head read and the conflict check with the chain predicate of main
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
 WHERE query LIKE 'SELECT * FROM postgres_query(%'
@@ -81,8 +81,9 @@ true
 
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE regexp_replace(query, '\s+', ' ', 'g') LIKE 'SELECT * FROM postgres_query(%c.branch_id = 0%'
-  AND regexp_replace(query, '\s+', ' ', 'g') LIKE '%ducklake_snapshot WHERE branch_id = 0) AND branch_id = 0 UNION ALL%'
+WHERE regexp_replace(query, '\s+', ' ', 'g') LIKE '%postgres_query(%c.snapshot_id > 2 AND c.branch_id = 0 )%'
+  AND regexp_replace(query, '\s+', ' ', 'g') LIKE '%WHERE (branch_id = 0) AND snapshot_id = (SELECT MAX(snapshot_id)%'
+  AND regexp_replace(query, '\s+', ' ', 'g') LIKE '%ducklake_snapshot WHERE branch_id = 0) UNION ALL%'
 ----
 true
 

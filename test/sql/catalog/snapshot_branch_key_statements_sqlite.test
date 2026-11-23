@@ -1,5 +1,5 @@
 # name: test/sql/catalog/snapshot_branch_key_statements_sqlite.test
-# description: a SQLite catalog of 2.0 reads main's snapshots by its chain predicate, its commits key lookups by branch
+# description: a SQLite catalog of 2.0 reads main's snapshots by its chain predicate, its commits name the branch too
 # group: [catalog]
 
 require ducklake
@@ -96,12 +96,12 @@ WHERE query LIKE '%DELETE FROM %ducklake_snapshot WHERE snapshot_id IN (1) AND b
 ----
 true
 
-# the conflict check keys the range over the changes and the head lookup, not the MAX over the table
+# the conflict check reads the changes of main and the head of main by the chain predicate of main
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
 WHERE regexp_replace(query, '\s+', ' ', 'g') LIKE '%WHERE c.snapshot_id > 2 AND c.branch_id = 0 )%'
-  AND regexp_replace(query, '\s+', ' ', 'g') LIKE '%FROM %ducklake_snapshot) AND branch_id = 0 UNION ALL%'
-  AND query NOT LIKE '%ducklake_snapshot WHERE branch_id = 0%'
+  AND regexp_replace(query, '\s+', ' ', 'g') LIKE '%WHERE (branch_id = 0) AND snapshot_id = (SELECT MAX(snapshot_id)%'
+  AND regexp_replace(query, '\s+', ' ', 'g') LIKE '%ducklake_snapshot WHERE branch_id = 0) UNION ALL%'
 ----
 true
 

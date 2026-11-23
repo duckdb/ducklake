@@ -569,8 +569,10 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot,
                                                                    bool include_exactness) const {
 	// one statement reads the latest snapshot and the table stats from the same state at any isolation level
-	bool branch_keyed = transaction.GetCatalog().SupportsBranching();
-	auto remote_query = SnapshotAndStatsAndChangesQuery(include_exactness, branch_keyed, branch_keyed);
+	auto &catalog = transaction.GetCatalog();
+	auto remote_query =
+	    SnapshotAndStatsAndChangesQuery(include_exactness, catalog.SupportsBranching(),
+	                                    catalog.AttachedChain().Predicate(""), catalog.AttachedBranchId());
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	SubstituteSnapshotPlaceholders(snapshot, remote_query);

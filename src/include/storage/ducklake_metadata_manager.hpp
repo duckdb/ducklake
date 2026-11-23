@@ -708,15 +708,15 @@ public:
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor, const string &query,
 	                              bool file_events);
-	static string SnapshotAndStatsAndChangesQuery(bool include_exactness, bool keyed_lookups, bool keyed_scans);
+	//! The head predicate selects the snapshots of the commit lineage, the commit branch the changes that conflict
+	static string SnapshotAndStatsAndChangesQuery(bool include_exactness, bool branch_aware,
+	                                              const string &head_predicate, idx_t commit_branch_id);
 	//! The query of the conflict check, which must read the latest snapshot and the table stats consistently
 	virtual string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const;
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	//! Whether the metadata statements run on DuckDB itself, rather than through the scanner of another database
 	static bool IsDuckDBMetadataType(const string &metadata_type);
-	//! Whether a lookup on snapshot_id names the branch of main, where the metadata engine serves it from the key
-	bool BranchKeyedLookups() const;
 	//! Throws when the newest expired snapshot a time travel by timestamp could see is its resolved snapshot or newer
 	void CheckSnapshotAfterExpiredGap(const DuckLakeSnapshot &snapshot, const Value &timestamp,
 	                                  idx_t newest_snapshot_id, const set<idx_t> &expired_in_transaction);
@@ -780,7 +780,7 @@ public:
 	                                      const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped);
 	//! Ends the row of a committed tag at the snapshot of the commit
 	static string EndSnapshotTagSql(const DuckLakeSnapshotTagInfo &tag);
-	static string DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots, bool branch_keyed);
+	static string DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots, bool branch_aware);
 	//! Deletes the snapshots once the caller checked the catalog version
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	//! Deletes the metadata that only the deleted snapshots referenced, once the caller checked the catalog version
@@ -930,7 +930,7 @@ protected:
 	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
 
 	virtual string GetLatestSnapshotQuery() const;
-	//! The branch conjunct of a lookup on snapshot_id, preceded by AND, empty where the engine would not use it
+	//! The branch conjunct of a lookup on the snapshots of main, preceded by AND, empty before 2.0
 	string MainSnapshotFilter() const;
 	//! The WHERE conditions of a snapshot filter, the latest snapshot is the head of the attached branch from 2.0 on
 	string SnapshotFilterSql(const DuckLakeSnapshotFilter &filter) const;

@@ -720,6 +720,7 @@
       "paths": [
         "test/sql/branches/branch_attach_read.test",
         "test/sql/branches/branch_chain_corrupt.test",
+        "test/sql/branches/branch_main_commit_beside_branch_rows.test",
         "test/sql/branches/branch_nested_chain.test",
         "test/sql/branches/branch_root_without_parent.test",
         "test/sql/branches/branch_same_snapshot_id.test",

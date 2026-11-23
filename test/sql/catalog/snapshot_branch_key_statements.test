@@ -1,5 +1,5 @@
 # name: test/sql/catalog/snapshot_branch_key_statements.test
-# description: a DuckDB catalog of 2.0 reads main's snapshots by its chain predicate, the conflict check keeps 1.x text
+# description: a DuckDB catalog of 2.0 reads main's snapshots by its chain predicate, its commits name the branch too
 # group: [catalog]
 
 require ducklake
@@ -80,14 +80,16 @@ WHERE query LIKE '%WHERE snapshot_id = 1 AND snapshot_id <= 2 AND (branch_id = 0
 ----
 true
 
-# the conflict check of a commit keeps the text of 1.x, DuckDB folds the branch conjunct of the key away
+# the conflict check of a commit reads the changes of main and the head of main by the chain predicate of main
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%STRING_AGG(changes_made%' AND query NOT LIKE '%branch_id = 0%'
+WHERE regexp_replace(query, '\s+', ' ', 'g') LIKE '%WHERE c.snapshot_id > 2 AND c.branch_id = 0 )%'
+  AND regexp_replace(query, '\s+', ' ', 'g') LIKE '%WHERE (branch_id = 0) AND snapshot_id = (SELECT MAX(snapshot_id)%'
+  AND regexp_replace(query, '\s+', ' ', 'g') LIKE '%ducklake_snapshot WHERE branch_id = 0) UNION ALL%'
 ----
 true
 
-# the expiry keeps the head of main and deletes by snapshot id alone
+# the expiry keeps the head of main and its delete names the branch beside snapshot_id
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
 WHERE query LIKE '%snapshot_id != (SELECT MAX(snapshot_id) FROM %ducklake_snapshot WHERE branch_id = 0)%'
@@ -96,7 +98,7 @@ true
 
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%DELETE FROM %ducklake_snapshot WHERE snapshot_id IN (1);%'
+WHERE query LIKE '%DELETE FROM %ducklake_snapshot WHERE snapshot_id IN (1) AND branch_id = 0;%'
 ----
 true
 

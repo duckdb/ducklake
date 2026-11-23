@@ -102,7 +102,6 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	supports_v2_0_metadata = catalog_version >= DuckLakeVersion::V2_0_DEV1;
 	supports_file_visibility_events = catalog_version >= DuckLakeVersion::V2_0_DEV1;
 	supports_row_visibility = catalog_version >= DuckLakeVersion::V2_0_DEV1;
-	branch_keyed_lookups = BranchKeyedLookups();
 	ReadCommitHeader();
 	ReadColumnTypes();
 	ReadStagedDeleteFiles();
@@ -584,14 +583,6 @@ DuckLakeVersion DuckLakeServerSideCommit::ReadCatalogVersion() {
 	return DuckLakeVersion::V1_0;
 }
 
-bool DuckLakeServerSideCommit::BranchKeyedLookups() const {
-	// the statements run on the server's own connection, so the engine of its metadata database decides
-	auto &database_manager = DatabaseManager::Get(*fresh_conn.context);
-	auto database = database_manager.GetDatabase(DatabaseManager::GetDefaultDatabase(*fresh_conn.context));
-	auto catalog_type = database ? database->GetCatalog().GetCatalogType() : string();
-	return supports_v2_0_metadata && !DuckLakeMetadataManager::IsDuckDBMetadataType(catalog_type);
-}
-
 DuckLakeSnapshot DuckLakeServerSideCommit::ReadLatestSnapshot() {
 	// the server side commits on main
 	auto query = supports_v2_0_metadata ? DuckLakeMetadataManager::HeadSnapshotQuery("branch_id = 0")
@@ -679,9 +670,8 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.supports_v2_0_metadata = supports_v2_0_metadata;
 	ctx.supports_file_visibility_events = supports_file_visibility_events;
 	ctx.supports_row_visibility = supports_row_visibility;
-	ctx.branch_keyed_lookups = branch_keyed_lookups;
-	ctx.snapshot_and_stats_query =
-	    DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(supports_v1_1_metadata, branch_keyed_lookups, false);
+	ctx.snapshot_and_stats_query = DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(
+	    supports_v1_1_metadata, supports_v2_0_metadata, "branch_id = 0", 0);
 	ctx.conflict_query_executor = [this](string q) -> unique_ptr<QueryResult> {
 		auto sql = SubstitutePlaceholders(std::move(q), transaction_snapshot);
 		return fresh_conn.Query(sql);

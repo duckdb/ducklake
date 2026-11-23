@@ -1908,7 +1908,6 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.supports_v2_0_metadata = ducklake_catalog.SupportsBranching();
 	context.supports_file_visibility_events = ducklake_catalog.SupportsFileVisibilityEvents();
 	context.supports_row_visibility = ducklake_catalog.SupportsRowVisibility();
-	context.branch_keyed_lookups = metadata_manager->BranchKeyedLookups();
 	context.snapshot_and_stats_query =
 	    metadata_manager->GetSnapshotAndStatsAndChangesQuery(transaction_snapshot, context.supports_v1_1_metadata);
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);

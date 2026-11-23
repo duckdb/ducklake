@@ -186,8 +186,6 @@ struct DuckLakeCommitContext {
 	bool supports_file_visibility_events = false;
 	//! Whether the catalog rows end in companion tables, the layout of 2.0
 	bool supports_row_visibility = false;
-	//! Whether a lookup on snapshot_id names the branch of main, where the metadata engine serves it from the key
-	bool branch_keyed_lookups = false;
 	//! Column names of the inlined data tables under this catalog version.
 	DuckLakeInlinedColNames InlinedColNames() const {
 		return DuckLakeInlinedColNames(supports_v1_1_metadata);

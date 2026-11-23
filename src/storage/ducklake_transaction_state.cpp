@@ -410,7 +410,7 @@ void DuckLakeTransactionState::CheckTaggedSnapshotsExist(const DuckLakeCommitCon
 	}
 	auto result = context.conflict_query_executor(StringUtil::Format(
 	    "SELECT snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id IN (%s)%s",
-	    TaggedSnapshotIdList(new_snapshot_tags), context.branch_keyed_lookups ? " AND branch_id = 0" : ""));
+	    TaggedSnapshotIdList(new_snapshot_tags), context.supports_v2_0_metadata ? " AND branch_id = 0" : ""));
 	set<idx_t> existing;
 	for (auto &row : *result) {
 		existing.insert(row.GetValue<idx_t>(0));
@@ -3112,7 +3112,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				batch_queries = DuckLakeMetadataManager::InsertSnapshotSql(context.supports_v2_0_metadata);
 				if (!expired_snapshots.empty()) {
 					batch_queries +=
-					    DuckLakeMetadataManager::DeleteSnapshotsSql(expired_snapshots, context.branch_keyed_lookups);
+					    DuckLakeMetadataManager::DeleteSnapshotsSql(expired_snapshots, context.supports_v2_0_metadata);
 				}
 				for (auto &tag : expiry.tags) {
 					batch_queries += DuckLakeMetadataManager::EndSnapshotTagSql(tag);

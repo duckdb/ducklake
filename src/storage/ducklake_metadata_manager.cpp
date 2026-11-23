@@ -6476,8 +6476,8 @@ string DuckLakeMetadataManager::WriteSnapshotChangesSql(const SnapshotChangeInfo
 	                          DuckLakeUtil::TextLiteralOrNull(commit_info.commit_extra_info));
 }
 
-string DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(bool include_exactness, bool keyed_lookups,
-                                                                bool keyed_scans) {
+string DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(bool include_exactness, bool branch_aware,
+                                                                const string &head_predicate, idx_t commit_branch_id) {
 	// both UNION arms must stay column-aligned - extend them together
 	string snapshot_arm_padding;
 	string stats_arm_columns;
@@ -6485,10 +6485,20 @@ string DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(bool include_exa
 		snapshot_arm_padding = ",\n    NULL AS min_is_exact,\n    NULL AS max_is_exact";
 		stats_arm_columns = ",\n    min_is_exact,\n    max_is_exact";
 	}
-	// the branch conjuncts of 2.0, on the lookups where the engine serves them from the key and on the MAX scan
-	string changes_filter = keyed_lookups ? " AND c.branch_id = 0" : "";
-	string head_filter = keyed_scans ? " WHERE branch_id = 0" : "";
-	string main_filter = keyed_lookups ? " AND branch_id = 0" : "";
+	// from 2.0 on the conflict read selects the head of the commit lineage as the head read does
+	string changes_filter = "c.snapshot_id > {SNAPSHOT_ID}";
+	string snapshot_arm_tail = R"(
+    FROM {METADATA_CATALOG}.ducklake_snapshot
+    WHERE snapshot_id = (
+        SELECT MAX(snapshot_id)
+        FROM {METADATA_CATALOG}.ducklake_snapshot))";
+	if (branch_aware) {
+		changes_filter = StringUtil::Format("c.snapshot_id > {SNAPSHOT_ID} AND c.branch_id = %llu", commit_branch_id);
+		snapshot_arm_tail = StringUtil::Format(R"(
+    FROM {METADATA_CATALOG}.ducklake_snapshot
+    WHERE (%s) AND %s)",
+		                                       head_predicate, HeadSnapshotFilter(head_predicate));
+	}
 	return R"(
 SELECT
     snapshot_id,
@@ -6498,7 +6508,7 @@ SELECT
     COALESCE((
             SELECT STRING_AGG(changes_made, ',')
             FROM {METADATA_CATALOG}.ducklake_snapshot_changes c
-            WHERE c.snapshot_id > {SNAPSHOT_ID})" +
+            WHERE )" +
 	       changes_filter + R"(
             ),'') AS changes,
     NULL AS table_id,
@@ -6511,12 +6521,7 @@ SELECT
     NULL AS min_value,
     NULL AS max_value,
     NULL AS extra_stats)" +
-	       snapshot_arm_padding + R"(
-    FROM {METADATA_CATALOG}.ducklake_snapshot
-    WHERE snapshot_id = (
-        SELECT MAX(snapshot_id)
-        FROM {METADATA_CATALOG}.ducklake_snapshot)" +
-	       head_filter + ")" + main_filter + R"(
+	       snapshot_arm_padding + snapshot_arm_tail + R"(
 UNION ALL
 SELECT
     NULL,
@@ -6563,7 +6568,9 @@ SnapshotChangeInfo DuckLakeMetadataManager::ParseSnapshotAndStatsAndChanges(Quer
 }
 
 string DuckLakeMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot, bool include_exactness) const {
-	return SnapshotAndStatsAndChangesQuery(include_exactness, BranchKeyedLookups(), false);
+	auto &catalog = transaction.GetCatalog();
+	return SnapshotAndStatsAndChangesQuery(include_exactness, catalog.SupportsBranching(),
+	                                       catalog.AttachedChain().Predicate(""), catalog.AttachedBranchId());
 }
 
 SnapshotChangeInfo
@@ -6635,14 +6642,8 @@ string DuckLakeMetadataManager::GetLatestSnapshotQuery() const {
 	return HeadSnapshotQuery(catalog.AttachedChain().Predicate(""));
 }
 
-bool DuckLakeMetadataManager::BranchKeyedLookups() const {
-	// DuckDB folds the conjunct away, the scanners push it into a lookup of the composite key
-	auto &catalog = transaction.GetCatalog();
-	return catalog.SupportsBranching() && !IsDuckDBMetadataType(catalog.MetadataType());
-}
-
 string DuckLakeMetadataManager::MainSnapshotFilter() const {
-	return BranchKeyedLookups() ? " AND branch_id = 0" : string();
+	return transaction.GetCatalog().SupportsBranching() ? " AND branch_id = 0" : string();
 }
 
 unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot() {
@@ -6726,8 +6727,7 @@ void DuckLakeMetadataManager::CheckSnapshotAfterExpiredGap(const DuckLakeSnapsho
                                                            idx_t newest_snapshot_id,
                                                            const set<idx_t> &expired_in_transaction) {
 	// the expiries after the snapshot, a concurrent one may have expired snapshots above the transaction's newest
-	// a parent records its expiries in snapshots above the cap, so its records are read without the cap and each
-	// branch contributes the expired ids of its own segment of the view
+	// a parent records its expiries above the cap, each branch contributes the expired ids of its own segment
 	auto &catalog = transaction.GetCatalog();
 	bool branch_aware = catalog.SupportsBranching();
 	auto &chain = catalog.AttachedChain();
@@ -7728,16 +7728,16 @@ DuckLakeMetadataManager::WriteSnapshotTagChanges(const case_insensitive_map_t<Du
 	return result;
 }
 
-string DuckLakeMetadataManager::DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots, bool branch_keyed) {
+string DuckLakeMetadataManager::DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots, bool branch_aware) {
 	// the changes of expired snapshots are kept, so a transaction that started before them still conflicts
 	auto snapshot_ids = StringUtil::Join(snapshots, snapshots.size(), ", ",
 	                                     [](const DuckLakeSnapshotInfo &snapshot) { return to_string(snapshot.id); });
 	return StringUtil::Format("DELETE FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id IN (%s)%s;\n",
-	                          snapshot_ids, branch_keyed ? " AND branch_id = 0" : "");
+	                          snapshot_ids, branch_aware ? " AND branch_id = 0" : "");
 }
 
 void DuckLakeMetadataManager::DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots) {
-	auto result = Execute(DeleteSnapshotsSql(snapshots, BranchKeyedLookups()));
+	auto result = Execute(DeleteSnapshotsSql(snapshots, transaction.GetCatalog().SupportsBranching()));
 	result->ThrowIfError("Failed to delete snapshots in DuckLake: ");
 	CleanupExpiredSnapshots(snapshots);
 }
