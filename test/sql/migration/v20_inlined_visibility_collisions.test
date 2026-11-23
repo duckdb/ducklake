@@ -118,6 +118,10 @@ statement ok
 DETACH dl
 
 # the readers take the table of a version from the name of its payload, so a payload named for another table is refused
+# a Quack catalog keeps the metadata database of a refused attach
+statement ok
+DETACH DATABASE IF EXISTS meta
+
 statement ok
 ATTACH '{DUCKLAKE_CONNECTION}' AS meta
 
@@ -140,6 +144,10 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST
 inlined data table ducklake_inlined_data_42_3 is registered for table 1
 
 # a table id beyond the range of the ids is no name of this build either
+# a Quack catalog keeps the metadata database of a refused attach
+statement ok
+DETACH DATABASE IF EXISTS meta
+
 statement ok
 ATTACH '{DUCKLAKE_CONNECTION}' AS meta
 
