@@ -231,7 +231,7 @@ row_id	BIGINT
 row_branch_id	BIGINT
 row_snapshot	BIGINT
 branch_id	BIGINT
-snapshot_id	BIGINT
+end_snapshot	BIGINT
 
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i

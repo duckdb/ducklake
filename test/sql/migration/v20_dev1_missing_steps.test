@@ -1230,7 +1230,7 @@ row_id
 row_branch_id
 row_snapshot
 branch_id
-snapshot_id
+end_snapshot
 
 query I
 SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')

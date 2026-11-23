@@ -58,7 +58,7 @@ statement ok
 ALTER TABLE meta.ducklake_inlined_data_1_1 ADD COLUMN _ducklake_end_snapshot BIGINT
 
 statement ok
-UPDATE meta.ducklake_inlined_data_1_1 SET _ducklake_end_snapshot = (SELECT e.snapshot_id
+UPDATE meta.ducklake_inlined_data_1_1 SET _ducklake_end_snapshot = (SELECT e.end_snapshot
     FROM meta.ducklake_inlined_data_visibility e
     WHERE e.table_id = 1 AND e.row_id = ducklake_inlined_data_1_1._ducklake_row_id
     AND e.row_snapshot = ducklake_inlined_data_1_1._ducklake_begin_snapshot)
