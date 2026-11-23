@@ -7875,11 +7875,6 @@ WHERE table_id IN (%s);)",
 			                                         delete_tbl, deleted_table_ids));
 			result->ThrowIfError("Failed to delete from " + delete_tbl + " in DuckLake: ");
 		}
-		if (row_visibility) {
-			// the companions of the specs name them by their id, so their ends go once the spec rows are gone
-			DeleteOrphanRowEnds(RowKind("partition"));
-			DeleteOrphanRowEnds(RowKind("sort"));
-		}
 		auto options_result = Execute(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_metadata
 WHERE scope = 'table' AND scope_id IN (%s);)",
@@ -7896,6 +7891,14 @@ WHERE scope = 'table' AND scope_id IN (%s);)",
 			// a Postgres catalog sends the batch in one postgres_execute, so the drops are not bound one by one
 			auto result = Execute(transaction.GetSnapshot(), drop_inlined_tables);
 			result->ThrowIfError("Failed to drop inlined-data table in DuckLake: ");
+		}
+	}
+
+	if (row_visibility) {
+		// an expiry interrupted between the rows of a table and their ends cannot find the table again, so the ends
+		// of the kinds keyed by a table go whenever their row is gone
+		for (auto kind_name : {"table", "column", "column_tag", "partition", "sort"}) {
+			DeleteOrphanRowEnds(RowKind(kind_name));
 		}
 	}
 
