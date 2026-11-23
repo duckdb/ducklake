@@ -22,9 +22,7 @@ DELETE FROM dl.f WHERE i IN (5, 6)
 
 # the branch column comes last with a default, like the one a migration adds
 query I
-SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
-    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_inlined_delete_1')
-ORDER BY column_index
+SELECT column_name FROM (DESCRIBE SELECT * FROM meta.ducklake_inlined_delete_1)
 ----
 file_id
 row_id

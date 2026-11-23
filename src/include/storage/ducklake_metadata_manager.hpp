@@ -382,6 +382,8 @@ public:
 		//! The birth columns of the row table
 		string branch_column = "branch_id";
 		string begin_column = "begin_snapshot";
+		//! The end column of the range rows before the kind took its companion
+		string end_column = "end_snapshot";
 	};
 	//! The versioned catalog kinds, the companion of a kind is ducklake_<kind>_visibility
 	static const vector<RowVisibilityKind> &RowVisibilityKinds();
@@ -665,6 +667,8 @@ public:
 	virtual Identifier GetInlinedTableQueries(DuckLakeSnapshot commit_snapshot, const DuckLakeTableInfo &table,
 	                                          vector<string> &inlined_tables, string &inlined_table_queries);
 	static Identifier InlinedTableNameFor(idx_t table_id, idx_t schema_version);
+	//! The table id of an inlined data table named by InlinedTableNameFor, invalid for any other name
+	static optional_idx ParseInlinedTableName(const string &name, idx_t &schema_version);
 	static string InlinedTableDdlSql(const Identifier &table_name, const string &column_defs,
 	                                 const DuckLakeInlinedColNames &col_names, bool row_visibility);
 	DuckLakeInlinedColNames InlinedColNames() const;
@@ -902,8 +906,11 @@ public:
 	virtual string RowCompanionRenameSql(const string &kind) const;
 	//! Adds the birth branch and the companion of every converted kind and turns its end column into end rows
 	string V2_0RowCompanionsSql(const V2_0RowCompanions &rows) const;
-	//! Turns the end column of a kind into end rows of its pending companion and drops the column
-	static string V2_0RowEndBackfillSql(const RowVisibilityKind &kind, const string &table, const string &pending);
+	//! Deletes the rows a kind superseded within their birth and turns its end column into end rows of its pending
+	//! companion
+	static string V2_0RowEndBackfillSql(const RowVisibilityKind &kind, const string &pending);
+	//! Turns the end column of a kind into end rows of the companion and drops the column
+	static string V2_0EndColumnSql(const RowVisibilityKind &kind, const string &companion);
 	//! The shape of an inlined data table against the shared companion
 	struct V2_0InlinedPayload {
 		Identifier table;
