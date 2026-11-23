@@ -111,7 +111,7 @@ public:
 	string content_type = "application/json";
 	//! Whether the request committed its changes, a failure after that is not a reason to commit them again
 	bool published = false;
-	//! Whether the request passed its commit on to a server that failed to answer, and that can have committed it
+	//! Whether the commit of the request was sent and not rejected, so that it may have been published
 	bool publication_unknown = false;
 };
 

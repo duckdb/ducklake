@@ -2939,9 +2939,14 @@ bool DuckLakeTransactionState::IsDurableCommitError(const ErrorData &error) {
 	return StringUtil::Contains(error.RawMessage(), "Transaction COMMIT succeeded and is durable");
 }
 
+bool DuckLakeTransactionState::CommitMayHaveBeenPublished(const ErrorData &error) {
+	return error.Type() == ExceptionType::IO || IsDurableCommitError(error);
+}
+
 //! Commits the metadata connection. A commit that is durable although it reports an error is published: the error
 //! is kept for the end of the commit, as nothing can be rolled back, retried or cleaned up after it
-static void CommitMetadata(const DuckLakeCommitContext &context, ErrorData &error_after_commit) {
+static void CommitMetadata(const DuckLakeCommitContext &context, ErrorData &error_after_commit, bool &commit_sent) {
+	commit_sent = true;
 	try {
 		context.commit_connection();
 	} catch (std::exception &ex) {
@@ -2966,6 +2971,8 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	for (idx_t i = 0;; i++) {
 		bool can_retry;
 		bool retryable_metadata_error = false;
+		// only a commit that was sent can be published, a failure before that published nothing
+		bool commit_sent = false;
 		auto attempt_changes = transaction_changes;
 		auto attempt_dropped_file_stats = dropped_file_stats;
 		try {
@@ -2994,7 +3001,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			wrote_snapshot = context.write_snapshot &&
 			                 (!expired_snapshots.empty() || !expiry.tags.empty() || !context.only_expires_snapshots);
 			if (!wrote_snapshot && !context.locks_config_options) {
-				CommitMetadata(context, error_after_commit);
+				CommitMetadata(context, error_after_commit, commit_sent);
 				break;
 			}
 			for (auto &snapshot : expired_snapshots) {
@@ -3020,6 +3027,8 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				    CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
 				batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context);
 			}
+			// on a catalog that commits each statement, running the batch already sends the commit
+			commit_sent = context.publishes_with_batch;
 			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				auto &commit_error = res->GetErrorObject();
@@ -3031,7 +3040,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			}
 			flushed_inlined = !flushed_inlined_tables.empty();
 			context.flush_cache_if_pending();
-			CommitMetadata(context, error_after_commit);
+			CommitMetadata(context, error_after_commit, commit_sent);
 			// a swap cannot throw: nothing fails between the commit and the end of the attempt, which is never retried
 			committed_tables.swap(commit_state.committed_tables);
 			committed_entry_oids.swap(commit_state.new_entry_oids);
@@ -3042,11 +3051,17 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			retryable_metadata_error =
 			    retryable_metadata_error || context.is_retryable_metadata_error(error.RawMessage());
 			auto error_without_query = context.commit_error_without_query(error.RawMessage());
+			bool retryable =
+			    retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error_without_query));
+			// a rejection is an answer of the catalog: it rolled back, so nothing was published
+			bool rejected = retryable || context.is_catalog_rejection(error.RawMessage());
+			if (commit_sent && (!rejected || CommitMayHaveBeenPublished(error))) {
+				// sent and not rejected, as after a lost connection: the commit may have been published
+				context.set_publication_unknown();
+			}
 			// an internal error is a bug that a retry cannot fix
 			// a retryable metadata error in the conflict check is retried, a conflict that it finds is not
-			bool retry_on_error =
-			    error.Type() != ExceptionType::INTERNAL && !context.skip_retry() &&
-			    (retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error_without_query)));
+			bool retry_on_error = error.Type() != ExceptionType::INTERNAL && !context.skip_retry() && retryable;
 			if (retry_on_error) {
 				try {
 					context.verify_retry();

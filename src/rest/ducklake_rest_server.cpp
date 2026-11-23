@@ -396,8 +396,8 @@ static ErrorData ErrorAfterPublication(const ErrorData &error) {
 
 //! The error of a group that can be published: an IO error as well, so that its clients keep their files
 static ErrorData ErrorOfUnknownPublication(const ErrorData &error) {
-	return ErrorData(ExceptionType::IO, "It is unknown whether the transaction was committed, the server that the "
-	                                    "commit was passed on to failed to respond: " +
+	return ErrorData(ExceptionType::IO, "It is unknown whether the transaction was committed, its commit was sent "
+	                                    "and failed without a rejection: " +
 	                                        error.RawMessage());
 }
 

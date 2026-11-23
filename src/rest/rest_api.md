@@ -85,7 +85,9 @@ The commit at the front of the queue runs next. A `commit_transaction` runs alon
 
 A commit that was published is never run again. If the server fails after the publication, for example while it builds the response, the request fails with an IO error that says that the transaction was committed.
 
-A server whose catalog is on another server passes its commits on to that server, a group as one commit. If that server does not answer, or answers with an IO error, it can have published the group. The commits of the group then do not run one by one, which could publish them twice. Each of its requests fails with an IO error that says that it is unknown whether the transaction was committed. A client keeps the files of a commit that fails with an IO error.
+The commits of a group only run one by one if the group published nothing. A group that fails before its commit is sent to the metadata catalog published nothing, and neither did one that the catalog rejected, as it does for a conflict. After any other failure of a commit that was sent, such as a lost connection to the catalog, the group can be published. Its commits then do not run one by one, which could publish them twice. Each of its requests fails with an IO error that says that it is unknown whether the transaction was committed. A client keeps the files of a commit that fails with an IO error.
+
+A server whose catalog is on another server passes its commits on to that server, a group as one commit. If that server does not answer, or answers with an IO error, it can have published the group, and the requests of the group fail in the same way.
 
 A group is only protected this way when one server passes it on. Through a chain of two or more servers that pass a commit on, the commits of a group can still be committed again.
 

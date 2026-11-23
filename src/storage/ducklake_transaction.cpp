@@ -1730,6 +1730,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.is_retryable_metadata_error = [&](const string &message) {
 		return option_lock_failed || metadata_manager->IsRetryableCommitError(message);
 	};
+	context.is_catalog_rejection = [&](const string &message) {
+		return metadata_manager->IsCatalogRejection(message);
+	};
 	// a retry rolls back what the statements wrote to the metadata
 	context.skip_retry = [&]() {
 		return option_lock_failed && metadata_written;
@@ -1755,6 +1758,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.set_published = [&]() {
 		published = true;
+	};
+	context.set_publication_unknown = [&]() {
+		publication_unknown = true;
 	};
 	context.try_rollback = [&]() {
 		if (connection->context->transaction.HasActiveTransaction()) {
@@ -1915,6 +1921,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	// a REST server commits from the snapshot of its client, its metadata transaction sees later commits
 	context.check_conflicts_first = files_owned_by_client;
 	context.files_owned_by_client = files_owned_by_client;
+	// a catalog that commits each statement publishes the changes when it runs the batch
+	context.publishes_with_batch = metadata_manager->CommitsEachStatement();
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
 	context.supports_v2_0_metadata = ducklake_catalog.SupportsBranching();

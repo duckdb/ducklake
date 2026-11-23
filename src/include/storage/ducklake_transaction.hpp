@@ -323,7 +323,7 @@ public:
 	bool IsPublished() const {
 		return published;
 	}
-	//! The server that the commit was passed on to failed to answer, so it can have published the changes
+	//! The commit was sent and not rejected, as after a lost answer, so the changes may have been published
 	void SetPublicationUnknown() {
 		publication_unknown = true;
 	}

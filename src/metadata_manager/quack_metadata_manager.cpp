@@ -141,26 +141,12 @@ bool QuackMetadataManager::CanSkipSnapshotFetch(const TransactionChangeInformati
 	return ExecuteRetrialsServerSide() && IsDataOnlyCommit(changes);
 }
 
-//! Marks a failed commit that the server can have committed, as after a lost response
-static void MarkPublicationUnknown(DuckLakeTransaction &transaction, const ErrorData &error) {
-	if (error.Type() == ExceptionType::IO || DuckLakeTransactionState::IsDurableCommitError(error)) {
-		// LCOV_EXCL_START: the server did not answer, or its checkpoint failed after it committed
-		transaction.SetPublicationUnknown();
-		// LCOV_EXCL_STOP
-	}
-}
-
 void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_transaction,
                                                   DuckLakeSnapshot transaction_snapshot,
                                                   const TransactionChangeInformation &transaction_changes,
                                                   const DuckLakeRetryConfig &retry_config) {
 	if (!IsDataOnlyCommit(transaction_changes) || RequiresClientSideCommit(flush_transaction)) {
-		try {
-			flush_transaction.RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
-		} catch (std::exception &ex) {
-			MarkPublicationUnknown(flush_transaction, ErrorData(ex));
-			throw;
-		}
+		flush_transaction.RunCommitLoop(transaction_snapshot, transaction_changes, retry_config);
 		return;
 	}
 	string batch;
@@ -180,8 +166,10 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
 	if (!result) {
 		throw IOException("Failed to invoke server-side ducklake_commit: empty result");
 	}
-	if (result->HasError()) {
-		MarkPublicationUnknown(flush_transaction, result->GetErrorObject());
+	if (result->HasError() && DuckLakeTransactionState::CommitMayHaveBeenPublished(result->GetErrorObject())) {
+		// LCOV_EXCL_START: the server did not answer, or its checkpoint failed after it committed
+		flush_transaction.SetPublicationUnknown();
+		// LCOV_EXCL_STOP
 	}
 	result->ThrowIfError("Failed to invoke server-side ducklake_commit: ");
 	auto row = result->begin();
