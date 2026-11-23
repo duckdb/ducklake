@@ -3,6 +3,7 @@
 #include "duckdb/common/file_system.hpp"
 #include "duckdb/common/path.hpp"
 #include "duckdb/common/exception/conversion_exception.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_transaction_changes.hpp"
@@ -1254,6 +1255,18 @@ string DuckLakeMetadataManager::RowCompanionRenameSql(const string &kind) const 
 	                          RowVisibilityTableName(kind));
 }
 
+//! Adds the birth branch to a table unless it has it, the update fills the rows of a SQLite catalog, which drops the
+//! default
+static string BranchColumnSql(const string &table, const string &column, bool has_column) {
+	string query;
+	if (!has_column) {
+		query +=
+		    StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s ADD COLUMN %s BIGINT DEFAULT 0;\n", table, column);
+	}
+	return query +
+	       StringUtil::Format("UPDATE {METADATA_CATALOG}.%s SET %s = 0 WHERE %s IS NULL;\n", table, column, column);
+}
+
 string DuckLakeMetadataManager::V2_0RowCompanionsSql(const V2_0RowCompanions &rows) const {
 	// every statement leaves a state the probes recognize, so the step resumes on a backend that commits each one
 	string query;
@@ -1264,12 +1277,7 @@ string DuckLakeMetadataManager::V2_0RowCompanionsSql(const V2_0RowCompanions &ro
 		auto &kind = RowKind(row.kind);
 		auto table = RowTableName(kind.kind);
 		auto pending = PendingRowVisibilityTableName(kind.kind);
-		if (!row.has_branch_column) {
-			query +=
-			    StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s ADD COLUMN branch_id BIGINT DEFAULT 0;\n", table);
-		}
-		// the SQLite scanner drops the default, so the update fills the branch of the existing rows
-		query += StringUtil::Format("UPDATE {METADATA_CATALOG}.%s SET branch_id = 0 WHERE branch_id IS NULL;\n", table);
+		query += BranchColumnSql(table, "branch_id", row.has_branch_column);
 		if (row.has_companion && !row.has_pending) {
 			// the final companion stands, the kind lacked its birth branch alone
 			continue;
@@ -1403,7 +1411,6 @@ DuckLakeMetadataManager::V2_0InlinedCompanion DuckLakeMetadataManager::ProbeV2_0
 		payload.table = row.GetValue<Identifier>(1);
 		auto &name = payload.table.GetIdentifierName();
 		if (!HasMetadataColumn(name, col_names.begin_snapshot.GetIdentifierName())) {
-			// a registered table that does not exist is left to its reader
 			continue;
 		}
 		payload.has_branch_column = HasMetadataColumn(name, col_names.branch_id.GetIdentifierName());
@@ -1427,7 +1434,6 @@ void DuckLakeMetadataManager::VerifyV2_0InlinedCompanion(const V2_0InlinedCompan
 		idx_t schema_version;
 		auto named_id = ParseInlinedTableName(name, schema_version);
 		if (!named_id.IsValid() || named_id.GetIndex() != payload.table_id) {
-			// the readers take the table of a version from the name of its payload
 			throw InvalidInputException("Cannot migrate this DuckLake catalog: inlined data table %s is registered "
 			                            "for table %d, this build names the inlined data tables "
 			                            "ducklake_inlined_data_<table>_<version>",
@@ -1490,25 +1496,15 @@ vector<string> DuckLakeMetadataManager::V2_0InlinedCompanionSql(const V2_0Inline
 	for (auto &payload : inlined.payloads) {
 		next_table();
 		auto &table = payload.table;
-		if (!payload.has_branch_column) {
-			query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s ADD COLUMN %s BIGINT DEFAULT 0;\n", table,
-			                            col_names.branch_id);
-		}
-		// the SQLite scanner drops the default, so the update fills the branch of the existing rows
-		query += StringUtil::Format("UPDATE {METADATA_CATALOG}.%s SET %s = 0 WHERE %s IS NULL;\n", table,
-		                            col_names.branch_id, col_names.branch_id);
+		query += BranchColumnSql(table.GetIdentifierName(), col_names.branch_id.GetIdentifierName(),
+		                         payload.has_branch_column);
 		if (payload.has_end_column) {
 			query += V2_0EndColumnSql(InlinedRowKind(table, col_names), target);
 		}
 	}
 	for (auto &table : inlined.deletion_tables) {
 		next_table();
-		if (!table.has_branch_column) {
-			query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s ADD COLUMN branch_id BIGINT DEFAULT 0;\n",
-			                            table.table);
-		}
-		query += StringUtil::Format("UPDATE {METADATA_CATALOG}.%s SET branch_id = 0 WHERE branch_id IS NULL;\n",
-		                            table.table);
+		query += BranchColumnSql(table.table.GetIdentifierName(), "branch_id", table.has_branch_column);
 	}
 	if (!inlined.has_companion) {
 		query += RowCompanionRenameSql("inlined_data");
@@ -4837,7 +4833,7 @@ string DuckLakeMetadataManager::InlinedFlushSource(const Identifier &inlined_tab
 	if (!has_casts && filter.empty()) {
 		return source;
 	}
-	return StringUtil::Format("(SELECT %s FROM %s%s)", StringUtil::Join(projection, ", "), source, filter);
+	return StringUtil::Format("(SELECT %s FROM %s inlined_data%s)", StringUtil::Join(projection, ", "), source, filter);
 }
 
 string DuckLakeMetadataManager::InlinedFlushOrder(const string &sort_order_sql) const {
@@ -4877,8 +4873,12 @@ optional_idx DuckLakeMetadataManager::ParseInlinedTableName(const string &name, 
 			return optional_idx();
 		}
 	}
-	schema_version = StringUtil::ToUnsigned(parts[1]);
-	return StringUtil::ToUnsigned(parts[0]);
+	idx_t table_id;
+	if (!TryCast::Operation<string_t, idx_t>(string_t(parts[0]), table_id) ||
+	    !TryCast::Operation<string_t, idx_t>(string_t(parts[1]), schema_version)) {
+		return optional_idx();
+	}
+	return table_id;
 }
 
 string DuckLakeMetadataManager::InlinedRowSource(const Identifier &inlined_table_name,
@@ -5326,7 +5326,6 @@ static unique_ptr<SQLStatement> InlinedDataInsert(DuckLakeTransaction &transacti
 		input->Append(input_chunk);
 	}
 
-	// the row shape of FormatInlinedDataInsert
 	bool row_visibility = catalog.SupportsRowVisibility();
 	vector<string> projections {"col" + to_string(types.size()), to_string(snapshot.snapshot_id)};
 	if (!row_visibility) {
@@ -8411,7 +8410,6 @@ WHERE e.branch_id = 0 AND e.snapshot_id <= %d AND EXISTS (
 			                                KeyMatches(kind, "e", "d"), col_names.branch_id, col_names.begin_snapshot,
 			                                flushed.flush_snapshot_id);
 		}
-		// the versions born on main up to the flush
 		result +=
 		    StringUtil::Format("DELETE FROM {METADATA_CATALOG}.%s AS d WHERE d.%s = 0 AND d.%s <= %d%s;\n", table_name,
 		                       col_names.branch_id, col_names.begin_snapshot, flushed.flush_snapshot_id, later_ends);
