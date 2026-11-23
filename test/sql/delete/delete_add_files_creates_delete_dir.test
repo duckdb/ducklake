@@ -39,6 +39,6 @@ SELECT count(*) FROM t
 69
 
 query I
-SELECT count(*) FROM ducklake_meta.ducklake_delete_file WHERE end_snapshot IS NULL
+SELECT coalesce(sum(delete_file_count), 0)::BIGINT FROM ducklake_table_info('ducklake')
 ----
 1

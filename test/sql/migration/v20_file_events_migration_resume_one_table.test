@@ -1,0 +1,84 @@
+# name: test/sql/migration/v20_file_events_migration_resume_one_table.test
+# description: the migration to 2.0-dev1 resumes when one file table is back under its name and the other still renamed
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t AS SELECT range AS i FROM range(10)
+
+statement ok
+DELETE FROM dl.t WHERE i = 3
+
+statement ok
+DETACH dl
+
+# the interrupted step finished the data files and left the delete files renamed with their ranges
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS meta
+
+statement ok
+CREATE TABLE meta.ducklake_file_visibility(branch_id BIGINT, table_id BIGINT, data_file_id BIGINT, snapshot_id BIGINT, is_delete BOOLEAN, PRIMARY KEY(branch_id, data_file_id, is_delete))
+
+statement ok
+CREATE TABLE meta.ducklake_delete_file_visibility(branch_id BIGINT, table_id BIGINT, delete_file_id BIGINT, snapshot_id BIGINT, is_delete BOOLEAN, PRIMARY KEY(branch_id, delete_file_id, is_delete))
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 0, table_id, data_file_id, begin_snapshot, false FROM meta.ducklake_data_file
+
+statement ok
+ALTER TABLE meta.ducklake_data_file DROP COLUMN begin_snapshot
+
+statement ok
+ALTER TABLE meta.ducklake_data_file DROP COLUMN end_snapshot
+
+statement ok
+ALTER TABLE meta.ducklake_delete_file RENAME TO ducklake_delete_file_ranges
+
+statement ok
+DETACH meta
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query IIIII
+SELECT branch_id, table_id, delete_file_id, snapshot_id, is_delete::BOOLEAN FROM meta.ducklake_delete_file_visibility
+----
+0	1	1	2	false
+
+query I
+SELECT table_name FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name LIKE 'ducklake_d%_file%' AND table_name NOT LIKE '%visibility' ORDER BY table_name
+----
+ducklake_data_file
+ducklake_delete_file
+
+query I
+SELECT column_name FROM duckdb_columns() WHERE database_name = 'meta' AND table_name IN ('ducklake_data_file', 'ducklake_delete_file') AND column_name IN ('begin_snapshot', 'end_snapshot')
+----
+
+query II
+SELECT count(*), sum(i) FROM dl.t
+----
+9	42
+
+query I
+SELECT count(*) FROM dl.t AT (VERSION => 1)
+----
+10
+
+statement ok
+DETACH dl

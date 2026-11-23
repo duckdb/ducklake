@@ -25,7 +25,7 @@ DELETE FROM lake.t WHERE id % 100 = @{r}; COMMIT; BEGIN;
 COMMIT;
 SELECT CASE WHEN (SELECT count(*) <> 33 FROM lake.snapshots())
 OR (SELECT count(*) <> 1 FROM lake.snapshots() WHERE snapshot_id = 22 AND changes::VARCHAR LIKE '%rewrite_delete%')
-OR (SELECT count(*) <> 1 FROM __ducklake_metadata_lake.ducklake_data_file WHERE begin_snapshot = 22)
+OR (SELECT count(*) <> 1 FROM __ducklake_metadata_lake.ducklake_file_visibility WHERE branch_id = 0 AND is_delete = FALSE AND snapshot_id = 22)
 THEN error('rewritten_history: expected 33 snapshots and one rewritten file at snapshot 22') END;
 CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
 DETACH lake;
