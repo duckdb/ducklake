@@ -27,8 +27,7 @@ static optional_ptr<const DuckLakeBranchInfo> FindBranchInfo(const vector<DuckLa
 
 DuckLakeBranchChain DuckLakeBranchChain::Resolve(const vector<DuckLakeBranchInfo> &branches, idx_t branch_id) {
 	vector<DuckLakeBranchSegment> segments;
-	// the cap of a branch is the parent snapshot its child continues from, clamped by the caps below it
-	// a branch forked below the fork of its parent reads nothing of the parent itself
+	// the cap of a parent is the fork snapshot of its child, clamped by the caps below it
 	optional_idx cap;
 	auto current = branch_id;
 	while (true) {

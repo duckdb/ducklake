@@ -69,6 +69,7 @@ SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
 [0, 1, 2, 3, 4]
 
 # every version of the lineage resolves to the segment that holds it
+# the rows are asserted once the files follow the lineage, until then the lookups only have to resolve
 statement ok
 SELECT i FROM dl.t AT (VERSION => 2)
 

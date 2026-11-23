@@ -78,6 +78,7 @@ SELECT list(snapshot_id ORDER BY snapshot_id) FROM feature.snapshots()
 [0, 1, 2, 3, 4, 5]
 
 # every id of the view names one snapshot of the lineage of feature
+# the counts are asserted once the files follow the lineage, until then the lookups only have to resolve
 loop n 1 6
 
 statement ok
