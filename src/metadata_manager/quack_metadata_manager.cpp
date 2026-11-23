@@ -94,6 +94,13 @@ void QuackMetadataManager::ClearCache() {
 	transaction.ExecuteRaw(clear);
 }
 
+bool QuackMetadataManager::ProbeMetadataColumns() {
+	// duckdb_columns() lists every column of the server's metadata schema, so one statement serves every probe
+	return ProbeMetadataColumnsFromListing(
+	    "SELECT table_name, column_name FROM duckdb_columns() WHERE database_name = current_database() "
+	    "AND schema_name = {METADATA_SCHEMA_NAME_LITERAL} ORDER BY table_name, column_index");
+}
+
 void QuackMetadataManager::ProbeServerCapabilities() {
 	// Check whether the quack server has the ducklake_commit function loaded (i.e. the ducklake
 	// extension is available server-side).

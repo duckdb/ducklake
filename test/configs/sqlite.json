@@ -142,6 +142,7 @@
         "test/sql/metadata/postgres_attach_cache_clear.test",
         "test/sql/metadata/postgres_metadata_profile.test",
         "test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test"
+        "test/sql/catalog/snapshot_branch_key_statements_postgres.test"
       ]
     },
     {

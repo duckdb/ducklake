@@ -25,6 +25,7 @@ public:
 	bool InlinedDeletionTableExists(const Identifier &table_name) override;
 	void MigrateInlinedDataTypes() override;
 	bool IsRetryableCommitError(const string &message) const override;
+	bool ProbeMetadataColumns() override;
 	string CommitErrorWithoutQuery(const string &message) const override;
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
