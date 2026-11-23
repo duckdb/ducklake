@@ -402,7 +402,7 @@ static ErrorData ErrorOfUnknownPublication(const ErrorData &error) {
 }
 
 void DuckLakeRESTServer::RunCommit(const ServedCatalog &served, DuckLakeRESTPendingCommit &commit) {
-	bool published = false;
+	auto outcome = DuckLakeCommitOutcome::NOT_PUBLISHED;
 	try {
 		auto endpoint = DuckLakeRESTAPI::GetEndpoints().at(commit.endpoint);
 		DuckLakeRESTRequest request(*served.db, served.catalog_name);
@@ -412,7 +412,7 @@ void DuckLakeRESTServer::RunCommit(const ServedCatalog &served, DuckLakeRESTPend
 			commit.response = endpoint(request, commit.request_json);
 			commit.content_type = request.content_type;
 		} catch (...) {
-			published = request.published;
+			outcome = request.commit_outcome;
 			if (request.connection.HasActiveTransaction()) {
 				request.connection.Rollback();
 			}
@@ -420,14 +420,13 @@ void DuckLakeRESTServer::RunCommit(const ServedCatalog &served, DuckLakeRESTPend
 		}
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
-		commit.error = published ? ErrorAfterPublication(error) : error;
+		commit.error = outcome == DuckLakeCommitOutcome::PUBLISHED ? ErrorAfterPublication(error) : error;
 	}
 }
 
 bool DuckLakeRESTServer::RunCommitGroup(const ServedCatalog &served,
                                         vector<reference<DuckLakeRESTPendingCommit>> &group) {
-	bool published = false;
-	bool publication_unknown = false;
+	auto outcome = DuckLakeCommitOutcome::NOT_PUBLISHED;
 	string response;
 	string content_type;
 	ErrorData error;
@@ -438,19 +437,19 @@ bool DuckLakeRESTServer::RunCommitGroup(const ServedCatalog &served,
 			response = DuckLakeRESTCommitGroup::Commit(request, group);
 			content_type = request.content_type;
 		} catch (...) {
-			published = request.published;
-			publication_unknown = request.publication_unknown;
+			outcome = request.commit_outcome;
 			if (request.connection.HasActiveTransaction()) {
 				request.connection.Rollback();
 			}
 			throw;
 		}
 	} catch (std::exception &ex) {
-		if (!published && !publication_unknown) {
+		if (outcome == DuckLakeCommitOutcome::NOT_PUBLISHED) {
 			return false;
 		}
 		// the commits of a group that is published, or that can be, never run again
 		ErrorData cause(ex);
+		bool published = outcome == DuckLakeCommitOutcome::PUBLISHED;
 		error = published ? ErrorAfterPublication(cause) : ErrorOfUnknownPublication(cause);
 	}
 	// a failure here does not reach the fallback either: the queue answers the commits that have no result

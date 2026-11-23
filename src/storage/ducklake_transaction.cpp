@@ -926,7 +926,7 @@ void DuckLakeTransaction::Commit() {
 		}
 	} catch (...) {
 		// a failed commit never reaches Rollback - the transaction manager only reports the error
-		if (!published) {
+		if (!IsPublished()) {
 			UndoConfigOptions();
 		}
 		ClearMaintenanceChanges();
@@ -1757,10 +1757,10 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		connection->Commit();
 	};
 	context.set_published = [&]() {
-		published = true;
+		AdvanceCommitOutcome(commit_outcome, DuckLakeCommitOutcome::PUBLISHED);
 	};
 	context.set_publication_unknown = [&]() {
-		publication_unknown = true;
+		SetPublicationUnknown();
 	};
 	context.try_rollback = [&]() {
 		if (connection->context->transaction.HasActiveTransaction()) {

@@ -11,6 +11,7 @@
 #include "ducklake_macro_entry.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/database.hpp"
+#include "common/ducklake_commit_outcome.hpp"
 #include "common/ducklake_data_file.hpp"
 #include "common/ducklake_snapshot.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
@@ -319,16 +320,17 @@ public:
 	bool FilesOwnedByClient() const {
 		return files_owned_by_client;
 	}
+	//! What is known about the publication of the commit, also after it failed
+	DuckLakeCommitOutcome GetCommitOutcome() const {
+		return commit_outcome;
+	}
 	//! Whether the commit wrote its changes to the metadata, also if it failed after that
 	bool IsPublished() const {
-		return published;
+		return commit_outcome == DuckLakeCommitOutcome::PUBLISHED;
 	}
 	//! The commit was sent and not rejected, as after a lost answer, so the changes may have been published
 	void SetPublicationUnknown() {
-		publication_unknown = true;
-	}
-	bool PublicationUnknown() const {
-		return publication_unknown;
+		AdvanceCommitOutcome(commit_outcome, DuckLakeCommitOutcome::PUBLICATION_UNKNOWN);
 	}
 	bool SchemaChangesMade() const;
 	idx_t GetLocalCatalogId();
@@ -553,8 +555,7 @@ private:
 
 private:
 	bool files_owned_by_client = false;
-	bool published = false;
-	bool publication_unknown = false;
+	DuckLakeCommitOutcome commit_outcome = DuckLakeCommitOutcome::NOT_PUBLISHED;
 };
 
 } // namespace duckdb

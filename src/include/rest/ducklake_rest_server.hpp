@@ -14,6 +14,7 @@
 #include "duckdb/common/mutex.hpp"
 #include "duckdb/main/connection.hpp"
 #include "duckdb/function/table_function.hpp"
+#include "common/ducklake_commit_outcome.hpp"
 #include "rest/ducklake_rest_api.hpp"
 #include "rest/ducklake_rest_multipart.hpp"
 
@@ -109,10 +110,8 @@ public:
 	shared_ptr<const string> request_data;
 	//! The content type of the response, set by the endpoint if it is not JSON
 	string content_type = "application/json";
-	//! Whether the request committed its changes, a failure after that is not a reason to commit them again
-	bool published = false;
-	//! Whether the commit of the request was sent and not rejected, so that it may have been published
-	bool publication_unknown = false;
+	//! Whether the request published its changes: a failed commit only runs again if it published nothing
+	DuckLakeCommitOutcome commit_outcome = DuckLakeCommitOutcome::NOT_PUBLISHED;
 };
 
 //! The pages of the scans that were split into pages, which the server keeps for a while
