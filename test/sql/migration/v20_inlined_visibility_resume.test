@@ -149,21 +149,46 @@ SELECT COUNT(*) FROM dl.f
 statement ok
 DETACH dl
 
-# the step renames the end column before its fold, so a payload with the renamed column folds from it
+# the step renames a payload before its rebuild, a renamed payload is rebuilt from the renamed table
 statement ok
 ATTACH '{DUCKLAKE_CONNECTION}' AS meta
 
 statement ok
-ALTER TABLE meta.ducklake_inlined_data_1_1 ADD COLUMN _ducklake_end_snapshot_old BIGINT
+ALTER TABLE meta.ducklake_inlined_data_1_1 RENAME TO ducklake_inlined_data_1_1_old
 
 statement ok
-UPDATE meta.ducklake_inlined_data_1_1 SET _ducklake_end_snapshot_old = (SELECT e.end_snapshot
+ALTER TABLE meta.ducklake_inlined_data_1_1_old DROP COLUMN _ducklake_branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1_old ADD COLUMN _ducklake_end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_inlined_data_1_1_old SET _ducklake_end_snapshot = (SELECT e.end_snapshot
     FROM meta.ducklake_inlined_data_visibility e
-    WHERE e.table_id = 1 AND e.row_id = ducklake_inlined_data_1_1._ducklake_row_id
-    AND e.row_snapshot = ducklake_inlined_data_1_1._ducklake_begin_snapshot)
+    WHERE e.table_id = 1 AND e.row_id = ducklake_inlined_data_1_1_old._ducklake_row_id
+    AND e.row_snapshot = ducklake_inlined_data_1_1_old._ducklake_begin_snapshot)
 
 statement ok
 DELETE FROM meta.ducklake_inlined_data_visibility WHERE table_id = 1
+
+# a rebuild interrupted after the copy of the rows of u left both tables
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_2_2 RENAME TO ducklake_inlined_data_2_2_old
+
+statement ok
+CREATE TABLE meta.ducklake_inlined_data_2_2 AS FROM meta.ducklake_inlined_data_2_2_old
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_2_2_old DROP COLUMN _ducklake_branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_2_2_old ADD COLUMN _ducklake_end_snapshot BIGINT
+
+statement ok
+UPDATE meta.ducklake_inlined_data_2_2_old SET _ducklake_end_snapshot = (SELECT e.end_snapshot
+    FROM meta.ducklake_inlined_data_visibility e
+    WHERE e.table_id = 2 AND e.row_id = ducklake_inlined_data_2_2_old._ducklake_row_id
+    AND e.row_snapshot = ducklake_inlined_data_2_2_old._ducklake_begin_snapshot)
 
 statement ok
 ALTER TABLE meta.ducklake_inlined_data_visibility RENAME TO ducklake_inlined_data_visibility_pending
@@ -194,12 +219,29 @@ _ducklake_begin_snapshot
 i
 _ducklake_branch_id
 
+query IIII
+FROM meta.ducklake_inlined_data_2_2 ORDER BY ALL
+----
+0	5	1	0
+1	5	2	0
+
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name LIKE 'ducklake_inlined_data_%_old'
+----
+0
+
 query I
 SELECT i FROM dl.t AT (VERSION => 2) ORDER BY i
 ----
 1
 2
 3
+
+query I
+SELECT i FROM dl.u ORDER BY i
+----
+2
 
 statement ok
 DETACH dl

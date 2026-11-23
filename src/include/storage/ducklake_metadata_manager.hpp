@@ -911,16 +911,21 @@ public:
 	string V2_0RowCompanionsSql(const V2_0RowCompanions &rows) const;
 	//! Deletes the rows a kind superseded within their birth, then folds its end column into the pending companion
 	static string V2_0RowEndBackfillSql(const RowVisibilityKind &kind, const string &pending);
+	//! Turns the end column of a kind into end rows of the companion
+	static string V2_0EndRowsSql(const RowVisibilityKind &kind, const string &companion);
 	//! Turns the end column of a kind into end rows of the companion and drops the column
 	static string V2_0EndColumnSql(const RowVisibilityKind &kind, const string &companion);
 	//! The shape of an inlined data table against the shared companion
 	struct V2_0InlinedPayload {
 		Identifier table;
 		idx_t table_id = 0;
+		bool present = false;
 		bool has_branch_column = false;
 		bool has_end_column = false;
-		//! Whether the end column is renamed for its fold, an interrupted step
-		bool has_old_end_column = false;
+		//! Whether the payload stands renamed for its rebuild, with the user columns the rebuilt table gets
+		bool has_old_table = false;
+		string column_defs;
+		vector<string> user_columns;
 	};
 	struct V2_0InlinedDeletionTable {
 		Identifier table;
@@ -938,7 +943,7 @@ public:
 	V2_0InlinedCompanion ProbeV2_0InlinedCompanion();
 	//! Refuses a payload whose end column is gone while no companion holds its ends and it holds rows
 	void VerifyV2_0InlinedCompanion(const V2_0InlinedCompanion &inlined);
-	//! The renames of the end columns of the payloads, batches that commit before the fold reads them
+	//! The renames of the payloads to rebuild, batches that commit before the rebuild reads them
 	static vector<string> V2_0InlinedRenameSql(const V2_0InlinedCompanion &inlined);
 	//! The batches of the step, one metadata transaction each, the rename into place closes the last one
 	vector<string> V2_0InlinedCompanionSql(const V2_0InlinedCompanion &inlined) const;
