@@ -1436,10 +1436,11 @@ DuckLakeMetadataManager::V2_0InlinedCompanion DuckLakeMetadataManager::ProbeV2_0
 				    column == col_names.end_snapshot) {
 					continue;
 				}
+				// the stored type stays, the storage mapping of a type is not a fixed point
 				auto quoted = SQLQuotedIdentifier::ToString(names[i]);
 				payload.user_columns.push_back(quoted);
 				payload.column_defs += StringUtil::Format("%s%s %s", payload.column_defs.empty() ? "" : ", ", quoted,
-				                                          GetColumnTypeInternal(probe->GetTypes()[i]));
+				                                          probe->GetTypes()[i].ToString());
 			}
 		}
 		inlined.payloads.push_back(std::move(payload));
@@ -1476,15 +1477,14 @@ void DuckLakeMetadataManager::VerifyV2_0InlinedCompanion(const V2_0InlinedCompan
 	if (started || inlined.payloads.empty()) {
 		return;
 	}
-	// a 1.0 catalog reserved the three bare names alone, so a user column can be named like a column the step adds
-	identifier_set_t reserved {col_names.branch_id, Identifier(col_names.end_snapshot.GetIdentifierName() + "_old")};
+	// a 1.0 catalog reserved the three bare names alone, so a user column can be named like the branch column
 	bool row_visibility = !HasMetadataColumn("ducklake_column", "end_snapshot");
 	auto columns = Query(GetInlinedTableColumnsSql(optional_idx(), row_visibility));
 	columns->ThrowIfError(
 	    "Failed to read the columns of the inlined data tables of DuckLake while probing the layout: ");
 	for (auto &row : *columns) {
 		auto column = row.GetValue<Identifier>(1);
-		if (reserved.count(column)) {
+		if (column == col_names.branch_id) {
 			throw InvalidInputException("Cannot migrate this DuckLake catalog: inlined data table %s has a column %s, "
 			                            "which the inlined data tables of 2.0 reserve. Rename the column and call "
 			                            "ducklake_flush_inlined_data() before migrating",

@@ -10,7 +10,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
 
 test-env DATA_PATH {TEST_DIR}
 
-# a 1.0 catalog reserved the three bare names alone, so a user column can be named like a column the step adds
+# a 1.0 catalog reserved the three bare names alone, so a user column can be named like the branch column
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
     DUCKLAKE_VERSION '1.0', DATA_INLINING_ROW_LIMIT 10)
@@ -20,12 +20,6 @@ CREATE TABLE dl.t(i INTEGER, _ducklake_branch_id INTEGER)
 
 statement ok
 INSERT INTO dl.t VALUES (1, 7), (2, NULL), (3, 0)
-
-statement ok
-CREATE TABLE dl.v(i INTEGER, _ducklake_end_snapshot_old INTEGER)
-
-statement ok
-INSERT INTO dl.v VALUES (1, 1)
 
 # a table without inlining has no payload to refuse, its column collides once inlining is enabled
 statement ok
@@ -43,7 +37,7 @@ CALL dl.set_option('data_inlining_row_limit', 10)
 statement ok
 DETACH dl
 
-# the step refuses the columns, the catalog stays at 1.0 or at 1.1 where the rename of the metadata columns committed
+# the step refuses the column, the catalog stays at 1.0 or at 1.1 where the rename of the metadata columns committed
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
     AUTOMATIC_MIGRATION TRUE)
@@ -68,24 +62,6 @@ SELECT i, _ducklake_branch_id FROM dl.t ORDER BY i
 # renaming the column and flushing the rows leaves no payload with the column
 statement ok
 ALTER TABLE dl.t RENAME COLUMN _ducklake_branch_id TO b
-
-statement ok
-CALL ducklake_flush_inlined_data('dl')
-
-statement ok
-DETACH dl
-
-statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    AUTOMATIC_MIGRATION TRUE)
-----
-has a column _ducklake_end_snapshot_old, which the inlined data tables of 2.0 reserve
-
-statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
-
-statement ok
-ALTER TABLE dl.v RENAME COLUMN _ducklake_end_snapshot_old TO e
 
 statement ok
 CALL ducklake_flush_inlined_data('dl')
@@ -146,10 +122,10 @@ statement ok
 ATTACH '{DUCKLAKE_CONNECTION}' AS meta
 
 statement ok
-ALTER TABLE meta.ducklake_inlined_data_1_4 RENAME TO ducklake_inlined_data_42_4
+ALTER TABLE meta.ducklake_inlined_data_1_3 RENAME TO ducklake_inlined_data_42_3
 
 statement ok
-UPDATE meta.ducklake_inlined_data_tables SET table_name = 'ducklake_inlined_data_42_4' WHERE table_id = 1
+UPDATE meta.ducklake_inlined_data_tables SET table_name = 'ducklake_inlined_data_42_3' WHERE table_id = 1
 
 statement ok
 ALTER TABLE meta.ducklake_inlined_data_visibility RENAME TO ducklake_inlined_data_visibility_pending
@@ -161,17 +137,17 @@ statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
     AUTOMATIC_MIGRATION TRUE)
 ----
-inlined data table ducklake_inlined_data_42_4 is registered for table 1
+inlined data table ducklake_inlined_data_42_3 is registered for table 1
 
 # a table id beyond the range of the ids is no name of this build either
 statement ok
 ATTACH '{DUCKLAKE_CONNECTION}' AS meta
 
 statement ok
-ALTER TABLE meta.ducklake_inlined_data_42_4 RENAME TO ducklake_inlined_data_18446744073709551616_4
+ALTER TABLE meta.ducklake_inlined_data_42_3 RENAME TO ducklake_inlined_data_18446744073709551616_3
 
 statement ok
-UPDATE meta.ducklake_inlined_data_tables SET table_name = 'ducklake_inlined_data_18446744073709551616_4'
+UPDATE meta.ducklake_inlined_data_tables SET table_name = 'ducklake_inlined_data_18446744073709551616_3'
     WHERE table_id = 1
 
 statement ok
@@ -181,4 +157,4 @@ statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
     AUTOMATIC_MIGRATION TRUE)
 ----
-inlined data table ducklake_inlined_data_18446744073709551616_4 is registered for table 1
+inlined data table ducklake_inlined_data_18446744073709551616_3 is registered for table 1

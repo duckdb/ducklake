@@ -36,7 +36,7 @@ SELECT (SELECT count(*) FROM dl.fits), (SELECT count(*) FROM ducklake_list_files
 statement ok
 DETACH dl
 
-# the end column goes before the branch column comes, so the payload stays within the limit
+# the rebuilt payload has the branch column within the limit
 statement ok
 ATTACH 'ducklake:sqlite:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}',
     AUTOMATIC_MIGRATION TRUE)
