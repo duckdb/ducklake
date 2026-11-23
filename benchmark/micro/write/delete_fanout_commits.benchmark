@@ -25,8 +25,7 @@ DELETE FROM lake.frag WHERE id % 10 = 2;
 # A missed reset leaves nothing for the last DELETE
 result_query III
 SELECT Count, (SELECT count(*) FROM lake.frag),
-(SELECT count(*) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL AND table_id = (
-SELECT table_id FROM __ducklake_metadata_lake.ducklake_table WHERE table_name = 'frag' AND end_snapshot IS NULL))
+(SELECT delete_file_count FROM ducklake_table_info('lake') WHERE table_name = 'frag')
 FROM __answer
 ----
 204800	1433600	1000

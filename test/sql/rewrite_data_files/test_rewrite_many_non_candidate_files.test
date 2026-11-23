@@ -36,11 +36,18 @@ WHERE data.table_id = (
     WHERE table_name = 'many_files' AND end_snapshot IS NULL
 )
 
+statement ok
+INSERT INTO ducklake_meta.ducklake_file_visibility
+SELECT v.branch_id, v.table_id, 1000000 + i, v.snapshot_id, v.is_delete
+FROM ducklake_meta.ducklake_file_visibility v, range(1, 500000) files(i)
+WHERE v.table_id = (
+    SELECT table_id
+    FROM ducklake_meta.ducklake_table
+    WHERE table_name = 'many_files' AND end_snapshot IS NULL
+)
+
 query I
-SELECT count(*)
-FROM ducklake_meta.ducklake_data_file data
-JOIN ducklake_meta.ducklake_table tables USING (table_id)
-WHERE tables.table_name = 'many_files' AND data.end_snapshot IS NULL
+SELECT file_count FROM ducklake_table_info('ducklake') WHERE table_name = 'many_files'
 ----
 500000
 
@@ -63,9 +70,6 @@ SELECT count(*) FROM rewrite_me
 9
 
 query I
-SELECT count(*)
-FROM ducklake_meta.ducklake_data_file data
-JOIN ducklake_meta.ducklake_table tables USING (table_id)
-WHERE tables.table_name = 'many_files' AND data.end_snapshot IS NULL
+SELECT file_count FROM ducklake_table_info('ducklake') WHERE table_name = 'many_files'
 ----
 500000
