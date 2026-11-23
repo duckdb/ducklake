@@ -81,7 +81,7 @@ SELECT object_id, value FROM metadata.ducklake_tag ORDER BY begin_snapshot
 1	new
 
 query III
-SELECT t.value, e.row_snapshot, e.snapshot_id FROM metadata.ducklake_tag_visibility e
+SELECT t.value, e.row_snapshot, e.end_snapshot FROM metadata.ducklake_tag_visibility e
 JOIN metadata.ducklake_tag t ON t.object_id = e.object_id AND t.key = e.key AND t.branch_id = e.row_branch_id
     AND t.begin_snapshot = e.row_snapshot
 ----

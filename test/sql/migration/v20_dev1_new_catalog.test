@@ -90,7 +90,7 @@ branch_id	BIGINT
 schema_id	BIGINT
 row_branch_id	BIGINT
 row_snapshot	BIGINT
-snapshot_id	BIGINT
+end_snapshot	BIGINT
 
 query I
 SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
@@ -152,7 +152,7 @@ table_id	BIGINT
 column_id	BIGINT
 row_branch_id	BIGINT
 row_snapshot	BIGINT
-snapshot_id	BIGINT
+end_snapshot	BIGINT
 
 query I
 SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
@@ -205,7 +205,7 @@ branch_id	BIGINT
 tag_name	VARCHAR
 row_branch_id	BIGINT
 row_snapshot	BIGINT
-snapshot_id	BIGINT
+end_snapshot	BIGINT
 
 query I
 SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')

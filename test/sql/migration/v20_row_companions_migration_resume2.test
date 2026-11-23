@@ -49,7 +49,7 @@ UPDATE meta.ducklake_schema SET branch_id = 0 WHERE branch_id IS NULL
 
 statement ok
 CREATE TABLE meta.ducklake_schema_visibility_pending(branch_id BIGINT, schema_id BIGINT, row_branch_id BIGINT,
-    row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, schema_id, row_branch_id, row_snapshot))
+    row_snapshot BIGINT, end_snapshot BIGINT, PRIMARY KEY(branch_id, schema_id, row_branch_id, row_snapshot))
 
 statement ok
 INSERT INTO meta.ducklake_schema_visibility_pending
@@ -69,7 +69,7 @@ UPDATE meta.ducklake_view SET branch_id = 0 WHERE branch_id IS NULL
 
 statement ok
 CREATE TABLE meta.ducklake_view_visibility_pending(branch_id BIGINT, view_id BIGINT, row_branch_id BIGINT,
-    row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, view_id, row_branch_id, row_snapshot))
+    row_snapshot BIGINT, end_snapshot BIGINT, PRIMARY KEY(branch_id, view_id, row_branch_id, row_snapshot))
 
 statement ok
 DETACH meta
@@ -85,7 +85,7 @@ SELECT value FROM dl.options() WHERE option_name = 'version'
 2.0-dev1
 
 query IIII
-SELECT s.schema_name, e.branch_id, e.row_snapshot, e.snapshot_id
+SELECT s.schema_name, e.branch_id, e.row_snapshot, e.end_snapshot
 FROM meta.ducklake_schema_visibility e
 JOIN meta.ducklake_schema s ON s.schema_id = e.schema_id AND s.branch_id = e.row_branch_id
     AND s.begin_snapshot = e.row_snapshot
@@ -93,7 +93,7 @@ JOIN meta.ducklake_schema s ON s.schema_id = e.schema_id AND s.branch_id = e.row
 s	0	1	6
 
 query IIII
-SELECT t.table_name, e.branch_id, e.row_snapshot, e.snapshot_id
+SELECT t.table_name, e.branch_id, e.row_snapshot, e.end_snapshot
 FROM meta.ducklake_table_visibility e
 JOIN meta.ducklake_table t ON t.table_id = e.table_id AND t.branch_id = e.row_branch_id
     AND t.begin_snapshot = e.row_snapshot
@@ -101,7 +101,7 @@ JOIN meta.ducklake_table t ON t.table_id = e.table_id AND t.branch_id = e.row_br
 t	0	2	4
 
 query IIII
-SELECT v.view_name, e.branch_id, e.row_snapshot, e.snapshot_id
+SELECT v.view_name, e.branch_id, e.row_snapshot, e.end_snapshot
 FROM meta.ducklake_view_visibility e
 JOIN meta.ducklake_view v ON v.view_id = e.view_id AND v.branch_id = e.row_branch_id
     AND v.begin_snapshot = e.row_snapshot
@@ -151,7 +151,7 @@ statement ok
 ALTER TABLE dl.t2 RENAME TO t3
 
 query II
-SELECT row_snapshot, snapshot_id FROM meta.ducklake_table_visibility ORDER BY snapshot_id
+SELECT row_snapshot, end_snapshot FROM meta.ducklake_table_visibility ORDER BY end_snapshot
 ----
 2	4
 4	7

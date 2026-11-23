@@ -480,7 +480,7 @@ static string RowVisibilityTableStatement(const DuckLakeMetadataManager::RowVisi
 		key_definitions += key + " " + DuckLakeMetadataManager::RowKeyType(key) + ", ";
 	}
 	return StringUtil::Format("CREATE TABLE {METADATA_CATALOG}.%s(branch_id BIGINT, %srow_branch_id BIGINT, "
-	                          "row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, %s, row_branch_id, "
+	                          "row_snapshot BIGINT, end_snapshot BIGINT, PRIMARY KEY(branch_id, %s, row_branch_id, "
 	                          "row_snapshot));",
 	                          table, key_definitions, StringUtil::Join(kind.key_columns, ", "));
 }
@@ -497,7 +497,7 @@ string DuckLakeMetadataManager::RowVisibility(const string &alias, const RowVisi
 	string end_cap;
 	if (!read_snapshot.empty()) {
 		birth_cap = StringUtil::Format(" AND %s.begin_snapshot <= %s", alias, read_snapshot);
-		end_cap = " AND vis.snapshot_id <= " + read_snapshot;
+		end_cap = " AND vis.end_snapshot <= " + read_snapshot;
 	}
 	return StringUtil::Format("%s.branch_id = 0%s AND NOT EXISTS (SELECT 1 FROM "
 	                          "{METADATA_CATALOG}.ducklake_%s_visibility vis WHERE %s AND vis.row_branch_id = "
@@ -513,7 +513,7 @@ string DuckLakeMetadataManager::EndRows(const string &kind_name, const string &f
 		keys.push_back("t." + key);
 	}
 	return StringUtil::Format(R"(INSERT INTO {METADATA_CATALOG}.ducklake_%s_visibility
-    (branch_id, %s, row_branch_id, row_snapshot, snapshot_id)
+    (branch_id, %s, row_branch_id, row_snapshot, end_snapshot)
 SELECT 0, %s, t.branch_id, t.begin_snapshot, {SNAPSHOT_ID}
 FROM {METADATA_CATALOG}.%s t
 WHERE %s AND %s;
@@ -1237,7 +1237,7 @@ WHERE end_snapshot = begin_snapshot AND EXISTS (
 	// the ranges of main become its end rows before the column goes away, a resumed backfill copies none twice
 	query += StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.%s
-    (branch_id, %s, row_branch_id, row_snapshot, snapshot_id)
+    (branch_id, %s, row_branch_id, row_snapshot, end_snapshot)
 SELECT DISTINCT 0, %s, 0, t.begin_snapshot, t.end_snapshot
 FROM {METADATA_CATALOG}.%s t
 WHERE t.end_snapshot IS NOT NULL AND NOT EXISTS (
@@ -3950,7 +3950,7 @@ void DuckLakeMetadataManager::SetPartitionSchemaVersions(DuckLakeTableEntry &tab
 	if (transaction.GetCatalog().SupportsRowVisibility()) {
 		partition_specs = R"((
 	SELECT p.partition_id, p.table_id, p.begin_snapshot, (
-		SELECT MIN(e.snapshot_id)
+		SELECT MIN(e.end_snapshot)
 		FROM {METADATA_CATALOG}.ducklake_partition_visibility e
 		WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot
 		  AND e.branch_id = 0
@@ -4951,7 +4951,7 @@ string DuckLakeMetadataManager::WriteDroppedNewColumns(const vector<DuckLakeNewC
 		ColumnEndsRecursive(column.column_info, column.table_id, ends);
 	}
 	return rows + InsertValuesSql("ducklake_column_visibility (branch_id, table_id, column_id, row_branch_id, "
-	                              "row_snapshot, snapshot_id)",
+	                              "row_snapshot, end_snapshot)",
 	                              ends);
 }
 
@@ -6859,7 +6859,7 @@ string DuckLakeMetadataManager::WriteNewPartitionKeys(const vector<DuckLakeParti
 	       InsertValuesSql("ducklake_partition_info (partition_id, table_id, begin_snapshot, branch_id)",
 	                       partition_values) +
 	       InsertValuesSql("ducklake_partition_visibility (branch_id, partition_id, row_branch_id, row_snapshot, "
-	                       "snapshot_id)",
+	                       "end_snapshot)",
 	                       partition_ends) +
 	       InsertValuesSql("ducklake_partition_column", partition_columns);
 }
@@ -7671,7 +7671,7 @@ static string UnreachableRowFilter(const DuckLakeMetadataManager::RowVisibilityK
       AND NOT EXISTS (
         SELECT 1
         FROM {METADATA_CATALOG}.ducklake_snapshot
-        WHERE snapshot_id >= %s.begin_snapshot AND snapshot_id < e.snapshot_id%s
+        WHERE snapshot_id >= %s.begin_snapshot AND snapshot_id < e.end_snapshot%s
       )
 ))",
 	                          alias, kind.kind, KeyMatches(kind, "e", alias), alias, alias, main_filter);

@@ -55,7 +55,7 @@ UPDATE meta.ducklake_tag SET branch_id = 0 WHERE branch_id IS NULL
 
 statement ok
 CREATE TABLE meta.ducklake_tag_visibility(branch_id BIGINT, object_id BIGINT, key VARCHAR, row_branch_id BIGINT,
-    row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, object_id, key, row_branch_id, row_snapshot))
+    row_snapshot BIGINT, end_snapshot BIGINT, PRIMARY KEY(branch_id, object_id, key, row_branch_id, row_snapshot))
 
 statement ok
 INSERT INTO meta.ducklake_tag_visibility
@@ -72,7 +72,7 @@ UPDATE meta.ducklake_column_tag SET branch_id = 0 WHERE branch_id IS NULL
 
 statement ok
 CREATE TABLE meta.ducklake_column_tag_visibility_pending(branch_id BIGINT, table_id BIGINT, column_id BIGINT,
-    key VARCHAR, row_branch_id BIGINT, row_snapshot BIGINT, snapshot_id BIGINT,
+    key VARCHAR, row_branch_id BIGINT, row_snapshot BIGINT, end_snapshot BIGINT,
     PRIMARY KEY(branch_id, table_id, column_id, key, row_branch_id, row_snapshot))
 
 statement ok
@@ -92,21 +92,21 @@ SELECT value FROM dl.options() WHERE option_name = 'version'
 2.0-dev1
 
 query IIII
-SELECT t.value, e.branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_tag_visibility e
+SELECT t.value, e.branch_id, e.row_snapshot, e.end_snapshot FROM meta.ducklake_tag_visibility e
 JOIN meta.ducklake_tag t ON t.object_id = e.object_id AND t.key = e.key AND t.branch_id = e.row_branch_id
     AND t.begin_snapshot = e.row_snapshot
 ----
 first	0	2	6
 
 query IIII
-SELECT t.value, e.branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_column_tag_visibility e
+SELECT t.value, e.branch_id, e.row_snapshot, e.end_snapshot FROM meta.ducklake_column_tag_visibility e
 JOIN meta.ducklake_column_tag t ON t.table_id = e.table_id AND t.column_id = e.column_id AND t.key = e.key
     AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
 ----
 col j	0	3	7
 
 query IIII
-SELECT t.value, e.branch_id, e.row_snapshot, e.snapshot_id FROM meta.ducklake_view_column_tag_visibility e
+SELECT t.value, e.branch_id, e.row_snapshot, e.end_snapshot FROM meta.ducklake_view_column_tag_visibility e
 JOIN meta.ducklake_view_column_tag t ON t.view_id = e.view_id AND t.column_name = e.column_name AND t.key = e.key
     AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
 ----
@@ -145,10 +145,10 @@ statement ok
 COMMENT ON COLUMN dl.v.x IS 'third x'
 
 query III
-SELECT t.value, e.row_snapshot, e.snapshot_id FROM meta.ducklake_view_column_tag_visibility e
+SELECT t.value, e.row_snapshot, e.end_snapshot FROM meta.ducklake_view_column_tag_visibility e
 JOIN meta.ducklake_view_column_tag t ON t.view_id = e.view_id AND t.column_name = e.column_name AND t.key = e.key
     AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
-ORDER BY e.snapshot_id
+ORDER BY e.end_snapshot
 ----
 first x	5	8
 second x	8	9

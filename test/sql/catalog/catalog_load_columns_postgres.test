@@ -68,9 +68,9 @@ true
 # Every scan of the column ends has the branch and snapshot filter as well
 query I
 SELECT CASE WHEN (SELECT catalog_type FROM settings()) = 'postgres' THEN
-	(SELECT bool_or(contains(query, printf('"branch_id" = 0 AND "snapshot_id" <= %d', getvariable('latest'))))
-	    AND bool_or(contains(query, printf('"branch_id" = 0 AND "snapshot_id" <= %d', getvariable('with_x'))))
-	    AND bool_and(contains(query, '"branch_id" = 0 AND "snapshot_id" <= '))
+	(SELECT bool_or(contains(query, printf('"branch_id" = 0 AND "end_snapshot" <= %d', getvariable('latest'))))
+	    AND bool_or(contains(query, printf('"branch_id" = 0 AND "end_snapshot" <= %d', getvariable('with_x'))))
+	    AND bool_and(contains(query, '"branch_id" = 0 AND "end_snapshot" <= '))
 	 FROM (SELECT message AS query FROM duckdb_logs WHERE type = 'PostgresQueryLog') logs
 	 WHERE contains(query, '"ducklake_column_visibility" '))
 	ELSE true END

@@ -34,7 +34,7 @@ x	comment	second
 
 # the first row ends at the snapshot that wrote the second
 query IIIII
-SELECT t.column_name, t.key, t.value, t.begin_snapshot, e.snapshot_id
+SELECT t.column_name, t.key, t.value, t.begin_snapshot, e.end_snapshot
 FROM __ducklake_metadata_ducklake.ducklake_view_column_tag t
 LEFT JOIN __ducklake_metadata_ducklake.ducklake_view_column_tag_visibility e ON e.view_id = t.view_id
     AND e.column_name = t.column_name AND e.key = t.key AND e.row_branch_id = t.branch_id

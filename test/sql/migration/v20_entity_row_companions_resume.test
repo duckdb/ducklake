@@ -55,7 +55,7 @@ UPDATE meta.ducklake_column SET branch_id = 0 WHERE branch_id IS NULL
 
 statement ok
 CREATE TABLE meta.ducklake_column_visibility(branch_id BIGINT, table_id BIGINT, column_id BIGINT, row_branch_id BIGINT,
-    row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, table_id, column_id, row_branch_id, row_snapshot))
+    row_snapshot BIGINT, end_snapshot BIGINT, PRIMARY KEY(branch_id, table_id, column_id, row_branch_id, row_snapshot))
 
 statement ok
 INSERT INTO meta.ducklake_column_visibility
@@ -72,7 +72,7 @@ UPDATE meta.ducklake_partition_info SET branch_id = 0 WHERE branch_id IS NULL
 
 statement ok
 CREATE TABLE meta.ducklake_partition_visibility_pending(branch_id BIGINT, partition_id BIGINT, row_branch_id BIGINT,
-    row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, partition_id, row_branch_id, row_snapshot))
+    row_snapshot BIGINT, end_snapshot BIGINT, PRIMARY KEY(branch_id, partition_id, row_branch_id, row_snapshot))
 
 statement ok
 ALTER TABLE meta.ducklake_sort_info ADD COLUMN branch_id BIGINT DEFAULT 0
@@ -91,7 +91,7 @@ SELECT value FROM dl.options() WHERE option_name = 'version'
 2.0-dev1
 
 query IIII
-SELECT c.column_name, e.branch_id, e.row_snapshot, e.snapshot_id
+SELECT c.column_name, e.branch_id, e.row_snapshot, e.end_snapshot
 FROM meta.ducklake_column_visibility e
 JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.column_id AND c.branch_id = e.row_branch_id
     AND c.begin_snapshot = e.row_snapshot
@@ -99,7 +99,7 @@ JOIN meta.ducklake_column c ON c.table_id = e.table_id AND c.column_id = e.colum
 j	0	1	5
 
 query III
-SELECT e.branch_id, e.row_snapshot, e.snapshot_id
+SELECT e.branch_id, e.row_snapshot, e.end_snapshot
 FROM meta.ducklake_partition_visibility e
 JOIN meta.ducklake_partition_info p ON p.partition_id = e.partition_id AND p.branch_id = e.row_branch_id
     AND p.begin_snapshot = e.row_snapshot
@@ -107,7 +107,7 @@ JOIN meta.ducklake_partition_info p ON p.partition_id = e.partition_id AND p.bra
 0	2	6
 
 query III
-SELECT e.branch_id, e.row_snapshot, e.snapshot_id
+SELECT e.branch_id, e.row_snapshot, e.end_snapshot
 FROM meta.ducklake_sort_visibility e
 JOIN meta.ducklake_sort_info s ON s.sort_id = e.sort_id AND s.branch_id = e.row_branch_id
     AND s.begin_snapshot = e.row_snapshot
@@ -115,7 +115,7 @@ JOIN meta.ducklake_sort_info s ON s.sort_id = e.sort_id AND s.branch_id = e.row_
 0	3	7
 
 query IIII
-SELECT m.macro_name, e.branch_id, e.row_snapshot, e.snapshot_id
+SELECT m.macro_name, e.branch_id, e.row_snapshot, e.end_snapshot
 FROM meta.ducklake_macro_visibility e
 JOIN meta.ducklake_macro m ON m.macro_id = e.macro_id AND m.branch_id = e.row_branch_id
     AND m.begin_snapshot = e.row_snapshot
@@ -168,7 +168,7 @@ statement ok
 ALTER TABLE dl.t SET PARTITIONED BY (i)
 
 query II
-SELECT row_snapshot, snapshot_id FROM meta.ducklake_partition_visibility ORDER BY snapshot_id
+SELECT row_snapshot, end_snapshot FROM meta.ducklake_partition_visibility ORDER BY end_snapshot
 ----
 2	6
 6	9
