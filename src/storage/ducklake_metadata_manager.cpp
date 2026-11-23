@@ -1351,7 +1351,7 @@ bool DuckLakeMetadataManager::V2_0InlinedCompanion::Incomplete() const {
 		return true;
 	}
 	for (auto &payload : payloads) {
-		if (!payload.has_branch_column || payload.has_end_column) {
+		if (!payload.has_branch_column || payload.has_end_column || payload.has_old_end_column) {
 			return true;
 		}
 	}
@@ -1413,6 +1413,7 @@ DuckLakeMetadataManager::V2_0InlinedCompanion DuckLakeMetadataManager::ProbeV2_0
 		}
 		payload.has_branch_column = HasMetadataColumn(name, col_names.branch_id.GetIdentifierName());
 		payload.has_end_column = HasMetadataColumn(name, col_names.end_snapshot.GetIdentifierName());
+		payload.has_old_end_column = HasMetadataColumn(name, col_names.end_snapshot.GetIdentifierName() + "_old");
 		inlined.payloads.push_back(std::move(payload));
 	}
 	for (auto &name : ProbedInlinedDeletionTables()) {
@@ -1441,7 +1442,7 @@ void DuckLakeMetadataManager::VerifyV2_0InlinedCompanion(const V2_0InlinedCompan
 			continue;
 		}
 		// without the end column only a companion holds the ends, so a payload without one has to be empty
-		if (!payload.has_end_column && TableHasRows(name)) {
+		if (!payload.has_end_column && !payload.has_old_end_column && TableHasRows(name)) {
 			throw InvalidInputException("Cannot migrate this DuckLake catalog: the end snapshots of the inlined rows "
 			                            "of %s were dropped and the end rows that replaced them are missing",
 			                            name);
@@ -1496,8 +1497,16 @@ vector<string> DuckLakeMetadataManager::V2_0InlinedCompanionSql(const V2_0Inline
 		auto &table = payload.table;
 		query += BranchColumnSql(table.GetIdentifierName(), col_names.branch_id.GetIdentifierName(),
 		                         payload.has_branch_column);
+		auto old_end = col_names.end_snapshot.GetIdentifierName() + "_old";
 		if (payload.has_end_column) {
-			query += V2_0EndColumnSql(InlinedRowKind(table, col_names), target);
+			// a writer of the previous layout fails on the renamed column instead of ending a row the fold misses
+			query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN %s TO %s;\n", table,
+			                            col_names.end_snapshot, old_end);
+		}
+		if (payload.has_end_column || payload.has_old_end_column) {
+			auto kind = InlinedRowKind(table, col_names);
+			kind.end_column = old_end;
+			query += V2_0EndColumnSql(kind, target);
 		}
 	}
 	for (auto &table : inlined.deletion_tables) {

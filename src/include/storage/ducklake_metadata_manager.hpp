@@ -917,6 +917,8 @@ public:
 		idx_t table_id = 0;
 		bool has_branch_column = false;
 		bool has_end_column = false;
+		//! Whether the end column stands renamed for its fold, the state of an interrupted step
+		bool has_old_end_column = false;
 	};
 	struct V2_0InlinedDeletionTable {
 		Identifier table;
