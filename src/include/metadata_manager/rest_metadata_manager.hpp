@@ -63,7 +63,6 @@ public:
 	vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot,
 	                                                    const vector<TableIndex> &table_ids = {}) override;
 	map<TableIndex, idx_t> GetTableRecordCounts(DuckLakeSnapshot snapshot) override;
-	bool GetTablesChangedSince(idx_t snapshot_id, DuckLakeSnapshot snapshot, set<TableIndex> &result) override;
 	vector<DuckLakeFileListEntry>
 	GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
 	                 const FilterPushdownInfo *filter_info = nullptr, bool include_local_changes = true,
