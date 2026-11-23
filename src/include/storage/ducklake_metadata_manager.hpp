@@ -373,12 +373,14 @@ public:
 	struct RowVisibilityKind {
 		string kind;
 		vector<string> key_columns;
-		//! The row table when it is not named after the kind, the payload of the inlined rows
+		//! The row table when not named after the kind, a payload of inlined rows
 		string row_table;
-		//! The constant of a key column in every statement of the kind, empty for a column of the row table
+		//! The literal of a key column, empty when the row table holds the column
 		vector<string> key_literals;
-		//! The row table columns of the keys when named unlike the companion's, the inlined rows prefix them
+		//! The row table names of the key columns when they differ from the companion's
 		vector<string> payload_key_columns;
+		//! Whether the key columns lead the companion and its primary key, the branch follows the version
+		bool key_leads = false;
 		//! The birth columns of the row table
 		string branch_column = "branch_id";
 		string begin_column = "begin_snapshot";
@@ -854,7 +856,7 @@ public:
 	static string GetMainBranchRowStatement();
 	//! Whether the catalog already has every metadata table and column of v1.1
 	bool HasV1_1Additions();
-	//! Whether the tables a migration to 2.0 moves aside are under their names, false for an interrupted first batch
+	//! Whether the catalog has the tables of 1.1 under their names in their shape, false once a migration to 2.0 began
 	bool HasV1_1Layout();
 	//! The snapshot additions of 2.0 a catalog is missing, probed so an interrupted migration resumes
 	struct V2_0SnapshotAdditions {

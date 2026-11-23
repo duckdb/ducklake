@@ -2661,6 +2661,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		}
 	}
 
+	// the payloads this commit deletes from keep the versions it ends when it flushes them
+	identifier_set_t deleted_payloads;
 	if (has_table_data_changes) {
 		// write new delete files
 		vector<DuckLakeOverwrittenDeleteFile> overwritten_delete_files;
@@ -2674,6 +2676,9 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 
 		// write new inlined deletes (for inlined data tables)
 		auto inlined_deletes = GetNewInlinedDeletes(commit_state);
+		for (auto &entry : inlined_deletes) {
+			deleted_payloads.insert(entry.table_name);
+		}
 		batch_queries += DuckLakeMetadataManager::WriteNewInlinedDeletes(inlined_deletes, context.InlinedColNames(),
 		                                                                 context.supports_row_visibility);
 
@@ -2733,10 +2738,6 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 	                                                                     commit_snapshot.next_file_id);
 
 	// delete the flushed inlined rows and inlined file deletions after the deletes of the transaction
-	identifier_set_t deleted_payloads;
-	for (auto &entry : GetNewInlinedDeletes(commit_state)) {
-		deleted_payloads.insert(entry.table_name);
-	}
 	batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(
 	    flushed_inlined_tables, flushed_inlined_file_deletions, deleted_payloads, context.InlinedColNames(),
 	    context.supports_row_visibility);

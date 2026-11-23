@@ -445,11 +445,18 @@ static idx_t InlinedTableId(const Identifier &inlined_table_name) {
 	return table_id.GetIndex();
 }
 
+//! The shared companion of the inlined rows names a version by its table and row id, the table id leads the key
+static DuckLakeMetadataManager::RowVisibilityKind InlinedCompanionKind() {
+	DuckLakeMetadataManager::RowVisibilityKind kind {"inlined_data", {"table_id", "row_id"}};
+	kind.key_leads = true;
+	return kind;
+}
+
 DuckLakeMetadataManager::RowVisibilityKind
 DuckLakeMetadataManager::InlinedRowKind(const Identifier &inlined_table_name,
                                         const DuckLakeInlinedColNames &col_names) {
-	// the shared companion names a version by its table and birth, the table id is a constant of every statement
-	RowVisibilityKind kind {"inlined_data", {"table_id", "row_id"}};
+	// the table id is a constant of every statement of a payload, whose columns carry the reserved prefix
+	auto kind = InlinedCompanionKind();
 	kind.row_table = inlined_table_name.GetIdentifierName();
 	kind.key_literals = {to_string(InlinedTableId(inlined_table_name)), ""};
 	kind.payload_key_columns = {"", col_names.row_id.GetIdentifierName()};
@@ -523,10 +530,17 @@ static string RowVisibilityTableStatement(const DuckLakeMetadataManager::RowVisi
 	for (auto &key : kind.key_columns) {
 		key_definitions += key + " " + DuckLakeMetadataManager::RowKeyType(key) + ", ";
 	}
+	auto keys = StringUtil::Join(kind.key_columns, ", ");
+	if (kind.key_leads) {
+		return StringUtil::Format("CREATE TABLE {METADATA_CATALOG}.%s(%srow_branch_id BIGINT, row_snapshot BIGINT, "
+		                          "branch_id BIGINT, snapshot_id BIGINT, PRIMARY KEY(%s, row_branch_id, row_snapshot, "
+		                          "branch_id));",
+		                          table, key_definitions, keys);
+	}
 	return StringUtil::Format("CREATE TABLE {METADATA_CATALOG}.%s(branch_id BIGINT, %srow_branch_id BIGINT, "
 	                          "row_snapshot BIGINT, snapshot_id BIGINT, PRIMARY KEY(branch_id, %s, row_branch_id, "
 	                          "row_snapshot));",
-	                          table, key_definitions, StringUtil::Join(kind.key_columns, ", "));
+	                          table, key_definitions, keys);
 }
 
 string DuckLakeMetadataManager::GetRowVisibilityTableStatement(const RowVisibilityKind &kind) {
@@ -534,12 +548,7 @@ string DuckLakeMetadataManager::GetRowVisibilityTableStatement(const RowVisibili
 }
 
 string DuckLakeMetadataManager::GetInlinedVisibilityTableStatement(const string &table) {
-	// one end per row version per branch, the version named by its table and birth, the table id leads the key
-	return StringUtil::Format(
-	    "CREATE TABLE {METADATA_CATALOG}.%s(table_id BIGINT, row_id BIGINT, row_branch_id BIGINT, "
-	    "row_snapshot BIGINT, branch_id BIGINT, snapshot_id BIGINT, PRIMARY KEY(table_id, "
-	    "row_id, row_branch_id, row_snapshot, branch_id));",
-	    table);
+	return RowVisibilityTableStatement(InlinedCompanionKind(), table);
 }
 
 string DuckLakeMetadataManager::RowVisibility(const string &alias, const RowVisibilityKind &kind,
@@ -908,11 +917,17 @@ static string ColumnProbeSql(const vector<std::pair<string, string>> &columns) {
 }
 
 bool DuckLakeMetadataManager::HasV1_1Layout() {
+	// the first batch of the migration takes the tables away by name, the next rebuilds the snapshot table with its
+	// branch key, and the version follows the last batch
 	vector<std::pair<string, string>> tables {{"ducklake_snapshot", "snapshot_id"},
 	                                          {"ducklake_snapshot_changes", "snapshot_id"},
 	                                          {"ducklake_data_file", "data_file_id"},
 	                                          {"ducklake_delete_file", "delete_file_id"}};
-	return !Query(ColumnProbeSql(tables))->HasError();
+	if (Query(ColumnProbeSql(tables))->HasError()) {
+		return false;
+	}
+	vector<std::pair<string, string>> rebuilt {{"ducklake_snapshot", "branch_id"}};
+	return Query(ColumnProbeSql(rebuilt))->HasError();
 }
 
 bool DuckLakeMetadataManager::HasV1_1Additions() {
@@ -1446,7 +1461,7 @@ void DuckLakeMetadataManager::VerifyV2_0InlinedCompanion(const V2_0InlinedCompan
 	}
 }
 
-//! The payloads one batch of the inlined step converts, a batch is one transaction within the lock table of Postgres
+//! The tables one batch of the inlined step converts, a batch is one transaction within the lock table of Postgres
 static constexpr idx_t INLINED_STEP_PAYLOADS = 500;
 
 vector<string> DuckLakeMetadataManager::V2_0InlinedCompanionSql(const V2_0InlinedCompanion &inlined) const {
@@ -1464,13 +1479,16 @@ vector<string> DuckLakeMetadataManager::V2_0InlinedCompanionSql(const V2_0Inline
 		query += GetInlinedVisibilityTableStatement(pending) + "\n";
 	}
 	idx_t converted = 0;
-	for (auto &payload : inlined.payloads) {
+	auto next_table = [&]() {
 		if (converted == INLINED_STEP_PAYLOADS) {
 			batches.push_back(std::move(query));
 			query.clear();
 			converted = 0;
 		}
 		converted++;
+	};
+	for (auto &payload : inlined.payloads) {
+		next_table();
 		auto &table = payload.table;
 		if (!payload.has_branch_column) {
 			query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s ADD COLUMN %s BIGINT DEFAULT 0;\n", table,
@@ -1484,6 +1502,7 @@ vector<string> DuckLakeMetadataManager::V2_0InlinedCompanionSql(const V2_0Inline
 		}
 	}
 	for (auto &table : inlined.deletion_tables) {
+		next_table();
 		if (!table.has_branch_column) {
 			query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s ADD COLUMN branch_id BIGINT DEFAULT 0;\n",
 			                            table.table);
@@ -5307,7 +5326,7 @@ static unique_ptr<SQLStatement> InlinedDataInsert(DuckLakeTransaction &transacti
 		input->Append(input_chunk);
 	}
 
-	// the birth branch follows the cells from 2.0 on, the NULL end precedes them before
+	// the row shape of FormatInlinedDataInsert
 	bool row_visibility = catalog.SupportsRowVisibility();
 	vector<string> projections {"col" + to_string(types.size()), to_string(snapshot.snapshot_id)};
 	if (!row_visibility) {

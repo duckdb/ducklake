@@ -183,6 +183,49 @@ SELECT i FROM dl.t AT (VERSION => 2) ORDER BY i
 statement ok
 DETACH dl
 
+# the batches of the migration from 1.1 commit before the version, a catalog between them is not a 1.1 catalog
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS meta
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_visibility RENAME TO ducklake_inlined_data_visibility_pending
+
+statement ok
+UPDATE meta.ducklake_metadata SET value = '1.1' WHERE key = 'version'
+
+statement ok
+DETACH meta
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DUCKLAKE_VERSION '1.1')
+----
+a migration to 2.0-dev1 has begun on it
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_inlined_data_visibility
+----
+2
+
+query I
+SELECT i FROM dl.t AT (VERSION => 2) ORDER BY i
+----
+1
+2
+3
+
+statement ok
+DETACH dl
+
 # a missing companion held the ends of the payloads without end column, so the migration refuses it
 statement ok
 ATTACH '{DUCKLAKE_CONNECTION}' AS meta
