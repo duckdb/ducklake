@@ -33,6 +33,7 @@
       "reason": "Inspects the SQL queries that are issued to the metadata catalog, which are issued by the REST server",
       "paths": [
         "test/sql/compaction/merge_adjacent_empty_tables.test",
+        "test/sql/compaction/compaction_candidate_tables.test",
         "test/sql/compaction/merge_adjacent_inlined_deletion_lookup.test",
         "test/sql/data_inlining/inlined_commit_append.test",
         "test/sql/delete/extended_file_list_metadata_query.test",
@@ -547,9 +548,20 @@
         "test/sql/general/read_only_attach_create_migrate.test",
         "test/sql/types/timestamptz_ns_v10.test",
         "test/sql/migration/v11_to_v20_dev1.test",
+        "test/sql/migration/v20_ended_delete_file_migration.test",
+        "test/sql/migration/v20_file_events_migration.test",
+        "test/sql/migration/v20_file_events_migration_resume.test",
+        "test/sql/migration/v20_interrupted_first_batch_attach.test",
+        "test/sql/migration/v20_file_events_migration_resume_events.test",
+        "test/sql/migration/v20_file_events_migration_resume_columns.test",
+        "test/sql/migration/v20_file_events_migration_resume_one_table.test",
+        "test/sql/metadata/file_visibility_layout.test",
+        "test/sql/delete/delete_file_events_main.test",
+        "test/sql/delete/delete_replacement_commit_statements.test",
+        "test/sql/retry/retry_conflict_read_shapes.test",
         "test/sql/migration/v20_dev1_new_catalog.test",
-        "test/sql/migration/v11_to_v20_dev2_snapshot_keys.test",
-        "test/sql/migration/v20_dev1_to_v20_dev2.test",
+        "test/sql/migration/v11_to_v20_dev1_snapshot_keys.test",
+        "test/sql/migration/v20_dev1_missing_steps.test",
         "test/sql/migration/v20_dev1_missing_tag_expiry.test",
         "test/sql/migration/rejected_migrating_attach_keeps_catalog.test",
         "test/sql/catalog/snapshot_branch_key.test",
@@ -557,7 +569,8 @@
         "test/sql/tags/tags_version_gate_time_travel.test",
         "test/sql/data_inlining/inlining_obstacle_log.test",
         "test/sql/compaction/user_columns_named_like_internal_columns.test",
-        "test/sql/data_inlining/data_inlining_transaction_local_field_readd_rejected.test"
+        "test/sql/data_inlining/data_inlining_transaction_local_field_readd_rejected.test",
+        "test/sql/data_inlining/data_inlining_variant_stats.test"
       ]
     },
     {

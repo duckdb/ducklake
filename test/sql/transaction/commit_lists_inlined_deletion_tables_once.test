@@ -1,0 +1,69 @@
+# name: test/sql/transaction/commit_lists_inlined_deletion_tables_once.test
+# description: the conflict checks of a commit list the inlined deletion tables of a remote catalog once per attempt
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+# two files per table
+statement ok
+CREATE TABLE dl.t1 AS SELECT i AS id FROM range(100) t(i)
+
+statement ok
+INSERT INTO dl.t1 SELECT i FROM range(100, 200) t(i)
+
+statement ok
+CREATE TABLE dl.t2 AS SELECT i AS id FROM range(100) t(i)
+
+statement ok
+INSERT INTO dl.t2 SELECT i FROM range(100, 200) t(i)
+
+statement ok
+SET immediate_transaction_mode=true
+
+# thirty rows of the first file of each table go to a delete file
+statement ok con1
+BEGIN
+
+statement ok con1
+DELETE FROM dl.t1 WHERE id >= 50 AND id < 80
+
+statement ok con1
+DELETE FROM dl.t2 WHERE id >= 50 AND id < 80
+
+# one row of the second file of each table becomes the first inlined deletion of the table
+statement ok con2
+DELETE FROM dl.t1 WHERE id = 150
+
+statement ok con2
+DELETE FROM dl.t2 WHERE id = 150
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# the commit checks the inlined deletions of both tables against its delete files and passes
+statement ok con1
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+# the checks of both tables share one listing, a catalog that looks tables up lists nothing
+query I
+SELECT count(*) <= 1 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%pg_tables%' OR query LIKE '%duckdb_tables()%'
+----
+true
+
+query II
+SELECT (SELECT count(*) FROM dl.t1), (SELECT count(*) FROM dl.t2)
+----
+169	169

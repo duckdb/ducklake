@@ -31,7 +31,7 @@ DELETE FROM ducklake.t WHERE id < 30
 30
 
 query I
-SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_delete_file WHERE table_id = getvariable('t_id') AND end_snapshot IS NULL
+SELECT delete_file_count FROM ducklake_table_info('ducklake') WHERE table_id = getvariable('t_id')
 ----
 1
 
@@ -53,7 +53,7 @@ SELECT COUNT(*) FROM ducklake.t
 0
 
 query I
-SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE table_id = getvariable('t_id') AND end_snapshot IS NULL
+SELECT file_count FROM ducklake_table_info('ducklake') WHERE table_id = getvariable('t_id')
 ----
 0
 
