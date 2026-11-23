@@ -9,7 +9,35 @@ template <typename Base>
 string DuckLakeMetadataManagerV2_0<Base>::GetCreateTableStatements() {
 	auto result = DuckLakeMetadataManagerV1_1<Base>::GetCreateTableStatements();
 	result += DuckLakeMetadataManager::GetSnapshotTagTableStatement() + "\n";
+	result += DuckLakeMetadataManager::GetBranchTableStatement() + "\n";
+	result += DuckLakeMetadataManager::GetMainBranchRowStatement() + "\n";
+	result += DuckLakeMetadataManager::GetFileVisibilityTableStatement() + "\n";
+	result += DuckLakeMetadataManager::GetDeleteFileVisibilityTableStatement() + "\n";
 	return result;
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetDataFileTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_data_file(" +
+	       DuckLakeMetadataManager::DataFileTableColumns(false, true) + ");";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetDeleteFileTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_delete_file(" +
+	       DuckLakeMetadataManager::DeleteFileTableColumns(false, true) + ");";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetSnapshotTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot(" +
+	       DuckLakeMetadataManager::BranchedSnapshotTableColumns() + ");";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetSnapshotChangesTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_changes(" +
+	       DuckLakeMetadataManager::BranchedSnapshotChangesTableColumns() + ");";
 }
 
 template <typename Base>

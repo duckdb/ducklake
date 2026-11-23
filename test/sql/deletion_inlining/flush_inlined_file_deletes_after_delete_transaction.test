@@ -59,7 +59,7 @@ statement ok
 SET VARIABLE d_id = (SELECT table_id FROM __ducklake_metadata_lake.ducklake_table WHERE table_name = 'd')
 
 query I
-SELECT COUNT(*) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE table_id = getvariable('d_id') AND end_snapshot IS NULL
+SELECT delete_file_count FROM ducklake_table_info('lake') WHERE table_id = getvariable('d_id')
 ----
 1
 

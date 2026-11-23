@@ -1,5 +1,5 @@
 # name: test/sql/migration/migration_load_error.test
-# description: a load error after a migration fails the attach at once, without the retries of a migration
+# description: a migrating attach rejected for its data path fails at once, without the retries of a migration
 # group: [migration]
 
 require ducklake
@@ -9,8 +9,17 @@ require parquet
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{TEST_DIR}/migration_load_error.db' AS setup (DATA_PATH '{DATA_PATH}/migration_load_error',
-DUCKLAKE_VERSION '1.0')
+CREATE TABLE metadata_reads(retries INTEGER, reads BIGINT)
+
+statement ok
+SET ducklake_retry_wait_ms = 1
+
+# every round rejects a migrating attach of its own 1.0 catalog
+foreach retries 0 8
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/migration_load_error_{retries}.db' AS setup
+(DATA_PATH '{DATA_PATH}/migration_load_error_{retries}', DUCKLAKE_VERSION '1.0')
 
 statement ok
 CREATE TABLE setup.t (a INTEGER)
@@ -19,22 +28,15 @@ statement ok
 DETACH setup
 
 statement ok
-CREATE TABLE metadata_reads(retries INTEGER, reads BIGINT)
-
-statement ok
-SET ducklake_retry_wait_ms = 1
-
-foreach retries 0 8
-
-statement ok
 SET ducklake_max_retry_count = {retries}
 
 statement ok
 CALL enable_logging('DuckLakeMetadata')
 
-# the migration succeeds and the data path that follows does not match
+# the data path does not match, so the attach fails before the migration
 statement error
-ATTACH 'ducklake:{TEST_DIR}/migration_load_error.db' AS dl (DATA_PATH '{DATA_PATH}/other', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{TEST_DIR}/migration_load_error_{retries}.db' AS dl (DATA_PATH '{DATA_PATH}/other',
+METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
 ----
 does not match existing data path
 
@@ -53,3 +55,58 @@ query I
 SELECT max(reads) FILTER (retries = 0) = max(reads) FILTER (retries = 8) FROM metadata_reads
 ----
 true
+
+# the rejected attach left the 1.0 catalog untouched
+statement ok
+DETACH DATABASE IF EXISTS meta
+
+statement ok
+ATTACH '{TEST_DIR}/migration_load_error_8.db' AS meta
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
+----
+1.0
+
+query I
+SELECT list(table_name ORDER BY table_name) FROM duckdb_tables() WHERE database_name = 'meta'
+AND table_name LIKE 'ducklake_snapshot%'
+----
+[ducklake_snapshot, ducklake_snapshot_changes]
+
+statement ok
+DETACH meta
+
+# an attach without the migration option still reads the 1.0 catalog
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/migration_load_error_8.db' AS dl (DATA_PATH '{DATA_PATH}/migration_load_error_8',
+METADATA_CATALOG 'meta')
+
+query I
+SELECT count(*) FROM dl.t
+----
+0
+
+statement ok
+DETACH dl
+
+# the next writable attach with the migration option migrates the catalog
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/migration_load_error_8.db' AS dl (DATA_PATH '{DATA_PATH}/migration_load_error_8',
+METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT count(*) FROM dl.t
+----
+0
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
+----
+2.0-dev1
+
+query I
+SELECT list(table_name ORDER BY table_name) FROM duckdb_tables() WHERE database_name = 'meta'
+AND table_name LIKE 'ducklake_snapshot%'
+----
+[ducklake_snapshot, ducklake_snapshot_changes, ducklake_snapshot_tag]

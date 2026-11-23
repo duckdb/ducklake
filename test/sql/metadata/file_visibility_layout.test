@@ -1,0 +1,110 @@
+# name: test/sql/metadata/file_visibility_layout.test
+# description: a new catalog keeps the visibility of its files as events and its file tables carry no ranges
+# group: [metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_data_file') ORDER BY column_index
+----
+data_file_id
+table_id
+file_order
+path
+path_is_relative
+file_format
+record_count
+file_size_bytes
+footer_size
+row_id_start
+partition_id
+encryption_key
+mapping_id
+partial_max
+row_group_count
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_delete_file') ORDER BY column_index
+----
+delete_file_id
+table_id
+data_file_id
+path
+path_is_relative
+format
+delete_count
+file_size_bytes
+footer_size
+encryption_key
+partial_max
+row_group_count
+
+# SQLite reports the boolean column as an integer
+query II
+SELECT column_name, CASE WHEN column_name = 'is_delete' AND data_type = 'BIGINT' THEN 'BOOLEAN' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_file_visibility') ORDER BY column_index
+----
+branch_id	BIGINT
+table_id	BIGINT
+data_file_id	BIGINT
+snapshot_id	BIGINT
+is_delete	BOOLEAN
+
+query II
+SELECT column_name, CASE WHEN column_name = 'is_delete' AND data_type = 'BIGINT' THEN 'BOOLEAN' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_delete_file_visibility') ORDER BY column_index
+----
+branch_id	BIGINT
+table_id	BIGINT
+delete_file_id	BIGINT
+snapshot_id	BIGINT
+is_delete	BOOLEAN
+
+# one add event per file and branch, a second one is refused by the key
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+query IIIII
+SELECT branch_id, table_id, data_file_id, snapshot_id, is_delete::BOOLEAN FROM meta.ducklake_file_visibility
+----
+0	1	0	1	false
+
+statement error
+INSERT INTO meta.ducklake_file_visibility VALUES (0, 1, 0, 2, false)
+----
+<REGEX>:.*(constraint|UNIQUE|duplicate).*
+
+# the drop of the table ends its file with a delete event, the file row stays for the time travel
+statement ok
+DROP TABLE dl.t
+
+query IIIII
+SELECT branch_id, table_id, data_file_id, snapshot_id, is_delete::BOOLEAN FROM meta.ducklake_file_visibility ORDER BY is_delete
+----
+0	1	0	1	false
+0	1	0	2	true
+
+query I
+SELECT count(*) FROM meta.ducklake_data_file
+----
+1
+
+query I
+SELECT i FROM dl.t AT (VERSION => 1)
+----
+42
+
+statement ok
+DETACH dl
