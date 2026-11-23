@@ -34,7 +34,7 @@ statement ok
 RESET ducklake_debug_lose_commit_reply
 
 query II
-SELECT count(*), min(begin_snapshot) FROM metadata.ducklake_data_file WHERE end_snapshot IS NULL
+SELECT count(*), min(begin_snapshot) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM metadata.ducklake_data_file f JOIN (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot, MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot FROM metadata.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id) v ON v.data_file_id = f.data_file_id) WHERE end_snapshot IS NULL
 ----
 1	2
 
@@ -59,7 +59,7 @@ RESET ducklake_debug_lose_commit_reply
 
 # the rewritten file begins at the snapshot of the rewrite, which ends the merged file
 query III
-SELECT count(*), count(*) FILTER (WHERE end_snapshot IS NULL), max(begin_snapshot) FROM metadata.ducklake_data_file
+SELECT count(*), count(*) FILTER (WHERE end_snapshot IS NULL), max(begin_snapshot) FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM metadata.ducklake_data_file f JOIN (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot, MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot FROM metadata.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id) v ON v.data_file_id = f.data_file_id)
 ----
 2	1	6
 

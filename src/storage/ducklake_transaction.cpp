@@ -1775,9 +1775,9 @@ DuckLakeCommitOutcome DuckLakeTransaction::CommitOutcome(const DuckLakeCommitSta
 	}
 	auto condition = StringUtil::Join(conditions, " OR ");
 	auto query =
-	    StringUtil::Format("SELECT count(*) FROM (SELECT path FROM {METADATA_CATALOG}.ducklake_data_file WHERE %s "
-	                       "UNION ALL SELECT path FROM {METADATA_CATALOG}.ducklake_delete_file WHERE %s)",
-	                       condition, condition);
+	    StringUtil::Format("SELECT count(*) FROM (SELECT path FROM %s WHERE %s UNION ALL SELECT path FROM %s "
+	                       "WHERE %s)",
+	                       metadata_manager->DataFiles(), condition, metadata_manager->DeleteFiles(), condition);
 	// the catalog finishes a COMMIT whose reply was lost on its own, so the files show up within moments
 	static constexpr int64_t WAIT_MS = 3000;
 	static constexpr int64_t STEP_MS = 100;

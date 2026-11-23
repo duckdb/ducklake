@@ -54,7 +54,7 @@ RESET ducklake_debug_lose_commit_reply
 
 # the merge never happened, the two files and the registered copy stay live
 query I
-SELECT count(*) FROM metadata.ducklake_data_file WHERE end_snapshot IS NULL
+SELECT coalesce(sum(file_count), 0)::BIGINT FROM ducklake_table_info('ducklake')
 ----
 3
 
