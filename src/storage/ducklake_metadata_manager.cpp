@@ -1360,7 +1360,7 @@ bool DuckLakeMetadataManager::V2_0InlinedCompanion::Incomplete() const {
 		return true;
 	}
 	for (auto &payload : payloads) {
-		if (!payload.has_branch_column || payload.has_end_column || payload.has_old_table) {
+		if (!payload.has_branch_column || payload.has_end_column || payload.has_old_table || payload.has_new_table) {
 			return true;
 		}
 	}
@@ -1420,7 +1420,8 @@ DuckLakeMetadataManager::V2_0InlinedCompanion DuckLakeMetadataManager::ProbeV2_0
 		auto &begin = col_names.begin_snapshot.GetIdentifierName();
 		payload.present = HasMetadataColumn(name, begin);
 		payload.has_old_table = HasMetadataColumn(name + "_old", begin);
-		if (!payload.present && !payload.has_old_table) {
+		payload.has_new_table = HasMetadataColumn(name + "_new", begin);
+		if (!payload.present && !payload.has_old_table && !payload.has_new_table) {
 			continue;
 		}
 		payload.has_branch_column = payload.present && HasMetadataColumn(name, col_names.branch_id.GetIdentifierName());
@@ -1541,31 +1542,39 @@ vector<string> DuckLakeMetadataManager::V2_0InlinedCompanionSql(const V2_0Inline
 		}
 		converted++;
 	};
+	vector<string> renames;
 	for (auto &payload : inlined.payloads) {
 		next_table();
 		auto &table = payload.table;
+		if (payload.has_new_table || payload.has_old_table) {
+			// the rebuilt table takes its name in the last batch, so no writer of the previous layout finds it before
+			renames.push_back(StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s_new RENAME TO %s;\n",
+			                                     table.GetIdentifierName(), table.GetIdentifierName()));
+		}
 		if (!payload.has_old_table) {
-			// an empty payload of a dev build that lost its end column
-			query += BranchColumnSql(table.GetIdentifierName(), col_names.branch_id.GetIdentifierName(),
-			                         payload.has_branch_column);
+			if (payload.present) {
+				// an empty payload of a dev build that lost its end column
+				query += BranchColumnSql(table.GetIdentifierName(), col_names.branch_id.GetIdentifierName(),
+				                         payload.has_branch_column);
+			}
 			continue;
 		}
-		// the payload is rebuilt in its 2.0 shape from the renamed one, a Postgres table at its column limit cannot
-		// take a column after a drop, and every statement runs again without harm
+		// a rebuild, since a Postgres table at its column limit takes no column after a drop
 		auto old_table = table.GetIdentifierName() + "_old";
+		Identifier new_table(table.GetIdentifierName() + "_new");
 		vector<string> columns {col_names.row_id.GetIdentifierName(), col_names.begin_snapshot.GetIdentifierName()};
 		columns.insert(columns.end(), payload.user_columns.begin(), payload.user_columns.end());
 		vector<string> values;
 		for (auto &column : columns) {
 			values.push_back("o." + column);
 		}
-		query += InlinedTableDdlSql(table, payload.column_defs, col_names, true) + "\n";
+		query += InlinedTableDdlSql(new_table, payload.column_defs, col_names, true) + "\n";
 		query += StringUtil::Format(R"(INSERT INTO {METADATA_CATALOG}.%s (%s, %s)
 SELECT %s, 0 FROM {METADATA_CATALOG}.%s o
 WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.%s n WHERE n.%s = o.%s AND n.%s = o.%s);
 )",
-		                            table, StringUtil::Join(columns, ", "), col_names.branch_id,
-		                            StringUtil::Join(values, ", "), old_table, table, col_names.row_id,
+		                            new_table, StringUtil::Join(columns, ", "), col_names.branch_id,
+		                            StringUtil::Join(values, ", "), old_table, new_table, col_names.row_id,
 		                            col_names.row_id, col_names.begin_snapshot, col_names.begin_snapshot);
 		auto kind = InlinedRowKind(table, col_names);
 		kind.row_table = old_table;
@@ -1576,6 +1585,7 @@ WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.%s n WHERE n.%s = o.%s AND n.
 		next_table();
 		query += BranchColumnSql(table.table.GetIdentifierName(), "branch_id", table.has_branch_column);
 	}
+	query += StringUtil::Join(renames, "");
 	if (!inlined.has_companion) {
 		query += RowCompanionRenameSql("inlined_data");
 	}

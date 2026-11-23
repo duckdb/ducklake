@@ -171,12 +171,12 @@ UPDATE meta.ducklake_inlined_data_1_1_old SET _ducklake_end_snapshot = (SELECT e
 statement ok
 DELETE FROM meta.ducklake_inlined_data_visibility WHERE table_id = 1
 
-# a rebuild interrupted after the copy of the rows of u left both tables
+# a rebuild interrupted after the copy of the rows of u left the renamed table and the new one
 statement ok
 ALTER TABLE meta.ducklake_inlined_data_2_2 RENAME TO ducklake_inlined_data_2_2_old
 
 statement ok
-CREATE TABLE meta.ducklake_inlined_data_2_2 AS FROM meta.ducklake_inlined_data_2_2_old
+CREATE TABLE meta.ducklake_inlined_data_2_2_new AS FROM meta.ducklake_inlined_data_2_2_old
 
 statement ok
 ALTER TABLE meta.ducklake_inlined_data_2_2_old DROP COLUMN _ducklake_branch_id
@@ -227,7 +227,7 @@ FROM meta.ducklake_inlined_data_2_2 ORDER BY ALL
 
 query I
 SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
-    AND table_name LIKE 'ducklake_inlined_data_%_old'
+    AND (table_name LIKE 'ducklake_inlined_data_%_old' OR table_name LIKE 'ducklake_inlined_data_%_new')
 ----
 0
 
@@ -246,9 +246,12 @@ SELECT i FROM dl.u ORDER BY i
 statement ok
 DETACH dl
 
-# a companion left under its pending name waits for the rename into place, the last statement of the step
+# a rebuilt payload under its new name and a companion under its pending name wait for the last batch
 statement ok
 ATTACH '{DUCKLAKE_CONNECTION}' AS meta
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1 RENAME TO ducklake_inlined_data_1_1_new
 
 statement ok
 ALTER TABLE meta.ducklake_inlined_data_visibility RENAME TO ducklake_inlined_data_visibility_pending
