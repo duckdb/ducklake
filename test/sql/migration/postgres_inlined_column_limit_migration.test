@@ -10,7 +10,7 @@ require postgres_scanner
 
 require-env DUCKLAKE_CI
 
-require-env DUCKLAKE_CONNECTION
+require-env DUCKLAKE_CONNECTION postgres:dbname=ducklakedb
 
 test-env DATA_PATH {TEST_DIR}
 
