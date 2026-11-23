@@ -1013,6 +1013,23 @@ string DuckLakeMetadataManager::GetMainBranchRowStatement() {
 	       "WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch WHERE branch_id = 0);";
 }
 
+vector<DuckLakeBranchInfo> DuckLakeMetadataManager::LoadBranches() {
+	auto result = Query(R"(
+SELECT branch_id, branch_name, parent_id, parent_branch_snapshot
+FROM {METADATA_CATALOG}.ducklake_branch;)");
+	result->ThrowIfError("Failed to get branches from DuckLake: ");
+	vector<DuckLakeBranchInfo> branches;
+	for (auto &row : *result) {
+		DuckLakeBranchInfo branch;
+		branch.branch_id = row.GetValue<idx_t>(0);
+		branch.name = row.GetValue<string>(1);
+		branch.parent_id = OptIdx(row, 2);
+		branch.parent_branch_snapshot = OptIdx(row, 3);
+		branches.push_back(std::move(branch));
+	}
+	return branches;
+}
+
 void DuckLakeMetadataManager::MigrateV11(bool from_dev1) {
 	// the renames of the first batch commit before the copies, so the copies see every commit a rename waited for
 	string from_version = from_dev1 ? "2.0-dev1" : "1.1";
@@ -2018,7 +2035,7 @@ vector<DuckLakeInlinedTableInfo> DuckLakeMetadataManager::GetInlinedDataTables(c
 	bool may_be_dropped = inlined_data_tables.size() > 1;
 	if (inlined_data_tables.size() == 1) {
 		// the only inlined table can be superseded after an older or pinned snapshot
-		may_be_dropped = transaction.GetCatalog().CatalogSnapshot() ||
+		may_be_dropped = transaction.GetCatalog().CatalogSnapshot() || transaction.GetCatalog().OnBranch() ||
 		                 snapshot.schema_version < transaction.GetSnapshot().schema_version;
 	}
 	if (!may_be_dropped) {
@@ -3893,7 +3910,7 @@ SELECT snapshot_id, changes_made
 FROM {METADATA_CATALOG}.ducklake_snapshot_changes
 WHERE snapshot_id >= %d AND snapshot_id <= %d AND changes_made LIKE '%%rewrite_delete:%%'%s
 )",
-	                          first_snapshot, last_snapshot, MainSnapshotFilter());
+	                          first_snapshot, last_snapshot, BranchLineageFilter());
 }
 
 vector<DuckLakeFileListExtendedEntry>
@@ -4307,7 +4324,8 @@ static vector<pair<string, string>> SnapshotReplacements(const DuckLakeSnapshot 
 	return {{"{SNAPSHOT_ID}", to_string(snapshot.snapshot_id)},
 	        {"{SCHEMA_VERSION}", to_string(snapshot.schema_version)},
 	        {"{NEXT_CATALOG_ID}", to_string(snapshot.next_catalog_id)},
-	        {"{NEXT_FILE_ID}", to_string(snapshot.next_file_id)}};
+	        {"{NEXT_FILE_ID}", to_string(snapshot.next_file_id)},
+	        {"{BRANCH_ID}", to_string(snapshot.branch_id)}};
 }
 
 static string CurrentTimeLiteral() {
@@ -6573,20 +6591,48 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::ParseSnapshot(QueryResult 
 		if (catalog_version && result.ColumnCount() > 4 && !row.IsNull(4)) {
 			*catalog_version = row.GetValue<string>(4);
 		}
+		if (result.ColumnCount() > 5 && !row.IsNull(5)) {
+			snapshot->branch_id = row.GetValue<idx_t>(5);
+		}
 	}
 	return snapshot;
 }
 
-string DuckLakeMetadataManager::LatestSnapshotQuery(bool keyed_lookups, bool keyed_scans) {
-	return StringUtil::Format(R"(SELECT snapshot_id, schema_version, next_catalog_id, next_file_id,
+string DuckLakeMetadataManager::LatestSnapshotQuery() {
+	return R"(SELECT snapshot_id, schema_version, next_catalog_id, next_file_id,
 (SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version')
 FROM {METADATA_CATALOG}.ducklake_snapshot
-WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot%s)%s;)",
-	                          keyed_scans ? " WHERE branch_id = 0" : "", keyed_lookups ? " AND branch_id = 0" : "");
+WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot);)";
+}
+
+string DuckLakeMetadataManager::HeadSnapshotFilter(const string &head_predicate) {
+	// MAX is the head, the ids of a chain are unique
+	return StringUtil::Format(
+	    "snapshot_id = (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE %s)", head_predicate);
+}
+
+string DuckLakeMetadataManager::HeadSnapshotQuery(const string &head_predicate) {
+	return StringUtil::Format(R"(SELECT snapshot_id, schema_version, next_catalog_id, next_file_id,
+(SELECT MAX(value) FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version'), branch_id
+FROM {METADATA_CATALOG}.ducklake_snapshot
+WHERE (%s) AND %s;)",
+	                          head_predicate, HeadSnapshotFilter(head_predicate));
+}
+
+string DuckLakeMetadataManager::BranchLineageFilter() const {
+	auto &catalog = transaction.GetCatalog();
+	if (!catalog.SupportsBranching()) {
+		return string();
+	}
+	return " AND (" + catalog.AttachedChain().Predicate("") + ")";
 }
 
 string DuckLakeMetadataManager::GetLatestSnapshotQuery() const {
-	return LatestSnapshotQuery(BranchKeyedLookups(), false);
+	auto &catalog = transaction.GetCatalog();
+	if (!catalog.SupportsBranching()) {
+		return LatestSnapshotQuery();
+	}
+	return HeadSnapshotQuery(catalog.AttachedChain().Predicate(""));
 }
 
 bool DuckLakeMetadataManager::BranchKeyedLookups() const {
@@ -6624,14 +6670,20 @@ unique_ptr<DuckLakeSnapshot> DuckLakeMetadataManager::GetSnapshot(BoundAtClause 
 	unique_ptr<QueryResult> result;
 	const string timestamp_order = bound == SnapshotBound::LOWER_BOUND ? "ASC" : "DESC";
 	const string timestamp_condition = bound == SnapshotBound::LOWER_BOUND ? ">" : "<";
-	const string visible_condition =
-	    StringUtil::Format(" AND snapshot_id <= %llu", newest_snapshot_id) + MainSnapshotFilter();
+	const string visible_condition = StringUtil::Format(" AND snapshot_id <= %llu", newest_snapshot_id);
+	auto lineage_condition = BranchLineageFilter();
+	// the version column of the head query is not read here, the branch follows it
+	string snapshot_columns = "snapshot_id, schema_version, next_catalog_id, next_file_id";
+	if (transaction.GetCatalog().SupportsBranching()) {
+		snapshot_columns += ", NULL, branch_id";
+	}
 	if (unit == "version") {
 		result = Query(StringUtil::Format(R"(
-SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
+SELECT %s
 FROM {METADATA_CATALOG}.ducklake_snapshot
-WHERE snapshot_id = %llu%s;)",
-		                                  ResolveSnapshotVersion(val), visible_condition));
+WHERE snapshot_id = %llu%s%s;)",
+		                                  snapshot_columns, ResolveSnapshotVersion(val), visible_condition,
+		                                  lineage_condition));
 	} else if (unit == "timestamp") {
 		auto timestamp = val.CastAs(*transaction.GetConnection().context, LogicalType::TIMESTAMP_TZ);
 		auto current_time = timestamp_tz_t(Timestamp::GetCurrentTimestamp());
@@ -6640,16 +6692,16 @@ WHERE snapshot_id = %llu%s;)",
 		}
 		result = Query(StringUtil::Format(
 		    R"(
-SELECT snapshot_id, schema_version, next_catalog_id, next_file_id
+SELECT %s
 FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id = (
 	SELECT snapshot_id
 	FROM {METADATA_CATALOG}.ducklake_snapshot
-	WHERE snapshot_time::TIMESTAMPTZ %s= %s%s
+	WHERE snapshot_time::TIMESTAMPTZ %s= %s%s%s
 	ORDER BY snapshot_time::TIMESTAMPTZ %s
 	LIMIT 1)%s;)",
-		    timestamp_condition, timestamp.DefaultCastAs(LogicalType::VARCHAR).ToSQLString(), visible_condition,
-		    timestamp_order, MainSnapshotFilter()));
+		    snapshot_columns, timestamp_condition, timestamp.DefaultCastAs(LogicalType::VARCHAR).ToSQLString(),
+		    visible_condition, lineage_condition, timestamp_order, lineage_condition));
 	} else {
 		throw InvalidInputException("Unsupported AT clause unit - %s", unit);
 	}
@@ -6674,17 +6726,36 @@ void DuckLakeMetadataManager::CheckSnapshotAfterExpiredGap(const DuckLakeSnapsho
                                                            idx_t newest_snapshot_id,
                                                            const set<idx_t> &expired_in_transaction) {
 	// the expiries after the snapshot, a concurrent one may have expired snapshots above the transaction's newest
+	// a parent records its expiries in snapshots above the cap, so its records are read without the cap and each
+	// branch contributes the expired ids of its own segment of the view
+	auto &catalog = transaction.GetCatalog();
+	bool branch_aware = catalog.SupportsBranching();
+	auto &chain = catalog.AttachedChain();
+	string branch_filter;
+	if (branch_aware) {
+		vector<string> branch_ids;
+		for (auto &segment : chain.Segments()) {
+			branch_ids.push_back(to_string(segment.branch_id));
+		}
+		branch_filter = " AND branch_id IN (" + StringUtil::Join(branch_ids, ", ") + ")";
+	}
+	auto lineage_condition = BranchLineageFilter();
 	auto result = Query(StringUtil::Format(R"(
-SELECT changes_made
+SELECT changes_made%s
 FROM {METADATA_CATALOG}.ducklake_snapshot_changes
 WHERE snapshot_id > %llu AND changes_made LIKE '%%expired_snapshot:%%'%s;)",
-	                                       snapshot.snapshot_id, MainSnapshotFilter()));
+	                                       branch_aware ? ", branch_id" : "", snapshot.snapshot_id, branch_filter));
 	result->ThrowIfError("Failed to query the expired snapshots of DuckLake: ");
 	// the transaction's own expiries are recorded by its commit
 	set<idx_t> expired_ids(expired_in_transaction);
 	for (auto &row : *result) {
 		auto changes = SnapshotChangeInformation::ParseChangesMade(row.GetValue<string>(0));
-		expired_ids.insert(changes.expired_snapshots.begin(), changes.expired_snapshots.end());
+		idx_t branch_id = branch_aware ? row.GetValue<idx_t>(1) : 0;
+		for (auto &expired_id : changes.expired_snapshots) {
+			if (chain.OwnerOf(expired_id) == branch_id) {
+				expired_ids.insert(expired_id);
+			}
+		}
 	}
 	// the newest expired snapshot the transaction could see
 	auto newest_expired = expired_ids.upper_bound(newest_snapshot_id);
@@ -6693,15 +6764,14 @@ WHERE snapshot_id > %llu AND changes_made LIKE '%%expired_snapshot:%%'%s;)",
 	}
 	newest_expired--;
 	// the remaining snapshots around it bound the gap, none may remain before it
-	auto bounds =
-	    Query(StringUtil::Format(R"(
+	auto bounds = Query(StringUtil::Format(R"(
 SELECT (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id < %llu%s), snapshot_id,
 	snapshot_time
 FROM {METADATA_CATALOG}.ducklake_snapshot
 WHERE snapshot_id > %llu%s
 ORDER BY snapshot_id
 LIMIT 1;)",
-	                             *newest_expired, MainSnapshotFilter(), *newest_expired, MainSnapshotFilter()));
+	                                       *newest_expired, lineage_condition, *newest_expired, lineage_condition));
 	bounds->ThrowIfError("Failed to query the snapshots around an expired snapshot of DuckLake: ");
 	for (auto &row : *bounds) {
 		auto first_after_gap = row.GetValue<idx_t>(1);
@@ -7129,10 +7199,16 @@ UPDATE {METADATA_CATALOG}.ducklake_table_stats SET file_size_bytes = (
 	return batch_query;
 }
 
-static string SnapshotFilterSQL(const DuckLakeSnapshotFilter &filter) {
+string DuckLakeMetadataManager::SnapshotFilterSql(const DuckLakeSnapshotFilter &filter) const {
+	auto &catalog = transaction.GetCatalog();
 	vector<string> conditions;
 	if (filter.exclude_latest) {
-		conditions.push_back("snapshot_id != (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot)");
+		string head_filter;
+		if (catalog.SupportsBranching()) {
+			head_filter = StringUtil::Format(" WHERE branch_id = %llu", catalog.AttachedBranchId());
+		}
+		conditions.push_back(StringUtil::Format(
+		    "snapshot_id != (SELECT MAX(snapshot_id) FROM {METADATA_CATALOG}.ducklake_snapshot%s)", head_filter));
 	}
 	if (!filter.older_than.empty()) {
 		conditions.push_back(
@@ -7143,24 +7219,29 @@ static string SnapshotFilterSQL(const DuckLakeSnapshotFilter &filter) {
 		                            [](idx_t id) { return to_string(id); });
 		conditions.push_back(ids.empty() ? "FALSE" : StringUtil::Format("snapshot_id IN (%s)", ids));
 	}
+	if (filter.chain_only && catalog.SupportsBranching()) {
+		conditions.push_back("(" + catalog.AttachedChain().Predicate("") + ")");
+	}
 	return StringUtil::Join(conditions, " AND ");
 }
 
 unique_ptr<QueryResult> DuckLakeMetadataManager::ReadSnapshots(const string &filter) {
+	// the snapshot ids of a chain view are unique, so they order its rows
+	bool branch_aware = transaction.GetCatalog().SupportsBranching();
 	auto res = Query(StringUtil::Format(R"(
 SELECT snapshot_id, snapshot_time, schema_version, changes_made, author, commit_message, commit_extra_info, next_file_id
 FROM {METADATA_CATALOG}.ducklake_snapshot
-LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot_changes USING (snapshot_id)
+LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot_changes USING (snapshot_id%s)
 %s %s
 ORDER BY snapshot_id ASC
 )",
-	                                    filter.empty() ? "" : "WHERE", filter));
+	                                    branch_aware ? ", branch_id" : "", filter.empty() ? "" : "WHERE", filter));
 	res->ThrowIfError("Failed to get snapshot information from DuckLake: ");
 	return res;
 }
 
 vector<DuckLakeSnapshotInfo> DuckLakeMetadataManager::GetAllSnapshots(const DuckLakeSnapshotFilter &filter) {
-	auto res = ReadSnapshots(SnapshotFilterSQL(filter));
+	auto res = ReadSnapshots(SnapshotFilterSql(filter));
 	auto context = transaction.context.lock();
 	vector<DuckLakeSnapshotInfo> snapshots;
 

@@ -440,10 +440,13 @@ public:
 	//! Pure SQL templates (use `{METADATA_CATALOG}` placeholder) — caller substitutes + executes.
 	//! Both used by the regular metadata-manager methods and by server-side commit, which runs the
 	//! SQL on a fresh Connection without going through the metadata-manager wrapper.
-	//! keyed_lookups puts branch_id = 0 beside the predicates on snapshot_id, keyed_scans on a MAX over the table
-	static string LatestSnapshotQuery(bool keyed_lookups, bool keyed_scans);
+	static string LatestSnapshotQuery();
 	//! With table ids only those tables' stats are read
 	static string GlobalTableStatsQuery(bool include_exactness, const vector<TableIndex> &table_ids = {});
+	//! The filter that selects the head of the snapshots the predicate matches
+	static string HeadSnapshotFilter(const string &head_predicate);
+	//! The head of the snapshots the predicate selects with the catalog version and its branch
+	static string HeadSnapshotQuery(const string &head_predicate);
 	//! Pure parsers for the results of the above queries.
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
 	                                                  optional_ptr<string> catalog_version = nullptr);
@@ -765,6 +768,8 @@ public:
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const DuckLakeSnapshotFilter &filter = {});
 	//! The snapshots in the column order of ducklake_snapshots, then next_file_id
 	unique_ptr<QueryResult> ReadSnapshots(const string &filter);
+	//! The chain predicate of the attached branch with bare column names, preceded by AND, empty before 2.0
+	string BranchLineageFilter() const;
 	//! The live snapshot tags, with the times of their snapshots if requested
 	virtual vector<DuckLakeSnapshotTagInfo> GetSnapshotTags(bool with_snapshot_time = true);
 	//! The snapshot of the live snapshot tag with the name, if any
@@ -822,6 +827,8 @@ public:
 	static string GetBranchTableStatement();
 	//! Inserts the row of the main branch unless the table has it
 	static string GetMainBranchRowStatement();
+	//! Every branch of the catalog
+	vector<DuckLakeBranchInfo> LoadBranches();
 	//! Whether the catalog already has every metadata table and column of v1.1
 	bool HasV1_1Additions();
 	//! Whether the tables a migration to 2.0 moves aside are under their names, false for an interrupted first batch
@@ -925,6 +932,8 @@ protected:
 	virtual string GetLatestSnapshotQuery() const;
 	//! The branch conjunct of a lookup on snapshot_id, preceded by AND, empty where the engine would not use it
 	string MainSnapshotFilter() const;
+	//! The WHERE conditions of a snapshot filter, the latest snapshot is the head of the attached branch from 2.0 on
+	string SnapshotFilterSql(const DuckLakeSnapshotFilter &filter) const;
 	//! The changes of the snapshots from first_snapshot to last_snapshot that recorded a rewrite
 	virtual string GetRewriteSnapshotsQuery(idx_t first_snapshot, idx_t last_snapshot) const;
 

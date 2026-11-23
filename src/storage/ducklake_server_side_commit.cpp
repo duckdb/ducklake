@@ -593,8 +593,10 @@ bool DuckLakeServerSideCommit::BranchKeyedLookups() const {
 }
 
 DuckLakeSnapshot DuckLakeServerSideCommit::ReadLatestSnapshot() {
-	string sql = StringUtil::Replace(DuckLakeMetadataManager::LatestSnapshotQuery(branch_keyed_lookups, false),
-	                                 "{METADATA_CATALOG}", schema_id);
+	// the server side commits on main
+	auto query = supports_v2_0_metadata ? DuckLakeMetadataManager::HeadSnapshotQuery("branch_id = 0")
+	                                    : DuckLakeMetadataManager::LatestSnapshotQuery();
+	string sql = StringUtil::Replace(query, "{METADATA_CATALOG}", schema_id);
 	auto result = RunQuery(sql, "read latest snapshot");
 	auto snapshot = DuckLakeMetadataManager::ParseSnapshot(*result);
 	if (!snapshot) {

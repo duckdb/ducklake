@@ -559,9 +559,8 @@ ORDER BY c.relname, a.attnum)",
 }
 
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
-	// the server plans both conjuncts from the composite key
-	bool branch_keyed = transaction.GetCatalog().SupportsBranching();
-	auto remote_query = LatestSnapshotQuery(branch_keyed, branch_keyed);
+	// the chain head query is standard SQL, so the server runs it
+	auto remote_query = DuckLakeMetadataManager::GetLatestSnapshotQuery();
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	return PostgresQuery(remote_query);

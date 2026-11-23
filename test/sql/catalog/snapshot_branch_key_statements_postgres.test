@@ -1,5 +1,5 @@
 # name: test/sql/catalog/snapshot_branch_key_statements_postgres.test
-# description: a Postgres catalog of 2.0 keeps every branch conjunct in its native statements and the scanner lookups
+# description: a Postgres catalog of 2.0 reads main's snapshots by its chain predicate, its commits keep every conjunct
 # group: [catalog]
 
 require ducklake
@@ -70,11 +70,12 @@ COMMIT
 statement ok
 CALL ducklake_expire_snapshots('dl', versions => [1])
 
-# the server plans the head read and the conflict check from the composite key, both keep every conjunct
+# the server runs the head read with the chain predicate of main and the conflict check with every conjunct
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
 WHERE query LIKE 'SELECT * FROM postgres_query(%'
-  AND query LIKE '%MAX(snapshot_id) FROM %ducklake_snapshot WHERE branch_id = 0) AND branch_id = 0;%'
+  AND query LIKE '%WHERE (branch_id = 0) AND snapshot_id = (SELECT MAX(snapshot_id) FROM %'
+  AND query LIKE '%snapshot_id = (SELECT MAX(snapshot_id) FROM %ducklake_snapshot WHERE branch_id = 0);%'
 ----
 true
 
@@ -85,10 +86,17 @@ WHERE regexp_replace(query, '\s+', ' ', 'g') LIKE 'SELECT * FROM postgres_query(
 ----
 true
 
-# the lookups through the scanner name the branch beside snapshot_id
+# the version lookup selects the snapshots of main by the chain predicate of main
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%WHERE snapshot_id = 1 AND snapshot_id <= 2 AND branch_id = 0;%'
+WHERE query LIKE '%WHERE snapshot_id = 1 AND snapshot_id <= 2 AND (branch_id = 0);%'
+----
+true
+
+# the expiry keeps the head of main and its delete names the branch beside snapshot_id
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%snapshot_id != (SELECT MAX(snapshot_id) FROM %ducklake_snapshot WHERE branch_id = 0)%'
 ----
 true
 
@@ -98,10 +106,10 @@ WHERE query LIKE '%DELETE FROM %ducklake_snapshot WHERE snapshot_id IN (1) AND b
 ----
 true
 
-# the listing and the existence checks of the expiry scan the tables as in 1.x
+# the listing joins the changes by branch and snapshot, the existence checks of the expiry scan the tables as in 1.x
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%LEFT JOIN %ducklake_snapshot_changes USING (snapshot_id)%' AND query NOT LIKE '%branch_id%'
+WHERE query LIKE '%ducklake_snapshot_changes USING (snapshot_id, branch_id)%WHERE snapshot_id <= 2 AND (branch_id = 0)%'
 ----
 true
 

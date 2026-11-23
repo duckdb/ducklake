@@ -500,7 +500,8 @@ bool DuckLakeTableEntry::AddedColumn(FieldIndex field_index) {
 }
 
 bool DuckLakeTableEntry::CanUseGlobalStats(DuckLakeTransaction &transaction) const {
-	return !IsTransactionLocal() && !transaction.HasTransactionLocalInserts(GetTableId());
+	return !IsTransactionLocal() && !transaction.HasTransactionLocalInserts(GetTableId()) &&
+	       !transaction.GetCatalog().OnBranch();
 }
 
 shared_ptr<DuckLakeTableStats> DuckLakeTableEntry::GetTableStats(DuckLakeTransaction &transaction) {

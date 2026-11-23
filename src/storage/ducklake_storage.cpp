@@ -43,6 +43,11 @@ static void HandleDuckLakeOption(ClientContext &context, DuckLakeOptions &option
 		}
 	} else if (lcase == "data_inlining_row_limit") {
 		options.config_options["data_inlining_row_limit"] = value.DefaultCastAs(LogicalType::UBIGINT).ToString();
+	} else if (lcase == "branch") {
+		if (value.IsNull() || value.ToString().empty()) {
+			throw InvalidInputException("BRANCH cannot be NULL or empty");
+		}
+		options.branch_name = value.ToString();
 	} else if (lcase == "snapshot_version") {
 		if (options.at_clause) {
 			throw InvalidInputException("Cannot specify both VERSION and TIMESTAMP");
@@ -68,8 +73,6 @@ static void HandleDuckLakeOption(ClientContext &context, DuckLakeOptions &option
 		options.busy_timeout = UBigIntValue::Get(value.DefaultCastAs(LogicalType::UBIGINT));
 	} else if (lcase == "ducklake_version") {
 		options.ducklake_version = ParseWritableDuckLakeVersion(value.ToString(), "ducklake_version");
-	} else if (lcase == "branch") {
-		throw InvalidInputException("branches are not yet supported in this version of DuckLake");
 	} else {
 		throw NotImplementedException("Unsupported option %s for DuckLake", option);
 	}
@@ -144,6 +147,13 @@ static unique_ptr<Catalog> DuckLakeAttach(optional_ptr<StorageExtensionInfo> sto
 	if (options.at_clause) {
 		if (attach_options.access_mode == AccessMode::READ_WRITE) {
 			throw InvalidInputException("SNAPSHOT_VERSION / SNAPSHOT_TIME can only be used in read-only mode");
+		}
+		attach_options.access_mode = AccessMode::READ_ONLY;
+		db.SetReadOnlyDatabase();
+	}
+	if (!options.branch_name.empty() && !StringUtil::CIEquals(options.branch_name, "main")) {
+		if (attach_options.access_mode == AccessMode::READ_WRITE) {
+			throw InvalidInputException("BRANCH can only be used in read-only mode");
 		}
 		attach_options.access_mode = AccessMode::READ_ONLY;
 		db.SetReadOnlyDatabase();

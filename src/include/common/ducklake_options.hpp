@@ -41,6 +41,8 @@ struct DuckLakeOptions {
 	map<TableIndex, option_map_t> table_options;
 	idx_t busy_timeout = 5000;
 	DuckLakeVersion ducklake_version = DuckLakeVersion::UNSET;
+	//! The branch the catalog is attached at, empty for main
+	string branch_name;
 };
 
 } // namespace duckdb
