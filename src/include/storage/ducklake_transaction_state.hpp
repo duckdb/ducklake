@@ -188,6 +188,8 @@ struct DuckLakeCommitContext {
 	bool supports_v1_1_metadata = false;
 	//! Whether the snapshot tables are keyed by branch and snapshot, the layout of 2.0
 	bool supports_v2_0_metadata = false;
+	//! Whether the file tables keep their visibility as events, the layout of 2.0
+	bool supports_file_visibility_events = false;
 	//! Whether a lookup on snapshot_id names the branch of main, where the metadata engine serves it from the key
 	bool branch_keyed_lookups = false;
 	//! Column names of the inlined data tables under this catalog version.
@@ -225,7 +227,8 @@ public:
 	                        const DuckLakeCommitContext &context) const;
 
 	static SnapshotDeletedFromFiles
-	GetFilesDeletedOrDroppedAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor);
+	GetFilesDeletedOrDroppedAfterSnapshot(const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                                      bool file_events);
 
 	string WriteSnapshotChanges(DuckLakeCommitState &commit_state, TransactionChangeInformation &changes,
 	                            const DuckLakeCommitContext &context) const;

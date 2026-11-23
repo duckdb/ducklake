@@ -1775,9 +1775,9 @@ DuckLakeCommitOutcome DuckLakeTransaction::CommitOutcome(const DuckLakeCommitSta
 	}
 	auto condition = StringUtil::Join(conditions, " OR ");
 	auto query =
-	    StringUtil::Format("SELECT count(*) FROM (SELECT path FROM {METADATA_CATALOG}.ducklake_data_file WHERE %s "
-	                       "UNION ALL SELECT path FROM {METADATA_CATALOG}.ducklake_delete_file WHERE %s)",
-	                       condition, condition);
+	    StringUtil::Format("SELECT count(*) FROM (SELECT path FROM %s WHERE %s UNION ALL SELECT path FROM %s "
+	                       "WHERE %s)",
+	                       metadata_manager->DataFiles(), condition, metadata_manager->DeleteFiles(), condition);
 	// the catalog finishes a COMMIT whose reply was lost on its own, so the files show up within moments
 	static constexpr int64_t WAIT_MS = 3000;
 	static constexpr int64_t STEP_MS = 100;
@@ -1854,7 +1854,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 		return result;
 	};
 	context.inlined_file_deletion_table_exists = [&](TableIndex table_id) {
-		return metadata_manager->InlinedDeletionTableExists(
+		return metadata_manager->CommittedInlinedDeletionTableExists(
 		    DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id));
 	};
 	context.get_snapshot = [&]() {
@@ -2130,6 +2130,7 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
 	context.supports_v2_0_metadata = ducklake_catalog.SupportsBranching();
+	context.supports_file_visibility_events = ducklake_catalog.SupportsFileVisibilityEvents();
 	context.branch_keyed_lookups = metadata_manager->BranchKeyedLookups();
 	context.snapshot_and_stats_query =
 	    metadata_manager->GetSnapshotAndStatsAndChangesQuery(transaction_snapshot, context.supports_v1_1_metadata);

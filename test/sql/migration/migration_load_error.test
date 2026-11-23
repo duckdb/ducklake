@@ -103,7 +103,7 @@ SELECT count(*) FROM dl.t
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
 ----
-2.0-dev2
+2.0-dev1
 
 query I
 SELECT list(table_name ORDER BY table_name) FROM duckdb_tables() WHERE database_name = 'meta'

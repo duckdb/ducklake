@@ -32,12 +32,12 @@ CALL ducklake_flush_inlined_data('ducklake')
 
 # Verify we have 1 data file, no delete files
 query I
-SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE end_snapshot IS NULL
+SELECT coalesce(sum(file_count), 0)::BIGINT FROM ducklake_table_info('ducklake')
 ----
 1
 
 query I
-SELECT count(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NULL
+SELECT coalesce(sum(delete_file_count), 0)::BIGINT FROM ducklake_table_info('ducklake')
 ----
 0
 
@@ -50,7 +50,7 @@ CALL ducklake_flush_inlined_data('ducklake')
 
 # Verify we now have a delete file
 query I
-SELECT count(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NULL
+SELECT coalesce(sum(delete_file_count), 0)::BIGINT FROM ducklake_table_info('ducklake')
 ----
 1
 
@@ -63,12 +63,12 @@ test	1	1
 
 # After rewrite: delete files should be gone, data file should be rewritten
 query I
-SELECT count(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NULL
+SELECT coalesce(sum(delete_file_count), 0)::BIGINT FROM ducklake_table_info('ducklake')
 ----
 0
 
 query I
-SELECT count(*) FROM ducklake_metadata.ducklake_data_file WHERE end_snapshot IS NULL
+SELECT coalesce(sum(file_count), 0)::BIGINT FROM ducklake_table_info('ducklake')
 ----
 1
 

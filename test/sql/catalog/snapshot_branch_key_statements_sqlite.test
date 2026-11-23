@@ -11,7 +11,7 @@ require sqlite_scanner
 # the WAL journal mode lets a commit run while another transaction is open
 statement ok
 ATTACH 'ducklake:sqlite:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_files',
-    METADATA_CATALOG 'meta', DUCKLAKE_VERSION '2.0-dev2', META_JOURNAL_MODE 'wal')
+    METADATA_CATALOG 'meta', DUCKLAKE_VERSION '2.0-dev1', META_JOURNAL_MODE 'wal')
 
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
