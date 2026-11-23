@@ -276,6 +276,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	DuckLakeVersion resolved_version = DuckLakeVersion::UNSET;
 	DuckLakeVersion catalog_version = DuckLakeVersion::UNSET;
 	DuckLakeVersion target_version = DuckLakeVersion::UNSET;
+	string missing_step;
 	for (auto &tag : metadata.tags) {
 		if (tag.key == "version" && metadata_manager.IsRemote()) {
 			// the server takes care of migrating the metadata
@@ -299,6 +300,29 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			if (catalog_version < target_version) {
 				catalog.VerifyWritable();
 				metadata_cache_stale = true;
+			}
+			if (catalog_version == DuckLakeVersion::V2_0_DEV1 && target_version == DuckLakeVersion::V2_0_DEV1) {
+				// one dev version, so the shape of the catalog tells which of its steps are missing
+				missing_step = metadata_manager.MissingV2_0Step();
+				if (!missing_step.empty() && !options.automatic_migration) {
+					throw InvalidInputException(
+					    "DuckLake catalog version is %s, but the catalog lacks %s. To "
+					    "automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
+					    tag.value, missing_step);
+				}
+				if (!missing_step.empty()) {
+					catalog.VerifyWritable();
+					metadata_cache_stale = true;
+				}
+			}
+			if (catalog_version == DuckLakeVersion::V1_1 && target_version == DuckLakeVersion::V1_1 &&
+			    !metadata_manager.HasV1_1Layout()) {
+				// the first batch of the migration to 2.0 commits with the version still 1.1
+				throw InvalidInputException(
+				    "DuckLake catalog version is %s, but a migration to 2.0-dev1 moved its tables "
+				    "aside. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when "
+				    "attaching.",
+				    tag.value);
 			}
 		}
 		if (tag.key == "data_path") {
@@ -334,7 +358,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	for (auto &tag : metadata.tags) {
 		if (tag.key == "version" && !metadata_manager.IsRemote()) {
 			// every check passed, migrate the catalog to the target version
-			migrating = catalog_version < target_version;
+			migrating = catalog_version < target_version || !missing_step.empty();
 			if (catalog_version == DuckLakeVersion::V0_1) {
 				metadata_manager.MigrateV01();
 				catalog_version = DuckLakeVersion::V0_2;
@@ -359,7 +383,7 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 				metadata_manager.MigrateV04();
 				catalog_version = DuckLakeVersion::V1_0;
 			}
-			if (catalog_version >= target_version) {
+			if (catalog_version >= target_version && missing_step.empty()) {
 				migrating = false;
 				resolved_version = catalog_version;
 				continue;
@@ -372,12 +396,11 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 					catalog_version = DuckLakeVersion::V1_1;
 				}
 				if (catalog_version == DuckLakeVersion::V1_1 && catalog_version < target_version) {
-					metadata_manager.MigrateV11();
+					metadata_manager.MigrateV11(false);
 					catalog_version = DuckLakeVersion::V2_0_DEV1;
 				}
-				if (catalog_version == DuckLakeVersion::V2_0_DEV1 && catalog_version < target_version) {
-					metadata_manager.MigrateV20Dev1();
-					catalog_version = DuckLakeVersion::V2_0_DEV2;
+				if (catalog_version == DuckLakeVersion::V2_0_DEV1 && !missing_step.empty()) {
+					metadata_manager.MigrateV11(true);
 				}
 				if (catalog_version != target_version) {
 					// LCOV_EXCL_START
@@ -453,7 +476,7 @@ void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &trans
 	unique_ptr<DuckLakeMetadataManager> new_manager;
 	if (version == DuckLakeVersion::V1_1) {
 		new_manager = MakeVersionedManager<DuckLakeMetadataManagerV1_1>(transaction);
-	} else if (version == DuckLakeVersion::V2_0_DEV2) {
+	} else if (version >= DuckLakeVersion::V2_0_DEV1) {
 		new_manager = MakeVersionedManager<DuckLakeMetadataManagerV2_0>(transaction);
 	} else {
 		throw InternalException("SetVersionedMetadataManager: unsupported version");
