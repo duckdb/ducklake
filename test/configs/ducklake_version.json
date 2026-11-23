@@ -25,7 +25,6 @@
       "paths": [
         "test/sql/add_files/add_files_stats_exactness.test",
         "test/sql/attach/attach_ducklake_version.test",
-        "test/sql/branches/branch_attach_read.test",
         "test/sql/branches/branch_version_gate.test",
         "test/sql/migration/v11_dev1_to_v11.test",
         "test/sql/migration/v20_dev1_new_catalog.test",
@@ -196,6 +195,7 @@
     {
       "reason": "Inserts branch rows into the 2.0 branch table, which a 1.0 catalog does not have",
       "paths": [
+        "test/sql/branches/branch_attach_read.test",
         "test/sql/branches/branch_chain_corrupt.test",
         "test/sql/branches/branch_main_commit_beside_branch_rows.test",
         "test/sql/branches/branch_nested_chain.test",
