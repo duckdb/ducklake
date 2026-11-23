@@ -446,7 +446,6 @@ static idx_t InlinedTableId(const Identifier &inlined_table_name) {
 	return table_id.GetIndex();
 }
 
-//! The kind of the shared inlined companion
 static DuckLakeMetadataManager::RowVisibilityKind InlinedCompanionKind() {
 	DuckLakeMetadataManager::RowVisibilityKind kind {"inlined_data", {"table_id", "row_id"}};
 	kind.key_leads = true;
@@ -569,19 +568,24 @@ string DuckLakeMetadataManager::RowVisibility(const string &alias, const RowVisi
 	                          kind.branch_column, alias, kind.begin_column, end_cap);
 }
 
-string DuckLakeMetadataManager::EndRows(const RowVisibilityKind &kind, const string &filter) {
-	// a row born at the commit snapshot is not ended, the callers write it after the ends or leave it out
+//! The key columns as the row alias reads them, the literals of the constant keys
+static string KeyValues(const DuckLakeMetadataManager::RowVisibilityKind &kind, const string &row_alias) {
 	vector<string> keys;
 	for (idx_t i = 0; i < kind.key_columns.size(); i++) {
-		keys.push_back(KeyValue(kind, i, "t"));
+		keys.push_back(KeyValue(kind, i, row_alias));
 	}
+	return StringUtil::Join(keys, ", ");
+}
+
+string DuckLakeMetadataManager::EndRows(const RowVisibilityKind &kind, const string &filter) {
+	// a row born at the commit snapshot is not ended, the callers write it after the ends or leave it out
 	return StringUtil::Format(R"(INSERT INTO {METADATA_CATALOG}.ducklake_%s_visibility
     (branch_id, %s, row_branch_id, row_snapshot, end_snapshot)
 SELECT 0, %s, t.%s, t.%s, {SNAPSHOT_ID}
 FROM {METADATA_CATALOG}.%s t
 WHERE %s AND %s;
 )",
-	                          kind.kind, StringUtil::Join(kind.key_columns, ", "), StringUtil::Join(keys, ", "),
+	                          kind.kind, StringUtil::Join(kind.key_columns, ", "), KeyValues(kind, "t"),
 	                          kind.branch_column, kind.begin_column, RowTableName(kind), filter,
 	                          RowVisibility("t", kind, "{SNAPSHOT_ID}"));
 }
@@ -1093,16 +1097,18 @@ void DuckLakeMetadataManager::MigrateV11(bool from_dev1) {
 	VerifyV2_0RowCompanions(layout.rows);
 	VerifyV2_0InlinedCompanion(layout.inlined);
 	auto rename_query = V2_0SnapshotRenameSql(layout.additions) + V2_0FileRenameSql(layout.ranges);
-	for (auto &batch : V2_0InlinedRenameSql(layout.inlined)) {
-		if (!rename_query.empty()) {
-			ExecuteMigration(rename_query, false, from_version, "2.0-dev1");
-			transaction.ReleaseMetadataTransaction();
-		}
-		rename_query = batch;
-	}
 	if (!rename_query.empty()) {
 		ExecuteMigration(rename_query, false, from_version, "2.0-dev1");
 		transaction.ReleaseMetadataTransaction();
+		layout = ProbeV2_0Layout();
+	}
+	// a payload a writer created since the last probe is renamed by the next round, until a probe finds none
+	for (auto batches = V2_0InlinedRenameSql(layout.inlined); !batches.empty();
+	     batches = V2_0InlinedRenameSql(layout.inlined)) {
+		for (auto &batch : batches) {
+			ExecuteMigration(batch, false, from_version, "2.0-dev1");
+			transaction.ReleaseMetadataTransaction();
+		}
 		layout = ProbeV2_0Layout();
 	}
 	auto migrate_query = V2_0SnapshotAdditionsSql(layout.additions) + V2_0FileEventsSql(layout.ranges) +
@@ -1332,10 +1338,6 @@ WHERE end_snapshot = begin_snapshot AND EXISTS (
 
 string DuckLakeMetadataManager::V2_0EndRowsSql(const RowVisibilityKind &kind, const string &companion) {
 	// the ranges of main become its end rows, a resumed backfill copies none twice
-	vector<string> keys;
-	for (idx_t i = 0; i < kind.key_columns.size(); i++) {
-		keys.push_back(KeyValue(kind, i, "t"));
-	}
 	return StringUtil::Format(R"(
 INSERT INTO {METADATA_CATALOG}.%s
     (branch_id, %s, row_branch_id, row_snapshot, end_snapshot)
@@ -1345,7 +1347,7 @@ WHERE t.%s IS NOT NULL AND NOT EXISTS (
     SELECT 1 FROM {METADATA_CATALOG}.%s e
     WHERE e.branch_id = 0 AND %s AND e.row_branch_id = 0 AND e.row_snapshot = t.%s);
 )",
-	                          companion, StringUtil::Join(kind.key_columns, ", "), StringUtil::Join(keys, ", "),
+	                          companion, StringUtil::Join(kind.key_columns, ", "), KeyValues(kind, "t"),
 	                          kind.begin_column, kind.end_column, RowTableName(kind), kind.end_column, companion,
 	                          KeyMatches(kind, "e", "t"), kind.begin_column);
 }
@@ -1547,13 +1549,13 @@ vector<string> DuckLakeMetadataManager::V2_0InlinedCompanionSql(const V2_0Inline
 		next_table();
 		auto &table = payload.table;
 		if (payload.has_new_table || payload.has_old_table) {
-			// the rebuilt table takes its name in the last batch, so no writer of the previous layout finds it before
+			// the rebuilt table takes its name after the folds, so no writer of the previous layout finds it before
 			renames.push_back(StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s_new RENAME TO %s;\n",
 			                                     table.GetIdentifierName(), table.GetIdentifierName()));
 		}
 		if (!payload.has_old_table) {
-			if (payload.present) {
-				// an empty payload of a dev build that lost its end column
+			if (payload.present && !payload.has_end_column) {
+				// a payload without end column, complete or an empty one of a dev build, has its branch filled
 				query += BranchColumnSql(table.GetIdentifierName(), col_names.branch_id.GetIdentifierName(),
 				                         payload.has_branch_column);
 			}
@@ -1585,7 +1587,10 @@ WHERE NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.%s n WHERE n.%s = o.%s AND n.
 		next_table();
 		query += BranchColumnSql(table.table.GetIdentifierName(), "branch_id", table.has_branch_column);
 	}
-	query += StringUtil::Join(renames, "");
+	for (auto &rename : renames) {
+		next_table();
+		query += rename;
+	}
 	if (!inlined.has_companion) {
 		query += RowCompanionRenameSql("inlined_data");
 	}
@@ -5593,7 +5598,7 @@ string DuckLakeMetadataManager::WriteNewInlinedDeletes(const vector<DuckLakeDele
 				                                 col_names.row_id, col_names.begin_snapshot);
 				return deleted_rows + EndRows(kind, filter);
 			}
-			// overwrite the snapshot for the old tags
+			// the live version of each row id ends in place
 			return deleted_rows + StringUtil::Format(R"(UPDATE {METADATA_CATALOG}.%s
 SET %s = {SNAPSHOT_ID}
 FROM deleted_row_list

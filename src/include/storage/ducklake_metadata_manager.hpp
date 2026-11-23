@@ -926,7 +926,7 @@ public:
 		bool has_old_table = false;
 		string column_defs;
 		vector<string> user_columns;
-		//! Whether the rebuilt table waits under its new name for the last batch
+		//! Whether the rebuilt table waits under its new name for its rename after the folds
 		bool has_new_table = false;
 	};
 	struct V2_0InlinedDeletionTable {
