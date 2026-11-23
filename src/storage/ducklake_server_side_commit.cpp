@@ -666,6 +666,8 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	DuckLakeCommitContext ctx;
 	ctx.commit_info = state->commit_info;
 	ctx.files_owned_by_client = files_owned_by_client;
+	// a commit that a server passes on starts from the snapshot of its client, which other commits can have followed
+	ctx.check_conflicts_first = files_owned_by_client;
 	ctx.skip_drop_empty_inlined = true;
 	ctx.supports_v1_1_metadata = supports_v1_1_metadata;
 	ctx.supports_v2_0_metadata = supports_v2_0_metadata;
