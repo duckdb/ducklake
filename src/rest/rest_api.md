@@ -87,6 +87,8 @@ A commit that was published is never run again. If the server fails after the pu
 
 A server whose catalog is on another server passes its commits on to that server, a group as one commit. If that server does not answer, or answers with an IO error, it can have published the group. The commits of the group then do not run one by one, which could publish them twice. Each of its requests fails with an IO error that says that it is unknown whether the transaction was committed. A client keeps the files of a commit that fails with an IO error.
 
+A group is only protected this way when one server passes it on. Through a chain of two or more servers that pass a commit on, the commits of a group can still be committed again.
+
 Clients choose the endpoint with the `ducklake_rest_group_commit` setting. A plain `SET ducklake_rest_group_commit = true` changes it for all connections of the database. `SET SESSION` changes it for the connection only.
 
 Direct writers, Quack writers, maintenance calls, and separate attachments of the same metadata database do not participate in this queue. They can still cause metadata retries.
