@@ -396,18 +396,16 @@ bool PostgresMetadataManager::IsRetryableCommitError(const string &message) cons
 	return false;
 }
 
-bool PostgresMetadataManager::InlinedDeletionTableExists(const Identifier &table_name) {
+unordered_set<string> PostgresMetadataManager::ListInlinedDeletionTables() {
+	// the server lists the tables, so a table another connection committed is seen without a catalog refresh
 	auto &catalog = transaction.GetCatalog();
-	auto remote_query =
-	    StringUtil::Format("SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = %s AND tablename = %s LIMIT 1",
-	                       SQLString::ToString(catalog.MetadataSchemaName().GetIdentifierName()),
-	                       SQLString::ToString(table_name.GetIdentifierName()));
-	auto query =
-	    StringUtil::Format("SELECT 1 FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
-	                       SQLString::ToString(remote_query));
-	auto result = DuckLakeMetadataManager::Query(query);
-	result->ThrowIfError("Failed to probe for DuckLake inlined-deletion table: ");
-	return result->Fetch() != nullptr;
+	auto remote_query = StringUtil::Format("SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = %s "
+	                                       "AND tablename LIKE 'ducklake\\_inlined\\_delete\\_%%'",
+	                                       SQLString::ToString(catalog.MetadataSchemaName().GetIdentifierName()));
+	auto query = StringUtil::Format(
+	    "SELECT tablename FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
+	    SQLString::ToString(remote_query));
+	return ReadTableNames(*DuckLakeMetadataManager::Query(query));
 }
 
 void PostgresMetadataManager::MigrateInlinedDataTypes() {

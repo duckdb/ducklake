@@ -42,7 +42,7 @@ statement ok
 INSERT INTO example SELECT i + 30000, concat('thisisalongstring', i) FROM range(10000) t(i);
 
 query I
-SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_data_file WHERE end_snapshot IS NULL
+SELECT coalesce(sum(file_count), 0)::BIGINT FROM ducklake_table_info('ducklake')
 ----
 4
 
