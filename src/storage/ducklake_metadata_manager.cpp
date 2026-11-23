@@ -391,6 +391,11 @@ string DuckLakeMetadataManager::GetMacroTableStatement() {
 	       "begin_snapshot BIGINT, end_snapshot BIGINT);";
 }
 
+string DuckLakeMetadataManager::GetSchemaVersionsTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_schema_versions(begin_snapshot BIGINT, schema_version BIGINT, "
+	       "table_id BIGINT);";
+}
+
 string DuckLakeMetadataManager::GetTagTableStatement() {
 	return "CREATE TABLE {METADATA_CATALOG}.ducklake_tag(object_id BIGINT, begin_snapshot BIGINT, end_snapshot BIGINT, "
 	       "key VARCHAR, value VARCHAR);";
@@ -477,6 +482,27 @@ static string KeyMatches(const DuckLakeMetadataManager::RowVisibilityKind &kind,
 	return StringUtil::Join(matches, " AND ");
 }
 
+//! The chain predicate over the rows of the prefix as one conjunct, a chain of several segments is parenthesized
+static string ChainConjunct(const DuckLakeBranchChain &chain, const string &prefix, const string &snapshot_column) {
+	auto predicate = chain.Predicate(prefix, snapshot_column);
+	return chain.Segments().size() > 1 ? "(" + predicate + ")" : predicate;
+}
+
+//! The rows of the prefix in the view of the chain, at or before the read snapshot when one is given
+static string ChainView(const DuckLakeBranchChain &chain, const string &prefix, const string &snapshot_column,
+                        const string &read_snapshot) {
+	auto view = ChainConjunct(chain, prefix, snapshot_column);
+	if (!read_snapshot.empty()) {
+		view += StringUtil::Format(" AND %s.%s <= %s", prefix, snapshot_column, read_snapshot);
+	}
+	return view;
+}
+
+//! The chain predicate over the begin snapshots of the rows of the alias, preceded by AND, empty before 2.0
+static string BirthChainFilter(bool row_visibility, const DuckLakeBranchChain &chain, const string &alias) {
+	return row_visibility ? " AND " + ChainConjunct(chain, alias, "begin_snapshot") : string();
+}
+
 //! The companion of a kind under the given table name
 static string RowVisibilityTableStatement(const DuckLakeMetadataManager::RowVisibilityKind &kind, const string &table) {
 	// (row_branch_id, row_snapshot) name the version row by its birth, branch_id the branch whose lineage ends it
@@ -494,20 +520,16 @@ string DuckLakeMetadataManager::GetRowVisibilityTableStatement(const RowVisibili
 	return RowVisibilityTableStatement(kind, RowVisibilityTableName(kind.kind));
 }
 
-string DuckLakeMetadataManager::RowVisibility(const string &alias, const RowVisibilityKind &kind,
-                                              const string &read_snapshot) {
-	// the main segment, the row is born on main at or before the read and no end of main is in the view
+string DuckLakeMetadataManager::RowVisibility(const DuckLakeBranchChain &chain, const string &alias,
+                                              const RowVisibilityKind &kind, const string &read_snapshot) {
+	// the row is born in the view of the chain at or before the read and no end of the view closes it
 	// an empty read snapshot reads the latest state
-	string birth_cap;
-	string end_cap;
-	if (!read_snapshot.empty()) {
-		birth_cap = StringUtil::Format(" AND %s.begin_snapshot <= %s", alias, read_snapshot);
-		end_cap = " AND vis.end_snapshot <= " + read_snapshot;
-	}
-	return StringUtil::Format("%s.branch_id = 0%s AND NOT EXISTS (SELECT 1 FROM "
+	return StringUtil::Format("%s AND NOT EXISTS (SELECT 1 FROM "
 	                          "{METADATA_CATALOG}.ducklake_%s_visibility vis WHERE %s AND vis.row_branch_id = "
-	                          "%s.branch_id AND vis.row_snapshot = %s.begin_snapshot AND vis.branch_id = 0%s)",
-	                          alias, birth_cap, kind.kind, KeyMatches(kind, "vis", alias), alias, alias, end_cap);
+	                          "%s.branch_id AND vis.row_snapshot = %s.begin_snapshot AND %s)",
+	                          ChainView(chain, alias, "begin_snapshot", read_snapshot), kind.kind,
+	                          KeyMatches(kind, "vis", alias), alias, alias,
+	                          ChainView(chain, "vis", "end_snapshot", read_snapshot));
 }
 
 string DuckLakeMetadataManager::EndRows(const string &kind_name, const string &filter) {
@@ -524,7 +546,8 @@ FROM {METADATA_CATALOG}.%s t
 WHERE %s AND %s;
 )",
 	                          kind.kind, StringUtil::Join(kind.key_columns, ", "), StringUtil::Join(keys, ", "),
-	                          RowTableName(kind.kind), filter, RowVisibility("t", kind, "{SNAPSHOT_ID}"));
+	                          RowTableName(kind.kind), filter,
+	                          RowVisibility(DuckLakeBranchChain::Main(), "t", kind, "{SNAPSHOT_ID}"));
 }
 
 string DuckLakeMetadataManager::DataFileTableColumns(bool with_ranges, bool with_row_group_count) {
@@ -683,8 +706,7 @@ string DuckLakeMetadataManager::GetCreateTableStatements() {
 	    "CREATE TABLE {METADATA_CATALOG}.ducklake_column_mapping(mapping_id BIGINT, table_id BIGINT, type VARCHAR);");
 	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_name_mapping(mapping_id BIGINT, column_id BIGINT, "
 	                     "source_name VARCHAR, target_field_id BIGINT, parent_column BIGINT, is_partition BOOLEAN);");
-	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_schema_versions(begin_snapshot BIGINT, "
-	                     "schema_version BIGINT, table_id BIGINT);");
+	statements.push_back(GetSchemaVersionsTableStatement());
 	statements.push_back(GetMacroTableStatement());
 	statements.push_back("CREATE TABLE {METADATA_CATALOG}.ducklake_macro_impl(macro_id BIGINT, impl_id BIGINT, dialect "
 	                     "VARCHAR, sql VARCHAR, type VARCHAR);");
@@ -1003,9 +1025,11 @@ void DuckLakeMetadataManager::MigrateV10(bool from_dev1) {
 }
 
 string DuckLakeMetadataManager::GetSnapshotTagTableStatement() {
-	// a snapshot tag row ends in its companion like every catalog row of 2.0
+	// a snapshot tag row ends in its companion like every catalog row of 2.0, snapshot_branch_id is the branch of the
+	// tagged snapshot and comes last like the column a migrated catalog adds
 	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_tag(tag_name VARCHAR, snapshot_id BIGINT, "
-	       "begin_snapshot BIGINT, expires_at TIMESTAMPTZ, branch_id BIGINT DEFAULT 0);";
+	       "begin_snapshot BIGINT, expires_at TIMESTAMPTZ, branch_id BIGINT DEFAULT 0, snapshot_branch_id BIGINT "
+	       "DEFAULT 0);";
 }
 
 string DuckLakeMetadataManager::GetBranchTableStatement() {
@@ -1047,7 +1071,7 @@ void DuckLakeMetadataManager::MigrateV11(bool from_dev1) {
 		layout = ProbeV2_0Layout();
 	}
 	auto migrate_query = V2_0SnapshotAdditionsSql(layout.additions) + V2_0FileEventsSql(layout.ranges) +
-	                     V2_0RowCompanionsSql(layout.rows);
+	                     V2_0RowCompanionsSql(layout.rows) + V2_0LineageColumnsSql(layout.lineage);
 	migrate_query += "UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version';\n";
 	ExecuteMigration(migrate_query, false, from_version, "2.0-dev1");
 }
@@ -1281,6 +1305,32 @@ ALTER TABLE {METADATA_CATALOG}.%s DROP COLUMN %s;
 	return query;
 }
 
+DuckLakeMetadataManager::V2_0LineageColumns DuckLakeMetadataManager::ProbeV2_0LineageColumns() {
+	V2_0LineageColumns lineage;
+	lineage.has_schema_versions_branch = HasMetadataColumn("ducklake_schema_versions", "branch_id");
+	// the snapshot tag step creates the table in its 2.0 shape before this step, with the branch of the target
+	lineage.has_snapshot_tag_target_branch = !HasMetadataColumn("ducklake_snapshot_tag", "tag_name") ||
+	                                         HasMetadataColumn("ducklake_snapshot_tag", "snapshot_branch_id");
+	return lineage;
+}
+
+string DuckLakeMetadataManager::V2_0LineageColumnsSql(const V2_0LineageColumns &lineage) {
+	// the SQLite scanner drops the default, so the updates fill the branch of the existing rows
+	string query;
+	if (!lineage.has_schema_versions_branch) {
+		query += "ALTER TABLE {METADATA_CATALOG}.ducklake_schema_versions ADD COLUMN branch_id BIGINT DEFAULT 0;\n";
+		query += "UPDATE {METADATA_CATALOG}.ducklake_schema_versions SET branch_id = 0 WHERE branch_id IS NULL;\n";
+	}
+	if (!lineage.has_snapshot_tag_target_branch) {
+		query +=
+		    "ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_tag ADD COLUMN snapshot_branch_id BIGINT DEFAULT 0;\n";
+		query +=
+		    "UPDATE {METADATA_CATALOG}.ducklake_snapshot_tag SET snapshot_branch_id = 0 WHERE snapshot_branch_id IS "
+		    "NULL;\n";
+	}
+	return query;
+}
+
 //! Takes a snapshot table without its branch key away by name, the first batch of its rebuild
 static string SnapshotTableRenameSql(const string &table, bool has_table, bool has_branch_column,
                                      bool has_rebuild_table, bool has_old_table) {
@@ -1394,6 +1444,7 @@ DuckLakeMetadataManager::V2_0Layout DuckLakeMetadataManager::ProbeV2_0Layout() {
 	layout.additions = ProbeV2_0SnapshotAdditions();
 	layout.ranges = ProbeV2_0FileRanges();
 	layout.rows = ProbeV2_0RowCompanions();
+	layout.lineage = ProbeV2_0LineageColumns();
 	return layout;
 }
 
@@ -1403,7 +1454,8 @@ string DuckLakeMetadataManager::MissingV2_0Step() {
 	    {"ducklake_snapshot", "branch_id"},        {"ducklake_snapshot_changes", "branch_id"},
 	    {"ducklake_branch", "branch_id"},          {"ducklake_snapshot_tag", "tag_name"},
 	    {"ducklake_file_visibility", "branch_id"}, {"ducklake_delete_file_visibility", "branch_id"},
-	    {"ducklake_data_file", "data_file_id"},    {"ducklake_delete_file", "delete_file_id"}};
+	    {"ducklake_data_file", "data_file_id"},    {"ducklake_delete_file", "delete_file_id"},
+	    {"ducklake_schema_versions", "branch_id"}, {"ducklake_snapshot_tag", "snapshot_branch_id"}};
 	for (auto &kind : RowVisibilityKinds()) {
 		// a companion binds under its final name only once the step renamed it into place
 		complete_layout.emplace_back(RowTableName(kind.kind), "branch_id");
@@ -1426,6 +1478,12 @@ string DuckLakeMetadataManager::MissingV2_0Step() {
 	}
 	if (layout.rows.Incomplete()) {
 		return "the catalog row companions";
+	}
+	if (!layout.lineage.has_schema_versions_branch) {
+		return "the branch of the schema versions";
+	}
+	if (!layout.lineage.has_snapshot_tag_target_branch) {
+		return "the branch of the tagged snapshots";
 	}
 	return string();
 }
@@ -1796,12 +1854,14 @@ idx_t DuckLakeMetadataManager::GetBeginSnapshotForTable(TableIndex table_id) {
 SELECT begin_snapshot
 FROM {METADATA_CATALOG}.ducklake_table
 WHERE table_id = {TABLE_ID})";
-	if (transaction.GetCatalog().SupportsRowVisibility()) {
-		// the earliest version row of main is the creation of the table
+	auto &catalog = transaction.GetCatalog();
+	if (catalog.SupportsRowVisibility()) {
+		// the earliest version row of the chain is the creation of the table
 		query = R"(
 SELECT MIN(t.begin_snapshot)
 FROM {METADATA_CATALOG}.ducklake_table t
-WHERE t.table_id = {TABLE_ID} AND t.branch_id = 0)";
+WHERE t.table_id = {TABLE_ID} AND )" +
+		        ChainConjunct(catalog.AttachedChain(), "t", "begin_snapshot");
 	}
 	query = StringUtil::Replace(query, "{TABLE_ID}", to_string(table_id.index));
 	auto result = Query(query);
@@ -1817,8 +1877,8 @@ DuckLakeTableSchemaVersions DuckLakeMetadataManager::GetTableSchemaVersions(Tabl
                                                                             DuckLakeSnapshot snapshot) {
 	auto query = StringUtil::Format("SELECT MIN(schema_version), MAX(schema_version) FROM "
 	                                "{METADATA_CATALOG}.ducklake_schema_versions "
-	                                "WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}",
-	                                table_id.index);
+	                                "WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}%s",
+	                                table_id.index, SchemaVersionsLineageFilter(""));
 	auto result = Query(snapshot, query);
 	result->ThrowIfError("Failed to get the schema versions of a table from DuckLake: ");
 	DuckLakeTableSchemaVersions schema_versions;
@@ -1838,7 +1898,8 @@ idx_t DuckLakeMetadataManager::GetBeginSnapshotForSchemaVersion(TableIndex table
 	string query = R"(
 SELECT begin_snapshot
 FROM {METADATA_CATALOG}.ducklake_schema_versions
-WHERE table_id = {TABLE_ID} AND schema_version = {SCHEMA_VERSION})";
+WHERE table_id = {TABLE_ID} AND schema_version = {SCHEMA_VERSION})" +
+	               SchemaVersionsLineageFilter("");
 	query = StringUtil::Replace(query, "{TABLE_ID}", to_string(table_id.index));
 	query = StringUtil::Replace(query, "{SCHEMA_VERSION}", to_string(schema_version));
 	auto result = Query(query);
@@ -1971,15 +2032,18 @@ idx_t DuckLakeMetadataManager::GetNetInlinedRowCount(const Identifier &inlined_t
 	// LCOV_EXCL_STOP
 }
 
-//! The live version rows of a kind, the given 1.x range text or the row companion of the alias from 2.0 on
-static string LiveRowFilter(bool row_visibility, const string &alias, const string &kind, const string &range_filter) {
+//! The live version rows of a kind, the given 1.x range text or the rows of the chain view from 2.0 on
+static string LiveRowFilter(bool row_visibility, const DuckLakeBranchChain &chain, const string &alias,
+                            const string &kind, const string &range_filter) {
 	if (row_visibility) {
-		return DuckLakeMetadataManager::RowVisibility(alias, DuckLakeMetadataManager::RowKind(kind), "{SNAPSHOT_ID}");
+		return DuckLakeMetadataManager::RowVisibility(chain, alias, DuckLakeMetadataManager::RowKind(kind),
+		                                              "{SNAPSHOT_ID}");
 	}
 	return range_filter;
 }
 
-string DuckLakeMetadataManager::GetTableColumnSchemaSql(TableIndex table_id, bool row_visibility) {
+string DuckLakeMetadataManager::GetTableColumnSchemaSql(TableIndex table_id, bool row_visibility,
+                                                        const DuckLakeBranchChain &chain) {
 	// Return the full flattened schema: top-level roots (parent_column IS NULL) and every nested leaf, each with its
 	// own column_id (== FieldIndex) and its own leaf column_type. Callers distinguish roots from leaves via
 	// parent_column. column_order == column_id for every row, so the ordering stays deterministic.
@@ -1990,56 +2054,85 @@ WHERE table_id = %d
   AND %s
 ORDER BY column_order ASC)",
 	                          row_visibility ? " col" : "", table_id.index,
-	                          LiveRowFilter(row_visibility, "col", "column",
+	                          LiveRowFilter(row_visibility, chain, "col", "column",
 	                                        "{SNAPSHOT_ID} >= begin_snapshot\n  AND ({SNAPSHOT_ID} < end_snapshot OR "
 	                                        "end_snapshot IS NULL)"));
 }
 
-string DuckLakeMetadataManager::GetInlinedTableNamesSql(TableIndex table_id) {
+string DuckLakeMetadataManager::InlinedTableRegistrations(bool row_visibility, const DuckLakeBranchChain &chain,
+                                                          optional_idx table_id) {
+	// a branch attach is read only, so every registration has a version row of main or none and main reads them all
+	if (!row_visibility || !chain.OnBranch()) {
+		return "{METADATA_CATALOG}.ducklake_inlined_data_tables";
+	}
+	string table_filter;
+	if (table_id.IsValid()) {
+		table_filter = StringUtil::Format("idt.table_id = %d AND ", table_id.GetIndex());
+	}
+	// a registration without any version row is the creation version, which every lineage of the table reads
+	return StringUtil::Format(R"((
+	SELECT idt.table_id, idt.table_name, idt.schema_version
+	FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+	LEFT JOIN (
+		SELECT sv.table_id, sv.schema_version, MAX(CASE WHEN %s THEN 1 ELSE 0 END) AS in_lineage
+		FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+		GROUP BY sv.table_id, sv.schema_version
+	) versions ON versions.table_id = idt.table_id AND versions.schema_version = idt.schema_version
+	WHERE %s(versions.table_id IS NULL OR versions.in_lineage = 1)
+))",
+	                          chain.Predicate("sv", "begin_snapshot"), table_filter);
+}
+
+string DuckLakeMetadataManager::GetInlinedTableNamesSql(TableIndex table_id, bool row_visibility,
+                                                        const DuckLakeBranchChain &chain) {
 	return StringUtil::Format(R"(
 SELECT DISTINCT table_name
-FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
+FROM %s idt
 WHERE table_id = %d)",
-	                          table_id.index);
+	                          InlinedTableRegistrations(row_visibility, chain, table_id.index), table_id.index);
 }
 
-string DuckLakeMetadataManager::GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id) {
+string DuckLakeMetadataManager::GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id, bool row_visibility,
+                                                                      const DuckLakeBranchChain &chain) {
 	return StringUtil::Format(R"(
 SELECT table_name
-FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
+FROM %s idt
 WHERE table_id = %d AND schema_version < (
-	SELECT MAX(schema_version)
-	FROM {METADATA_CATALOG}.ducklake_schema_versions
-	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
+	SELECT MAX(sv.schema_version)
+	FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+	WHERE sv.table_id = %d AND sv.begin_snapshot <= {SNAPSHOT_ID}%s
 ))",
-	                          table_id.index, table_id.index);
+	                          InlinedTableRegistrations(row_visibility, chain, table_id.index), table_id.index,
+	                          table_id.index, BirthChainFilter(row_visibility, chain, "sv"));
 }
 
-string DuckLakeMetadataManager::GetInlinedTableColumnsSql(optional_idx table_id, bool row_visibility) {
+string DuckLakeMetadataManager::GetInlinedTableColumnsSql(optional_idx table_id, bool row_visibility,
+                                                          const DuckLakeBranchChain &chain) {
 	string table_filter;
 	if (table_id.IsValid()) {
 		table_filter = StringUtil::Format("\n\tWHERE idt.table_id = %d", table_id.GetIndex());
 	}
 	// each inlined table supplies the read snapshot of its columns, the begin of its schema version
-	return StringUtil::Format(R"(
+	return StringUtil::Format(
+	    R"(
 WITH inlined AS (
 	SELECT idt.table_id, idt.table_name, COALESCE(sv.begin_snapshot, (
 		SELECT MIN(t.begin_snapshot) FROM {METADATA_CATALOG}.ducklake_table t WHERE t.table_id = idt.table_id%s
 	)) AS snapshot_id
-	FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
+	FROM %s idt
 	LEFT JOIN {METADATA_CATALOG}.ducklake_schema_versions sv
-		ON sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version%s
+		ON sv.table_id = idt.table_id AND sv.schema_version = idt.schema_version%s%s
 )
 SELECT inlined.table_name, col.column_name, col.column_type, col.column_id
 FROM inlined
 JOIN {METADATA_CATALOG}.ducklake_column col ON col.table_id = inlined.table_id AND col.parent_column IS NULL
 WHERE %s
 )",
-	                          row_visibility ? " AND t.branch_id = 0" : "", table_filter,
-	                          row_visibility
-	                              ? RowVisibility("col", RowKind("column"), "inlined.snapshot_id")
-	                              : "col.begin_snapshot <= inlined.snapshot_id AND (col.end_snapshot IS NULL "
-	                                "OR col.end_snapshot > inlined.snapshot_id)");
+	    BirthChainFilter(row_visibility, chain, "t"), InlinedTableRegistrations(row_visibility, chain, table_id),
+	    BirthChainFilter(row_visibility, chain, "sv"), table_filter,
+	    row_visibility ? RowVisibility(chain, "col", RowKind("column"), "inlined.snapshot_id")
+	                   : "col.begin_snapshot <= inlined.snapshot_id AND (col.end_snapshot IS NULL "
+	                     "OR col.end_snapshot > inlined.snapshot_id)");
 }
 
 vector<DuckLakeInlinedTableInfo> DuckLakeMetadataManager::GetInlinedDataTables(const DuckLakeTableEntry &table,
@@ -2066,7 +2159,8 @@ vector<DuckLakeInlinedTableInfo> DuckLakeMetadataManager::GetInlinedDataTables(c
 }
 
 identifier_set_t DuckLakeMetadataManager::GetInlinedTableNames(TableIndex table_id) {
-	auto result = Query(GetInlinedTableNamesSql(table_id));
+	auto &catalog = transaction.GetCatalog();
+	auto result = Query(GetInlinedTableNamesSql(table_id, catalog.SupportsRowVisibility(), catalog.AttachedChain()));
 	result->ThrowIfError("Failed to get inlined data tables from DuckLake: ");
 	identifier_set_t table_names;
 	for (auto &row : *result) {
@@ -2079,13 +2173,14 @@ DuckLakeCatalogInfo DuckLakeMetadataManager::GetCatalogForSnapshot(DuckLakeSnaps
 	auto &ducklake_catalog = transaction.GetCatalog();
 	return BuildCatalogForSnapshot(
 	    snapshot, [this](DuckLakeSnapshot s, string q) { return Query(s, q); }, ducklake_catalog.DataPath(),
-	    ducklake_catalog.Separator(), ducklake_catalog.SupportsV1_1Metadata(),
-	    ducklake_catalog.SupportsRowVisibility());
+	    ducklake_catalog.Separator(), ducklake_catalog.SupportsV1_1Metadata(), ducklake_catalog.SupportsRowVisibility(),
+	    ducklake_catalog.AttachedChain());
 }
 
 DuckLakeCatalogInfo DuckLakeMetadataManager::BuildCatalogForSnapshot(
     DuckLakeSnapshot snapshot, const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
-    const string &base_data_path, const string &separator, bool supports_v1_1_metadata, bool row_visibility) {
+    const string &base_data_path, const string &separator, bool supports_v1_1_metadata, bool row_visibility,
+    const DuckLakeBranchChain &chain) {
 	DuckLakeCatalogInfo catalog;
 	// load the schema information
 	string parent_schema_select = supports_v1_1_metadata ? ", parent_schema_id" : "";
@@ -2095,7 +2190,7 @@ FROM {METADATA_CATALOG}.ducklake_schema%s
 WHERE %s
 )",
 	                                                          parent_schema_select, row_visibility ? " sch" : "",
-	                                                          LiveRowFilter(row_visibility, "sch", "schema",
+	                                                          LiveRowFilter(row_visibility, chain, "sch", "schema",
 	                                                                        "{SNAPSHOT_ID} >= begin_snapshot AND "
 	                                                                        "({SNAPSHOT_ID} < end_snapshot OR "
 	                                                                        "end_snapshot IS NULL)")));
@@ -2161,18 +2256,18 @@ WHERE %s
 ORDER BY table_id ASC, parent_column ASC NULLS FIRST, column_order ASC
 )",
 	                                 ListAggregation(TAG_FIELDS),
-	                                 LiveRowFilter(row_visibility, "tag", "tag",
+	                                 LiveRowFilter(row_visibility, chain, "tag", "tag",
 	                                               "{SNAPSHOT_ID} >= tag.begin_snapshot AND ({SNAPSHOT_ID} < "
 	                                               "tag.end_snapshot OR tag.end_snapshot IS NULL)"),
 	                                 ListAggregation(INLINED_DATA_TABLES_FIELDS), ListAggregation(TAG_FIELDS),
-	                                 LiveRowFilter(row_visibility, "col_tag", "column_tag",
+	                                 LiveRowFilter(row_visibility, chain, "col_tag", "column_tag",
 	                                               "{SNAPSHOT_ID} >= col_tag.begin_snapshot AND ({SNAPSHOT_ID} "
 	                                               "< col_tag.end_snapshot OR col_tag.end_snapshot IS NULL)"),
 	                                 row_visibility ? " col" : "",
-	                                 LiveRowFilter(row_visibility, "col", "column",
+	                                 LiveRowFilter(row_visibility, chain, "col", "column",
 	                                               "{SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < "
 	                                               "end_snapshot OR end_snapshot IS NULL)"),
-	                                 LiveRowFilter(row_visibility, "tbl", "table",
+	                                 LiveRowFilter(row_visibility, chain, "tbl", "table",
 	                                               "{SNAPSHOT_ID} >= tbl.begin_snapshot AND ({SNAPSHOT_ID} < "
 	                                               "tbl.end_snapshot OR tbl.end_snapshot IS NULL)")));
 	result->ThrowIfError("Failed to get table information from DuckLake: ");
@@ -2261,7 +2356,7 @@ ORDER BY table_id ASC, parent_column ASC NULLS FIRST, column_order ASC
 		}
 	}
 	// load view information
-	auto view_column_tag_filter = LiveRowFilter(row_visibility, "vct", "view_column_tag",
+	auto view_column_tag_filter = LiveRowFilter(row_visibility, chain, "vct", "view_column_tag",
 	                                            "{SNAPSHOT_ID} >= vct.begin_snapshot AND ({SNAPSHOT_ID} < "
 	                                            "vct.end_snapshot OR vct.end_snapshot IS NULL)");
 	auto view_column_tags_select =
@@ -2286,12 +2381,12 @@ FROM {METADATA_CATALOG}.ducklake_view view
 WHERE %s
 )",
 	                                                     ListAggregation(TAG_FIELDS),
-	                                                     LiveRowFilter(row_visibility, "tag", "tag",
+	                                                     LiveRowFilter(row_visibility, chain, "tag", "tag",
 	                                                                   "{SNAPSHOT_ID} >= tag.begin_snapshot AND "
 	                                                                   "({SNAPSHOT_ID} < tag.end_snapshot OR "
 	                                                                   "tag.end_snapshot IS NULL)"),
 	                                                     view_column_tags_select,
-	                                                     LiveRowFilter(row_visibility, "view", "view",
+	                                                     LiveRowFilter(row_visibility, chain, "view", "view",
 	                                                                   "{SNAPSHOT_ID} >= begin_snapshot AND "
 	                                                                   "({SNAPSHOT_ID} < view.end_snapshot OR "
 	                                                                   "view.end_snapshot IS NULL)")));
@@ -2345,7 +2440,7 @@ FROM {METADATA_CATALOG}.ducklake_macro
 WHERE  %s
 )",
 	                                                     ListAggregation(MACRO_IMPL_FIELDS),
-	                                                     LiveRowFilter(row_visibility, "ducklake_macro", "macro",
+	                                                     LiveRowFilter(row_visibility, chain, "ducklake_macro", "macro",
 	                                                                   "{SNAPSHOT_ID} >= ducklake_macro.begin_snapshot "
 	                                                                   "AND ({SNAPSHOT_ID} < "
 	                                                                   "ducklake_macro.end_snapshot OR "
@@ -2370,7 +2465,7 @@ JOIN {METADATA_CATALOG}.ducklake_partition_column part_col USING (partition_id)
 WHERE %s
 ORDER BY part.table_id ASC, partition_id ASC, partition_key_index ASC
 )",
-	                                                     LiveRowFilter(row_visibility, "part", "partition",
+	                                                     LiveRowFilter(row_visibility, chain, "part", "partition",
 	                                                                   "{SNAPSHOT_ID} >= part.begin_snapshot AND "
 	                                                                   "({SNAPSHOT_ID} < part.end_snapshot OR "
 	                                                                   "part.end_snapshot IS NULL)")));
@@ -2403,7 +2498,7 @@ JOIN {METADATA_CATALOG}.ducklake_sort_expression sort_expr USING (sort_id)
 WHERE %s
 ORDER BY sort.table_id ASC, sort.sort_id ASC, sort_expr.sort_key_index ASC
 )",
-	                                                     LiveRowFilter(row_visibility, "sort", "sort",
+	                                                     LiveRowFilter(row_visibility, chain, "sort", "sort",
 	                                                                   "{SNAPSHOT_ID} >= sort.begin_snapshot AND "
 	                                                                   "({SNAPSHOT_ID} < sort.end_snapshot OR "
 	                                                                   "sort.end_snapshot IS NULL)")));
@@ -3976,19 +4071,23 @@ void DuckLakeMetadataManager::SetPartitionSchemaVersions(DuckLakeTableEntry &tab
 	for (auto &entry : file_indexes) {
 		file_ids.insert(DataFileIndex(entry.first));
 	}
-	// from 2.0 on a spec ends in its companion, the earliest end of main closes its range
+	// from 2.0 on a spec ends in its companion, the earliest end of the chain closes its range
+	auto &catalog = transaction.GetCatalog();
 	string partition_specs = "{METADATA_CATALOG}.ducklake_partition_info";
-	if (transaction.GetCatalog().SupportsRowVisibility()) {
-		partition_specs = R"((
+	if (catalog.SupportsRowVisibility()) {
+		auto &chain = catalog.AttachedChain();
+		partition_specs =
+		    StringUtil::Format(R"((
 	SELECT p.partition_id, p.table_id, p.begin_snapshot, (
 		SELECT MIN(e.end_snapshot)
 		FROM {METADATA_CATALOG}.ducklake_partition_visibility e
 		WHERE e.partition_id = p.partition_id AND e.row_branch_id = p.branch_id AND e.row_snapshot = p.begin_snapshot
-		  AND e.branch_id = 0
+		  AND %s
 	) AS end_snapshot
 	FROM {METADATA_CATALOG}.ducklake_partition_info p
-	WHERE p.branch_id = 0
-))";
+	WHERE %s
+))",
+		                       ChainConjunct(chain, "e", "end_snapshot"), ChainConjunct(chain, "p", "begin_snapshot"));
 	}
 	auto result = Query(StringUtil::Format(R"(
 WITH snapshot_ranges AS (
@@ -4000,7 +4099,7 @@ WITH snapshot_ranges AS (
 		) AS end_snapshot,
 		schema_version
 	FROM {METADATA_CATALOG}.ducklake_schema_versions
-	WHERE table_id=%d
+	WHERE table_id=%d%s
 )
 SELECT data.data_file_id, partition_sr.schema_version
 FROM %s data
@@ -4012,8 +4111,8 @@ JOIN snapshot_ranges partition_sr
 	AND COALESCE(partition_spec.end_snapshot - 1, data.begin_snapshot) < partition_sr.end_snapshot
 WHERE data.data_file_id IN (%s)
 )",
-	                                       table.GetTableId().index, DataFiles(table.GetTableId()), partition_specs,
-	                                       GenerateIDList(file_ids)));
+	                                       table.GetTableId().index, SchemaVersionsLineageFilter(""),
+	                                       DataFiles(table.GetTableId()), partition_specs, GenerateIDList(file_ids)));
 	result->ThrowIfError("Failed to get the partition schema versions of compaction files from DuckLake: ");
 	for (auto &row : *result) {
 		auto entry = file_indexes.find(row.GetValue<idx_t>(0));
@@ -4112,7 +4211,7 @@ WITH %ssnapshot_ranges AS (
 		) AS end_snapshot,
 		schema_version
 	FROM {METADATA_CATALOG}.ducklake_schema_versions
-	WHERE table_id=%d
+	WHERE table_id=%d%s
 	ORDER BY begin_snapshot ASC
 )
 SELECT %s
@@ -4133,9 +4232,9 @@ LEFT JOIN (
 WHERE data.table_id=%d %s
 ORDER BY data.begin_snapshot ASC, data.row_id_start ASC, data.data_file_id ASC, del.begin_snapshot ASC
 	)",
-	                                candidate_files_cte, table_id.index, select_list, data_file_source,
-	                                DeleteFiles(table_id), table_id.index, delete_file_filter, partition_value_filter,
-	                                table_id.index, file_filter_clause);
+	                                candidate_files_cte, table_id.index, SchemaVersionsLineageFilter(""), select_list,
+	                                data_file_source, DeleteFiles(table_id), table_id.index, delete_file_filter,
+	                                partition_value_filter, table_id.index, file_filter_clause);
 	auto result = Query(query);
 	result->ThrowIfError("Failed to get compaction file list from DuckLake: ");
 	vector<DuckLakeCompactionFileEntry> files;
@@ -6648,6 +6747,14 @@ string DuckLakeMetadataManager::BranchLineageFilter() const {
 	return " AND (" + catalog.AttachedChain().Predicate("") + ")";
 }
 
+string DuckLakeMetadataManager::SchemaVersionsLineageFilter(const string &prefix) const {
+	auto &catalog = transaction.GetCatalog();
+	if (!catalog.SupportsBranching()) {
+		return string();
+	}
+	return " AND " + ChainConjunct(catalog.AttachedChain(), prefix, "begin_snapshot");
+}
+
 string DuckLakeMetadataManager::GetLatestSnapshotQuery() const {
 	auto &catalog = transaction.GetCatalog();
 	if (!catalog.SupportsBranching()) {
@@ -7647,27 +7754,28 @@ WHERE %s(f.end_snapshot IS NOT NULL AND (s.snapshot_id IS NULL OR s.snapshot_id 
 }
 
 vector<DuckLakeSnapshotTagInfo> DuckLakeMetadataManager::GetSnapshotTags(bool with_snapshot_time) {
-	if (!transaction.GetCatalog().SupportsSnapshotTags()) {
+	auto &catalog = transaction.GetCatalog();
+	if (!catalog.SupportsSnapshotTags()) {
 		return vector<DuckLakeSnapshotTagInfo>();
 	}
-	// the tags live in the latest state, snapshot tags exist from 2.0 on where every catalog row ends in its companion
-	auto live_tags = RowVisibility("tag", RowKind("snapshot_tag"), "");
-	string query;
+	// the tags born in the view of the attached chain, snapshot tags exist from 2.0 on where every row ends in its
+	// companion, the time of a tagged snapshot is known when the view holds it
+	auto &chain = catalog.AttachedChain();
+	auto live_tags = RowVisibility(chain, "tag", RowKind("snapshot_tag"), "");
+	string time_column = "NULL";
+	string time_join;
 	if (with_snapshot_time) {
-		query = StringUtil::Format(R"(
-SELECT tag.tag_name, tag.snapshot_id, snap.snapshot_time, tag.begin_snapshot, tag.expires_at
-FROM {METADATA_CATALOG}.ducklake_snapshot_tag tag
-LEFT JOIN {METADATA_CATALOG}.ducklake_snapshot snap ON snap.snapshot_id = tag.snapshot_id
+		time_column = "snap.snapshot_time";
+		time_join = StringUtil::Format("\nLEFT JOIN {METADATA_CATALOG}.ducklake_snapshot snap ON snap.branch_id = "
+		                               "tag.snapshot_branch_id AND snap.snapshot_id = tag.snapshot_id AND %s",
+		                               ChainConjunct(chain, "snap", "snapshot_id"));
+	}
+	auto query = StringUtil::Format(R"(
+SELECT tag.tag_name, tag.snapshot_id, %s, tag.begin_snapshot, tag.expires_at, tag.snapshot_branch_id, tag.branch_id
+FROM {METADATA_CATALOG}.ducklake_snapshot_tag tag%s
 WHERE %s
 ORDER BY tag.begin_snapshot ASC, tag.tag_name ASC;)",
-		                           live_tags);
-	} else {
-		query = StringUtil::Format(R"(
-SELECT tag.tag_name, tag.snapshot_id, NULL, tag.begin_snapshot, tag.expires_at
-FROM {METADATA_CATALOG}.ducklake_snapshot_tag tag
-WHERE %s;)",
-		                           live_tags);
-	}
+	                                time_column, time_join, live_tags);
 	auto result = Query(query);
 	result->ThrowIfError("Failed to get snapshot tags from DuckLake: ");
 	auto context = transaction.context.lock();
@@ -7682,18 +7790,20 @@ WHERE %s;)",
 		if (!row.IsNull(4)) {
 			tag.expires_at = row.GetBaseValue(4).CastAs(*context, LogicalType::TIMESTAMP_TZ);
 		}
+		tag.snapshot_branch_id = row.GetValue<idx_t>(5);
+		tag.created_branch_id = row.GetValue<idx_t>(6);
 		tags.push_back(std::move(tag));
 	}
 	return tags;
 }
 
-optional_idx DuckLakeMetadataManager::GetTaggedSnapshot(const string &name) {
+unique_ptr<DuckLakeSnapshotTagInfo> DuckLakeMetadataManager::GetTaggedSnapshot(const string &name) {
 	for (auto &tag : GetSnapshotTags()) {
 		if (StringUtil::CIEquals(tag.name, name)) {
-			return tag.snapshot_id;
+			return make_uniq<DuckLakeSnapshotTagInfo>(tag);
 		}
 	}
-	return optional_idx();
+	return nullptr;
 }
 
 idx_t DuckLakeMetadataManager::ResolveSnapshotVersion(const Value &version) {
@@ -7707,8 +7817,20 @@ idx_t DuckLakeMetadataManager::ResolveSnapshotVersion(const Value &version) {
 	}
 	auto &name = StringValue::Get(version);
 	auto tagged = GetTaggedSnapshot(name);
-	if (tagged.IsValid()) {
-		return tagged.GetIndex();
+	if (tagged) {
+		// a tag resolves when the attached branch reads the snapshot it names
+		auto &chain = transaction.GetCatalog().AttachedChain();
+		if (!chain.Contains(tagged->snapshot_branch_id, tagged->snapshot_id)) {
+			if (tagged->snapshot_branch_id == 0) {
+				throw InvalidInputException("Snapshot tag \"%s\" names snapshot %llu of main, which is newer than "
+				                            "the snapshot the attached branch continues from",
+				                            name, tagged->snapshot_id);
+			}
+			throw InvalidInputException("Snapshot tag \"%s\" names snapshot %llu of branch %llu, which the attached "
+			                            "branch does not read",
+			                            name, tagged->snapshot_id, tagged->snapshot_branch_id);
+		}
+		return tagged->snapshot_id;
 	}
 	if (transaction.GetCatalog().SupportsSnapshotTags()) {
 		throw InvalidInputException("No snapshot tag with the name \"%s\" exists", name);
@@ -7718,9 +7840,9 @@ idx_t DuckLakeMetadataManager::ResolveSnapshotVersion(const Value &version) {
 
 string DuckLakeMetadataManager::EndSnapshotTagSql(const DuckLakeSnapshotTagInfo &tag) {
 	// the row is named by its birth, the collation of the catalog can fold names so they compare byte for byte
-	auto filter = StringUtil::Format("%s = %s AND t.branch_id = 0 AND t.begin_snapshot = %d",
+	auto filter = StringUtil::Format("%s = %s AND t.branch_id = %llu AND t.begin_snapshot = %d",
 	                                 DuckLakeUtil::WithBinaryCollation("t.tag_name"), SQLString(tag.name),
-	                                 tag.created_snapshot_id.GetIndex());
+	                                 tag.created_branch_id, tag.created_snapshot_id.GetIndex());
 	return EndRows("snapshot_tag", filter);
 }
 
@@ -7736,8 +7858,9 @@ DuckLakeMetadataManager::WriteSnapshotTagChanges(const case_insensitive_map_t<Du
 		auto &tag = entry.second;
 		auto expires_at = tag.expires_at.IsNull() ? string("NULL") : tag.expires_at.ToSQLString();
 		result += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.ducklake_snapshot_tag (tag_name, snapshot_id, "
-		                             "begin_snapshot, expires_at, branch_id) VALUES (%s, %d, {SNAPSHOT_ID}, %s, 0);\n",
-		                             SQLString(entry.first), tag.snapshot_id, expires_at);
+		                             "snapshot_branch_id, begin_snapshot, expires_at, branch_id) VALUES (%s, %d, %d, "
+		                             "{SNAPSHOT_ID}, %s, 0);\n",
+		                             SQLString(entry.first), tag.snapshot_id, tag.snapshot_branch_id, expires_at);
 	}
 	return result;
 }
@@ -8128,14 +8251,16 @@ string DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(const vector<Fl
 	return result;
 }
 
-string DuckLakeMetadataManager::InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids) {
+string DuckLakeMetadataManager::InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids,
+                                                bool write_branch_id) {
 	if (table_ids.empty()) {
 		return {};
 	}
 	string result;
 	for (auto &table_id : table_ids) {
-		result += StringUtil::Format(R"(INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions VALUES (%d,%d,%d);)",
-		                             snapshot.snapshot_id, snapshot.schema_version, table_id.index);
+		result += StringUtil::Format(R"(INSERT INTO {METADATA_CATALOG}.ducklake_schema_versions VALUES (%d,%d,%d%s);)",
+		                             snapshot.snapshot_id, snapshot.schema_version, table_id.index,
+		                             write_branch_id ? ", 0" : "");
 	}
 	return result;
 }
@@ -8190,6 +8315,7 @@ unordered_set<idx_t> DuckLakeMetadataManager::GetTablesWithRewriteCandidates(con
 vector<DuckLakeTableSizeInfo> DuckLakeMetadataManager::GetTableSizes(DuckLakeSnapshot snapshot) {
 	vector<DuckLakeTableSizeInfo> table_sizes;
 	auto row_visibility = transaction.GetCatalog().SupportsRowVisibility();
+	auto &chain = transaction.GetCatalog().AttachedChain();
 	auto result =
 	    Query(snapshot, StringUtil::Format(R"(
 SELECT
@@ -8210,7 +8336,7 @@ FROM {METADATA_CATALOG}.ducklake_table tbl, LATERAL (
 WHERE %s
 )",
 	                                       DataFiles(), DeleteFiles(),
-	                                       LiveRowFilter(row_visibility, "tbl", "table",
+	                                       LiveRowFilter(row_visibility, chain, "tbl", "table",
 	                                                     "{SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < "
 	                                                     "end_snapshot OR end_snapshot IS NULL)")));
 	for (auto &row : *result) {

@@ -30,6 +30,7 @@ public:
 	string GetTagTableStatement() override;
 	string GetColumnTagTableStatement() override;
 	string GetViewColumnTagTableStatement() override;
+	string GetSchemaVersionsTableStatement() override;
 	string GetDataFileTableStatement() override;
 	string GetDeleteFileTableStatement() override;
 	string GetSnapshotTableStatement() override;

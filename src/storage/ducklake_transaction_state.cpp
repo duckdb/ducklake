@@ -396,27 +396,31 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 	}
 }
 
-string DuckLakeTransactionState::TaggedSnapshotIdList(const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &tags) {
-	vector<string> snapshot_ids;
-	for (auto &tag : tags) {
-		snapshot_ids.push_back(to_string(tag.second.snapshot_id));
-	}
-	return StringUtil::Join(snapshot_ids, ", ");
-}
-
 void DuckLakeTransactionState::CheckTaggedSnapshotsExist(const DuckLakeCommitContext &context) const {
 	if (new_snapshot_tags.empty()) {
 		return;
 	}
-	auto result = context.conflict_query_executor(StringUtil::Format(
-	    "SELECT snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE snapshot_id IN (%s)%s",
-	    TaggedSnapshotIdList(new_snapshot_tags), context.supports_v2_0_metadata ? " AND branch_id = 0" : ""));
-	set<idx_t> existing;
+	// a tag names a snapshot of a branch, other branches hold the same ids from 2.0 on
+	vector<string> targets;
+	for (auto &tag : new_snapshot_tags) {
+		if (context.supports_v2_0_metadata) {
+			targets.push_back(StringUtil::Format("(branch_id = %llu AND snapshot_id = %llu)",
+			                                     tag.second.snapshot_branch_id, tag.second.snapshot_id));
+		} else {
+			targets.push_back(StringUtil::Format("snapshot_id = %llu", tag.second.snapshot_id));
+		}
+	}
+	auto result = context.conflict_query_executor(
+	    StringUtil::Format("SELECT snapshot_id, %s FROM {METADATA_CATALOG}.ducklake_snapshot WHERE %s",
+	                       context.supports_v2_0_metadata ? "branch_id" : "0", StringUtil::Join(targets, " OR ")));
+	set<pair<idx_t, idx_t>> existing;
 	for (auto &row : *result) {
-		existing.insert(row.GetValue<idx_t>(0));
+		existing.emplace(row.GetValue<idx_t>(1), row.GetValue<idx_t>(0));
 	}
 	for (auto &tag : new_snapshot_tags) {
-		if (existing.find(tag.second.snapshot_id) == existing.end()) {
+		auto target = make_pair(context.supports_v2_0_metadata ? tag.second.snapshot_branch_id : idx_t(0),
+		                        tag.second.snapshot_id);
+		if (existing.find(target) == existing.end()) {
 			throw TransactionException("Transaction conflict - attempting to create tag %s for snapshot %d"
 			                           " - but another transaction has expired the snapshot",
 			                           tag.first, tag.second.snapshot_id);
@@ -1015,7 +1019,8 @@ static identifier_set_t ReadInlinedTablesBeforeSchemaChange(TableIndex table_id,
                                                             const DuckLakeCommitContext &context) {
 	identifier_set_t result;
 	auto tables = context.query_metadata_with_snapshot(
-	    snapshot, DuckLakeMetadataManager::GetInlinedTablesBeforeSchemaChangeSql(table_id));
+	    snapshot, DuckLakeMetadataManager::GetInlinedTablesBeforeSchemaChangeSql(
+	                  table_id, context.supports_row_visibility, DuckLakeBranchChain::Main()));
 	tables->ThrowIfError("Failed to read the inlined data tables from DuckLake: ");
 	for (auto &row : *tables) {
 		result.insert(row.GetValue<Identifier>(0));
@@ -1027,8 +1032,8 @@ static identifier_set_t ReadInlinedTablesBeforeSchemaChange(TableIndex table_id,
 static map<Identifier, map<FieldIndex, DuckLakeColumnSchemaEntry>>
 ReadInlinedTableColumns(TableIndex table_id, const DuckLakeCommitContext &context) {
 	map<Identifier, map<FieldIndex, DuckLakeColumnSchemaEntry>> result;
-	auto columns = context.query_metadata(
-	    DuckLakeMetadataManager::GetInlinedTableColumnsSql(table_id.index, context.supports_row_visibility));
+	auto columns = context.query_metadata(DuckLakeMetadataManager::GetInlinedTableColumnsSql(
+	    table_id.index, context.supports_row_visibility, DuckLakeBranchChain::Main()));
 	columns->ThrowIfError("Failed to read the columns of the inlined data tables from DuckLake: ");
 	for (auto &row : *columns) {
 		FieldIndex field_index(static_cast<idx_t>(row.GetValue<int64_t>(3)));
@@ -2396,8 +2401,8 @@ static FloatWidenedBounds GetFloatBoundsToRewrite(DuckLakeCommitState &commit_st
 	unique_ptr<QueryResult> query_result;
 	if (context.supports_row_visibility) {
 		// the live version rows are those no end of main closes at the commit snapshot
-		auto live =
-		    DuckLakeMetadataManager::RowVisibility("c", DuckLakeMetadataManager::RowKind("column"), "{SNAPSHOT_ID}");
+		auto live = DuckLakeMetadataManager::RowVisibility(DuckLakeBranchChain::Main(), "c",
+		                                                   DuckLakeMetadataManager::RowKind("column"), "{SNAPSHOT_ID}");
 		auto query = StringUtil::Format(R"(
 SELECT c.table_id, c.column_id, c.column_type, %s
 FROM {METADATA_CATALOG}.ducklake_column c WHERE (c.table_id, c.column_id) IN (%s))",
@@ -2558,7 +2563,7 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			// only a commit that changes a partition or sort spec compares it with the committed ones
 			existing_catalog = DuckLakeMetadataManager::BuildCatalogForSnapshot(
 			    commit_snapshot, context.query_metadata_with_snapshot, data_path, separator,
-			    context.supports_v1_1_metadata, context.supports_row_visibility);
+			    context.supports_v1_1_metadata, context.supports_row_visibility, DuckLakeBranchChain::Main());
 		}
 		batch_queries += DuckLakeMetadataManager::WriteNewPartitionKeys(
 		    existing_catalog.partitions, result.new_partition_keys, context.supports_row_visibility);
@@ -2756,7 +2761,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 			tables_with_schema_changes.insert(new_table.id);
 		}
 	}
-	batch_queries += DuckLakeMetadataManager::InsertNewSchema(commit_snapshot, tables_with_schema_changes);
+	batch_queries += DuckLakeMetadataManager::InsertNewSchema(commit_snapshot, tables_with_schema_changes,
+	                                                          context.supports_v2_0_metadata);
 
 	return batch_queries;
 }

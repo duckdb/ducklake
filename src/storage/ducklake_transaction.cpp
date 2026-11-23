@@ -2061,6 +2061,7 @@ void DuckLakeTransaction::CreateSnapshotTag(const string &name, idx_t snapshot_i
 	DuckLakeSnapshotTagInfo tag;
 	tag.name = name;
 	tag.snapshot_id = snapshot_id;
+	tag.snapshot_branch_id = ducklake_catalog.AttachedChain().OwnerOf(snapshot_id);
 	tag.expires_at = expires_at;
 	state->new_snapshot_tags[name] = std::move(tag);
 }
@@ -2122,6 +2123,7 @@ void DuckLakeTransaction::ReplaceSnapshotTag(const string &name, idx_t snapshot_
 	CheckNotExpiredInTransaction(snapshot_id);
 	auto changed = tag;
 	changed.snapshot_id = snapshot_id;
+	changed.snapshot_branch_id = ducklake_catalog.AttachedChain().OwnerOf(snapshot_id);
 	ChangeSnapshotTag(tag, std::move(changed));
 	ExpireReleasedSnapshots();
 }

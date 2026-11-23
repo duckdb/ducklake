@@ -77,7 +77,7 @@ FROM ducklake.test
 84
 
 query III
-FROM __ducklake_metadata_ducklake.ducklake_schema_versions;
+SELECT begin_snapshot, schema_version, table_id FROM __ducklake_metadata_ducklake.ducklake_schema_versions;
 ----
 1	1	1
 

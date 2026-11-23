@@ -222,8 +222,8 @@ void DuckLakeServerSideCommit::ReadColumnTypes() {
 	// the server commits on main, so the live columns are those of main at the transaction snapshot
 	string live = "col.end_snapshot IS NULL";
 	if (supports_row_visibility) {
-		live =
-		    DuckLakeMetadataManager::RowVisibility("col", DuckLakeMetadataManager::RowKind("column"), "{SNAPSHOT_ID}");
+		live = DuckLakeMetadataManager::RowVisibility(DuckLakeBranchChain::Main(), "col",
+		                                              DuckLakeMetadataManager::RowKind("column"), "{SNAPSHOT_ID}");
 	}
 	auto query = SubstitutePlaceholders(StringUtil::Format("SELECT col.table_id, col.column_id, col.column_type "
 	                                                       "FROM {METADATA_CATALOG}.ducklake_column col "
@@ -606,7 +606,9 @@ unique_ptr<DuckLakeStats> DuckLakeServerSideCommit::BuildStatsMap(vector<DuckLak
 
 vector<Identifier> DuckLakeServerSideCommit::LookupInlinedTableNames(TableIndex table_id) {
 	vector<Identifier> names;
-	auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), transaction_snapshot);
+	auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(
+	                                      table_id, supports_row_visibility, DuckLakeBranchChain::Main()),
+	                                  transaction_snapshot);
 	auto result = RunQuery(sql, "lookup inlined table names");
 	for (auto &row : *result) {
 		names.push_back(row.GetValue<Identifier>(0));
@@ -720,8 +722,9 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	};
 	ctx.get_table_column_schema = [this](TableIndex table_id) {
 		vector<DuckLakeColumnSchemaEntry> schema;
-		auto sql = SubstitutePlaceholders(
-		    DuckLakeMetadataManager::GetTableColumnSchemaSql(table_id, supports_row_visibility), transaction_snapshot);
+		auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetTableColumnSchemaSql(
+		                                      table_id, supports_row_visibility, DuckLakeBranchChain::Main()),
+		                                  transaction_snapshot);
 		auto result = RunQuery(sql, "read table column schema");
 		for (auto &row : *result) {
 			// parent_column IS NULL => top-level root; otherwise a nested leaf carrying its own leaf type.

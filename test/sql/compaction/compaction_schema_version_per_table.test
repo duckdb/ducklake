@@ -49,7 +49,7 @@ SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'table_to_compact')
 
 # verify schema evolution table
 query III
-FROM __ducklake_metadata_ducklake.ducklake_schema_versions
+SELECT begin_snapshot, schema_version, table_id FROM __ducklake_metadata_ducklake.ducklake_schema_versions
 ----
 1	1	1
 

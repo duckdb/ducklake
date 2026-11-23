@@ -16,6 +16,7 @@
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/reference_map.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "common/ducklake_branch_chain.hpp"
 #include "common/ducklake_row_helpers.hpp"
 #include "common/ducklake_snapshot.hpp"
 #include "storage/ducklake_partition_data.hpp"
@@ -365,6 +366,7 @@ public:
 	virtual string GetTagTableStatement();
 	virtual string GetColumnTagTableStatement();
 	virtual string GetViewColumnTagTableStatement();
+	virtual string GetSchemaVersionsTableStatement();
 	//! A catalog table whose version rows end in a companion table, with the key columns naming an entity
 	struct RowVisibilityKind {
 		string kind;
@@ -381,8 +383,9 @@ public:
 	static string RowKeyType(const string &key);
 	//! The companion table holding the ends of the version rows of a kind, one end per row per branch
 	static string GetRowVisibilityTableStatement(const RowVisibilityKind &kind);
-	//! Whether a version row of the alias is visible on the main branch at the read snapshot, latest when empty
-	static string RowVisibility(const string &alias, const RowVisibilityKind &kind, const string &read_snapshot);
+	//! Whether a version row of the alias is visible in the view of the chain at the read snapshot, latest when empty
+	static string RowVisibility(const DuckLakeBranchChain &chain, const string &alias, const RowVisibilityKind &kind,
+	                            const string &read_snapshot);
 	//! Ends the version rows of a kind the filter selects, live at the commit snapshot, in its companion
 	static string EndRows(const string &kind, const string &filter);
 	//! The columns of the file tables, with the inline ranges before the events and the row group count from 1.1 on
@@ -461,12 +464,12 @@ public:
 	virtual DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot);
 	//! Transaction-free build of the catalog snapshot. Caller supplies a snapshot-aware query
 	//! executor (responsible for `{METADATA_CATALOG}` / `{SNAPSHOT_ID}` substitution) plus the
-	//! data path and separator used for resolving stored relative paths.
+	//! data path and separator used for resolving stored relative paths, the rows are those of the chain
 	static DuckLakeCatalogInfo
 	BuildCatalogForSnapshot(DuckLakeSnapshot snapshot,
 	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
-	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata = false,
-	                        bool row_visibility = false);
+	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata,
+	                        bool row_visibility, const DuckLakeBranchChain &chain);
 	//! The global stats of every table of the snapshot, or of the given tables
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot,
 	                                                            const vector<TableIndex> &table_ids = {});
@@ -517,11 +520,16 @@ public:
 	//! The rows that are stored, deleted ones included, and the rows that are live
 	static string GetInlinedRowCountsSql(const Identifier &inlined_table_name,
 	                                     const DuckLakeInlinedColNames &col_names);
-	static string GetTableColumnSchemaSql(TableIndex table_id, bool row_visibility);
-	static string GetInlinedTableNamesSql(TableIndex table_id);
-	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id);
+	static string GetTableColumnSchemaSql(TableIndex table_id, bool row_visibility, const DuckLakeBranchChain &chain);
+	//! The inlined data table registrations a branch reads, those whose schema version is in its lineage
+	static string InlinedTableRegistrations(bool row_visibility, const DuckLakeBranchChain &chain,
+	                                        optional_idx table_id);
+	static string GetInlinedTableNamesSql(TableIndex table_id, bool row_visibility, const DuckLakeBranchChain &chain);
+	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id, bool row_visibility,
+	                                                    const DuckLakeBranchChain &chain);
 	//! The top-level columns of each inlined data table at the schema version of that table
-	static string GetInlinedTableColumnsSql(optional_idx table_id, bool row_visibility);
+	static string GetInlinedTableColumnsSql(optional_idx table_id, bool row_visibility,
+	                                        const DuckLakeBranchChain &chain);
 	//! The inserts of the given rows, in batches
 	static string InsertValuesSql(const string &table_name, const vector<string> &values);
 	//! The inserts of the given rows into the given table, in batches
@@ -763,18 +771,22 @@ public:
 	static string GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
 	                                               const map<TableIndex, idx_t> &flushed_file_deletions,
 	                                               const DuckLakeInlinedColNames &col_names);
-	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
+	//! The schema version rows of the changed tables, born on main from 2.0 on
+	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids,
+	                              bool write_branch_id);
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const DuckLakeSnapshotFilter &filter = {});
 	//! The snapshots in the column order of ducklake_snapshots, then next_file_id
 	unique_ptr<QueryResult> ReadSnapshots(const string &filter);
 	//! The chain predicate of the attached branch with bare column names, preceded by AND, empty before 2.0
 	string BranchLineageFilter() const;
+	//! The chain predicate over the begin snapshots of the schema version rows, preceded by AND, empty before 2.0
+	string SchemaVersionsLineageFilter(const string &prefix) const;
 	//! The live snapshot tags, with the times of their snapshots if requested
 	virtual vector<DuckLakeSnapshotTagInfo> GetSnapshotTags(bool with_snapshot_time = true);
-	//! The snapshot of the live snapshot tag with the name, if any
-	optional_idx GetTaggedSnapshot(const string &name);
-	//! The snapshot id of a VERSION value, a snapshot id or the name of a snapshot tag
+	//! The live snapshot tag with the name, if any
+	unique_ptr<DuckLakeSnapshotTagInfo> GetTaggedSnapshot(const string &name);
+	//! The snapshot id of a VERSION value, a snapshot id or the name of a snapshot tag the attached chain reads
 	idx_t ResolveSnapshotVersion(const Value &version);
 	static string WriteSnapshotTagChanges(const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &created,
 	                                      const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped);
@@ -887,11 +899,20 @@ public:
 	string V2_0RowCompanionsSql(const V2_0RowCompanions &rows) const;
 	//! Turns the end column of a kind into end rows of its pending companion and drops the column
 	static string V2_0RowEndBackfillSql(const RowVisibilityKind &kind, const string &table, const string &pending);
+	//! The branch columns of the schema versions and the tagged snapshots, probed so an interrupted step resumes
+	struct V2_0LineageColumns {
+		bool has_schema_versions_branch = false;
+		bool has_snapshot_tag_target_branch = false;
+	};
+	V2_0LineageColumns ProbeV2_0LineageColumns();
+	//! Adds the branch columns the catalog lacks and fills the branch of the existing rows
+	static string V2_0LineageColumnsSql(const V2_0LineageColumns &lineage);
 	//! The shape of the catalog against the steps of 2.0, one probe of the metadata schema
 	struct V2_0Layout {
 		V2_0SnapshotAdditions additions;
 		V2_0FileRanges ranges;
 		V2_0RowCompanions rows;
+		V2_0LineageColumns lineage;
 	};
 	V2_0Layout ProbeV2_0Layout();
 	//! The first step of 2.0 the catalog lacks, empty for a complete layout

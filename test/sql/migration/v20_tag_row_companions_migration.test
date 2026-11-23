@@ -159,6 +159,7 @@ snapshot_id
 begin_snapshot
 expires_at
 branch_id
+snapshot_branch_id
 
 query II
 SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns()

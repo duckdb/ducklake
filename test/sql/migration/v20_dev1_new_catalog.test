@@ -31,11 +31,23 @@ snapshot_id	BIGINT
 begin_snapshot	BIGINT
 expires_at	TIMESTAMP WITH TIME ZONE
 branch_id	BIGINT
+snapshot_branch_id	BIGINT
 
 query I
 SELECT COUNT(*) FROM meta.ducklake_snapshot_tag
 ----
 0
+
+# the schema versions carry the branch of their begin snapshot, like a migrated catalog
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_schema_versions')
+ORDER BY column_index
+----
+begin_snapshot
+schema_version
+table_id
+branch_id
 
 # the catalog rows carry their birth branch and end in companion tables, like a migrated catalog
 query I
@@ -226,6 +238,11 @@ query I
 SELECT * FROM dl.t
 ----
 42
+
+query IIII
+SELECT begin_snapshot, schema_version, table_id, branch_id FROM meta.ducklake_schema_versions
+----
+1	1	1	0
 
 statement ok
 DETACH dl
