@@ -486,6 +486,11 @@ static string PendingRowVisibilityTableName(const string &kind) {
 	return DuckLakeMetadataManager::RowVisibilityTableName(kind) + "_pending";
 }
 
+//! The name the end column carries from the fence until the backfill drops it
+static string FencedEndColumn() {
+	return "end_snapshot_old";
+}
+
 string DuckLakeMetadataManager::RowKeyType(const string &key) {
 	if (key == "key" || key == "column_name" || key == "tag_name") {
 		return "VARCHAR";
@@ -1224,6 +1229,7 @@ DuckLakeMetadataManager::V2_0RowCompanions DuckLakeMetadataManager::ProbeV2_0Row
 		row.has_pending = HasMetadataColumn(PendingRowVisibilityTableName(kind.kind), "branch_id");
 		row.has_companion = HasMetadataColumn(RowVisibilityTableName(kind.kind), "branch_id");
 		row.has_end_column = HasMetadataColumn(table, "end_snapshot");
+		row.has_fenced_end_column = HasMetadataColumn(table, FencedEndColumn());
 		if (!row.present && kind.kind == "snapshot_tag") {
 			// the snapshot tag step creates the table in its 2.0 shape before this step, which adds its companion
 			row.present = true;
@@ -1238,7 +1244,8 @@ DuckLakeMetadataManager::V2_0RowCompanions DuckLakeMetadataManager::ProbeV2_0Row
 void DuckLakeMetadataManager::VerifyV2_0RowCompanions(const V2_0RowCompanions &rows) {
 	// without the end column only a companion holds the ends, so a missing one is created for an empty table alone
 	for (auto &row : rows.kinds) {
-		if (!row.present || row.created_by_migration || row.has_end_column || row.has_companion || row.has_pending) {
+		if (!row.present || row.created_by_migration || row.has_end_column || row.has_fenced_end_column ||
+		    row.has_companion || row.has_pending) {
 			continue;
 		}
 		auto table = RowTableName(row.kind);
@@ -1297,8 +1304,16 @@ string DuckLakeMetadataManager::V2_0RowCompanionsSql(const V2_0RowCompanions &ro
 		if (!row.has_pending) {
 			query += RowVisibilityTableStatement(kind, pending) + "\n";
 		}
+		// the end column is renamed away first, so a writer of the previous layout fails instead of ending a row
+		// that the backfill has already copied
 		if (row.has_end_column) {
-			query += V2_0RowEndBackfillSql(kind, pending);
+			query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME COLUMN end_snapshot TO %s;\n", table,
+			                            FencedEndColumn());
+		}
+		if (row.has_end_column || row.has_fenced_end_column) {
+			auto fenced = kind;
+			fenced.end_column = FencedEndColumn();
+			query += V2_0RowEndBackfillSql(fenced, pending);
 		}
 		query += RowCompanionRenameSql(kind.kind);
 	}
@@ -1308,6 +1323,7 @@ string DuckLakeMetadataManager::V2_0RowCompanionsSql(const V2_0RowCompanions &ro
 string DuckLakeMetadataManager::V2_0RowEndBackfillSql(const RowVisibilityKind &kind, const string &pending) {
 	string query;
 	auto table = RowTableName(kind);
+	auto &end = kind.end_column;
 	if (kind.kind == "column") {
 		// the version row that goes may hold the type the column's files were written with, so their bounds are unknown
 		for (auto stats_table : {"ducklake_file_column_stats", "ducklake_table_column_stats"}) {
@@ -1317,22 +1333,22 @@ WHERE EXISTS (
     SELECT 1 FROM {METADATA_CATALOG}.ducklake_column gone
     JOIN {METADATA_CATALOG}.ducklake_column live ON live.table_id = gone.table_id AND live.column_id = gone.column_id
         AND live.begin_snapshot = gone.begin_snapshot
-        AND (live.end_snapshot IS NULL OR live.end_snapshot > live.begin_snapshot)
-    WHERE gone.end_snapshot = gone.begin_snapshot AND gone.column_type <> live.column_type
+        AND (live.%s IS NULL OR live.%s > live.begin_snapshot)
+    WHERE gone.%s = gone.begin_snapshot AND gone.column_type <> live.column_type
         AND gone.table_id = stats.table_id AND gone.column_id = stats.column_id);
 )",
-			                            stats_table);
+			                            stats_table, end, end, end);
 		}
 	}
 	// a row superseded in its birth transaction goes, as an end it would hide the live row of the same birth
 	query += StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.%s
-WHERE end_snapshot = begin_snapshot AND EXISTS (
+WHERE %s = begin_snapshot AND EXISTS (
     SELECT 1 FROM {METADATA_CATALOG}.%s live
     WHERE %s AND live.begin_snapshot = %s.begin_snapshot
-    AND (live.end_snapshot IS NULL OR live.end_snapshot > live.begin_snapshot));
+    AND (live.%s IS NULL OR live.%s > live.begin_snapshot));
 )",
-	                            table, table, KeyMatches(kind, "live", table), table);
+	                            table, end, table, KeyMatches(kind, "live", table), table, end, end);
 	return query + V2_0EndColumnSql(kind, pending);
 }
 
@@ -8284,11 +8300,6 @@ WHERE table_id IN (%s);)",
 			                                         delete_tbl, deleted_table_ids));
 			result->ThrowIfError("Failed to delete from " + delete_tbl + " in DuckLake: ");
 		}
-		if (row_visibility) {
-			// the companions of the specs name them by their id, so their ends go once the spec rows are gone
-			DeleteOrphanRowEnds(RowKind("partition"));
-			DeleteOrphanRowEnds(RowKind("sort"));
-		}
 		auto options_result = Execute(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_metadata
 WHERE scope = 'table' AND scope_id IN (%s);)",
@@ -8305,6 +8316,14 @@ WHERE scope = 'table' AND scope_id IN (%s);)",
 			// a Postgres catalog sends the batch in one postgres_execute, so the drops are not bound one by one
 			auto result = Execute(transaction.GetSnapshot(), drop_inlined_tables);
 			result->ThrowIfError("Failed to drop inlined-data table in DuckLake: ");
+		}
+	}
+
+	if (row_visibility) {
+		// an expiry interrupted between the rows of a table and their ends cannot find the table again, so the ends
+		// of the kinds keyed by a table go whenever their row is gone
+		for (auto kind_name : {"table", "column", "column_tag", "partition", "sort"}) {
+			DeleteOrphanRowEnds(RowKind(kind_name));
 		}
 	}
 

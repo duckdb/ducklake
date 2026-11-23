@@ -890,6 +890,8 @@ public:
 		bool has_pending = false;
 		bool has_companion = false;
 		bool has_end_column = false;
+		//! Whether the end column is renamed away already, which fences the writers of the previous layout
+		bool has_fenced_end_column = false;
 		//! Whether the snapshot tag step creates the row table, empty and in its 2.0 shape, before this step runs
 		bool created_by_migration = false;
 		//! Whether the kind still lacks a part of the step

@@ -1,0 +1,182 @@
+# name: test/sql/migration/v20_row_companions_interleaved_drop_absorbed.test
+# description: a drop by the previous layout before the row step fences the end column is copied by the backfill
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE dl.t(a INTEGER, b INTEGER)
+
+statement ok
+ALTER TABLE dl.t RENAME COLUMN b TO c
+
+statement ok
+COMMIT
+
+statement ok
+INSERT INTO dl.t VALUES (10, 20)
+
+statement ok
+ALTER TABLE dl.t RENAME TO u
+
+statement ok
+ALTER TABLE dl.u RENAME COLUMN c TO d
+
+statement ok
+DETACH dl
+
+# the layout of the earlier steps of the sequence, written by hand
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS meta
+
+statement ok
+CREATE TABLE meta.ducklake_branch(branch_id BIGINT PRIMARY KEY, branch_name VARCHAR, parent_id BIGINT,
+    parent_branch_snapshot BIGINT)
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (0, 'main', NULL, NULL)
+
+statement ok
+CREATE TABLE meta.ducklake_snapshot_tag(tag_name VARCHAR, snapshot_id BIGINT, begin_snapshot BIGINT,
+    expires_at TIMESTAMPTZ, branch_id BIGINT DEFAULT 0)
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot RENAME TO ducklake_snapshot_old
+
+statement ok
+CREATE TABLE meta.ducklake_snapshot(snapshot_id BIGINT, snapshot_time TIMESTAMPTZ, schema_version BIGINT,
+    next_catalog_id BIGINT, next_file_id BIGINT, branch_id BIGINT DEFAULT 0, PRIMARY KEY(branch_id, snapshot_id))
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT *, 0 FROM meta.ducklake_snapshot_old
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_old
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_changes RENAME TO ducklake_snapshot_changes_old
+
+statement ok
+CREATE TABLE meta.ducklake_snapshot_changes(snapshot_id BIGINT, changes_made VARCHAR, author VARCHAR,
+    commit_message VARCHAR, commit_extra_info VARCHAR, branch_id BIGINT DEFAULT 0,
+    PRIMARY KEY(branch_id, snapshot_id))
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes SELECT *, 0 FROM meta.ducklake_snapshot_changes_old
+
+statement ok
+DROP TABLE meta.ducklake_snapshot_changes_old
+
+statement ok
+CREATE TABLE meta.ducklake_file_visibility(branch_id BIGINT, table_id BIGINT, data_file_id BIGINT,
+    snapshot_id BIGINT, is_delete BOOLEAN, PRIMARY KEY(branch_id, data_file_id, is_delete))
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 0, table_id, data_file_id, begin_snapshot, false
+FROM meta.ducklake_data_file
+
+statement ok
+ALTER TABLE meta.ducklake_data_file DROP COLUMN begin_snapshot
+
+statement ok
+ALTER TABLE meta.ducklake_data_file DROP COLUMN end_snapshot
+
+statement ok
+CREATE TABLE meta.ducklake_delete_file_visibility(branch_id BIGINT, table_id BIGINT, delete_file_id BIGINT,
+    snapshot_id BIGINT, is_delete BOOLEAN, PRIMARY KEY(branch_id, delete_file_id, is_delete))
+
+statement ok
+ALTER TABLE meta.ducklake_delete_file DROP COLUMN begin_snapshot
+
+statement ok
+ALTER TABLE meta.ducklake_delete_file DROP COLUMN end_snapshot
+
+statement ok
+UPDATE meta.ducklake_metadata SET value = '2.0-dev1' WHERE key = 'version'
+
+# the row step of the table kind up to the companion, statement by statement
+statement ok
+ALTER TABLE meta.ducklake_table ADD COLUMN branch_id BIGINT DEFAULT 0
+
+statement ok
+UPDATE meta.ducklake_table SET branch_id = 0 WHERE branch_id IS NULL
+
+statement ok
+CREATE TABLE meta.ducklake_table_visibility_pending(branch_id BIGINT, table_id BIGINT, row_branch_id BIGINT,
+    row_snapshot BIGINT, end_snapshot BIGINT, PRIMARY KEY(branch_id, table_id, row_branch_id, row_snapshot))
+
+# a client of the previous layout drops the table at snapshot 5 before the fence
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 5, NOW(), schema_version + 1, next_catalog_id, next_file_id, 0
+FROM meta.ducklake_snapshot WHERE snapshot_id = 4
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (5, 'dropped_table:1', NULL, NULL, NULL, 0)
+
+statement ok
+UPDATE meta.ducklake_table SET end_snapshot = 5 WHERE end_snapshot IS NULL AND table_id = 1
+
+statement ok
+UPDATE meta.ducklake_column SET end_snapshot = 5 WHERE end_snapshot IS NULL AND table_id = 1
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 0, table_id, data_file_id, 5, true FROM meta.ducklake_data_file
+
+statement ok
+COMMIT
+
+# the fence comes after the drop, so the backfill copies the drop's end
+statement ok
+ALTER TABLE meta.ducklake_table RENAME COLUMN end_snapshot TO end_snapshot_old
+
+statement ok
+INSERT INTO meta.ducklake_table_visibility_pending
+SELECT DISTINCT 0, table_id, 0, begin_snapshot, end_snapshot_old FROM meta.ducklake_table
+WHERE end_snapshot_old IS NOT NULL
+
+statement ok
+ALTER TABLE meta.ducklake_table DROP COLUMN end_snapshot_old
+
+statement ok
+ALTER TABLE meta.ducklake_table_visibility_pending RENAME TO ducklake_table_visibility
+
+statement ok
+DETACH meta
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT count(*) FROM ducklake_table_info('dl')
+----
+0
+
+query II
+SELECT row_snapshot, end_snapshot FROM meta.ducklake_table_visibility ORDER BY row_snapshot
+----
+1	3
+3	5
+
+query I
+SELECT count(*) FROM dl.u AT (VERSION => 4)
+----
+1
+
+statement ok
+DETACH dl
