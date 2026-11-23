@@ -76,7 +76,7 @@ SELECT rowid, a, b FROM test ORDER BY a
 
 # Verify the delete file has been removed (compaction succeeded)
 query I
-SELECT COUNT(*) FROM ducklake_metadata.ducklake_delete_file WHERE end_snapshot IS NULL
+SELECT coalesce(sum(delete_file_count), 0)::BIGINT FROM ducklake_table_info('ducklake')
 ----
 0
 
