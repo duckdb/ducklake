@@ -1369,6 +1369,7 @@ RESTCommitTransactionResponse DuckLakeRESTCommit::Commit() {
 	} catch (...) {
 		// the commit of the metadata, or a step after it, can fail when the changes are published
 		request.published = transaction_ref->IsPublished();
+		request.publication_unknown = transaction_ref->PublicationUnknown();
 		throw;
 	}
 	request.published = true;

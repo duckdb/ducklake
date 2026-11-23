@@ -206,6 +206,8 @@ public:
 
 	void Commit(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &transaction_changes,
 	            const DuckLakeRetryConfig &retry_config, const DuckLakeCommitContext &context);
+	//! Whether the error is of a metadata commit that is durable: DuckDB reports the checkpoint that fails after it
+	static bool IsDurableCommitError(const ErrorData &error);
 
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes,

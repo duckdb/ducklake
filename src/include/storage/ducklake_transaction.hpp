@@ -323,6 +323,13 @@ public:
 	bool IsPublished() const {
 		return published;
 	}
+	//! The server that the commit was passed on to failed to answer, so it can have published the changes
+	void SetPublicationUnknown() {
+		publication_unknown = true;
+	}
+	bool PublicationUnknown() const {
+		return publication_unknown;
+	}
 	bool SchemaChangesMade() const;
 	idx_t GetLocalCatalogId();
 	static bool IsTransactionLocal(idx_t id) {
@@ -547,6 +554,7 @@ private:
 private:
 	bool files_owned_by_client = false;
 	bool published = false;
+	bool publication_unknown = false;
 };
 
 } // namespace duckdb

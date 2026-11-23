@@ -111,6 +111,8 @@ public:
 	string content_type = "application/json";
 	//! Whether the request committed its changes, a failure after that is not a reason to commit them again
 	bool published = false;
+	//! Whether the request passed its commit on to a server that failed to answer, and that can have committed it
+	bool publication_unknown = false;
 };
 
 //! The pages of the scans that were split into pages, which the server keeps for a while

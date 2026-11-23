@@ -394,6 +394,13 @@ static ErrorData ErrorAfterPublication(const ErrorData &error) {
 	                 "The transaction was committed, but the server failed to respond: " + error.RawMessage());
 }
 
+//! The error of a group that can be published: an IO error as well, so that its clients keep their files
+static ErrorData ErrorOfUnknownPublication(const ErrorData &error) {
+	return ErrorData(ExceptionType::IO, "It is unknown whether the transaction was committed, the server that the "
+	                                    "commit was passed on to failed to respond: " +
+	                                        error.RawMessage());
+}
+
 void DuckLakeRESTServer::RunCommit(const ServedCatalog &served, DuckLakeRESTPendingCommit &commit) {
 	bool published = false;
 	try {
@@ -420,6 +427,7 @@ void DuckLakeRESTServer::RunCommit(const ServedCatalog &served, DuckLakeRESTPend
 bool DuckLakeRESTServer::RunCommitGroup(const ServedCatalog &served,
                                         vector<reference<DuckLakeRESTPendingCommit>> &group) {
 	bool published = false;
+	bool publication_unknown = false;
 	string response;
 	string content_type;
 	ErrorData error;
@@ -431,17 +439,19 @@ bool DuckLakeRESTServer::RunCommitGroup(const ServedCatalog &served,
 			content_type = request.content_type;
 		} catch (...) {
 			published = request.published;
+			publication_unknown = request.publication_unknown;
 			if (request.connection.HasActiveTransaction()) {
 				request.connection.Rollback();
 			}
 			throw;
 		}
 	} catch (std::exception &ex) {
-		if (!published) {
+		if (!published && !publication_unknown) {
 			return false;
 		}
-		// the commits of a published group never run again
-		error = ErrorAfterPublication(ErrorData(ex));
+		// the commits of a group that is published, or that can be, never run again
+		ErrorData cause(ex);
+		error = published ? ErrorAfterPublication(cause) : ErrorOfUnknownPublication(cause);
 	}
 	// a failure here does not reach the fallback either: the queue answers the commits that have no result
 	for (auto &entry : group) {

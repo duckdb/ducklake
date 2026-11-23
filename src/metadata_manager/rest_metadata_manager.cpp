@@ -1175,8 +1175,11 @@ void RESTMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tran
 	try {
 		response = group_commit ? GetClient().GroupCommitTransaction(request) : GetClient().CommitTransaction(request);
 	} catch (std::exception &ex) {
-		// the server rejected the commit, but after a failed request or response it might have committed
-		if (ErrorData(ex).Type() != ExceptionType::IO) {
+		if (ErrorData(ex).Type() == ExceptionType::IO) {
+			// after a failed request or response the server might have committed
+			flush_transaction.SetPublicationUnknown();
+		} else {
+			// the server rejected the commit
 			flush_transaction.CleanupFiles();
 		}
 		throw;

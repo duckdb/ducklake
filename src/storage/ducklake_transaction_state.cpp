@@ -2906,6 +2906,10 @@ bool DuckLakeTransactionState::FindConflictWithOtherCommits(DuckLakeSnapshot tra
 	return found_conflict;
 }
 
+bool DuckLakeTransactionState::IsDurableCommitError(const ErrorData &error) {
+	return StringUtil::Contains(error.RawMessage(), "Transaction COMMIT succeeded and is durable");
+}
+
 //! Commits the metadata connection. A commit that is durable although it reports an error is published: the error
 //! is kept for the end of the commit, as nothing can be rolled back, retried or cleaned up after it
 static void CommitMetadata(const DuckLakeCommitContext &context, ErrorData &error_after_commit) {
@@ -2913,8 +2917,7 @@ static void CommitMetadata(const DuckLakeCommitContext &context, ErrorData &erro
 		context.commit_connection();
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
-		// DuckDB reports a checkpoint that fails after the commit with the error of the checkpoint
-		if (!StringUtil::Contains(error.RawMessage(), "Transaction COMMIT succeeded and is durable")) {
+		if (!DuckLakeTransactionState::IsDurableCommitError(error)) {
 			throw;
 		}
 		error_after_commit = std::move(error);
