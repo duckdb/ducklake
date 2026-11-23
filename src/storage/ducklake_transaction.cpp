@@ -921,18 +921,12 @@ void DuckLakeTransaction::Commit() {
 				connection->Commit();
 			} catch (std::exception &ex) {
 				ErrorData error(ex);
-				// the options of a commit that is durable are published, also if the checkpoint after it fails
-				published = DuckLakeTransactionState::IsDurableCommitError(error);
 				error.Throw(GetMetadataManager().CommitErrorHint(error.Message()));
 			}
 		}
 	} catch (...) {
 		// a failed commit never reaches Rollback - the transaction manager only reports the error
-		if (publication_unknown) {
-			// the options can be published: the next transaction reads them from the metadata
-			ducklake_catalog.AddUncertainConfigOptions(std::move(config_option_undo));
-			config_option_undo.clear();
-		} else if (!published) {
+		if (!published) {
 			UndoConfigOptions();
 		}
 		ClearMaintenanceChanges();
