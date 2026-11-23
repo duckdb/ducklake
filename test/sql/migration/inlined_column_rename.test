@@ -52,7 +52,7 @@ SELECT row_id FROM dlmeta.ducklake_inlined_data_1_1 LIMIT 0;
 row_id
 
 statement ok
-SELECT _ducklake_row_id, _ducklake_begin_snapshot, _ducklake_end_snapshot FROM dlmeta.ducklake_inlined_data_1_1 LIMIT 0;
+SELECT _ducklake_row_id, _ducklake_begin_snapshot, _ducklake_branch_id FROM dlmeta.ducklake_inlined_data_1_1 LIMIT 0;
 
 # row ids are preserved across the rename
 query III

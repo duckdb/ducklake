@@ -1193,6 +1193,69 @@ SELECT COUNT(*) FROM ducklake_tags('dl')
 statement ok
 DETACH dl
 
+# a dev build ended its inlined rows in place and knew no shared companion, the step folds the end column into it
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1 ADD COLUMN _ducklake_end_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1 DROP COLUMN _ducklake_branch_id
+
+statement ok
+DROP TABLE meta.ducklake_inlined_data_visibility
+
+statement ok
+DETACH dl
+
+# the incomplete layout is refused without the migration option
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+----
+catalog version is 2.0-dev1, but the catalog lacks the inlined data visibility
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name = 'ducklake_inlined_data_visibility')
+ORDER BY column_index
+----
+table_id
+row_id
+row_branch_id
+row_snapshot
+branch_id
+snapshot_id
+
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name LIKE '%_visibility_pending'
+----
+0
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_inlined_data_1_1')
+ORDER BY column_index
+----
+_ducklake_row_id
+_ducklake_begin_snapshot
+i
+_ducklake_branch_id
+
+query I
+SELECT list(i ORDER BY i) FROM dl.t
+----
+[42, 43, 44, 45, 46, 47, 48, 49]
+
+statement ok
+DETACH dl
+
 # a 2.0-dev1 attach of a complete layout probes the layout with one statement and runs no migration statement
 statement ok
 CALL truncate_duckdb_logs()
@@ -1219,11 +1282,11 @@ WHERE (query LIKE '%ducklake_branch%' OR query LIKE '%_rebuild%' OR query LIKE '
 ----
 0
 
-# the one statement binds the snapshot tag table and the row companions, so it fails until the step renamed them
+# the one statement binds the snapshot tag table and the companions, so it fails until the steps renamed them
 query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
 WHERE query LIKE '%ducklake_snapshot_tag_visibility%' AND query LIKE '%ducklake_schema_visibility%'
-    AND query LIKE '%LIMIT 0%'
+    AND query LIKE '%ducklake_inlined_data_visibility%' AND query LIKE '%LIMIT 0%'
 ----
 1
 

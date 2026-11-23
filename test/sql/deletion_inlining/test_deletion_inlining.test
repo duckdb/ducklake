@@ -188,8 +188,13 @@ SELECT file_id, row_id, begin_snapshot FROM ducklake_meta.ducklake_inlined_delet
 4	14	11
 0	40	11
 
+# the end of a row lives in the shared companion, keyed by the table and the birth of the version
 query IIII
-FROM ducklake_meta.ducklake_inlined_data_1_1 order by ALL
+SELECT d._ducklake_row_id, d._ducklake_begin_snapshot, e.snapshot_id, d.a
+FROM ducklake_meta.ducklake_inlined_data_1_1 d
+LEFT JOIN ducklake_meta.ducklake_inlined_data_visibility e ON e.table_id = 1 AND e.row_id = d._ducklake_row_id
+    AND e.row_branch_id = d._ducklake_branch_id AND e.row_snapshot = d._ducklake_begin_snapshot
+ORDER BY ALL
 ----
 50	9	NULL	51
 51	9	NULL	52

@@ -76,6 +76,7 @@ struct DuckLakeInlinedColNames {
 			row_id = Identifier(PREFIX + row_id);
 			begin_snapshot = Identifier(PREFIX + begin_snapshot);
 			end_snapshot = Identifier(PREFIX + end_snapshot);
+			branch_id = Identifier(PREFIX + branch_id);
 		}
 	}
 
@@ -84,7 +85,10 @@ struct DuckLakeInlinedColNames {
 
 	Identifier row_id = "row_id";
 	Identifier begin_snapshot = "begin_snapshot";
+	//! The end column before 2.0, the alias of the end of main the row sources project from 2.0 on
 	Identifier end_snapshot = "end_snapshot";
+	//! The birth branch of a version from 2.0 on
+	Identifier branch_id = "branch_id";
 };
 
 struct CTERequirement {
@@ -369,22 +373,42 @@ public:
 	struct RowVisibilityKind {
 		string kind;
 		vector<string> key_columns;
+		//! The row table when it is not named after the kind, the payload of the inlined rows
+		string row_table;
+		//! The constant of a key column in every statement of the kind, empty for a column of the row table
+		vector<string> key_literals;
+		//! The row table columns of the keys when named unlike the companion's, the inlined rows prefix them
+		vector<string> payload_key_columns;
+		//! The birth columns of the row table
+		string branch_column = "branch_id";
+		string begin_column = "begin_snapshot";
 	};
 	//! The versioned catalog kinds, the companion of a kind is ducklake_<kind>_visibility
 	static const vector<RowVisibilityKind> &RowVisibilityKinds();
 	static const RowVisibilityKind &RowKind(const string &kind);
+	//! The kind of an inlined data table, whose shared companion names the versions by table id and row id
+	static RowVisibilityKind InlinedRowKind(const Identifier &inlined_table_name,
+	                                        const DuckLakeInlinedColNames &col_names);
 	//! The row table of a kind, the partition and sort specs keep their info suffix
 	static string RowTableName(const string &kind);
+	static string RowTableName(const RowVisibilityKind &kind);
 	//! The companion table of a kind, ducklake_<kind>_visibility
 	static string RowVisibilityTableName(const string &kind);
 	//! The type of a key column, the tag keys and names are text
 	static string RowKeyType(const string &key);
 	//! The companion table holding the ends of the version rows of a kind, one end per row per branch
 	static string GetRowVisibilityTableStatement(const RowVisibilityKind &kind);
+	//! The shared companion of the inlined rows of every table, under the given name
+	static string GetInlinedVisibilityTableStatement(const string &table);
 	//! Whether a version row of the alias is visible on the main branch at the read snapshot, latest when empty
 	static string RowVisibility(const string &alias, const RowVisibilityKind &kind, const string &read_snapshot);
 	//! Ends the version rows of a kind the filter selects, live at the commit snapshot, in its companion
+	static string EndRows(const RowVisibilityKind &kind, const string &filter);
 	static string EndRows(const string &kind, const string &filter);
+	//! The inlined rows to read, from 2.0 on those born on main with their end of main under the end column name
+	static string InlinedRowSource(const Identifier &inlined_table_name, const DuckLakeInlinedColNames &col_names,
+	                               bool row_visibility);
+	string InlinedRowSource(const Identifier &inlined_table_name) const;
 	//! The columns of the file tables, with the inline ranges before the events and the row group count from 1.1 on
 	static string DataFileTableColumns(bool with_ranges, bool with_row_group_count);
 	static string DeleteFileTableColumns(bool with_ranges, bool with_row_group_count);
@@ -510,10 +534,10 @@ public:
 	                                        bool file_events, bool require_exact = false,
 	                                        bool exclude_new_files = false);
 	static string GetNetInlinedRowCountSql(const Identifier &inlined_table_name,
-	                                       const DuckLakeInlinedColNames &col_names);
+	                                       const DuckLakeInlinedColNames &col_names, bool row_visibility);
 	//! The rows that are stored, deleted ones included, and the rows that are live
-	static string GetInlinedRowCountsSql(const Identifier &inlined_table_name,
-	                                     const DuckLakeInlinedColNames &col_names);
+	static string GetInlinedRowCountsSql(const Identifier &inlined_table_name, const DuckLakeInlinedColNames &col_names,
+	                                     bool row_visibility);
 	static string GetTableColumnSchemaSql(TableIndex table_id, bool row_visibility);
 	static string GetInlinedTableNamesSql(TableIndex table_id);
 	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id);
@@ -601,17 +625,17 @@ public:
 	                                   const vector<DuckLakeTableInfo> &new_inlined_data_tables_result,
 	                                   vector<unique_ptr<SQLStatement>> &inlined_inserts);
 	static string WriteNewInlinedDeletes(const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes,
-	                                     const DuckLakeInlinedColNames &col_names);
+	                                     const DuckLakeInlinedColNames &col_names, bool row_visibility);
 	//! Creates the INSERT INTO {METADATA_CATALOG}.<inlined_table_name> VALUES (...) batch.
 	static string FormatInlinedDataInsert(const Identifier &inlined_table_name, idx_t row_id_start,
 	                                      bool has_preserved_row_ids, const vector<int64_t> *row_ids,
-	                                      const vector<string> &cells_per_row);
+	                                      const vector<string> &cells_per_row, bool row_visibility);
 	//! Static deterministic name of the per-table inlined deletion table.
 	static Identifier InlinedFileDeletionTableName(TableIndex table_id);
 	//! Pure SQL builder for inlined file deletions (CREATE TABLE IF NOT EXISTS + INSERT). Sets
 	//! created_new_table when a new ducklake_inlined_delete_<id> table was emitted.
 	static string WriteNewInlinedFileDeletesSql(const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes,
-	                                            bool &created_new_table);
+	                                            bool &created_new_table, bool row_visibility);
 	//! SQL branch of WriteNewInlinedFileDeletes — returns the CREATE/INSERT statements and marks the
 	//! metadata-manager cache for clearing when a new per-table deletion table is created.
 	string WriteNewInlinedFileDeletesSqlBatch(const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes);
@@ -642,7 +666,7 @@ public:
 	                                          vector<string> &inlined_tables, string &inlined_table_queries);
 	static Identifier InlinedTableNameFor(idx_t table_id, idx_t schema_version);
 	static string InlinedTableDdlSql(const Identifier &table_name, const string &column_defs,
-	                                 const DuckLakeInlinedColNames &col_names);
+	                                 const DuckLakeInlinedColNames &col_names, bool row_visibility);
 	DuckLakeInlinedColNames InlinedColNames() const;
 	static string InlinedTableRegistrationTuple(idx_t table_id, const Identifier &table_name, idx_t schema_version);
 	static string LatestInlinedTableQuery(idx_t table_id);
@@ -663,7 +687,7 @@ public:
 	static string GetColumnDefaultsSql(TableIndex table_id, const set<FieldIndex> &column_ids);
 	//! Selects the number of live inlined values of each check, the checks of a table are consecutive
 	static string GetInlinedValuesSql(const vector<DuckLakeInlinedValueCheck> &checks,
-	                                  const DuckLakeInlinedColNames &col_names);
+	                                  const DuckLakeInlinedColNames &col_names, bool row_visibility);
 	//! Selects the given tables or views renamed after the snapshot
 	static string GetRenamedAfterSnapshotSql(const string &metadata_table_name, const string &id_name,
 	                                         const set<TableIndex> &ids, bool row_visibility);
@@ -748,7 +772,7 @@ public:
 	//! SQL builders for the stats-refresh queries used by DuckLakeTransactionState::RecomputeGlobalStatsAfterRewrite.
 	//! Caller substitutes `{METADATA_CATALOG}` / `{SNAPSHOT_ID}` and executes via the commit context's executor.
 	static string ReadInlinedDataAggregatesSql(const Identifier &inlined_table_name, const string &select_list,
-	                                           const DuckLakeInlinedColNames &col_names);
+	                                           const DuckLakeInlinedColNames &col_names, bool row_visibility);
 	//! The column stats of the data files committed before the snapshot's next file id
 	static string ReadFileColumnStatsForTableSql(TableIndex table_id, bool include_exactness, bool file_events);
 	//! Throws on a failed inlined data read, hinting at the migration for legacy named catalogs
@@ -756,10 +780,12 @@ public:
 	shared_ptr<DuckLakeInlinedData> TransformInlinedData(QueryResult &result, const vector<LogicalType> &expected_types,
 	                                                     const Identifier &inlined_table_name);
 
-	//! The statements deleting the inlined rows and inlined file deletions that the transaction flushed
+	//! The statements deleting the inlined rows and inlined file deletions that the transaction flushed, the
+	//! payloads the transaction deleted from keep the versions it ended
 	static string GenerateDeleteFlushedInlinedData(const vector<FlushedInlinedTableInfo> &flushed_tables,
 	                                               const map<TableIndex, idx_t> &flushed_file_deletions,
-	                                               const DuckLakeInlinedColNames &col_names);
+	                                               const identifier_set_t &deleted_payloads,
+	                                               const DuckLakeInlinedColNames &col_names, bool row_visibility);
 	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const DuckLakeSnapshotFilter &filter = {});
@@ -878,16 +904,44 @@ public:
 	string V2_0RowCompanionsSql(const V2_0RowCompanions &rows) const;
 	//! Turns the end column of a kind into end rows of its pending companion and drops the column
 	static string V2_0RowEndBackfillSql(const RowVisibilityKind &kind, const string &table, const string &pending);
+	//! The shape of an inlined data table against the shared companion
+	struct V2_0InlinedPayload {
+		Identifier table;
+		idx_t table_id = 0;
+		bool has_branch_column = false;
+		bool has_end_column = false;
+	};
+	struct V2_0InlinedDeletionTable {
+		Identifier table;
+		bool has_branch_column = false;
+	};
+	//! The shared companion of the inlined rows, probed so an interrupted step resumes
+	struct V2_0InlinedCompanion {
+		vector<V2_0InlinedPayload> payloads;
+		vector<V2_0InlinedDeletionTable> deletion_tables;
+		//! Whether the companion still stands under its pending name, the rename into place closes the step
+		bool has_pending = false;
+		bool has_companion = false;
+		bool Incomplete() const;
+	};
+	V2_0InlinedCompanion ProbeV2_0InlinedCompanion();
+	//! Refuses a payload whose end column is gone while no companion holds its ends and it holds rows
+	void VerifyV2_0InlinedCompanion(const V2_0InlinedCompanion &inlined);
+	//! The batches of the step, one metadata transaction each, the rename into place closes the last one
+	vector<string> V2_0InlinedCompanionSql(const V2_0InlinedCompanion &inlined) const;
 	//! The shape of the catalog against the steps of 2.0, one probe of the metadata schema
 	struct V2_0Layout {
 		V2_0SnapshotAdditions additions;
 		V2_0FileRanges ranges;
 		V2_0RowCompanions rows;
+		V2_0InlinedCompanion inlined;
 	};
 	V2_0Layout ProbeV2_0Layout();
 	//! The first step of 2.0 the catalog lacks, empty for a complete layout
 	string MissingV2_0Step();
 	bool HasMetadataColumn(const string &table, const string &column);
+	//! The inlined deletion tables of the catalog that hold the snapshot of their rows, named by the probe
+	vector<string> ProbedInlinedDeletionTables();
 	//! Scans the metadata schema into the memo, once per probe pass
 	void ProbeMetadataSchema();
 	//! Reads the columns of every table of the metadata schema into the memo, false when the catalog lists none

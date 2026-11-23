@@ -44,6 +44,12 @@ SELECT COUNT(*) FROM duckdb_tables() WHERE database_name='ducklake_meta' AND sch
 ----
 0
 
+# the flushed table left no end in the shared companion
+query I
+SELECT COUNT(*) FROM ducklake_meta.ducklake_inlined_data_visibility WHERE table_id = 1
+----
+0
+
 query II
 SELECT COUNT(*), SUM(i) FROM ducklake.t
 ----
