@@ -2167,11 +2167,12 @@ vector<DuckLakeSnapshotTagInfo> DuckLakeTransaction::GetSnapshotTagsInternal(boo
 	if (state->new_snapshot_tags.empty()) {
 		return result;
 	}
-	// the times of the snapshots this transaction tagged
+	// the times of the snapshots this transaction tagged, which the view of the attached branch holds
 	map<idx_t, Value> snapshot_times;
 	if (with_snapshot_time) {
 		DuckLakeSnapshotFilter filter;
 		filter.has_snapshot_ids = true;
+		filter.chain_only = true;
 		for (auto &tag : state->new_snapshot_tags) {
 			filter.snapshot_ids.push_back(tag.second.snapshot_id);
 		}

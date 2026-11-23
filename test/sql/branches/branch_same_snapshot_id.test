@@ -23,13 +23,13 @@ INSERT INTO dl.t VALUES (1)
 statement ok
 INSERT INTO dl.t VALUES (2)
 
-# dev forks at the first insert, so its first own snapshot is 3 like the second insert of main
+# dev forks at the first insert, so its first own snapshot is 3 like the second insert of main, dated long before it
 statement ok
 INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
 
 statement ok
 INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id,
-    branch_id) SELECT 3, NOW(), schema_version, next_catalog_id, next_file_id,
+    branch_id) SELECT 3, TIMESTAMPTZ '2000-01-01 00:00:00+00', schema_version, next_catalog_id, next_file_id,
     1 FROM meta.ducklake_snapshot WHERE snapshot_id = 2 AND branch_id = 0
 
 statement ok
@@ -66,6 +66,22 @@ SELECT i FROM dl.t AT (VERSION => 3) ORDER BY i
 ----
 1
 2
+
+# a tag of main's snapshot 3 created in this transaction carries the time of main's row, not the time of dev's
+statement ok
+BEGIN
+
+statement ok
+CALL ducklake_create_tag('dl', 'release', version => 3)
+
+query III
+SELECT snapshot_id, snapshot_time IS NOT NULL, snapshot_time < TIMESTAMPTZ '2000-01-02 00:00:00+00'
+FROM ducklake_tags('dl')
+----
+3	true	false
+
+statement ok
+ROLLBACK
 
 statement ok
 DETACH dl
