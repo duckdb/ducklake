@@ -47,6 +47,33 @@ SELECT snapshot_id, schema_version, changes FROM ducklake.snapshots() WHERE snap
 1	1	{schemas_created=[s1]}
 2	2	{tables_created=[s1.tbl]}
 
+query III
+SELECT snapshot_id, schema_version, changes FROM ducklake.snapshots(start_snapshot => 1, end_snapshot => 2)
+----
+1	1	{schemas_created=[s1]}
+2	2	{tables_created=[s1.tbl]}
+
+query I
+SELECT count(*) FROM ducklake_snapshots('ducklake', end_snapshot => 0)
+----
+1
+
+query I
+SELECT count(*) FROM ducklake.snapshots(start_snapshot => 2, end_snapshot => 1)
+----
+0
+
+query I
+SELECT max(snapshot_id) = (SELECT id FROM ducklake.current_snapshot())
+FROM ducklake.snapshots(start_snapshot => 2, end_snapshot => 1000)
+----
+true
+
+statement error
+FROM ducklake.snapshots(start_snapshot => -1)
+----
+non-negative snapshot ID
+
 # verify insert-related snapshot(s) exist - inlined_insert or tables_inserted_into
 query I
 SELECT count(*) FROM ducklake.snapshots() WHERE changes::VARCHAR LIKE '%insert%=[2]%'

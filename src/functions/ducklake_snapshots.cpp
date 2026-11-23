@@ -189,7 +189,7 @@ struct DuckLakeSnapshotsState : public GlobalTableFunctionState {
 //! The snapshots of a remote metadata manager, in the column order of ReadSnapshots
 static unique_ptr<ColumnDataCollection> RemoteSnapshotsToCollection(ClientContext &context,
                                                                     const vector<DuckLakeSnapshotInfo> &snapshots,
-                                                                    idx_t newest_snapshot_id) {
+                                                                    idx_t start_snapshot_id, idx_t end_snapshot_id) {
 	vector<LogicalType> types {LogicalType::BIGINT,  LogicalType::TIMESTAMP_TZ, LogicalType::BIGINT,
 	                           LogicalType::VARCHAR, LogicalType::VARCHAR,      LogicalType::VARCHAR,
 	                           LogicalType::VARCHAR, LogicalType::BIGINT};
@@ -198,7 +198,7 @@ static unique_ptr<ColumnDataCollection> RemoteSnapshotsToCollection(ClientContex
 	collection->InitializeAppend(append_state);
 	vector<reference<const DuckLakeSnapshotInfo>> visible;
 	for (auto &snapshot : snapshots) {
-		if (snapshot.id <= newest_snapshot_id) {
+		if (snapshot.id >= start_snapshot_id && snapshot.id <= end_snapshot_id) {
 			visible.push_back(snapshot);
 		}
 	}
@@ -224,6 +224,18 @@ static unique_ptr<ColumnDataCollection> RemoteSnapshotsToCollection(ClientContex
 	return collection;
 }
 
+static idx_t GetSnapshotBound(const TableFunctionBindInput &input, const string &name, idx_t default_value) {
+	auto entry = input.named_parameters.find(Identifier(name));
+	if (entry == input.named_parameters.end() || entry->second.IsNull()) {
+		return default_value;
+	}
+	auto id = entry->second.GetValue<int64_t>();
+	if (id < 0) {
+		throw BinderException("The %s option must be a non-negative snapshot ID.", name);
+	}
+	return NumericCast<idx_t>(id);
+}
+
 static unique_ptr<FunctionData> DuckLakeSnapshotsBind(ClientContext &context, TableFunctionBindInput &input,
                                                       vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
@@ -232,12 +244,17 @@ static unique_ptr<FunctionData> DuckLakeSnapshotsBind(ClientContext &context, Ta
 	auto &metadata_manager = transaction.GetMetadataManager();
 	auto result = make_uniq<DuckLakeSnapshotsBindData>();
 	auto newest_snapshot_id = transaction.GetNewestVisibleSnapshotId();
+	auto start_snapshot_id = GetSnapshotBound(input, "start_snapshot", 0);
+	auto end_snapshot_id = MinValue(newest_snapshot_id, GetSnapshotBound(input, "end_snapshot", newest_snapshot_id));
 	if (metadata_manager.IsRemote()) {
-		result->snapshots =
-		    RemoteSnapshotsToCollection(context, metadata_manager.GetAllSnapshots(), newest_snapshot_id);
+		result->snapshots = RemoteSnapshotsToCollection(context, metadata_manager.GetAllSnapshots(), start_snapshot_id,
+		                                                end_snapshot_id);
 	} else {
-		auto query_result =
-		    metadata_manager.ReadSnapshots(StringUtil::Format("snapshot_id <= %llu", newest_snapshot_id));
+		auto filter = StringUtil::Format("snapshot_id <= %llu", end_snapshot_id);
+		if (start_snapshot_id > 0) {
+			filter += StringUtil::Format(" AND snapshot_id >= %llu", start_snapshot_id);
+		}
+		auto query_result = metadata_manager.ReadSnapshots(filter);
 		result->snapshots = query_result->TakeCollection();
 	}
 	DuckLakeSnapshotsFunction::GetSnapshotTypes(return_types, names);
@@ -275,6 +292,9 @@ static void DuckLakeSnapshotsExecute(ClientContext &context, TableFunctionInput 
 
 DuckLakeSnapshotsFunction::DuckLakeSnapshotsFunction()
     : DuckLakeBaseMetadataFunction("ducklake_snapshots", DuckLakeSnapshotsBind) {
+	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
+		options.Add("start_snapshot", LogicalType::BIGINT).Add("end_snapshot", LogicalType::BIGINT);
+	});
 	function = DuckLakeSnapshotsExecute;
 	init_global = DuckLakeSnapshotsInit;
 	projection_pushdown = true;

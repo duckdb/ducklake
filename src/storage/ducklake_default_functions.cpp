@@ -14,7 +14,7 @@ static const DefaultTableMacro ducklake_table_macros[] = {
 	{DEFAULT_SCHEMA, "settings", {nullptr}, {{nullptr, nullptr}}, "FROM ducklake_settings({CATALOG})"},
 	{DEFAULT_SCHEMA, "current_snapshot", {nullptr}, {{nullptr, nullptr}},  "FROM ducklake_current_snapshot({CATALOG})"},
 {DEFAULT_SCHEMA, "last_committed_snapshot", {nullptr}, {{nullptr, nullptr}}, "FROM ducklake_last_committed_snapshot({CATALOG})"},
-	{DEFAULT_SCHEMA, "snapshots", {nullptr}, {{nullptr, nullptr}},  "FROM ducklake_snapshots({CATALOG})"},
+	{DEFAULT_SCHEMA, "snapshots", {nullptr}, {{"start_snapshot", "NULL"}, {"end_snapshot", "NULL"}, {nullptr, nullptr}}, "FROM ducklake_snapshots({CATALOG}, start_snapshot => start_snapshot, end_snapshot => end_snapshot)"},
 	{DEFAULT_SCHEMA, "table_info", {nullptr}, {{nullptr, nullptr}},  "FROM ducklake_table_info({CATALOG})"},
 	{DEFAULT_SCHEMA, "table_changes", {"table_name", "start_snapshot", "end_snapshot", nullptr}, {{nullptr, nullptr}},  "FROM ducklake_table_changes({CATALOG}, {SCHEMA}, table_name, start_snapshot, end_snapshot)"},
 	{DEFAULT_SCHEMA, "table_deletions", {"table_name", "start_snapshot", "end_snapshot", nullptr}, {{nullptr, nullptr}},  "FROM ducklake_table_deletions({CATALOG}, {SCHEMA}, table_name, start_snapshot, end_snapshot)"},
