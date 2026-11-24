@@ -324,9 +324,11 @@ public:
 	bool IsPublished() const {
 		return commit_outcome == DuckLakeCommitOutcome::PUBLISHED;
 	}
-	//! The commit was sent and not rejected, as after a lost answer, so the changes may have been published
-	void SetPublicationUnknown() {
-		AdvanceCommitOutcome(commit_outcome, DuckLakeCommitOutcome::PUBLICATION_UNKNOWN);
+	//! Moves the outcome of the commit to what an attempt reports, never back: PUBLISHED is final
+	void ReportCommitOutcome(DuckLakeCommitOutcome reported) {
+		if (reported > commit_outcome) {
+			commit_outcome = reported;
+		}
 	}
 	bool SchemaChangesMade() const;
 	idx_t GetLocalCatalogId();

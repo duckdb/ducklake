@@ -1756,11 +1756,8 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.commit_connection = [&]() {
 		connection->Commit();
 	};
-	context.set_published = [&]() {
-		AdvanceCommitOutcome(commit_outcome, DuckLakeCommitOutcome::PUBLISHED);
-	};
-	context.set_publication_unknown = [&]() {
-		SetPublicationUnknown();
+	context.report_commit_outcome = [&](DuckLakeCommitOutcome reported) {
+		ReportCommitOutcome(reported);
 	};
 	context.try_rollback = [&]() {
 		if (connection->context->transaction.HasActiveTransaction()) {

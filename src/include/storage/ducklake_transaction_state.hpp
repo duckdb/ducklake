@@ -74,11 +74,8 @@ struct DuckLakeCommitContext {
 	// LCOV_EXCL_START
 	std::function<void()> commit_connection = []() {
 	};
-	//! Tells the committer that its changes are in the metadata, whatever fails after that.
-	std::function<void()> set_published = []() {
-	};
-	//! Tells the committer that its changes may be in the metadata: the commit was sent and not rejected.
-	std::function<void()> set_publication_unknown = []() {
+	//! Tells the committer whether its changes are in the metadata, or may be, whatever fails after that.
+	std::function<void(DuckLakeCommitOutcome)> report_commit_outcome = [](DuckLakeCommitOutcome) {
 	};
 	//! Rolls back the metadata connection if a transaction is active.
 	std::function<void()> try_rollback = []() {

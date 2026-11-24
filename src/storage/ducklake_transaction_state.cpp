@@ -2960,7 +2960,7 @@ static void CommitMetadata(const DuckLakeCommitContext &context, ErrorData &erro
 		}
 		error_after_commit = std::move(error);
 	}
-	context.set_published();
+	context.report_commit_outcome(DuckLakeCommitOutcome::PUBLISHED);
 }
 
 void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
@@ -3061,7 +3061,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			bool rejected = retryable || context.is_catalog_rejection(error.RawMessage());
 			if (commit_sent && (!rejected || CommitMayHaveBeenPublished(error))) {
 				// sent and not rejected, as after a lost connection: the commit may have been published
-				context.set_publication_unknown();
+				context.report_commit_outcome(DuckLakeCommitOutcome::PUBLICATION_UNKNOWN);
 			}
 			// an internal error is a bug that a retry cannot fix
 			// a retryable metadata error in the conflict check is retried, a conflict that it finds is not

@@ -1177,13 +1177,15 @@ void RESTMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tran
 	} catch (std::exception &ex) {
 		if (ErrorData(ex).Type() == ExceptionType::IO) {
 			// after a failed request or response the server might have committed
-			flush_transaction.SetPublicationUnknown();
+			flush_transaction.ReportCommitOutcome(DuckLakeCommitOutcome::PUBLICATION_UNKNOWN);
 		} else {
 			// the server rejected the commit
 			flush_transaction.CleanupFiles();
 		}
 		throw;
 	}
+	// the server answered: the commit is published, also if applying its answer fails
+	flush_transaction.ReportCommitOutcome(DuckLakeCommitOutcome::PUBLISHED);
 	if (RESTIsNull(response.snapshot)) {
 		// nothing was written that creates a snapshot (e.g. only options were set)
 		flush_transaction.ApplyServerSideCommit(transaction_snapshot.schema_version);

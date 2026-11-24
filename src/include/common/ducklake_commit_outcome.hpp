@@ -22,11 +22,4 @@ enum class DuckLakeCommitOutcome : uint8_t {
 	PUBLISHED
 };
 
-//! Moves the outcome of a commit to what an attempt reports, never back: PUBLISHED is final
-inline void AdvanceCommitOutcome(DuckLakeCommitOutcome &outcome, DuckLakeCommitOutcome reported) {
-	if (reported > outcome) {
-		outcome = reported;
-	}
-}
-
 } // namespace duckdb
