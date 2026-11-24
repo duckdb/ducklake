@@ -467,7 +467,7 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 			continue;
 		}
 		auto migrated_name = Identifier(table_name + "_migrated");
-		auto migrate_query = InlinedTableDdlSql(migrated_name, column_defs, col_names);
+		auto migrate_query = InlinedTableDdlSql(migrated_name, column_defs, col_names, false);
 		migrate_query += StringUtil::Format("INSERT INTO {METADATA_CATALOG}.%s SELECT %s FROM {METADATA_CATALOG}.%s;",
 		                                    migrated_name, StringUtil::Join(select_list, ", "), table_name);
 		migrate_query += StringUtil::Format("DROP TABLE {METADATA_CATALOG}.%s;", table_name);

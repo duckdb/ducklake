@@ -1049,7 +1049,8 @@ static void CountInlinedRows(const vector<Identifier> &inlined_table_names, Duck
 	stored_rows = 0;
 	live_rows = 0;
 	for (auto &inlined_table_name : inlined_table_names) {
-		auto sql = DuckLakeMetadataManager::GetInlinedRowCountsSql(inlined_table_name, context.InlinedColNames());
+		auto sql = DuckLakeMetadataManager::GetInlinedRowCountsSql(inlined_table_name, context.InlinedColNames(),
+		                                                           context.supports_row_visibility);
 		auto result = context.query_metadata_with_snapshot(snapshot, sql);
 		result->ThrowIfError("Failed to read the inlined row counts from DuckLake: ");
 		for (auto &row : *result) {
@@ -1100,8 +1101,8 @@ bool DuckLakeTransactionState::TryMergeInlinedStats(TableIndex table_id,
 			select_list += StringUtil::Format(", MIN(%s)::VARCHAR, MAX(%s)::VARCHAR, COUNT(%s), %s", col_expr, col_expr,
 			                                  col_expr, nan_expr);
 		}
-		auto sql = DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(inlined_table_name, select_list,
-		                                                                 context.InlinedColNames());
+		auto sql = DuckLakeMetadataManager::ReadInlinedDataAggregatesSql(
+		    inlined_table_name, select_list, context.InlinedColNames(), context.supports_row_visibility);
 		auto result = context.query_metadata_with_snapshot(snapshot, sql);
 		result->ThrowIfError("Failed to read inlined-data aggregates from DuckLake: ");
 		for (auto &row : *result) {
@@ -1685,8 +1686,8 @@ static void RemoveColumnsWithInlinedValues(TableIndex table_id, const vector<Flu
 		if (checks.empty()) {
 			continue;
 		}
-		auto values = context.conflict_query_executor(
-		    DuckLakeMetadataManager::GetInlinedValuesSql(checks, context.InlinedColNames()));
+		auto values = context.conflict_query_executor(DuckLakeMetadataManager::GetInlinedValuesSql(
+		    checks, context.InlinedColNames(), context.supports_row_visibility));
 		values->ThrowIfError("Failed to commit DuckLake transaction - failed to check the inlined data of a table:");
 		for (auto &row : *values) {
 			for (idx_t check_idx = 0; check_idx < checks.size(); check_idx++) {
@@ -2665,6 +2666,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		}
 	}
 
+	// the payloads this commit deletes from keep the versions it ends when it flushes them
+	identifier_set_t deleted_payloads;
 	if (has_table_data_changes) {
 		// write new delete files
 		vector<DuckLakeOverwrittenDeleteFile> overwritten_delete_files;
@@ -2678,7 +2681,11 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 
 		// write new inlined deletes (for inlined data tables)
 		auto inlined_deletes = GetNewInlinedDeletes(commit_state);
-		batch_queries += DuckLakeMetadataManager::WriteNewInlinedDeletes(inlined_deletes, context.InlinedColNames());
+		for (auto &entry : inlined_deletes) {
+			deleted_payloads.insert(entry.table_name);
+		}
+		batch_queries += DuckLakeMetadataManager::WriteNewInlinedDeletes(inlined_deletes, context.InlinedColNames(),
+		                                                                 context.supports_row_visibility);
 
 		// write new inlined file deletes (for parquet files)
 		auto inlined_file_deletes = GetNewInlinedFileDeletes(commit_state);
@@ -2737,7 +2744,8 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 
 	// delete the flushed inlined rows and inlined file deletions after the deletes of the transaction
 	batch_queries += DuckLakeMetadataManager::GenerateDeleteFlushedInlinedData(
-	    flushed_inlined_tables, flushed_inlined_file_deletions, context.InlinedColNames());
+	    flushed_inlined_tables, flushed_inlined_file_deletions, deleted_payloads, context.InlinedColNames(),
+	    context.supports_row_visibility);
 	// the live files and inlined rows decide the stats that this commit cannot update from memory
 	batch_queries += DuckLakeMetadataManager::RefreshTableSizesSql(refreshed_table_sizes, refreshed_record_counts,
 	                                                               context.supports_file_visibility_events);

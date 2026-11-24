@@ -22,7 +22,8 @@ CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS dev1_skips_present_ddl CASCAD
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
-(DATA_PATH '{DATA_PATH}/dev1_skips_present_ddl', METADATA_SCHEMA 'dev1_skips_present_ddl', DUCKLAKE_VERSION '1.1')
+(DATA_PATH '{DATA_PATH}/dev1_skips_present_ddl', METADATA_SCHEMA 'dev1_skips_present_ddl', DUCKLAKE_VERSION '1.1',
+    DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i

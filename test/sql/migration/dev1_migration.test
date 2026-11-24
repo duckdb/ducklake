@@ -91,7 +91,7 @@ SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND table_name
 1
 
 query I
-SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_inlined_data_1_1' AND column_name IN ('_ducklake_row_id', '_ducklake_begin_snapshot', '_ducklake_end_snapshot')
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_inlined_data_1_1' AND column_name IN ('_ducklake_row_id', '_ducklake_begin_snapshot', '_ducklake_branch_id')
 ----
 3
 
