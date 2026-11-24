@@ -693,6 +693,10 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.commit_connection = [this]() {
 		fresh_conn.Commit();
 	};
+	// the outcome only moves forward: PUBLISHED is final
+	ctx.report_commit_outcome = [this](DuckLakeCommitOutcome reported) {
+		commit_outcome = MaxValue(commit_outcome, reported);
+	};
 	ctx.try_rollback = [this]() {
 		if (fresh_conn.context->transaction.HasActiveTransaction()) {
 			fresh_conn.Rollback();

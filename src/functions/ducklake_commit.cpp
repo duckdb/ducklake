@@ -62,6 +62,13 @@ static void DuckLakeCommitExecute(ClientContext &context, TableFunctionInput &da
 		result = commit.Run();
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
+		// a commit that is or can be published fails with an IO error, which a client does not take for a rejection
+		if (commit.GetCommitOutcome() == DuckLakeCommitOutcome::PUBLISHED) {
+			ErrorAfterPublication(error).Throw();
+		}
+		if (commit.GetCommitOutcome() == DuckLakeCommitOutcome::PUBLICATION_UNKNOWN) {
+			ErrorOfUnknownPublication(error).Throw();
+		}
 		if (error.Type() != ExceptionType::INTERNAL) {
 			throw;
 		}

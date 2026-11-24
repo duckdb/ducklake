@@ -2947,6 +2947,17 @@ bool DuckLakeTransactionState::CommitMayHaveBeenPublished(const ErrorData &error
 	return error.Type() == ExceptionType::IO || IsDurableCommitError(error);
 }
 
+ErrorData ErrorAfterPublication(const ErrorData &error) {
+	return ErrorData(ExceptionType::IO,
+	                 "The transaction was committed, but the server failed to respond: " + error.RawMessage());
+}
+
+ErrorData ErrorOfUnknownPublication(const ErrorData &error) {
+	return ErrorData(ExceptionType::IO, "It is unknown whether the transaction was committed, its commit was sent "
+	                                    "and failed without a rejection: " +
+	                                        error.RawMessage());
+}
+
 //! Commits the metadata connection. A commit that is durable although it reports an error is published: the error
 //! is kept for the end of the commit, as nothing can be rolled back, retried or cleaned up after it
 static void CommitMetadata(const DuckLakeCommitContext &context, ErrorData &error_after_commit, bool &commit_sent) {

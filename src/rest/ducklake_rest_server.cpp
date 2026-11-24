@@ -13,6 +13,7 @@
 #include "functions/ducklake_table_functions.hpp"
 #include "storage/ducklake_catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
+#include "storage/ducklake_transaction_state.hpp"
 
 #include "rest/ducklake_rest_client.hpp"
 
@@ -385,20 +386,6 @@ static void InitializeCommitRequest(DuckLakeRESTRequest &request, const DuckLake
 	request.server = commit.server;
 	request.prefix = commit.prefix;
 	request.accepts_arrow = commit.accepts_arrow;
-}
-
-//! The error of a commit that failed after it published its changes: an IO error, as for a lost response, so that
-//! the client does not remove the files of the transaction
-static ErrorData ErrorAfterPublication(const ErrorData &error) {
-	return ErrorData(ExceptionType::IO,
-	                 "The transaction was committed, but the server failed to respond: " + error.RawMessage());
-}
-
-//! The error of a group that can be published: an IO error as well, so that its clients keep their files
-static ErrorData ErrorOfUnknownPublication(const ErrorData &error) {
-	return ErrorData(ExceptionType::IO, "It is unknown whether the transaction was committed, its commit was sent "
-	                                    "and failed without a rejection: " +
-	                                        error.RawMessage());
 }
 
 void DuckLakeRESTServer::RunCommit(const ServedCatalog &served, DuckLakeRESTPendingCommit &commit) {

@@ -375,4 +375,10 @@ public:
 	ducklake_entry_oids_t committed_entry_oids;
 };
 
+//! The error of a commit that failed after it published its changes: an IO error, as for a lost response, so that
+//! the client does not remove the files of the transaction
+ErrorData ErrorAfterPublication(const ErrorData &error);
+//! The error of a commit that can be published: an IO error as well, so that its client keeps the files
+ErrorData ErrorOfUnknownPublication(const ErrorData &error);
+
 } // namespace duckdb
