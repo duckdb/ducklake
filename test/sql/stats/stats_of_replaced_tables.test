@@ -1,0 +1,59 @@
+# name: test/sql/stats/stats_of_replaced_tables.test
+# description: A table's stats are read at its first snapshot, after it replaces a dropped table and after a rename
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/stats_of_replaced_tables')
+
+statement ok
+CALL ducklake.set_option('data_inlining_row_limit', 0)
+
+# the table and its stats come from the same snapshot, the first one that sees the table
+statement ok
+CREATE TABLE ducklake.t AS SELECT range AS id FROM range(10)
+
+query I
+SELECT stats(id) FROM ducklake.t LIMIT 1
+----
+{'has_no_null': true, 'has_null': false, 'max': 9, 'min': 0}
+
+statement ok
+DROP TABLE ducklake.t
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT range + 100 AS id FROM range(10)
+
+query I
+SELECT stats(id) FROM ducklake.t LIMIT 1
+----
+{'has_no_null': true, 'has_null': false, 'max': 109, 'min': 100}
+
+query I
+SELECT count(*) FROM ducklake.t WHERE id < 105
+----
+5
+
+# a renamed table keeps its stats, at the snapshot of the rename and after the next commit
+statement ok
+ALTER TABLE ducklake.t RENAME TO u
+
+query I
+SELECT stats(id) FROM ducklake.u LIMIT 1
+----
+{'has_no_null': true, 'has_null': false, 'max': 109, 'min': 100}
+
+statement ok
+INSERT INTO ducklake.u VALUES (110)
+
+query I
+SELECT stats(id) FROM ducklake.u LIMIT 1
+----
+{'has_no_null': true, 'has_null': false, 'max': 110, 'min': 100}

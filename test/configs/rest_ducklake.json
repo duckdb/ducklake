@@ -488,6 +488,7 @@
         "test/sql/stats/skip_stats_columns_rewrite.test",
         "test/sql/stats/skip_stats_columns_transaction.test",
         "test/sql/stats/stats_exactness_inlined.test",
+        "test/sql/stats/stats_of_dropped_tables.test",
         "test/sql/stats/table_stats_null_totals.test",
         "test/sql/stats/table_stats_null_totals_retry.test",
         "test/sql/stats/table_stats_without_column_stats.test",
