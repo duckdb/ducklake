@@ -4229,7 +4229,6 @@ DuckLakeMetadataManager::GetTableDeletions(DuckLakeTableEntry &table, DuckLakeSn
 	                     ", data.row_id_start, data.record_count, data.mapping_id, " + insert_snapshot + ", " +
 	                     GetDeleteFileSelectList("current_delete") + ", " + GetDeleteFileSelectList("previous_delete");
 	// the segments of the add events bound the dated deletes and the rows of inherited files
-	// partial_max tells an undated chosen file, the earlier files of the view date the rows it copied
 	string segment_column = on_branch ? ", begin_segment" : "";
 	// on an equal back dated begin the file of the later segment is the later one
 	string segment_order = on_branch ? ", begin_segment DESC" : "";

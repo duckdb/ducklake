@@ -436,8 +436,7 @@ public:
 	                             optional_idx table_id = optional_idx());
 	static string DeleteFileSource(bool file_events, const DuckLakeBranchChain &chain, const string &prefix,
 	                               optional_idx table_id = optional_idx());
-	//! The per file ranges a branch derives from its visibility events
-	//! begin_segment is the chain position of the earliest add event, a file is written once in its lineage view
+	//! The per file ranges of a branch, begin_segment is the segment of the earliest add event
 	static string VisibilityEventRanges(const string &visibility_table, const string &file_id_column,
 	                                    const DuckLakeBranchChain &chain, const string &prefix);
 	//! The delete files the filter selects on a branch, one per data file (and begin) with the writer nearest the leaf
