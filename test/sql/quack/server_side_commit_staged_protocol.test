@@ -166,7 +166,7 @@ SELECT del.table_id, data.path, del.data_file_id, del.path, del.format, del.dele
        del.footer_size, del.encryption_key, NULL, NULL, ''REGULAR'', true, del.delete_file_id, del.path, NULL, NULL
 FROM main.ducklake_delete_file del JOIN main.ducklake_data_file data USING (data_file_id)
 JOIN main.ducklake_delete_file_visibility v ON v.delete_file_id = del.delete_file_id AND v.branch_id = 0 AND v.is_delete = FALSE
-JOIN main.ducklake_table tbl ON tbl.table_id = del.table_id AND tbl.end_snapshot IS NULL
+JOIN main.ducklake_table tbl ON tbl.table_id = del.table_id
 WHERE tbl.table_name = ''d'' AND NOT EXISTS (SELECT 1 FROM main.ducklake_delete_file_visibility d
     WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.delete_file_id = del.delete_file_id);
 SELECT count(*) FROM ducklake_staged_delete_file')

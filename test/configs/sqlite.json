@@ -121,6 +121,7 @@
         "test/sql/concurrent/postgres_concurrent_attach_new_migrate.test",
         "test/sql/migration/postgres_dev_migration_failure.test",
         "test/sql/migration/postgres_dev1_migration_skips_present_ddl.test",
+        "test/sql/migration/postgres_row_companions_index_names.test",
         "test/sql/data_inlining/postgres_identifier_limit.test",
         "test/sql/data_inlining/postgres_system_column_names.test",
         "test/sql/metadata/postgres_text_protocol.test",

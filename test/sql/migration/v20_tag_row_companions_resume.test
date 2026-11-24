@@ -1,0 +1,157 @@
+# name: test/sql/migration/v20_tag_row_companions_resume.test
+# description: the migration to 2.0-dev1 resumes the companions of the tag kinds from an interrupted step
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
+
+# snapshot 1 creates t, 2 comments it, 3 comments j, 4 creates v, 5 comments its column
+statement ok
+CREATE TABLE dl.t(i INTEGER, j INTEGER)
+
+statement ok
+COMMENT ON TABLE dl.t IS 'first'
+
+statement ok
+COMMENT ON COLUMN dl.t.j IS 'col j'
+
+statement ok
+CREATE VIEW dl.v AS SELECT 1 AS x
+
+statement ok
+COMMENT ON COLUMN dl.v.x IS 'first x'
+
+# snapshot 6 changes the table comment, 7 drops j, 8 changes the view column comment
+statement ok
+COMMENT ON TABLE dl.t IS 'second'
+
+statement ok
+ALTER TABLE dl.t DROP COLUMN j
+
+statement ok
+COMMENT ON COLUMN dl.v.x IS 'second x'
+
+statement ok
+DETACH dl
+
+# an interrupted step, tags converted, an empty pending column tag companion, the view column tag birth branch alone
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS meta
+
+statement ok
+ALTER TABLE meta.ducklake_tag ADD COLUMN branch_id BIGINT DEFAULT 0
+
+statement ok
+UPDATE meta.ducklake_tag SET branch_id = 0 WHERE branch_id IS NULL
+
+statement ok
+CREATE TABLE meta.ducklake_tag_visibility(branch_id BIGINT, object_id BIGINT, key VARCHAR, row_branch_id BIGINT,
+    row_snapshot BIGINT, end_snapshot BIGINT, PRIMARY KEY(branch_id, object_id, key, row_branch_id, row_snapshot))
+
+statement ok
+INSERT INTO meta.ducklake_tag_visibility
+SELECT 0, object_id, key, 0, begin_snapshot, end_snapshot FROM meta.ducklake_tag WHERE end_snapshot IS NOT NULL
+
+statement ok
+ALTER TABLE meta.ducklake_tag DROP COLUMN end_snapshot
+
+statement ok
+ALTER TABLE meta.ducklake_column_tag ADD COLUMN branch_id BIGINT DEFAULT 0
+
+statement ok
+UPDATE meta.ducklake_column_tag SET branch_id = 0 WHERE branch_id IS NULL
+
+statement ok
+CREATE TABLE meta.ducklake_column_tag_visibility_pending(branch_id BIGINT, table_id BIGINT, column_id BIGINT,
+    key VARCHAR, row_branch_id BIGINT, row_snapshot BIGINT, end_snapshot BIGINT,
+    PRIMARY KEY(branch_id, table_id, column_id, key, row_branch_id, row_snapshot))
+
+statement ok
+ALTER TABLE meta.ducklake_view_column_tag ADD COLUMN branch_id BIGINT DEFAULT 0
+
+statement ok
+DETACH meta
+
+# the resumed step fills and renames the pending companion, converts the view column tags and copies no end twice
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 0)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query IIII
+SELECT t.value, e.branch_id, e.row_snapshot, e.end_snapshot FROM meta.ducklake_tag_visibility e
+JOIN meta.ducklake_tag t ON t.object_id = e.object_id AND t.key = e.key AND t.branch_id = e.row_branch_id
+    AND t.begin_snapshot = e.row_snapshot
+----
+first	0	2	6
+
+query IIII
+SELECT t.value, e.branch_id, e.row_snapshot, e.end_snapshot FROM meta.ducklake_column_tag_visibility e
+JOIN meta.ducklake_column_tag t ON t.table_id = e.table_id AND t.column_id = e.column_id AND t.key = e.key
+    AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+----
+col j	0	3	7
+
+query IIII
+SELECT t.value, e.branch_id, e.row_snapshot, e.end_snapshot FROM meta.ducklake_view_column_tag_visibility e
+JOIN meta.ducklake_view_column_tag t ON t.view_id = e.view_id AND t.column_name = e.column_name AND t.key = e.key
+    AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+----
+first x	0	5	8
+
+query II
+SELECT (SELECT COUNT(*) FROM meta.ducklake_snapshot_tag), (SELECT COUNT(*) FROM meta.ducklake_snapshot_tag_visibility)
+----
+0	0
+
+query I
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name IN ('ducklake_tag', 'ducklake_column_tag', 'ducklake_view_column_tag', 'ducklake_snapshot_tag')
+    AND column_name = 'end_snapshot'
+----
+0
+
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name LIKE '%_visibility_pending'
+----
+0
+
+query I
+SELECT comment FROM duckdb_tables() WHERE database_name = 'dl' AND table_name = 't'
+----
+second
+
+query I
+SELECT comment FROM duckdb_columns() WHERE database_name = 'dl' AND table_name = 'v'
+----
+second x
+
+# the migrated catalog keeps ending its rows in the renamed companions, snapshot 9 changes the view column comment
+statement ok
+COMMENT ON COLUMN dl.v.x IS 'third x'
+
+query III
+SELECT t.value, e.row_snapshot, e.end_snapshot FROM meta.ducklake_view_column_tag_visibility e
+JOIN meta.ducklake_view_column_tag t ON t.view_id = e.view_id AND t.column_name = e.column_name AND t.key = e.key
+    AND t.branch_id = e.row_branch_id AND t.begin_snapshot = e.row_snapshot
+ORDER BY e.end_snapshot
+----
+first x	5	8
+second x	8	9
+
+statement ok
+DETACH dl
