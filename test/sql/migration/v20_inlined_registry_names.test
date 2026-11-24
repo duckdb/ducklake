@@ -1,6 +1,7 @@
 # name: test/sql/migration/v20_inlined_registry_names.test
 # description: a registered payload whose name carries another table is refused on the complete layout as well
 # group: [migration]
+
 require ducklake
 
 require parquet

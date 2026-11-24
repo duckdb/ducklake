@@ -1,6 +1,7 @@
 # name: test/sql/migration/v20_inlined_visibility_resume_fenced_columns.test
 # description: the inlined data visibility step resumes while the catalog column step stands fenced, its probe reads no companion
 # group: [migration]
+
 require ducklake
 
 require parquet
