@@ -1,5 +1,5 @@
 # name: test/sql/migration/v11_to_v20_dev1.test
-# description: a 1.1 catalog is migrated to 2.0-dev2 only with AUTOMATIC_MIGRATION, and the dev version is attached as it is
+# description: a 1.1 catalog is migrated to 2.0-dev1 only with AUTOMATIC_MIGRATION, and the dev version is attached as it is
 # group: [migration]
 
 require ducklake
@@ -43,17 +43,21 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_to_v20
 query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
-2.0-dev2
+2.0-dev1
 
 # SQLite reports the timestamp column as text
 query II
-SELECT column_name, CASE WHEN column_name = 'expires_at' AND data_type = 'VARCHAR' THEN 'TIMESTAMP WITH TIME ZONE' ELSE data_type END FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_snapshot_tag') ORDER BY column_index
+SELECT column_name, CASE WHEN column_name = 'expires_at' AND data_type = 'VARCHAR' THEN 'TIMESTAMP WITH TIME ZONE'
+    ELSE data_type END
+FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_snapshot_tag')
+ORDER BY column_index
 ----
 tag_name	VARCHAR
 snapshot_id	BIGINT
 begin_snapshot	BIGINT
-end_snapshot	BIGINT
 expires_at	TIMESTAMP WITH TIME ZONE
+branch_id	BIGINT
 
 query I
 SELECT COUNT(*) FROM meta.ducklake_snapshot_tag
@@ -75,13 +79,13 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_to_v20
 query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
-2.0-dev2
+2.0-dev1
 
 statement ok
 DETACH dl
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_to_v20_dev1_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '2.0-dev2')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/v11_to_v20_dev1_files', METADATA_CATALOG 'meta', DUCKLAKE_VERSION '2.0-dev1')
 
 query I
 SELECT * FROM dl.t

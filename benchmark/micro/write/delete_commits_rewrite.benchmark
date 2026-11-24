@@ -42,10 +42,10 @@ DELETE FROM lake.bg WHERE id BETWEEN 38913 AND 38932;
 # A missed reset leaves nothing to delete, so the rewritten delete files would be missing
 result_query IIIII
 SELECT (SELECT count(*) FROM lake.snapshots()), count(*),
-(SELECT count(*) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL),
-(SELECT sum(delete_count) FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL),
+(SELECT coalesce(sum(delete_file_count), 0)::BIGINT FROM ducklake_table_info('lake')),
+(SELECT sum(delete_count) FROM __ducklake_metadata_lake.ducklake_delete_file),
 (SELECT count(*) FROM __ducklake_metadata_lake.ducklake_delete_file
-WHERE end_snapshot IS NULL AND delete_count = 21 AND partial_max IS NOT NULL)
+WHERE delete_count = 21 AND partial_max IS NOT NULL)
 FROM lake.bg
 ----
 25	8384112	4096	4496	20

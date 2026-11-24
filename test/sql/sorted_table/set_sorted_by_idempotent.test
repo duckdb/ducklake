@@ -91,12 +91,6 @@ FROM sort_metadata()
 ----
 5	3	6
 
-# The surviving sort order is the last one that was actually set, then cleared
-query I
-SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_sort_info WHERE table_id = 1 AND end_snapshot IS NULL
-----
-0
-
 # A sort declared by CREATE TABLE is the same sort as an identical SET SORTED BY
 statement ok
 CREATE TABLE ducklake.created(a INTEGER) SORTED BY (a);
@@ -113,3 +107,20 @@ query III
 FROM sort_metadata()
 ----
 6	4	7
+
+# The sort order of test was set, then cleared, so an insert keeps its own order while created sorts
+statement ok
+INSERT INTO ducklake.test VALUES (3, 'c'), (1, 'a'), (2, 'b');
+
+query I
+SELECT list(a ORDER BY file_row_number) FROM ducklake.test
+----
+[3, 1, 2]
+
+statement ok
+INSERT INTO ducklake.created VALUES (3), (1), (2);
+
+query I
+SELECT list(a ORDER BY file_row_number) FROM ducklake.created
+----
+[1, 2, 3]

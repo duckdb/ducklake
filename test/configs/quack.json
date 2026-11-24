@@ -69,6 +69,7 @@
         "test/sql/concurrent/postgres_concurrent_attach_new_migrate.test",
         "test/sql/migration/postgres_dev_migration_failure.test",
         "test/sql/migration/postgres_dev1_migration_skips_present_ddl.test",
+        "test/sql/migration/postgres_row_companions_index_names.test",
         "test/sql/benchmark/postgres_catalog.test",
         "test/sql/issues/issue_843_postgres_legacy_inlined_types.test",
         "test/sql/data_inlining/inlined_superseded_drop_failure_postgres.test",
@@ -249,6 +250,18 @@
       "paths": [
         "test/sql/cleanup/expire_cleanup_in_transaction.test",
         "test/sql/cleanup/expire_cleanup_concurrent_commit.test"
+      ]
+    },
+    {
+      "reason": "The commit batch of a quack catalog is sent through quack_query_by_name, so the client log holds no delete file event insert to count",
+      "paths": [
+        "test/sql/delete/delete_replacement_commit_statements.test"
+      ]
+    },
+    {
+      "reason": "The conflict read of a server side quack commit runs in the sidecar, so the client log never shows it",
+      "paths": [
+        "test/sql/retry/retry_conflict_read_shapes.test"
       ]
     }
   ]

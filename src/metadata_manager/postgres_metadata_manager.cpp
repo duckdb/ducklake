@@ -317,22 +317,22 @@ bool PostgresMetadataManager::IsRetryableCommitError(const string &message) cons
 	return false;
 }
 
-bool PostgresMetadataManager::InlinedDeletionTableExists(const Identifier &table_name) {
+unordered_set<string> PostgresMetadataManager::ListInlinedDeletionTables() {
+	// the server lists the tables, so a table another connection committed is seen without a catalog refresh
 	auto &catalog = transaction.GetCatalog();
-	auto remote_query =
-	    StringUtil::Format("SELECT 1 FROM pg_catalog.pg_tables WHERE schemaname = %s AND tablename = %s LIMIT 1",
-	                       SQLString::ToString(catalog.MetadataSchemaName().GetIdentifierName()),
-	                       SQLString::ToString(table_name.GetIdentifierName()));
-	auto query =
-	    StringUtil::Format("SELECT 1 FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
-	                       SQLString::ToString(remote_query));
-	auto result = DuckLakeMetadataManager::Query(query);
-	result->ThrowIfError("Failed to probe for DuckLake inlined-deletion table: ");
-	return result->Fetch() != nullptr;
+	auto remote_query = StringUtil::Format("SELECT tablename FROM pg_catalog.pg_tables WHERE schemaname = %s "
+	                                       "AND tablename LIKE 'ducklake\\_inlined\\_delete\\_%%'",
+	                                       SQLString::ToString(catalog.MetadataSchemaName().GetIdentifierName()));
+	auto query = StringUtil::Format(
+	    "SELECT tablename FROM postgres_query({METADATA_CATALOG_NAME_LITERAL}, %s, use_transaction = true)",
+	    SQLString::ToString(remote_query));
+	return ReadTableNames(*DuckLakeMetadataManager::Query(query));
 }
 
 void PostgresMetadataManager::MigrateInlinedDataTypes() {
-	auto columns = DuckLakeMetadataManager::Query(GetInlinedTableColumnsSql());
+	// a 2.0 catalog whose version string was rewound reaches this step with the column rows already converted
+	auto columns = DuckLakeMetadataManager::Query(
+	    GetInlinedTableColumnsSql(optional_idx(), HasMetadataColumn("ducklake_column", "branch_id")));
 	columns->ThrowIfError("Failed to read the columns of inlined-data tables while migrating: ");
 	map<Identifier, identifier_map_t<string>> inlined_tables;
 	for (auto &row : *columns) {
@@ -398,6 +398,16 @@ void PostgresMetadataManager::MigrateInlinedDataTypes() {
 		result->ThrowIfError(
 		    StringUtil::Format("Failed to migrate the column types of inlined-data table %s: ", table_name));
 	}
+}
+
+string PostgresMetadataManager::RowCompanionRenameSql(const string &kind) const {
+	// a renamed table keeps the name of its primary key index, a fresh catalog names it after the final table
+	auto table = RowVisibilityTableName(kind);
+	auto schema = SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName());
+	auto rename_index =
+	    StringUtil::Format("ALTER INDEX IF EXISTS %s.%s_pending_pkey RENAME TO %s_pkey", schema, table, table);
+	return DuckLakeMetadataManager::RowCompanionRenameSql(kind) +
+	       StringUtil::Format("CALL postgres_execute({METADATA_CATALOG_NAME_LITERAL}, %s);\n", SQLString(rename_index));
 }
 
 unique_ptr<QueryResult> PostgresMetadataManager::Execute(DuckLakeSnapshot snapshot, string &query) {

@@ -61,13 +61,15 @@ SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_ver
 ----
 3
 
-# Verify sort data was committed correctly
-query III
-SELECT expression, sort_direction, null_order
+# Verify sort data was committed correctly, each transaction wrote one sort row and the newest is its last SET
+query IIII
+SELECT si.begin_snapshot, expression, sort_direction, null_order
 FROM __ducklake_metadata_ducklake.ducklake_sort_expression se
 JOIN __ducklake_metadata_ducklake.ducklake_sort_info si USING (sort_id)
-WHERE si.table_id = 1 AND si.end_snapshot IS NULL
-ORDER BY se.sort_key_index
+WHERE si.table_id = 1
+ORDER BY si.begin_snapshot, se.sort_key_index
 ----
-a	ASC	NULLS_LAST
-c	DESC	NULLS_LAST
+2	a	DESC	NULLS_LAST
+2	b	ASC	NULLS_LAST
+3	a	ASC	NULLS_LAST
+3	c	DESC	NULLS_LAST

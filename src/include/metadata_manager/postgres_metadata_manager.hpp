@@ -22,11 +22,15 @@ public:
 
 	bool CanInlineValues(DataChunk &chunk) override;
 	string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const override;
-	bool InlinedDeletionTableExists(const Identifier &table_name) override;
+	bool ListsInlinedDeletionTables() const override {
+		return true;
+	}
+	unordered_set<string> ListInlinedDeletionTables() override;
 	void MigrateInlinedDataTypes() override;
 	bool IsRetryableCommitError(const string &message) const override;
 	bool ProbeMetadataColumns() override;
 	string CommitErrorWithoutQuery(const string &message) const override;
+	string RowCompanionRenameSql(const string &kind) const override;
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 	unique_ptr<QueryResult> ExecuteDropInTransaction(string &query) override;

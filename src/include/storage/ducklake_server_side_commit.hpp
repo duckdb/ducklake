@@ -105,6 +105,8 @@ private:
 	vector<TableIndex> commit_tables;
 	bool supports_v1_1_metadata = false;
 	bool supports_v2_0_metadata = false;
+	bool supports_file_visibility_events = false;
+	bool supports_row_visibility = false;
 	bool branch_keyed_lookups = false;
 	bool staged_dropped_files_read = false;
 	vector<pair<string, idx_t>> staged_dropped_files;

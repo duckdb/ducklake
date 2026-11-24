@@ -43,7 +43,10 @@ public:
 	void ClearCache() override;
 
 	bool MetadataExists() override;
-	bool InlinedDeletionTableExists(const Identifier &table_name) override;
+	bool ListsInlinedDeletionTables() const override {
+		return true;
+	}
+	unordered_set<string> ListInlinedDeletionTables() override;
 
 protected:
 	string MetadataExistsQuery() const override;
