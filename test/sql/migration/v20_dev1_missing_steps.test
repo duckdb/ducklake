@@ -11,7 +11,8 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
@@ -70,14 +71,15 @@ DETACH dl
 
 # the incomplete layout is refused without the migration option
 statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 ----
 catalog version is 2.0-dev1, but the catalog lacks the branch key of the snapshot tables
 
 # a read only attach cannot migrate
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    READ_ONLY, AUTOMATIC_MIGRATION TRUE)
+    READ_ONLY, AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 ----
 read-only mode
 
@@ -87,7 +89,7 @@ CALL enable_logging('DuckLakeMetadata', storage = 'memory')
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    AUTOMATIC_MIGRATION TRUE)
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 CALL disable_logging()
@@ -244,20 +246,21 @@ DETACH dl
 
 # the incomplete layout is refused without the migration option
 statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 ----
 catalog version is 2.0-dev1, but the catalog lacks the branch key of the snapshot tables
 
 # a read only attach cannot migrate
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    READ_ONLY, AUTOMATIC_MIGRATION TRUE)
+    READ_ONLY, AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 ----
 read-only mode
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    AUTOMATIC_MIGRATION TRUE)
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
@@ -331,20 +334,21 @@ DETACH dl
 
 # the incomplete layout is refused without the migration option
 statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 ----
 catalog version is 2.0-dev1, but the catalog lacks the branch key of the snapshot tables
 
 # a read only attach cannot migrate
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    READ_ONLY, AUTOMATIC_MIGRATION TRUE)
+    READ_ONLY, AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 ----
 read-only mode
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    AUTOMATIC_MIGRATION TRUE)
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
@@ -408,7 +412,8 @@ statement ok
 DETACH dl
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
@@ -486,20 +491,21 @@ DETACH dl
 
 # the incomplete layout is refused without the migration option
 statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 ----
 catalog version is 2.0-dev1, but the catalog lacks the branch key of the snapshot tables
 
 # a read only attach cannot migrate
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    READ_ONLY, AUTOMATIC_MIGRATION TRUE)
+    READ_ONLY, AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 ----
 read-only mode
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    AUTOMATIC_MIGRATION TRUE)
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
@@ -577,20 +583,21 @@ DETACH dl
 
 # the incomplete layout is refused without the migration option
 statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 ----
 catalog version is 2.0-dev1, but the catalog lacks the branch key of the snapshot tables
 
 # a read only attach cannot migrate
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    READ_ONLY, AUTOMATIC_MIGRATION TRUE)
+    READ_ONLY, AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 ----
 read-only mode
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    AUTOMATIC_MIGRATION TRUE)
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 
 query I
 SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
@@ -679,7 +686,8 @@ DETACH dl
 
 # a dev build ended its catalog rows in place and knew no birth branch, the step adds the companions and the ends
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 
 # snapshots 9 and 10 create and drop a view, 11 and 12 rename the table and back, 13 and 14 create and drop a schema
 statement ok
@@ -744,20 +752,21 @@ DETACH dl
 
 # the incomplete layout is refused without the migration option
 statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 ----
 catalog version is 2.0-dev1, but the catalog lacks the catalog row companions
 
 # a read only attach cannot migrate
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    READ_ONLY, AUTOMATIC_MIGRATION TRUE)
+    READ_ONLY, AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 ----
 read-only mode
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    AUTOMATIC_MIGRATION TRUE)
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 
 query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
@@ -824,13 +833,14 @@ statement ok
 DETACH dl
 
 statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 ----
 catalog version is 2.0-dev1, but the catalog lacks the catalog row companions
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    AUTOMATIC_MIGRATION TRUE)
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 
 query I
 SELECT COUNT(*) FROM meta.ducklake_view_visibility
@@ -858,13 +868,14 @@ DETACH dl
 
 # the incomplete layout is refused without the migration option
 statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 ----
 catalog version is 2.0-dev1, but the catalog lacks the catalog row companions
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    AUTOMATIC_MIGRATION TRUE)
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 
 query II
 SELECT row_snapshot, end_snapshot FROM meta.ducklake_schema_visibility
@@ -882,7 +893,8 @@ DETACH dl
 
 # a birth branch missing beside the final companion is added back, the companion stays in place
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 ALTER TABLE meta.ducklake_schema DROP COLUMN branch_id
@@ -892,13 +904,14 @@ DETACH dl
 
 # the incomplete layout is refused without the migration option
 statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 ----
 catalog version is 2.0-dev1, but the catalog lacks the catalog row companions
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    AUTOMATIC_MIGRATION TRUE)
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 
 query II
 SELECT schema_name, branch_id FROM meta.ducklake_schema ORDER BY begin_snapshot
@@ -930,7 +943,8 @@ DETACH dl
 
 # the columns and macros of an older dev build ended in place and knew no birth branch, they migrate like the tables
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 CREATE TABLE dl.tc(a INTEGER, b INTEGER)
@@ -976,13 +990,14 @@ DETACH dl
 
 # the incomplete layout is refused without the migration option
 statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 ----
 catalog version is 2.0-dev1, but the catalog lacks the catalog row companions
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    AUTOMATIC_MIGRATION TRUE)
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 
 # the ends are rebuilt from the end snapshots, the renamed column ends where its successor is born
 query II
@@ -1030,7 +1045,8 @@ DETACH dl
 
 # the tags of an older dev build ended in place and knew no birth branch, they migrate like the tables
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 COMMENT ON TABLE dl.tc IS 'tagged'
@@ -1120,13 +1136,14 @@ DETACH dl
 
 # the incomplete layout is refused without the migration option
 statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 ----
 catalog version is 2.0-dev1, but the catalog lacks the catalog row companions
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    AUTOMATIC_MIGRATION TRUE)
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 
 # the ends are rebuilt from the end snapshots, a replaced tag ends where its successor is born
 query II
@@ -1195,7 +1212,8 @@ DETACH dl
 
 # a dev build ended its inlined rows in place and knew no shared companion, the step folds the end column into it
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 ALTER TABLE meta.ducklake_inlined_data_1_1 ADD COLUMN _ducklake_end_snapshot BIGINT
@@ -1211,13 +1229,14 @@ DETACH dl
 
 # the incomplete layout is refused without the migration option
 statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 ----
 catalog version is 2.0-dev1, but the catalog lacks the inlined data visibility
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    AUTOMATIC_MIGRATION TRUE)
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 
 query I
 SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
@@ -1264,7 +1283,8 @@ statement ok
 CALL enable_logging('DuckLakeMetadata', storage = 'memory')
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 CALL disable_logging()
@@ -1300,7 +1320,8 @@ DETACH dl
 
 # a missing companion of a kind whose end column is gone held the ends of its rows, so the migration refuses it
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 DROP TABLE meta.ducklake_view_visibility
@@ -1309,12 +1330,13 @@ statement ok
 DETACH dl
 
 statement error
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
 ----
 catalog version is 2.0-dev1, but the catalog lacks the catalog row companions
 
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    AUTOMATIC_MIGRATION TRUE)
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 ----
 the end snapshots of the ducklake_view rows were dropped and the end rows that replaced them are missing
