@@ -1106,8 +1106,7 @@ void DuckLakeMetadataManager::MigrateV10(bool from_dev1) {
 }
 
 string DuckLakeMetadataManager::GetSnapshotTagTableStatement() {
-	// a snapshot tag row ends in its companion like every catalog row of 2.0, snapshot_branch_id is the branch of the
-	// tagged snapshot and comes last like the column a migrated catalog adds
+	// snapshot_branch_id is the branch of the tagged snapshot, last like the column a migrated catalog adds
 	return "CREATE TABLE {METADATA_CATALOG}.ducklake_snapshot_tag(tag_name VARCHAR, snapshot_id BIGINT, "
 	       "begin_snapshot BIGINT, expires_at TIMESTAMPTZ, branch_id BIGINT DEFAULT 0, snapshot_branch_id BIGINT "
 	       "DEFAULT 0);";
@@ -1320,7 +1319,7 @@ string DuckLakeMetadataManager::RowCompanionRenameSql(const string &kind) const 
 	                          RowVisibilityTableName(kind));
 }
 
-//! Adds the birth branch unless the table has it and fills the rows, since a SQLite catalog drops the default
+//! Adds the branch column unless the table has it and fills the rows, since a SQLite catalog drops the default
 static string BranchColumnSql(const string &table, const string &column, bool has_column) {
 	string query;
 	if (!has_column) {
@@ -1424,24 +1423,17 @@ DuckLakeMetadataManager::V2_0LineageColumns DuckLakeMetadataManager::ProbeV2_0Li
 	V2_0LineageColumns lineage;
 	lineage.has_schema_versions_branch = HasMetadataColumn("ducklake_schema_versions", "branch_id");
 	// the snapshot tag step creates the table in its 2.0 shape before this step, with the branch of the target
-	lineage.has_snapshot_tag_target_branch = !HasMetadataColumn("ducklake_snapshot_tag", "tag_name") ||
-	                                         HasMetadataColumn("ducklake_snapshot_tag", "snapshot_branch_id");
+	lineage.has_snapshot_tag_table = HasMetadataColumn("ducklake_snapshot_tag", "tag_name");
+	lineage.has_snapshot_tag_target_branch =
+	    !lineage.has_snapshot_tag_table || HasMetadataColumn("ducklake_snapshot_tag", "snapshot_branch_id");
 	return lineage;
 }
 
 string DuckLakeMetadataManager::V2_0LineageColumnsSql(const V2_0LineageColumns &lineage) {
-	// the SQLite scanner drops the default, so the updates fill the branch of the existing rows
-	string query;
-	if (!lineage.has_schema_versions_branch) {
-		query += "ALTER TABLE {METADATA_CATALOG}.ducklake_schema_versions ADD COLUMN branch_id BIGINT DEFAULT 0;\n";
-		query += "UPDATE {METADATA_CATALOG}.ducklake_schema_versions SET branch_id = 0 WHERE branch_id IS NULL;\n";
-	}
-	if (!lineage.has_snapshot_tag_target_branch) {
-		query +=
-		    "ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_tag ADD COLUMN snapshot_branch_id BIGINT DEFAULT 0;\n";
-		query +=
-		    "UPDATE {METADATA_CATALOG}.ducklake_snapshot_tag SET snapshot_branch_id = 0 WHERE snapshot_branch_id IS "
-		    "NULL;\n";
+	// a step interrupted after the ADD COLUMN probes as complete, so the rows are filled on every run
+	auto query = BranchColumnSql("ducklake_schema_versions", "branch_id", lineage.has_schema_versions_branch);
+	if (lineage.has_snapshot_tag_table) {
+		query += BranchColumnSql("ducklake_snapshot_tag", "snapshot_branch_id", lineage.has_snapshot_tag_target_branch);
 	}
 	return query;
 }
@@ -1571,7 +1563,8 @@ void DuckLakeMetadataManager::VerifyV2_0InlinedCompanion(const V2_0InlinedCompan
 	}
 	// a 1.0 catalog reserved the three bare names alone, so a user column can be named like the branch column
 	bool row_visibility = !HasMetadataColumn("ducklake_column", "end_snapshot");
-	auto columns = Query(GetInlinedTableColumnsSql(optional_idx(), row_visibility, DuckLakeBranchChain::Main()));
+	auto columns = Query(GetInlinedTableColumnsSql(optional_idx(), row_visibility, DuckLakeBranchChain::Main(),
+	                                               HasMetadataColumn("ducklake_schema_versions", "branch_id")));
 	columns->ThrowIfError(
 	    "Failed to read the columns of the inlined data tables of DuckLake while probing the layout: ");
 	for (auto &row : *columns) {
@@ -2465,7 +2458,8 @@ WHERE table_id = %d AND schema_version < (
 }
 
 string DuckLakeMetadataManager::GetInlinedTableColumnsSql(optional_idx table_id, bool row_visibility,
-                                                          const DuckLakeBranchChain &chain) {
+                                                          const DuckLakeBranchChain &chain,
+                                                          bool schema_versions_branch) {
 	string table_filter;
 	if (table_id.IsValid()) {
 		table_filter = StringUtil::Format("\n\tWHERE idt.table_id = %d", table_id.GetIndex());
@@ -2487,7 +2481,7 @@ JOIN {METADATA_CATALOG}.ducklake_column col ON col.table_id = inlined.table_id A
 WHERE %s
 )",
 	    BirthChainFilter(row_visibility, chain, "t"), InlinedTableRegistrations(row_visibility, chain, table_id),
-	    BirthChainFilter(row_visibility, chain, "sv"), table_filter,
+	    BirthChainFilter(row_visibility && schema_versions_branch, chain, "sv"), table_filter,
 	    row_visibility ? RowVisibility(chain, "col", RowKind("column"), "inlined.snapshot_id")
 	                   : "col.begin_snapshot <= inlined.snapshot_id AND (col.end_snapshot IS NULL "
 	                     "OR col.end_snapshot > inlined.snapshot_id)");
@@ -8187,8 +8181,7 @@ vector<DuckLakeSnapshotTagInfo> DuckLakeMetadataManager::GetSnapshotTags(bool wi
 	if (!catalog.SupportsSnapshotTags()) {
 		return vector<DuckLakeSnapshotTagInfo>();
 	}
-	// the tags born in the view of the attached chain, snapshot tags exist from 2.0 on where every row ends in its
-	// companion, the time of a tagged snapshot is known when the view holds it
+	// the tags born in the view of the attached chain, with the time of a target the view holds
 	auto &chain = catalog.AttachedChain();
 	auto live_tags = RowVisibility(chain, "tag", RowKind("snapshot_tag"), "");
 	string time_column = "NULL";

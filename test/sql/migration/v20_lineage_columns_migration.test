@@ -203,3 +203,54 @@ SELECT COUNT(*) FROM dl.t AT (VERSION => 'second')
 
 statement ok
 DETACH dl
+
+# a step interrupted after the ADD COLUMN of a backend that commits each statement left the rows without a branch
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS meta
+
+statement ok
+ALTER TABLE meta.ducklake_schema_versions DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_schema_versions ADD COLUMN branch_id BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_tag DROP COLUMN snapshot_branch_id
+
+query I
+SELECT COUNT(*) FILTER (WHERE branch_id IS NULL) FROM meta.ducklake_schema_versions
+----
+3
+
+statement ok
+DETACH meta
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 0)
+
+# the resumed step fills the branch of the rows the interrupted one left
+query IIII
+SELECT begin_snapshot, schema_version, table_id, branch_id FROM meta.ducklake_schema_versions ORDER BY begin_snapshot
+----
+1	1	1	0
+3	2	1	0
+5	3	1	0
+
+query IIII
+SELECT tag_name, snapshot_id, snapshot_branch_id, branch_id FROM meta.ducklake_snapshot_tag ORDER BY tag_name
+----
+first	2	0	0
+second	5	0	0
+
+# the lineage filters of main read the filled rows
+query I
+SELECT column_name FROM (DESCRIBE SELECT * FROM dl.t AT (VERSION => 'first'))
+----
+i
+
+statement ok
+ALTER TABLE dl.t SET PARTITIONED BY (i)
+
+statement ok
+DETACH dl

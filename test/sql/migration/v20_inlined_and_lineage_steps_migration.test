@@ -1,0 +1,143 @@
+# name: test/sql/migration/v20_inlined_and_lineage_steps_migration.test
+# description: a 2.0-dev1 catalog with inlined rows completes the inlined visibility and the lineage columns steps
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN j INTEGER
+
+statement ok
+INSERT INTO dl.t VALUES (4, 40)
+
+statement ok
+CALL ducklake_create_tag('dl', 'first', version => 2)
+
+statement ok
+DETACH dl
+
+# the layout of an older dev build, the payloads hold their ends and no branch, the lineage columns are missing
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS meta
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1 ADD COLUMN _ducklake_end_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1 DROP COLUMN _ducklake_branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_2 ADD COLUMN _ducklake_end_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_2 DROP COLUMN _ducklake_branch_id
+
+statement ok
+DROP TABLE meta.ducklake_inlined_data_visibility
+
+statement ok
+ALTER TABLE meta.ducklake_schema_versions DROP COLUMN branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_tag DROP COLUMN snapshot_branch_id
+
+statement ok
+DETACH meta
+
+# the incomplete layout is refused without the migration option, the inlined step comes first
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+----
+catalog version is 2.0-dev1, but the catalog lacks the inlined data visibility
+
+# the inlined step probes the columns of the payloads before the lineage step adds the branch of the schema versions
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query II
+SELECT i, j FROM dl.t ORDER BY i
+----
+1	NULL
+2	NULL
+3	NULL
+4	40
+
+query I
+SELECT i FROM dl.t AT (VERSION => 'first') ORDER BY i
+----
+1
+2
+3
+
+query IIII
+SELECT begin_snapshot, schema_version, table_id, branch_id FROM meta.ducklake_schema_versions ORDER BY begin_snapshot
+----
+1	1	1	0
+3	2	1	0
+
+query IIII
+SELECT tag_name, snapshot_id, snapshot_branch_id, branch_id FROM meta.ducklake_snapshot_tag
+----
+first	2	0	0
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_inlined_data_1_2')
+ORDER BY column_index
+----
+_ducklake_row_id
+_ducklake_begin_snapshot
+i
+j
+_ducklake_branch_id
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_inlined_data_visibility
+----
+0
+
+# the migrated catalog writes and flushes through the companion
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+query II
+SELECT i, j FROM dl.t ORDER BY i
+----
+1	NULL
+3	NULL
+4	40
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query II
+SELECT i, j FROM dl.t ORDER BY i
+----
+1	NULL
+3	NULL
+4	40
+
+statement ok
+DETACH dl

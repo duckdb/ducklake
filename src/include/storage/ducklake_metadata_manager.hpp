@@ -559,9 +559,9 @@ public:
 	static string GetInlinedTableNamesSql(TableIndex table_id, bool row_visibility, const DuckLakeBranchChain &chain);
 	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id, bool row_visibility,
 	                                                    const DuckLakeBranchChain &chain);
-	//! The top-level columns of each inlined data table at the schema version of that table
+	//! The columns of each inlined data table at its schema version, in the lineage once the versions carry a branch
 	static string GetInlinedTableColumnsSql(optional_idx table_id, bool row_visibility,
-	                                        const DuckLakeBranchChain &chain);
+	                                        const DuckLakeBranchChain &chain, bool schema_versions_branch);
 	//! The inserts of the given rows, in batches
 	static string InsertValuesSql(const string &table_name, const vector<string> &values);
 	//! The inserts of the given rows into the given table, in batches
@@ -975,6 +975,7 @@ public:
 	//! The branch columns of the schema versions and the tagged snapshots, probed so an interrupted step resumes
 	struct V2_0LineageColumns {
 		bool has_schema_versions_branch = false;
+		bool has_snapshot_tag_table = false;
 		bool has_snapshot_tag_target_branch = false;
 	};
 	V2_0LineageColumns ProbeV2_0LineageColumns();

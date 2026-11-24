@@ -1032,8 +1032,9 @@ static identifier_set_t ReadInlinedTablesBeforeSchemaChange(TableIndex table_id,
 static map<Identifier, map<FieldIndex, DuckLakeColumnSchemaEntry>>
 ReadInlinedTableColumns(TableIndex table_id, const DuckLakeCommitContext &context) {
 	map<Identifier, map<FieldIndex, DuckLakeColumnSchemaEntry>> result;
+	// a commit runs on a complete layout, whose schema versions carry their branch
 	auto columns = context.query_metadata(DuckLakeMetadataManager::GetInlinedTableColumnsSql(
-	    table_id.index, context.supports_row_visibility, DuckLakeBranchChain::Main()));
+	    table_id.index, context.supports_row_visibility, DuckLakeBranchChain::Main(), true));
 	columns->ThrowIfError("Failed to read the columns of the inlined data tables from DuckLake: ");
 	for (auto &row : *columns) {
 		FieldIndex field_index(static_cast<idx_t>(row.GetValue<int64_t>(3)));
