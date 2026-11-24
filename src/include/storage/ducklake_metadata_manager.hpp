@@ -717,6 +717,9 @@ public:
 	//! Throws when the newest expired snapshot a time travel by timestamp could see is its resolved snapshot or newer
 	void CheckSnapshotAfterExpiredGap(const DuckLakeSnapshot &snapshot, const Value &timestamp,
 	                                  idx_t newest_snapshot_id, const set<idx_t> &expired_in_transaction);
+	//! The tables whose values the snapshots after `after_snapshot` up to `last_snapshot` may have removed
+	//! Returns false if their changes cannot all be read
+	bool GetTablesWithRemovedValues(idx_t after_snapshot, idx_t last_snapshot, set<TableIndex> &result);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound,
 	                                                 idx_t newest_snapshot_id);
 
@@ -970,9 +973,12 @@ public:
 	static string GetPathForSchema(SchemaIndex schema_id, const vector<DuckLakeSchemaInfo> &new_schemas_result,
 	                               const std::function<unique_ptr<QueryResult>(string)> &query_executor,
 	                               const string &base_data_path, const string &separator);
-	static string GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
+	//! Adds the paths of the tables to `paths`: from the new tables, then `known_path`, then one metadata query
+	static void GetPathsForTables(const set<TableIndex> &table_ids, const vector<DuckLakeTableInfo> &new_tables,
+	                              const std::function<string(TableIndex)> &known_path,
 	                              const std::function<unique_ptr<QueryResult>(string)> &query_executor,
-	                              const string &base_data_path, const string &separator);
+	                              const string &base_data_path, const string &separator,
+	                              unordered_map<idx_t, string> &paths);
 
 protected:
 	vector<DuckLakeColumnMappingInfo> GetColumnMappingsWhere(const string &filter);

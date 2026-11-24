@@ -547,6 +547,15 @@ optional_ptr<CatalogEntry> DuckLakeCatalog::GetEntryById(DuckLakeTransaction &tr
 	return schema.GetEntryById(macro_id);
 }
 
+string DuckLakeCatalog::GetLoadedTableDataPath(DuckLakeSnapshot snapshot, TableIndex table_id) {
+	auto cached = GetObjectCacheInstance().Get<DuckLakeSchemaCacheEntry>(SchemaCacheKey(snapshot.schema_version));
+	auto entry = cached ? cached->catalog_set.GetEntryById(table_id) : nullptr;
+	if (!entry || entry->type != CatalogType::TABLE_ENTRY) {
+		return string();
+	}
+	return entry->Cast<DuckLakeTableEntry>().DataPath();
+}
+
 idx_t DuckLakeCatalog::GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version,
                                                         DuckLakeTransaction &transaction) {
 	auto &metadata_manager = transaction.GetMetadataManager();
@@ -1647,13 +1656,41 @@ void DuckLakeCatalog::AdvanceColumnsWithValues(idx_t snapshot_id) {
 	}
 }
 
+optional_idx DuckLakeCatalog::OlderColumnsWithValuesSnapshot(TableIndex table_id, FieldIndex column_id,
+                                                             idx_t snapshot_id) {
+	lock_guard<mutex> guard(columns_with_values_lock);
+	if (!columns_with_values_snapshot.IsValid() || columns_with_values_snapshot.GetIndex() >= snapshot_id ||
+	    columns_with_values.count(make_pair(table_id.index, column_id.index)) == 0) {
+		return optional_idx();
+	}
+	return columns_with_values_snapshot;
+}
+
+static void EraseColumnsOfTables(set<pair<idx_t, idx_t>> &columns, const set<TableIndex> &table_ids) {
+	for (auto &table_id : table_ids) {
+		auto begin = columns.lower_bound(make_pair(table_id.index, idx_t(0)));
+		auto end = columns.lower_bound(make_pair(table_id.index + 1, idx_t(0)));
+		columns.erase(begin, end);
+	}
+}
+
+void DuckLakeCatalog::AdvanceColumnsWithValues(idx_t from_snapshot, idx_t to_snapshot,
+                                               optional_ptr<const set<TableIndex>> changed) {
+	lock_guard<mutex> guard(columns_with_values_lock);
+	if (!columns_with_values_snapshot.IsValid() || columns_with_values_snapshot.GetIndex() != from_snapshot) {
+		return;
+	}
+	if (changed) {
+		EraseColumnsOfTables(columns_with_values, *changed);
+	} else {
+		columns_with_values.clear();
+	}
+	columns_with_values_snapshot = to_snapshot;
+}
+
 void DuckLakeCatalog::ForgetColumnsWithValues(const set<TableIndex> &table_ids) {
 	lock_guard<mutex> guard(columns_with_values_lock);
-	for (auto &table_id : table_ids) {
-		auto begin = columns_with_values.lower_bound(make_pair(table_id.index, idx_t(0)));
-		auto end = columns_with_values.lower_bound(make_pair(table_id.index + 1, idx_t(0)));
-		columns_with_values.erase(begin, end);
-	}
+	EraseColumnsOfTables(columns_with_values, table_ids);
 }
 
 string DuckLakeCatalog::StatsCacheKey(idx_t next_file_id, TableIndex table_id) const {
