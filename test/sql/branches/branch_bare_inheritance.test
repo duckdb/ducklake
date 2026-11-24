@@ -1,4 +1,4 @@
-# name: test/sql/branches/branch_heal_inheritance.test
+# name: test/sql/branches/branch_bare_inheritance.test
 # description: a bare branch inherits files through the fork and the fork bounds an inherited cumulative delete file
 # group: [branches]
 
@@ -11,7 +11,7 @@ test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
 test-env DATA_PATH {TEST_DIR}
 
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_heal_inheritance_files',
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_bare_inheritance_files',
     METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
 
 statement ok
@@ -33,8 +33,8 @@ INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 3)
 
 statement ok
 INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id,
-    branch_id) SELECT 4, NOW(), schema_version, next_catalog_id, next_file_id,
-    1 FROM meta.ducklake_snapshot WHERE snapshot_id = 3 AND branch_id = 0
+    branch_id) SELECT 4, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot
+    WHERE snapshot_id = 3 AND branch_id = 0
 
 statement ok
 INSERT INTO meta.ducklake_snapshot_changes VALUES (4, NULL, NULL, NULL, NULL, 1)
@@ -44,7 +44,7 @@ DETACH dl
 
 # a writable attach leaves the branch without rows, it inherits through the fork
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_heal_inheritance_files',
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_bare_inheritance_files',
     METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
 
 query I
@@ -68,7 +68,7 @@ DETACH dl
 
 # deletes dated after the fork inside the inherited delete file do not apply on the branch
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_heal_inheritance_files',
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/branch_bare_inheritance_files',
     METADATA_CATALOG 'meta', BRANCH 'dev')
 
 query I

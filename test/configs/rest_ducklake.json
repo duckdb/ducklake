@@ -735,6 +735,7 @@
       "paths": [
         "test/sql/branches/branch_attach_compacted.test",
         "test/sql/branches/branch_attach_read.test",
+        "test/sql/branches/branch_bare_inheritance.test",
         "test/sql/branches/branch_catalog_rows.test",
         "test/sql/branches/branch_chain_corrupt.test",
         "test/sql/branches/branch_column_rows.test",
@@ -748,7 +749,6 @@
         "test/sql/branches/branch_feed_previous_delete_tie.test",
         "test/sql/branches/branch_feed_undated_cumulative.test",
         "test/sql/branches/branch_full_delete_feed_capped.test",
-        "test/sql/branches/branch_heal_inheritance.test",
         "test/sql/branches/branch_inlined_after_rename.test",
         "test/sql/branches/branch_insertions_delete_choice.test",
         "test/sql/branches/branch_macro_rows.test",
@@ -759,6 +759,7 @@
         "test/sql/branches/branch_nested_retro_delete.test",
         "test/sql/branches/branch_nested_retro_delete_history.test",
         "test/sql/branches/branch_nested_segment_cap.test",
+        "test/sql/branches/branch_only_file_attach.test",
         "test/sql/branches/branch_refork_historical.test",
         "test/sql/branches/branch_remove_data_files.test",
         "test/sql/branches/branch_replacement_segment_cap.test",

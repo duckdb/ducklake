@@ -41,16 +41,16 @@ statement ok
 INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 4)
 
 statement ok
-INSERT INTO meta.ducklake_snapshot SELECT 5, NOW(), schema_version, 1000, 1001,
-    1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 4
+INSERT INTO meta.ducklake_snapshot SELECT 5, NOW(), schema_version, 1000, 1001, 1 FROM meta.ducklake_snapshot
+    WHERE branch_id = 0 AND snapshot_id = 4
 
 statement ok
-INSERT INTO meta.ducklake_snapshot SELECT 6, NOW(), schema_version, 1000, 1002,
-    1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 4
+INSERT INTO meta.ducklake_snapshot SELECT 6, NOW(), schema_version, 1000, 1002, 1 FROM meta.ducklake_snapshot
+    WHERE branch_id = 0 AND snapshot_id = 4
 
 statement ok
-INSERT INTO meta.ducklake_snapshot_changes VALUES (5, 'rewrite_delete:1', NULL, NULL, NULL, 1), (6,
-    'inserted_into_table:1', NULL, NULL, NULL, 1)
+INSERT INTO meta.ducklake_snapshot_changes VALUES (5, 'rewrite_delete:1', NULL, NULL, NULL, 1),
+    (6, 'inserted_into_table:1', NULL, NULL, NULL, 1)
 
 statement ok
 COPY (SELECT 10::INTEGER AS i) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_rewrite.parquet' (FORMAT PARQUET, FIELD_IDS {i: 1})
@@ -60,13 +60,13 @@ COPY (SELECT 20::INTEGER AS i) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_insert.parque
 
 statement ok
 INSERT INTO meta.ducklake_data_file (data_file_id, table_id, path, path_is_relative, file_format, record_count,
-    file_size_bytes, row_id_start) SELECT 1000, 1, '{TEST_DIR}/{BASE_TEST_NAME}_dev_rewrite.parquet', false, 'parquet',
-    1, file_size_bytes, 100 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_rewrite.parquet')
+    file_size_bytes, row_id_start) SELECT 1000, 1, '{TEST_DIR}/{BASE_TEST_NAME}_dev_rewrite.parquet', false,
+    'parquet', 1, file_size_bytes, 100 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_rewrite.parquet')
 
 statement ok
 INSERT INTO meta.ducklake_data_file (data_file_id, table_id, path, path_is_relative, file_format, record_count,
-    file_size_bytes, row_id_start) SELECT 1001, 1, '{TEST_DIR}/{BASE_TEST_NAME}_dev_insert.parquet', false, 'parquet',
-    1, file_size_bytes, 200 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_insert.parquet')
+    file_size_bytes, row_id_start) SELECT 1001, 1, '{TEST_DIR}/{BASE_TEST_NAME}_dev_insert.parquet', false,
+    'parquet', 1, file_size_bytes, 200 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_insert.parquet')
 
 statement ok
 INSERT INTO meta.ducklake_file_visibility VALUES (1, 1, 1000, 5, false), (1, 1, 1001, 6, false)

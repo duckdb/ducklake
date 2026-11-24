@@ -33,16 +33,16 @@ statement ok
 INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2), (2, 'feature', 1, 4)
 
 statement ok
-INSERT INTO meta.ducklake_snapshot SELECT 3, NOW(), schema_version, 1000, 1001,
-    1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 2
+INSERT INTO meta.ducklake_snapshot SELECT 3, NOW(), schema_version, 1000, 1001, 1 FROM meta.ducklake_snapshot
+    WHERE branch_id = 0 AND snapshot_id = 2
 
 statement ok
-INSERT INTO meta.ducklake_snapshot SELECT 4, NOW(), schema_version, 1000, 1002,
-    1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 2
+INSERT INTO meta.ducklake_snapshot SELECT 4, NOW(), schema_version, 1000, 1002, 1 FROM meta.ducklake_snapshot
+    WHERE branch_id = 0 AND snapshot_id = 2
 
 statement ok
-INSERT INTO meta.ducklake_snapshot SELECT 5, NOW(), schema_version, 2000, 2001,
-    2 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 2
+INSERT INTO meta.ducklake_snapshot SELECT 5, NOW(), schema_version, 2000, 2001, 2 FROM meta.ducklake_snapshot
+    WHERE branch_id = 0 AND snapshot_id = 2
 
 statement ok
 INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1), (4, NULL, NULL, NULL, NULL, 1),
@@ -69,8 +69,8 @@ INSERT INTO meta.ducklake_data_file (data_file_id, table_id, path, path_is_relat
 
 statement ok
 INSERT INTO meta.ducklake_data_file (data_file_id, table_id, path, path_is_relative, file_format, record_count,
-    file_size_bytes, row_id_start) SELECT 2000, 1, '{TEST_DIR}/{BASE_TEST_NAME}_feature_5.parquet', false, 'parquet',
-    1, file_size_bytes, 300 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_feature_5.parquet')
+    file_size_bytes, row_id_start) SELECT 2000, 1, '{TEST_DIR}/{BASE_TEST_NAME}_feature_5.parquet', false, 'parquet', 1,
+    file_size_bytes, 300 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_feature_5.parquet')
 
 statement ok
 INSERT INTO meta.ducklake_file_visibility VALUES (1, 1, 1000, 3, false), (1, 1, 1001, 4, false),

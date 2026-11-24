@@ -27,8 +27,8 @@ statement ok
 INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 3)
 
 statement ok
-INSERT INTO meta.ducklake_snapshot SELECT 4, NOW(), schema_version, 1000, 1001,
-    1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 3
+INSERT INTO meta.ducklake_snapshot SELECT 4, NOW(), schema_version, 1000, 1001, 1 FROM meta.ducklake_snapshot
+    WHERE branch_id = 0 AND snapshot_id = 3
 
 statement ok
 INSERT INTO meta.ducklake_snapshot_changes VALUES (4, NULL, NULL, NULL, NULL, 1)
@@ -127,8 +127,8 @@ FROM dev.table_changes('t', 3, 3) ORDER BY ALL
 # dev deletes the row 2 at its 5 with a second undated cumulative file, the earlier files date the rows 0 and 1 it
 # copied
 statement ok
-INSERT INTO meta.ducklake_snapshot SELECT 5, NOW(), schema_version, 1000, 1002,
-    1 FROM meta.ducklake_snapshot WHERE branch_id = 1 AND snapshot_id = 4
+INSERT INTO meta.ducklake_snapshot SELECT 5, NOW(), schema_version, 1000, 1002, 1 FROM meta.ducklake_snapshot
+    WHERE branch_id = 1 AND snapshot_id = 4
 
 statement ok
 INSERT INTO meta.ducklake_snapshot_changes VALUES (5, NULL, NULL, NULL, NULL, 1)
@@ -203,8 +203,8 @@ SELECT i FROM dev.t ORDER BY i
 
 # a position past the data file in an earlier file is rejected like one of the chosen file
 statement ok
-COPY (SELECT ''::VARCHAR AS file_path,
-    100::BIGINT AS pos) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet' (FORMAT PARQUET)
+COPY (SELECT ''::VARCHAR AS file_path, 100::BIGINT AS pos)
+    TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_delete.parquet' (FORMAT PARQUET)
 
 statement error
 FROM dev.table_changes('t', 4, 5)

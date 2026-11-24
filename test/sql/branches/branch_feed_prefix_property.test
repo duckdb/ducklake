@@ -48,17 +48,17 @@ statement ok
 INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 8), (2, 'feature', 1, 9)
 
 statement ok
-INSERT INTO meta.ducklake_snapshot SELECT 9, NOW(), schema_version, 1000, 1000,
-    1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 8
+INSERT INTO meta.ducklake_snapshot SELECT 9, NOW(), schema_version, 1000, 1000, 1 FROM meta.ducklake_snapshot
+    WHERE branch_id = 0 AND snapshot_id = 8
 
 statement ok
-INSERT INTO meta.ducklake_snapshot SELECT 10, NOW(), schema_version, 2000, 2000,
-    2 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 8
+INSERT INTO meta.ducklake_snapshot SELECT 10, NOW(), schema_version, 2000, 2000, 2 FROM meta.ducklake_snapshot
+    WHERE branch_id = 0 AND snapshot_id = 8
 
 statement ok
 INSERT INTO meta.ducklake_snapshot_changes VALUES (9, NULL, NULL, NULL, NULL, 1), (10, NULL, NULL, NULL, NULL, 2)
 
-# main continues after the fork with the ids the branches hold themselves, writing files
+# main continues after the fork with files, stage 5 restores the inlined form once a branch reads inlined rows
 statement ok
 DETACH lake
 

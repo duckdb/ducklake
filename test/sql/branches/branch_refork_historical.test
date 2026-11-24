@@ -25,8 +25,8 @@ statement ok
 INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
 
 statement ok
-INSERT INTO meta.ducklake_snapshot SELECT 3, NOW(), schema_version, next_catalog_id, next_file_id,
-    1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 2
+INSERT INTO meta.ducklake_snapshot SELECT 3, NOW(), schema_version, next_catalog_id, next_file_id, 1
+    FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 2
 
 statement ok
 INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1)

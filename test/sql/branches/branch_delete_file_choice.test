@@ -69,12 +69,12 @@ statement ok
 INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 7)
 
 statement ok
-INSERT INTO meta.ducklake_snapshot SELECT 8, NOW(), schema_version, 1002, 1002,
-    1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 7
+INSERT INTO meta.ducklake_snapshot SELECT 8, NOW(), schema_version, 1002, 1002, 1 FROM meta.ducklake_snapshot
+    WHERE branch_id = 0 AND snapshot_id = 7
 
 statement ok
-INSERT INTO meta.ducklake_snapshot SELECT 9, NOW(), schema_version, 1002, 1002,
-    1 FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id = 7
+INSERT INTO meta.ducklake_snapshot SELECT 9, NOW(), schema_version, 1002, 1002, 1 FROM meta.ducklake_snapshot
+    WHERE branch_id = 0 AND snapshot_id = 7
 
 statement ok
 INSERT INTO meta.ducklake_snapshot_changes VALUES (8, NULL, NULL, NULL, NULL, 1), (9, NULL, NULL, NULL, NULL, 1)
@@ -82,28 +82,28 @@ INSERT INTO meta.ducklake_snapshot_changes VALUES (8, NULL, NULL, NULL, NULL, 1)
 # the cumulative delete file of dev for t holds the dates of main and its own 9, its add event is back dated like a
 # replacement
 statement ok
-COPY (SELECT ''::VARCHAR AS file_path, p::BIGINT AS pos, s::BIGINT AS _ducklake_internal_snapshot_id FROM (VALUES (0,
-    3), (1, 4), (2, 9)) v(p, s)) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_t_delete.parquet' (FORMAT PARQUET)
+COPY (SELECT ''::VARCHAR AS file_path, p::BIGINT AS pos, s::BIGINT AS _ducklake_internal_snapshot_id FROM
+    (VALUES (0, 3), (1, 4), (2, 9)) v(p, s)) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_t_delete.parquet' (FORMAT PARQUET)
 
 statement ok
 INSERT INTO meta.ducklake_delete_file (delete_file_id, table_id, data_file_id, path, path_is_relative, format,
     delete_count, file_size_bytes, partial_max) SELECT 1000, getvariable('t_table'), getvariable('t_file'),
-    '{TEST_DIR}/{BASE_TEST_NAME}_dev_t_delete.parquet', false, 'parquet', 3, file_size_bytes,
-    9 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_t_delete.parquet')
+    '{TEST_DIR}/{BASE_TEST_NAME}_dev_t_delete.parquet', false, 'parquet', 3, file_size_bytes, 9
+    FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_t_delete.parquet')
 
 statement ok
 INSERT INTO meta.ducklake_delete_file_visibility VALUES (1, getvariable('t_table'), 1000, 3, false)
 
 # the delete file of dev for u holds the inlined date of main and its own 8, its add event is at 8
 statement ok
-COPY (SELECT ''::VARCHAR AS file_path, p::BIGINT AS pos, s::BIGINT AS _ducklake_internal_snapshot_id FROM (VALUES (0,
-    7), (1, 8)) v(p, s)) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_u_delete.parquet' (FORMAT PARQUET)
+COPY (SELECT ''::VARCHAR AS file_path, p::BIGINT AS pos, s::BIGINT AS _ducklake_internal_snapshot_id FROM
+    (VALUES (0, 7), (1, 8)) v(p, s)) TO '{TEST_DIR}/{BASE_TEST_NAME}_dev_u_delete.parquet' (FORMAT PARQUET)
 
 statement ok
 INSERT INTO meta.ducklake_delete_file (delete_file_id, table_id, data_file_id, path, path_is_relative, format,
     delete_count, file_size_bytes, partial_max) SELECT 1001, getvariable('u_table'), getvariable('u_file'),
-    '{TEST_DIR}/{BASE_TEST_NAME}_dev_u_delete.parquet', false, 'parquet', 2, file_size_bytes,
-    8 FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_u_delete.parquet')
+    '{TEST_DIR}/{BASE_TEST_NAME}_dev_u_delete.parquet', false, 'parquet', 2, file_size_bytes, 8
+    FROM parquet_file_metadata('{TEST_DIR}/{BASE_TEST_NAME}_dev_u_delete.parquet')
 
 statement ok
 INSERT INTO meta.ducklake_delete_file_visibility VALUES (1, getvariable('u_table'), 1001, 8, false)
@@ -113,8 +113,8 @@ statement ok
 INSERT INTO meta.ducklake_branch VALUES (2, 'feature', 1, 8)
 
 statement ok
-INSERT INTO meta.ducklake_snapshot SELECT 9, NOW(), schema_version, 2000, 2000,
-    2 FROM meta.ducklake_snapshot WHERE branch_id = 1 AND snapshot_id = 8
+INSERT INTO meta.ducklake_snapshot SELECT 9, NOW(), schema_version, 2000, 2000, 2 FROM meta.ducklake_snapshot
+    WHERE branch_id = 1 AND snapshot_id = 8
 
 statement ok
 INSERT INTO meta.ducklake_snapshot_changes VALUES (9, NULL, NULL, NULL, NULL, 2)
