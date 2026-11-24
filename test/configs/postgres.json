@@ -75,7 +75,8 @@
       "reason": "on_init ends with USE memory, which a DuckLake opened as the main database does not have",
       "paths": [
         "test/sql/attach/ducklake_main_database.test",
-        "test/sql/attach/ducklake_main_database_reopen.test"
+        "test/sql/attach/ducklake_main_database_reopen.test",
+        "test/sql/functions/ducklake_commit_unknown_publication.test"
       ]
     },
     {
