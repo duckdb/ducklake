@@ -393,6 +393,8 @@ public:
 	static const vector<RowVisibilityKind> &RowVisibilityKinds();
 	static const RowVisibilityKind &RowKind(const string &kind);
 	//! The kind of an inlined data table, whose shared companion names the versions by table id and row id
+	//! Refuses a registered payload whose name carries another table, the readers take the table from the name
+	static void VerifyInlinedTableName(const Identifier &inlined_table_name, TableIndex table_id);
 	static RowVisibilityKind InlinedRowKind(const Identifier &inlined_table_name,
 	                                        const DuckLakeInlinedColNames &col_names);
 	//! The row table of a kind, the partition and sort specs keep their info suffix
@@ -924,6 +926,8 @@ public:
 		bool present = false;
 		bool has_branch_column = false;
 		bool has_end_column = false;
+		//! Whether a user column of the previous layout carries the name of the branch column
+		bool has_user_branch_column = false;
 		//! Whether the payload stands renamed for its rebuild, with the user columns the rebuilt table gets
 		bool has_old_table = false;
 		string column_defs;

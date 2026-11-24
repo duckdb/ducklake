@@ -1,0 +1,65 @@
+# name: test/sql/migration/v20_inlined_visibility_resume_fenced_columns.test
+# description: the inlined data visibility step resumes while the catalog column step stands fenced, its probe reads no companion
+# group: [migration]
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 100, DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1),(2)
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS meta
+
+# the rename fence of the inlined step committed, its rebuild has not started
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1 DROP COLUMN _ducklake_branch_id
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1 ADD COLUMN _ducklake_end_snapshot BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1 RENAME TO ducklake_inlined_data_1_1_old
+
+statement ok
+DROP TABLE meta.ducklake_inlined_data_visibility
+
+# the end column of the catalog columns is fenced and their companion still pending
+statement ok
+ALTER TABLE meta.ducklake_column ADD COLUMN end_snapshot_old BIGINT
+
+statement ok
+ALTER TABLE meta.ducklake_column_visibility RENAME TO ducklake_column_visibility_pending
+
+statement ok
+UPDATE meta.ducklake_metadata SET value='1.1' WHERE key='version'
+
+statement ok
+DETACH meta
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+query I
+SELECT list(i ORDER BY i) FROM dl.t
+----
+[1, 2]

@@ -1444,6 +1444,8 @@ DuckLakeMetadataManager::V2_0InlinedCompanion DuckLakeMetadataManager::ProbeV2_0
 		}
 		payload.has_branch_column = payload.present && HasMetadataColumn(name, col_names.branch_id.GetIdentifierName());
 		payload.has_end_column = payload.present && HasMetadataColumn(name, col_names.end_snapshot.GetIdentifierName());
+		// the previous layout had no branch column, so one next to the end column is a user column
+		payload.has_user_branch_column = payload.has_end_column && payload.has_branch_column;
 		if (payload.has_old_table) {
 			// the rebuilt payload takes the user columns of the renamed one in their order
 			auto probe = Query(StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s_old LIMIT 0", name));
@@ -1454,6 +1456,9 @@ DuckLakeMetadataManager::V2_0InlinedCompanion DuckLakeMetadataManager::ProbeV2_0
 				if (column == col_names.row_id || column == col_names.begin_snapshot ||
 				    column == col_names.end_snapshot) {
 					continue;
+				}
+				if (column == col_names.branch_id) {
+					payload.has_user_branch_column = true;
 				}
 				// the stored type stays, the storage mapping of a type is not a fixed point
 				auto quoted = SQLQuotedIdentifier::ToString(names[i]);
@@ -1492,22 +1497,13 @@ void DuckLakeMetadataManager::VerifyV2_0InlinedCompanion(const V2_0InlinedCompan
 			                            "of %s were dropped and the end rows that replaced them are missing",
 			                            name);
 		}
-	}
-	if (started || inlined.payloads.empty()) {
-		return;
-	}
-	// a 1.0 catalog reserved the three bare names alone, so a user column can be named like the branch column
-	bool row_visibility = !HasMetadataColumn("ducklake_column", "end_snapshot");
-	auto columns = Query(GetInlinedTableColumnsSql(optional_idx(), row_visibility));
-	columns->ThrowIfError(
-	    "Failed to read the columns of the inlined data tables of DuckLake while probing the layout: ");
-	for (auto &row : *columns) {
-		auto column = row.GetValue<Identifier>(1);
-		if (column == col_names.branch_id) {
+		// a 1.0 catalog reserved the three bare names alone, so a user column can be named like the branch column
+		// the payload itself tells, the catalog rows may stand fenced for the companion step
+		if (payload.has_user_branch_column) {
 			throw InvalidInputException("Cannot migrate this DuckLake catalog: inlined data table %s has a column %s, "
 			                            "which the inlined data tables of 2.0 reserve. Rename the column and call "
 			                            "ducklake_flush_inlined_data() before migrating",
-			                            row.GetValue<Identifier>(0).GetIdentifierName(), column.GetIdentifierName());
+			                            name, col_names.branch_id.GetIdentifierName());
 		}
 	}
 }
@@ -2377,9 +2373,25 @@ WHERE %s
 	                                "OR col.end_snapshot > inlined.snapshot_id)");
 }
 
+void DuckLakeMetadataManager::VerifyInlinedTableName(const Identifier &inlined_table_name, TableIndex table_id) {
+	// the readers take the table of a version from the name of its payload
+	idx_t schema_version;
+	auto named_id = ParseInlinedTableName(inlined_table_name.GetIdentifierName(), schema_version);
+	if (named_id.IsValid() && named_id.GetIndex() != table_id.index) {
+		throw InvalidInputException("Corrupt DuckLake - inlined data table %s is registered for table %d, this build "
+		                            "names the inlined data tables ducklake_inlined_data_<table>_<version>",
+		                            inlined_table_name.GetIdentifierName(), table_id.index);
+	}
+}
+
 vector<DuckLakeInlinedTableInfo> DuckLakeMetadataManager::GetInlinedDataTables(const DuckLakeTableEntry &table,
                                                                                DuckLakeSnapshot snapshot) {
 	auto &inlined_data_tables = table.GetInlinedDataTables();
+	if (transaction.GetCatalog().SupportsRowVisibility()) {
+		for (auto &inlined_table : inlined_data_tables) {
+			VerifyInlinedTableName(inlined_table.table_name, table.GetTableId());
+		}
+	}
 	// another attach can drop superseded inlined tables without bumping the schema version
 	bool may_be_dropped = inlined_data_tables.size() > 1;
 	if (inlined_data_tables.size() == 1) {
@@ -8386,11 +8398,14 @@ WHERE scope = 'schema' AND NOT EXISTS(
 	// above. Runs after the drop block, so dropped tables are already unregistered and this needs
 	// no table_id filter.
 	{
-		auto inlined = Query("SELECT table_name FROM {METADATA_CATALOG}.ducklake_inlined_data_tables;");
+		auto inlined = Query("SELECT table_id, table_name FROM {METADATA_CATALOG}.ducklake_inlined_data_tables;");
 		inlined->ThrowIfError("Failed to list inlined-data tables for cleanup in DuckLake: ");
 		auto col_names = InlinedColNames();
 		for (auto &row : *inlined) {
-			auto inlined_table_name = row.GetValue<Identifier>(0);
+			auto inlined_table_name = row.GetValue<Identifier>(1);
+			if (row_visibility) {
+				VerifyInlinedTableName(inlined_table_name, TableIndex(row.GetValue<idx_t>(0)));
+			}
 			unique_ptr<QueryResult> result;
 			if (row_visibility) {
 				// the versions of main no snapshot of main reads any more
