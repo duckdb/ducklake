@@ -67,7 +67,7 @@ b
 query I
 SELECT COUNT(*)
 FROM __ducklake_metadata_ducklake.ducklake_sort_info
-WHERE table_id = 1 AND end_snapshot IS NULL
+WHERE table_id = 1
 ----
 0
 
@@ -117,7 +117,7 @@ b
 query I
 SELECT COUNT(*)
 FROM __ducklake_metadata_ducklake.ducklake_sort_info
-WHERE table_id = 1 AND end_snapshot IS NULL
+WHERE table_id = 1
 ----
 0
 
@@ -165,7 +165,7 @@ b
 query I
 SELECT COUNT(*)
 FROM __ducklake_metadata_ducklake.ducklake_sort_info
-WHERE table_id = 1 AND end_snapshot IS NULL
+WHERE table_id = 1
 ----
 0
 
@@ -192,11 +192,19 @@ a
 b
 c
 
+# the only sort row of the table is the committed one
+query I
+SELECT COUNT(*)
+FROM __ducklake_metadata_ducklake.ducklake_sort_info
+WHERE table_id = 1
+----
+1
+
 query III
 SELECT expression, sort_direction, null_order
 FROM __ducklake_metadata_ducklake.ducklake_sort_expression se
 JOIN __ducklake_metadata_ducklake.ducklake_sort_info si USING (sort_id)
-WHERE si.table_id = 1 AND si.end_snapshot IS NULL
+WHERE si.table_id = 1
 ORDER BY se.sort_key_index
 ----
 a	ASC	NULLS_LAST

@@ -26,10 +26,10 @@ statement ok
 CREATE MACRO xt(a,_name) as TABLE SELECT * FROM test_tbl WHERE(id>=a or name=_name);
 
 # Check Macro Tables
-query IIIII
-FROM __ducklake_metadata_ducklake.ducklake_macro;
+query IIII
+SELECT schema_id, macro_id, macro_name, begin_snapshot FROM __ducklake_metadata_ducklake.ducklake_macro;
 ----
-0	2	xt	3	NULL
+0	2	xt	3
 
 query IIIII
 FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
