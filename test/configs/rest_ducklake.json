@@ -579,6 +579,11 @@
         "test/sql/migration/v20_tag_row_companions_resume.test",
         "test/sql/migration/v20_inlined_visibility_migration.test",
         "test/sql/migration/v20_inlined_visibility_resume.test",
+        "test/sql/migration/v20_inlined_and_lineage_steps_migration.test",
+        "test/sql/migration/v20_lineage_columns_migration.test",
+        "test/sql/catalog/snapshot_v11_statements.test",
+        "test/sql/branches/branch_main_commit_beside_branch_rows.test",
+        "test/sql/branches/schema_versions_branch_column.test",
         "test/sql/migration/v20_inlined_visibility_collisions.test",
         "test/sql/catalog/catalog_tag_row_companions.test",
         "test/sql/alter/create_table_drop_column_same_transaction.test",
@@ -722,11 +727,7 @@
         "test/sql/time_travel/postgres_at_timestamp_expired_read_committed.test",
         "test/sql/transaction/postgres_failed_rollback_releases_transaction.test",
         "test/sql/data_inlining/data_inlining_variant_sql_rollback.test",
-        "test/sql/catalog/snapshot_branch_key_statements_postgres.test",
-        "test/sql/catalog/snapshot_v11_statements.test",
-        "test/sql/branches/branch_main_commit_beside_branch_rows.test",
-        "test/sql/branches/schema_versions_branch_column.test",
-        "test/sql/migration/v20_lineage_columns_migration.test"
+        "test/sql/catalog/snapshot_branch_key_statements_postgres.test"
       ]
     },
     {
