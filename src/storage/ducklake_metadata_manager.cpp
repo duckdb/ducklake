@@ -8321,8 +8321,8 @@ WHERE scope = 'table' AND scope_id IN (%s);)",
 
 	if (row_visibility) {
 		// an expiry interrupted between the rows of a table and their ends cannot find the table again, so the ends
-		// of the kinds keyed by a table go whenever their row is gone
-		for (auto kind_name : {"table", "column", "column_tag", "partition", "sort"}) {
+		// of the kinds keyed by a table go whenever their row is gone, the column tags with the unreachable tags below
+		for (auto kind_name : {"table", "column", "partition", "sort"}) {
 			DeleteOrphanRowEnds(RowKind(kind_name));
 		}
 	}
