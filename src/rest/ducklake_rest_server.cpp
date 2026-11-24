@@ -420,7 +420,14 @@ void DuckLakeRESTServer::RunCommit(const ServedCatalog &served, DuckLakeRESTPend
 		}
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
-		commit.error = outcome == DuckLakeCommitOutcome::PUBLISHED ? ErrorAfterPublication(error) : error;
+		// as for a group: a commit that is published, or that can be, fails with an IO error
+		if (outcome == DuckLakeCommitOutcome::PUBLISHED) {
+			commit.error = ErrorAfterPublication(error);
+		} else if (outcome == DuckLakeCommitOutcome::PUBLICATION_UNKNOWN) {
+			commit.error = ErrorOfUnknownPublication(error);
+		} else {
+			commit.error = error;
+		}
 	}
 }
 
