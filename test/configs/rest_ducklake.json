@@ -638,7 +638,8 @@
         "test/sql/tags/tags_time_travel.test",
         "test/sql/tags/tags_transaction.test",
         "test/sql/tags/tags_version_gate.test",
-        "test/sql/tags/tags_row_collation.test"
+        "test/sql/tags/tags_row_collation.test",
+        "test/sql/branches/branch_gap_tag_commit.test"
       ]
     },
     {
