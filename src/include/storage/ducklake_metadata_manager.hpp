@@ -431,8 +431,20 @@ public:
 	//! A file table with begin_snapshot and end_snapshot, derived from the branch 0 events when the catalog keeps them
 	static string DataFileSource(bool file_events, const string &prefix, optional_idx table_id = optional_idx());
 	static string DeleteFileSource(bool file_events, const string &prefix, optional_idx table_id = optional_idx());
+	//! On a branch the ranges come from the events of the chain, with the segment of the writer as begin_segment
+	static string DataFileSource(bool file_events, const DuckLakeBranchChain &chain, const string &prefix,
+	                             optional_idx table_id = optional_idx());
+	static string DeleteFileSource(bool file_events, const DuckLakeBranchChain &chain, const string &prefix,
+	                               optional_idx table_id = optional_idx());
+	//! The per file ranges a branch derives from its visibility events
+	//! begin_segment is the chain position of the earliest add event, a file is written once in its lineage view
+	static string VisibilityEventRanges(const string &visibility_table, const string &file_id_column,
+	                                    const DuckLakeBranchChain &chain, const string &prefix);
+	//! The delete files the filter selects on a branch, one per data file (and begin) with the writer nearest the leaf
+	static string ChosenDeleteFiles(const DuckLakeBranchChain &chain, const string &source, const string &filter,
+	                                bool per_begin_snapshot = false);
 	bool WritesFileVisibilityEvents() const;
-	//! The file sources of the attached catalog, with the table filter pushed into the events when given
+	//! The file sources of the attached chain, with the table filter pushed into the events when given
 	string DataFiles() const;
 	string DataFiles(TableIndex table_id) const;
 	string DeleteFiles() const;
@@ -486,9 +498,10 @@ public:
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
 	                                                  optional_ptr<string> catalog_version = nullptr);
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
-	//! Take the table sizes that stats rows lack from the live data files
+	//! Take the table sizes that stats rows lack from the live data files of the source
 	static void FillMissingTableSizes(vector<DuckLakeGlobalStatsInfo> &stats,
-	                                  const std::function<unique_ptr<QueryResult>(string)> &executor, bool file_events);
+	                                  const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                                  const string &data_files);
 	//! Whether the result contains a column with the given name
 	static bool ResultHasColumn(QueryResult &result, const string &name);
 
@@ -519,6 +532,9 @@ public:
 	GetTableDeletions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot, DuckLakeSnapshot snapshot,
 	                  bool include_local_changes = true,
 	                  optional_ptr<const vector<DuckLakeProjectedColumn>> projection = nullptr);
+	//! The earlier delete files of the view dating the rows the undated chosen files of the entries copied
+	void ReadEarlierDeleteFiles(DuckLakeTableEntry &table, DuckLakeSnapshot end_snapshot,
+	                            vector<DuckLakeDeleteScanEntry> &files, const vector<idx_t> &undated_entries);
 	//! The snapshots of the range that rewrote data files of the table without changing its rows
 	set<idx_t> GetTableRewriteSnapshots(TableIndex table_id, DuckLakeSnapshot start_snapshot,
 	                                    DuckLakeSnapshot snapshot);

@@ -563,7 +563,7 @@ shared_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::GetExistingTableStats(T
 	    [&](string query) {
 		    return RunQuery(StringUtil::Replace(query, "{METADATA_CATALOG}", schema_id), "read missing table sizes");
 	    },
-	    supports_file_visibility_events);
+	    DuckLakeMetadataManager::DataFileSource(supports_file_visibility_events, "{METADATA_CATALOG}"));
 	for (auto &read_table : read_tables) {
 		existing_table_stats[read_table] = nullptr;
 	}

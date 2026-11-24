@@ -458,6 +458,8 @@ struct DuckLakeFileListEntry {
 	optional_idx snapshot_filter_min;
 	//! We skip the rows whose _ducklake_internal_snapshot_id is one of these rewrite snapshots
 	vector<idx_t> snapshot_filter_excluded;
+	//! Upper bound for the dated deletes of an inherited delete file on a branch
+	optional_idx delete_snapshot_filter_max;
 	MappingIndex mapping_id;
 	DuckLakeDataType data_type = DuckLakeDataType::DATA_FILE;
 	//! The partitioning the file was written with and the values of its partition keys, only set by
@@ -474,10 +476,21 @@ struct DuckLakeFileListEntry {
 	shared_ptr<DuckLakeCommittedInlinedRows> inlined_rows;
 };
 
+//! An earlier delete file of the view, dating the rows an undated chosen file copied from it
+struct DuckLakeEarlierDeleteFile {
+	DuckLakeFileData file;
+	//! The begin of the file, the date of its rows when it carries none
+	idx_t begin_snapshot;
+	//! The bound of its dates, the cap of its writer's segment below the begin of the chosen file
+	idx_t snapshot_max;
+};
+
 struct DuckLakeDeleteScanEntry {
 	DuckLakeFileData file;
 	DuckLakeFileData delete_file;
 	DuckLakeFileData previous_delete_file;
+	//! The earlier files dating the rows an undated chosen file copied, read on a branch when it begins in the range
+	vector<DuckLakeEarlierDeleteFile> earlier_delete_files;
 	idx_t row_count;
 	optional_idx row_id_start;
 	MappingIndex mapping_id;
@@ -490,6 +503,10 @@ struct DuckLakeDeleteScanEntry {
 	optional_idx start_snapshot;
 	//! The end of the snapshot range for filtering
 	optional_idx end_snapshot;
+	//! The cap of the previous delete file's segment, unset on main and for a file of the attached branch
+	optional_idx previous_delete_snapshot_max;
+	//! The bound of the rows of an inherited partial data file, its rows past it were never visible
+	optional_idx row_snapshot_max;
 	//! Data file ID for matching inlined deletions
 	DataFileIndex file_id;
 	//! Inlined file deletions {row_id -> snapshot_id}

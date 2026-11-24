@@ -707,24 +707,88 @@ string DuckLakeMetadataManager::DeleteFileSource(bool file_events, const string 
 	                            table_id);
 }
 
+string DuckLakeMetadataManager::VisibilityEventRanges(const string &visibility_table, const string &file_id_column,
+                                                      const DuckLakeBranchChain &chain, const string &prefix) {
+	// the earliest add is when the file became visible to the lineage, the earliest delete ends it
+	return StringUtil::Format(
+	    "SELECT v.table_id, v.%s, MIN(CASE WHEN v.is_delete = FALSE THEN v.snapshot_id END) AS begin_snapshot, "
+	    "MIN(CASE WHEN v.is_delete = TRUE THEN v.snapshot_id END) AS end_snapshot, "
+	    "MIN(CASE WHEN v.is_delete = FALSE THEN %s END) AS begin_segment "
+	    "FROM %s.%s v WHERE %s GROUP BY v.table_id, v.%s "
+	    "HAVING MIN(CASE WHEN v.is_delete = FALSE THEN v.snapshot_id END) IS NOT NULL",
+	    file_id_column, chain.SegmentPosition("v"), prefix, visibility_table, chain.Predicate("v"), file_id_column);
+}
+
+//! A file table joined with the per file ranges of its visibility events
+static string FileSourceOverRanges(const string &prefix, const string &file_table, const string &file_id_column,
+                                   const string &ranges, optional_idx table_id) {
+	string outer_filter = table_id.IsValid() ? StringUtil::Format(" WHERE f.table_id = %d", table_id.GetIndex()) : "";
+	return StringUtil::Format("(SELECT f.*, v.begin_snapshot, v.end_snapshot, v.begin_segment FROM %s.%s f JOIN (%s) v "
+	                          "ON v.%s = f.%s AND v.table_id = f.table_id%s)",
+	                          prefix, file_table, ranges, file_id_column, file_id_column, outer_filter);
+}
+
+string DuckLakeMetadataManager::DataFileSource(bool file_events, const DuckLakeBranchChain &chain, const string &prefix,
+                                               optional_idx table_id) {
+	if (!file_events || !chain.OnBranch()) {
+		return DataFileSource(file_events, prefix, table_id);
+	}
+	return FileSourceOverRanges(prefix, "ducklake_data_file", "data_file_id",
+	                            VisibilityEventRanges("ducklake_file_visibility", "data_file_id", chain, prefix),
+	                            table_id);
+}
+
+string DuckLakeMetadataManager::DeleteFileSource(bool file_events, const DuckLakeBranchChain &chain,
+                                                 const string &prefix, optional_idx table_id) {
+	if (!file_events || !chain.OnBranch()) {
+		return DeleteFileSource(file_events, prefix, table_id);
+	}
+	return FileSourceOverRanges(
+	    prefix, "ducklake_delete_file", "delete_file_id",
+	    VisibilityEventRanges("ducklake_delete_file_visibility", "delete_file_id", chain, prefix), table_id);
+}
+
+string DuckLakeMetadataManager::ChosenDeleteFiles(const DuckLakeBranchChain &chain, const string &source,
+                                                  const string &filter, bool per_begin_snapshot) {
+	D_ASSERT(chain.OnBranch());
+	// the file of the segment nearest the leaf is cumulative for the reader, the later begin and id break ties
+	string partition = "del_src.data_file_id";
+	string order = "del_src.begin_segment DESC, del_src.begin_snapshot DESC, del_src.delete_file_id DESC";
+	if (per_begin_snapshot) {
+		partition += ", del_src.begin_snapshot";
+		order = "del_src.begin_segment DESC, del_src.delete_file_id DESC";
+	}
+	return StringUtil::Format(R"(SELECT *
+    FROM (
+        SELECT del_src.*, ROW_NUMBER() OVER (PARTITION BY %s ORDER BY %s) AS delete_file_rank
+        FROM %s del_src
+        WHERE %s
+    ) ranked
+    WHERE delete_file_rank = 1)",
+	                          partition, order, source, filter);
+}
+
 bool DuckLakeMetadataManager::WritesFileVisibilityEvents() const {
 	return transaction.GetCatalog().SupportsFileVisibilityEvents();
 }
 
 string DuckLakeMetadataManager::DataFiles() const {
-	return DataFileSource(WritesFileVisibilityEvents(), "{METADATA_CATALOG}");
+	return DataFileSource(WritesFileVisibilityEvents(), transaction.GetCatalog().AttachedChain(), "{METADATA_CATALOG}");
 }
 
 string DuckLakeMetadataManager::DataFiles(TableIndex table_id) const {
-	return DataFileSource(WritesFileVisibilityEvents(), "{METADATA_CATALOG}", table_id.index);
+	return DataFileSource(WritesFileVisibilityEvents(), transaction.GetCatalog().AttachedChain(), "{METADATA_CATALOG}",
+	                      table_id.index);
 }
 
 string DuckLakeMetadataManager::DeleteFiles() const {
-	return DeleteFileSource(WritesFileVisibilityEvents(), "{METADATA_CATALOG}");
+	return DeleteFileSource(WritesFileVisibilityEvents(), transaction.GetCatalog().AttachedChain(),
+	                        "{METADATA_CATALOG}");
 }
 
 string DuckLakeMetadataManager::DeleteFiles(TableIndex table_id) const {
-	return DeleteFileSource(WritesFileVisibilityEvents(), "{METADATA_CATALOG}", table_id.index);
+	return DeleteFileSource(WritesFileVisibilityEvents(), transaction.GetCatalog().AttachedChain(),
+	                        "{METADATA_CATALOG}", table_id.index);
 }
 
 //! The add event of a file on the main branch as a VALUES tuple
@@ -2995,7 +3059,7 @@ vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::ParseGlobalTableStats(Q
 
 void DuckLakeMetadataManager::FillMissingTableSizes(vector<DuckLakeGlobalStatsInfo> &stats,
                                                     const std::function<unique_ptr<QueryResult>(string)> &executor,
-                                                    bool file_events) {
+                                                    const string &data_files) {
 	vector<TableIndex> table_ids;
 	for (auto &entry : stats) {
 		if (entry.missing_table_size) {
@@ -3005,13 +3069,12 @@ void DuckLakeMetadataManager::FillMissingTableSizes(vector<DuckLakeGlobalStatsIn
 	if (table_ids.empty()) {
 		return;
 	}
-	auto result =
-	    executor(StringUtil::Format(R"(
+	auto result = executor(StringUtil::Format(R"(
 SELECT table_id, SUM(file_size_bytes)
 FROM %s
 WHERE end_snapshot IS NULL AND table_id IN (%s)
 GROUP BY table_id;)",
-	                                DataFileSource(file_events, "{METADATA_CATALOG}"), GenerateIDList(table_ids)));
+	                                          data_files, GenerateIDList(table_ids)));
 	result->ThrowIfError("Failed to get the table sizes from DuckLake: ");
 	map<TableIndex, idx_t> table_sizes;
 	for (auto &row : *result) {
@@ -3030,7 +3093,7 @@ vector<DuckLakeGlobalStatsInfo> DuckLakeMetadataManager::GetGlobalTableStats(Duc
 	auto result = Query(snapshot, GlobalTableStatsQuery(transaction.GetCatalog().SupportsV1_1Metadata(), table_ids));
 	auto global_stats = ParseGlobalTableStats(*result);
 	FillMissingTableSizes(
-	    global_stats, [&](string query) { return Query(snapshot, query); }, WritesFileVisibilityEvents());
+	    global_stats, [&](string query) { return Query(snapshot, query); }, DataFiles());
 	return global_stats;
 }
 
@@ -3147,13 +3210,13 @@ DuckLakeFileData DuckLakeMetadataManager::ReadDeleteFile(DuckLakeTableEntry &tab
 	return data;
 }
 
-static void SetSnapshotFilter(const DuckLakeSnapshot &snapshot, idx_t max_partial_file_snapshot,
+static void SetSnapshotFilter(idx_t snapshot_bound, idx_t max_partial_file_snapshot,
                               DuckLakeFileListEntry &file_entry) {
-	if (max_partial_file_snapshot <= snapshot.snapshot_id) {
-		// all snapshot ids are included for this snapshot - skip filtering
+	if (max_partial_file_snapshot <= snapshot_bound) {
+		// every row of the file is dated at or below the bound
 		return;
 	}
-	file_entry.snapshot_filter_max = snapshot.snapshot_id;
+	file_entry.snapshot_filter_max = snapshot_bound;
 }
 
 //! The CTE a column's stats are read from - definition, join and conditions must agree
@@ -3853,6 +3916,8 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 	}
 	auto table_id = table.GetTableId();
 	auto file_events = WritesFileVisibilityEvents();
+	auto &catalog = transaction.GetCatalog();
+	auto &chain = catalog.AttachedChain();
 
 	const unordered_set<string> runtime_stats {"min_value", "max_value", "contains_nan"};
 	for (auto &column_field_index : runtime_filter_stats_columns) {
@@ -3920,24 +3985,37 @@ string DuckLakeMetadataManager::GenerateFileListQuery(DuckLakeTableEntry &table,
 		select_list = "data.data_file_id, " + GetDataFileSelectList("data") +
 		              ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
 		              GetDeleteFileSelectList("del") + stats_select_list;
+		if (catalog.OnBranch()) {
+			// the segments of the add events give the caps of an inherited data file and of its delete file
+			select_list += ", data.begin_segment, del.begin_segment";
+		}
 	}
 
+	// the live delete files of the table, on a branch one per data file
+	auto delete_filter = StringUtil::Format("table_id=%d  AND {SNAPSHOT_ID} >= begin_snapshot\n"
+	                                        "          AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)",
+	                                        table_id.index);
+	string delete_files;
+	if (catalog.OnBranch()) {
+		delete_files = ChosenDeleteFiles(
+		    chain, DeleteFileSource(file_events, chain, metadata_table_prefix, table_id.index), delete_filter);
+	} else {
+		delete_files = StringUtil::Format("SELECT *\n    FROM %s%s\n    WHERE %s",
+		                                  DeleteFileSource(file_events, metadata_table_prefix, table_id.index),
+		                                  file_events ? " del_src" : "", delete_filter);
+	}
 	// Add base query
 	query += StringUtil::Format(R"(
 SELECT %s
 FROM %s data
 %s
 LEFT JOIN (
-    SELECT *
-    FROM %s%s
-    WHERE table_id=%d  AND {SNAPSHOT_ID} >= begin_snapshot
-          AND ({SNAPSHOT_ID} < end_snapshot OR end_snapshot IS NULL)
+    %s
     ) del ON del.data_file_id = data.data_file_id
 WHERE data.table_id=%d AND {SNAPSHOT_ID} >= data.begin_snapshot AND ({SNAPSHOT_ID} < data.end_snapshot OR data.end_snapshot IS NULL)
 		)",
-	                            select_list, DataFileSource(file_events, metadata_table_prefix, table_id.index),
-	                            stats_join_list, DeleteFileSource(file_events, metadata_table_prefix, table_id.index),
-	                            file_events ? " del_src" : "", table_id.index, table_id.index);
+	                            select_list, DataFileSource(file_events, chain, metadata_table_prefix, table_id.index),
+	                            stats_join_list, delete_files, table_id.index);
 
 	if (!filter_result.where_conditions.empty()) {
 		query += "\nAND " + filter_result.where_conditions;
@@ -3996,6 +4074,8 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 	// Query inlined file deletions for this table
 	auto inlined_deletions = ReadInlinedFileDeletions(table_id, snapshot, include_local_changes);
 
+	auto &catalog = transaction.GetCatalog();
+	auto &chain = catalog.AttachedChain();
 	vector<DuckLakeFileListEntry> files;
 	for (auto &row : *result) {
 		DuckLakeFileListEntry file_entry;
@@ -4004,11 +4084,7 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 		file_entry.file = ReadDataFile(table, row, col_idx, IsEncrypted());
 		file_entry.row_id_start = OptIdx(row, col_idx++);
 		file_entry.snapshot_id = row.GetValue<idx_t>(col_idx++);
-		if (!row.IsNull(col_idx)) {
-			auto partial_max = row.GetValue<idx_t>(col_idx);
-			SetSnapshotFilter(snapshot, partial_max, file_entry);
-		}
-		col_idx++;
+		auto partial_max = OptIdx(row, col_idx++);
 		if (!row.IsNull(col_idx)) {
 			file_entry.mapping_id = MappingIndex(row.GetValue<idx_t>(col_idx));
 		}
@@ -4020,6 +4096,20 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 			column_stats.has_max = TryReadValue(row, col_idx++, column_stats.max);
 			column_stats.has_contains_nan = TryReadValue(row, col_idx++, column_stats.contains_nan);
 			file_entry.column_min_max.emplace(column_field_index, std::move(column_stats));
+		}
+		optional_idx begin_segment;
+		if (catalog.OnBranch()) {
+			begin_segment = row.GetValue<idx_t>(col_idx++);
+			auto delete_segment = OptIdx(row, col_idx++);
+			if (delete_segment.IsValid()) {
+				// an inherited delete file applies the deletes dated up to the cap of its writer's segment
+				file_entry.delete_snapshot_filter_max = chain.SegmentCap(delete_segment.GetIndex());
+			}
+		}
+		if (partial_max.IsValid()) {
+			// the rows of an inherited partial file dated past the cap of its writer's segment stay invisible
+			SetSnapshotFilter(chain.SnapshotBound(begin_segment, snapshot.snapshot_id), partial_max.GetIndex(),
+			                  file_entry);
 		}
 
 		// Populate inlined file deletions for this file
@@ -4041,29 +4131,41 @@ DuckLakeMetadataManager::GetTableInsertions(DuckLakeTableEntry &table, DuckLakeS
                                             DuckLakeSnapshot end_snapshot,
                                             optional_ptr<const vector<DuckLakeProjectedColumn>> projection) {
 	auto table_id = table.GetTableId();
+	auto &catalog = transaction.GetCatalog();
+	auto &chain = catalog.AttachedChain();
 	string select_list = GetDataFileSelectList("data") +
 	                     ", data.row_id_start, data.begin_snapshot, data.partial_max, data.mapping_id, " +
 	                     GetDeleteFileSelectList("del");
+	if (catalog.OnBranch()) {
+		// the segment of the add event bounds the rows of an inherited partial file
+		select_list += ", data.begin_segment";
+	}
 	// Files either match the exact snapshot range
 	// Or they have partial_max set, which means they are a file with many snapshot ids, and might contain
 	// the snapshot we need
 	// Rows deleted in the snapshot that inserted them were never visible
+	auto delete_filter = StringUtil::Format("table_id=%d AND begin_snapshot >= %d AND begin_snapshot <= {SNAPSHOT_ID}",
+	                                        table_id.index, start_snapshot.snapshot_id);
+	string delete_files;
+	if (catalog.OnBranch()) {
+		// the join matches the begins, so a branch chooses one delete file per data file and begin
+		delete_files = ChosenDeleteFiles(chain, DeleteFiles(table_id), delete_filter, true);
+	} else {
+		delete_files = StringUtil::Format("SELECT *\n\tFROM %s\n\tWHERE %s", DeleteFiles(table_id), delete_filter);
+	}
 	auto query = StringUtil::Format(R"(
 SELECT %s
 FROM %s data
 LEFT JOIN (
-	SELECT *
-	FROM %s
-	WHERE table_id=%d AND begin_snapshot >= %d AND begin_snapshot <= {SNAPSHOT_ID}
+	%s
 ) del ON del.data_file_id = data.data_file_id AND del.begin_snapshot = data.begin_snapshot AND data.partial_max IS NULL
 WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 	(data.begin_snapshot >= %d) OR
 	(data.partial_max IS NOT NULL AND data.partial_max >= %d)
 );
 		)",
-	                                select_list, DataFiles(table_id), DeleteFiles(table_id), table_id.index,
-	                                start_snapshot.snapshot_id, table_id.index, start_snapshot.snapshot_id,
-	                                start_snapshot.snapshot_id);
+	                                select_list, DataFiles(table_id), delete_files, table_id.index,
+	                                start_snapshot.snapshot_id, start_snapshot.snapshot_id);
 
 	auto result = Query(end_snapshot, query);
 	result->ThrowIfError("Failed to get table insertion file list from DuckLake: ");
@@ -4076,17 +4178,32 @@ WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 		file_entry.row_id_start = OptIdx(row, col_idx++);
 		auto begin_snapshot = row.GetValue<idx_t>(col_idx++);
 		file_entry.snapshot_id = begin_snapshot;
+		auto partial_max = OptIdx(row, col_idx++);
 		if (!row.IsNull(col_idx)) {
-			auto partial_max = row.GetValue<idx_t>(col_idx);
-			// Set upper bound filter if partial_max > end_snapshot
-			SetSnapshotFilter(end_snapshot, partial_max, file_entry);
+			file_entry.mapping_id = MappingIndex(row.GetValue<idx_t>(col_idx));
+		}
+		col_idx++;
+		file_entry.delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
+		optional_idx begin_segment;
+		if (catalog.OnBranch()) {
+			begin_segment = row.GetValue<idx_t>(col_idx++);
+		}
+		if (partial_max.IsValid()) {
+			// the rows of an inherited partial file dated past the cap of its writer's segment were never visible
+			auto row_bound = chain.SnapshotBound(begin_segment, end_snapshot.snapshot_id);
+			if (row_bound < start_snapshot.snapshot_id) {
+				// no row of the file is dated in the range
+				continue;
+			}
+			// Set upper bound filter if partial_max > row_bound
+			SetSnapshotFilter(row_bound, partial_max.GetIndex(), file_entry);
 			// Set lower bound filter if begin_snapshot < start_snapshot
 			// This means the file contains rows from before start_snapshot that we need to filter out
 			if (begin_snapshot < start_snapshot.snapshot_id) {
 				file_entry.snapshot_filter_min = start_snapshot.snapshot_id;
 			}
 			for (auto snapshot_id : rewrite_snapshots) {
-				if (snapshot_id >= begin_snapshot && snapshot_id <= partial_max) {
+				if (snapshot_id >= begin_snapshot && snapshot_id <= partial_max.GetIndex()) {
 					file_entry.snapshot_filter_excluded.push_back(snapshot_id);
 				}
 			}
@@ -4094,12 +4211,6 @@ WHERE data.table_id=%d AND data.begin_snapshot <= {SNAPSHOT_ID} AND (
 			// the rows of a file written by a rewrite were inserted before
 			continue;
 		}
-		col_idx++;
-		if (!row.IsNull(col_idx)) {
-			file_entry.mapping_id = MappingIndex(row.GetValue<idx_t>(col_idx));
-		}
-		col_idx++;
-		file_entry.delete_file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
 		files.push_back(std::move(file_entry));
 	}
 	return files;
@@ -4110,10 +4221,29 @@ DuckLakeMetadataManager::GetTableDeletions(DuckLakeTableEntry &table, DuckLakeSn
                                            DuckLakeSnapshot end_snapshot, bool include_local_changes,
                                            optional_ptr<const vector<DuckLakeProjectedColumn>> projection) {
 	auto table_id = table.GetTableId();
+	auto &catalog = transaction.GetCatalog();
+	auto &chain = catalog.AttachedChain();
+	bool on_branch = catalog.OnBranch();
 	string insert_snapshot = "CASE WHEN data.partial_max IS NULL THEN data.begin_snapshot END";
 	string select_list = "data.data_file_id, " + GetDataFileSelectList("data") +
 	                     ", data.row_id_start, data.record_count, data.mapping_id, " + insert_snapshot + ", " +
 	                     GetDeleteFileSelectList("current_delete") + ", " + GetDeleteFileSelectList("previous_delete");
+	// the segments of the add events bound the dated deletes and the rows of inherited files
+	// partial_max tells an undated chosen file, the earlier files of the view date the rows it copied
+	string segment_column = on_branch ? ", begin_segment" : "";
+	// on an equal back dated begin the file of the later segment is the later one
+	string segment_order = on_branch ? ", begin_segment DESC" : "";
+	// the id breaks the tie of an equal segment and begin, as the choice of the current file does
+	string delete_id_order = on_branch ? ", delete_file_id DESC" : "";
+	string delete_file_segments = on_branch ? ", current_delete.begin_segment, previous_delete.begin_segment, "
+	                                          "data.begin_segment, current_delete.partial_max"
+	                                        : "";
+	string file_delete_segments = on_branch ? ", CAST(NULL AS BIGINT), previous_delete.begin_segment, "
+	                                          "data.begin_segment, CAST(NULL AS BIGINT)"
+	                                        : "";
+	string inlined_segments = on_branch ? ", CAST(NULL AS BIGINT), CAST(NULL AS BIGINT), data.begin_segment, "
+	                                      "CAST(NULL AS BIGINT)"
+	                                    : "";
 
 	// Check if we have an inlined deletion table for this table (usually cached, no DB hit)
 	auto inlined_table_name = GetInlinedDeletionTableName(table_id, end_snapshot, include_local_changes);
@@ -4156,6 +4286,16 @@ main_results AS (
 		query = "WITH main_results AS (\n";
 	}
 
+	// the delete files the range can read, on a branch one per data file
+	auto current_filter = StringUtil::Format("table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}", table_id.index);
+	string current_delete_files;
+	if (on_branch) {
+		current_delete_files =
+		    StringUtil::Format("(%s) chosen", ChosenDeleteFiles(chain, DeleteFiles(table_id), current_filter));
+	} else {
+		current_delete_files = StringUtil::Format("{DELETE_FILES}\n\tWHERE %s", current_filter);
+	}
+
 	// the delete files that can hold deletes of the range, including flushes and files with inlined deletes
 	auto delete_file_in_range = StringUtil::Format(
 	    "current_delete.begin_snapshot >= %d OR current_delete.partial_max >= %d OR (current_delete.partial_max IS "
@@ -4165,11 +4305,10 @@ main_results AS (
 
 	// Main query: partial deletes from delete_file table and full file deletes
 	query += StringUtil::Format(R"(
-SELECT %s, current_delete.begin_snapshot, false AS file_deleted FROM (
-	SELECT data_file_id, begin_snapshot, path, path_is_relative, file_size_bytes, footer_size, encryption_key, format,
+SELECT %s, current_delete.begin_snapshot, false AS file_deleted%s FROM (
+	SELECT data_file_id, begin_snapshot%s, path, path_is_relative, file_size_bytes, footer_size, encryption_key, format,
 		partial_max{FILE_COUNTS}
-	FROM {DELETE_FILES}
-	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
+	FROM %s
 ) AS current_delete
 LEFT JOIN LATERAL (
 	SELECT DISTINCT ON (data_file_id)
@@ -4179,10 +4318,10 @@ LEFT JOIN LATERAL (
 		file_size_bytes,
 		footer_size,
 		encryption_key,
-		format{FILE_COUNTS}
+		format%s{FILE_COUNTS}
 	FROM {DELETE_FILES}
 	WHERE table_id = %d AND begin_snapshot < %d
-	ORDER BY data_file_id ASC, begin_snapshot DESC
+	ORDER BY data_file_id ASC%s, begin_snapshot DESC%s
 ) AS previous_delete
 USING (data_file_id)
 JOIN (
@@ -4195,7 +4334,7 @@ WHERE %s
 
 UNION ALL
 
-SELECT %s, data.end_snapshot, true FROM (
+SELECT %s, data.end_snapshot, true%s FROM (
 	SELECT *
 	FROM {DATA_FILES}
 	WHERE table_id = %d AND end_snapshot >= %d AND end_snapshot <= {SNAPSHOT_ID}%s
@@ -4208,10 +4347,10 @@ LEFT JOIN LATERAL (
 		file_size_bytes,
 		footer_size,
 		encryption_key,
-		format{FILE_COUNTS}
+		format%s{FILE_COUNTS}
 	FROM {DELETE_FILES}
 	WHERE table_id = %d AND begin_snapshot <= data.end_snapshot
-	ORDER BY data_file_id ASC, begin_snapshot DESC
+	ORDER BY data_file_id ASC%s, begin_snapshot DESC%s
 ) AS previous_delete
 USING (data_file_id), (
 	SELECT CAST(NULL AS VARCHAR) AS path,
@@ -4222,9 +4361,11 @@ USING (data_file_id), (
 		CAST(NULL AS VARCHAR) format{NULL_FILE_COUNTS}
 ) current_delete
 )",
-	                            select_list, table_id.index, table_id.index, start_snapshot.snapshot_id, table_id.index,
-	                            delete_file_in_range, select_list, table_id.index, start_snapshot.snapshot_id,
-	                            rewrite_end_filter, table_id.index);
+	                            select_list, delete_file_segments, segment_column, current_delete_files, segment_column,
+	                            table_id.index, start_snapshot.snapshot_id, segment_order, delete_id_order,
+	                            table_id.index, delete_file_in_range, select_list, file_delete_segments, table_id.index,
+	                            start_snapshot.snapshot_id, rewrite_end_filter, segment_column, table_id.index,
+	                            segment_order, delete_id_order);
 	// the row group count only exists in the metadata of DuckLake 1.1
 	string row_group_count =
 	    transaction.GetCatalog().SupportsV1_1Metadata() ? "row_group_count" : "CAST(NULL AS BIGINT) AS row_group_count";
@@ -4250,7 +4391,7 @@ UNION ALL
 SELECT data.data_file_id, %s, data.row_id_start, data.record_count, data.mapping_id, %s,
        %s,
        %s,
-       inlined_dels.min_snapshot, false
+       inlined_dels.min_snapshot, false%s
 FROM {DATA_FILES} data
 JOIN inlined_dels ON data.data_file_id = inlined_dels.file_id
 WHERE data.table_id = %d
@@ -4261,7 +4402,8 @@ WHERE data.table_id = %d
   AND (data.end_snapshot IS NULL OR data.end_snapshot < %d OR data.end_snapshot > {SNAPSHOT_ID}%s)
 )",
 		                            GetDataFileSelectList("data"), insert_snapshot, null_file_cols, null_file_cols,
-		                            table_id.index, table_id.index, start_snapshot.snapshot_id, rewrite_end_condition);
+		                            inlined_segments, table_id.index, table_id.index, start_snapshot.snapshot_id,
+		                            rewrite_end_condition);
 	}
 
 	query = StringUtil::Replace(query, "{DATA_FILES}", DataFiles(table_id));
@@ -4288,6 +4430,7 @@ FROM main_results
 
 	// Build entries from the unified query result
 	vector<DuckLakeDeleteScanEntry> files;
+	vector<idx_t> undated_entries;
 	for (auto &row : *result) {
 		DuckLakeDeleteScanEntry entry;
 		idx_t col_idx = 0;
@@ -4308,6 +4451,26 @@ FROM main_results
 		// store the snapshot range for filtering embedded snapshot IDs
 		entry.start_snapshot = start_snapshot.snapshot_id;
 		entry.end_snapshot = end_snapshot.snapshot_id;
+		if (on_branch) {
+			// the embedded ids of an inherited file apply up to the cap of the segment that wrote it
+			auto current_segment = OptIdx(row, col_idx++);
+			auto previous_segment = OptIdx(row, col_idx++);
+			auto data_segment = OptIdx(row, col_idx++);
+			auto partial_max = OptIdx(row, col_idx++);
+			entry.end_snapshot = chain.SnapshotBound(current_segment, end_snapshot.snapshot_id);
+			if (previous_segment.IsValid()) {
+				entry.previous_delete_snapshot_max = chain.SegmentCap(previous_segment.GetIndex());
+			}
+			if (!entry.insert_snapshot.IsValid() && data_segment.IsValid() &&
+			    chain.SegmentCap(data_segment.GetIndex()).IsValid()) {
+				entry.row_snapshot_max = chain.SnapshotBound(data_segment, end_snapshot.snapshot_id);
+			}
+			// an undated chosen file that begins in the range copied rows the earlier files of the view date
+			if (!entry.delete_file.path.empty() && !partial_max.IsValid() &&
+			    entry.snapshot_id.GetIndex() > start_snapshot.snapshot_id) {
+				undated_entries.push_back(files.size());
+			}
+		}
 
 		// Parse inlined file deletions from the LIST column (last column)
 		if (!row.IsNull(col_idx)) {
@@ -4322,6 +4485,9 @@ FROM main_results
 		}
 
 		files.push_back(std::move(entry));
+	}
+	if (!undated_entries.empty()) {
+		ReadEarlierDeleteFiles(table, end_snapshot, files, undated_entries);
 	}
 	if (!has_inlined_table) {
 		return files;
@@ -4359,6 +4525,39 @@ WHERE begin_snapshot < %d AND file_id IN (%s)
 		entry.inlined_file_deletions[row.GetValue<idx_t>(1)] = row.GetValue<idx_t>(2);
 	}
 	return files;
+}
+
+void DuckLakeMetadataManager::ReadEarlierDeleteFiles(DuckLakeTableEntry &table, DuckLakeSnapshot end_snapshot,
+                                                     vector<DuckLakeDeleteScanEntry> &files,
+                                                     const vector<idx_t> &undated_entries) {
+	auto table_id = table.GetTableId();
+	auto &chain = transaction.GetCatalog().AttachedChain();
+	unordered_map<idx_t, reference<DuckLakeDeleteScanEntry>> entries;
+	vector<string> file_filters;
+	for (auto position : undated_entries) {
+		auto &entry = files[position];
+		entries.emplace(entry.file_id.index, entry);
+		file_filters.push_back(StringUtil::Format("(data_file_id = %d AND begin_snapshot < %d)", entry.file_id.index,
+		                                          entry.snapshot_id.GetIndex()));
+	}
+	// one file per begin below the chosen file, the later segment and id are the cumulative one of an equal begin
+	auto filter = StringUtil::Format("table_id = %d AND (%s)", table_id.index, StringUtil::Join(file_filters, " OR "));
+	auto query = StringUtil::Format(
+	    "SELECT earlier.data_file_id, earlier.begin_snapshot, earlier.begin_segment, %s\nFROM (%s) earlier",
+	    GetDeleteFileSelectList("earlier"), ChosenDeleteFiles(chain, DeleteFiles(table_id), filter, true));
+	auto result = Query(end_snapshot, query);
+	result->ThrowIfError("Failed to get the earlier delete files from DuckLake: ");
+	for (auto &row : *result) {
+		idx_t col_idx = 0;
+		auto &entry = entries.at(row.GetValue<idx_t>(col_idx++)).get();
+		DuckLakeEarlierDeleteFile earlier;
+		earlier.begin_snapshot = row.GetValue<idx_t>(col_idx++);
+		auto begin_segment = OptIdx(row, col_idx++);
+		// a date past the cap of the writer's segment never applied, the chosen file dates the rows from its begin on
+		earlier.snapshot_max = chain.SnapshotBound(begin_segment, entry.snapshot_id.GetIndex() - 1);
+		earlier.file = ReadDeleteFile(table, row, col_idx, IsEncrypted());
+		entry.earlier_delete_files.push_back(std::move(earlier));
+	}
 }
 
 set<idx_t> DuckLakeMetadataManager::GetTableRewriteSnapshots(TableIndex table_id, DuckLakeSnapshot start_snapshot,
@@ -7133,7 +7332,7 @@ DuckLakeMetadataManager::GetSnapshotAndStatsAndChanges(SnapshotAndStats &current
                                                        const string &query, bool file_events) {
 	auto result = executor(query);
 	auto change_info = ParseSnapshotAndStatsAndChanges(*result, current_snapshot);
-	FillMissingTableSizes(current_snapshot.stats, executor, file_events);
+	FillMissingTableSizes(current_snapshot.stats, executor, DataFileSource(file_events, "{METADATA_CATALOG}"));
 	return change_info;
 }
 
