@@ -55,7 +55,7 @@ CALL ducklake_add_data_files('ducklake', 'holdings', 'S3A://mybucket/absolute_re
 
 # the paths are stored absolute, as they were given
 query II
-SELECT path, path_is_relative FROM metadata.ducklake_data_file WHERE end_snapshot IS NULL ORDER BY path
+SELECT path, CAST(path_is_relative AS BOOLEAN) FROM metadata.ducklake_data_file ORDER BY path
 ----
 S3A://mybucket/absolute_remote_path/external_upper.parquet	false
 s3://mybucket/absolute_remote_path/external.parquet	false
