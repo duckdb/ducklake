@@ -262,6 +262,13 @@
       "paths": [
         "test/sql/retry/retry_conflict_read_shapes.test"
       ]
+    },
+    {
+      "reason": "A data-only commit of a quack catalog runs on the server, so the client log never shows the metadata reads it makes",
+      "paths": [
+        "test/sql/stats/stats_reads_filter_table.test",
+        "test/sql/stats/null_first_bounds_unrelated_commits.test"
+      ]
     }
   ]
 }
