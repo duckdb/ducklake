@@ -1,0 +1,175 @@
+# name: test/sql/general/file_list_cache_bypass.test
+# description: Time travel, transaction-local changes and older snapshots do not read the cached file list
+# group: [general]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/file_list_cache_bypass', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT i FROM range(100) t(i);
+
+statement ok
+INSERT INTO ducklake.t SELECT i FROM range(100, 200) t(i);
+
+statement ok
+CREATE VIEW file_list_queries AS SELECT COUNT(*) AS n FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%data.row_id_start, data.begin_snapshot, data.partial_max%'
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+19900
+
+query I
+SELECT n FROM file_list_queries
+----
+1
+
+# time travel reads the file list of its snapshot every time
+query I
+SELECT SUM(i) FROM ducklake.t AT (VERSION => 1)
+----
+4950
+
+query I
+SELECT SUM(i) FROM ducklake.t AT (VERSION => 1)
+----
+4950
+
+query I
+SELECT n FROM file_list_queries
+----
+3
+
+# and leaves the cached file list of the current snapshot alone
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+19900
+
+query I
+SELECT n FROM file_list_queries
+----
+3
+
+# a transaction with local changes reads the file list on every scan
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO ducklake.t VALUES (1000)
+
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+20900
+
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+20900
+
+query I
+SELECT n FROM file_list_queries
+----
+5
+
+statement ok
+DELETE FROM ducklake.t WHERE i < 10
+
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+20855
+
+statement ok
+ROLLBACK
+
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+19900
+
+# a transaction that started at an older snapshot reads its own files
+statement ok con1
+BEGIN
+
+query I con1
+SELECT SUM(i) FROM ducklake.t
+----
+19900
+
+statement ok
+INSERT INTO ducklake.t VALUES (1000)
+
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+20900
+
+statement ok
+CALL truncate_duckdb_logs()
+
+query I con1
+SELECT SUM(i) FROM ducklake.t
+----
+19900
+
+# the older snapshot does not replace the cached file list of the newer one
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+20900
+
+query I
+SELECT n FROM file_list_queries
+----
+1
+
+query I con1
+SELECT SUM(i) FROM ducklake.t WHERE i >= 150
+----
+8725
+
+statement ok con1
+COMMIT
+
+query I con1
+SELECT SUM(i) FROM ducklake.t
+----
+20900
+
+query I
+SELECT SUM(i) FROM ducklake.t WHERE i >= 150
+----
+9725
+
+# a filtered scan reads the file list with its filter every time
+statement ok
+CALL truncate_duckdb_logs()
+
+query I
+SELECT SUM(i) FROM ducklake.t WHERE i >= 150
+----
+9725
+
+query I
+SELECT SUM(i) FROM ducklake.t WHERE i >= 150
+----
+9725
+
+query I
+SELECT n FROM file_list_queries
+----
+2

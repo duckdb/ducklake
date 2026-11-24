@@ -1,0 +1,150 @@
+# name: test/sql/general/file_list_cache.test
+# description: Scans at one snapshot read the committed file list of a table once, and see every commit
+# group: [general]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/file_list_cache', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT i FROM range(100) t(i);
+
+statement ok
+INSERT INTO ducklake.t SELECT i FROM range(100, 200) t(i);
+
+statement ok
+CREATE VIEW file_list_queries AS SELECT COUNT(*) AS n FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%data.row_id_start, data.begin_snapshot, data.partial_max%'
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# a repeated read with no commit in between is served from the cache
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+19900
+
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+19900
+
+query I
+SELECT n FROM file_list_queries
+----
+1
+
+# an insert between reads is seen
+statement ok
+INSERT INTO ducklake.t VALUES (1000)
+
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+20900
+
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+20900
+
+# a delete between reads is seen
+statement ok
+DELETE FROM ducklake.t WHERE i < 10
+
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+20855
+
+query I
+SELECT COUNT(*) FROM ducklake.t WHERE i < 20
+----
+10
+
+# a compaction between reads is seen
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake')
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 't')
+----
+2
+
+query II
+SELECT SUM(i), COUNT(*) FROM ducklake.t
+----
+20855	191
+
+# the files that compaction replaced can be removed once their snapshots expire
+statement ok
+CALL ducklake_expire_snapshots('ducklake', older_than => now())
+
+statement ok
+CALL ducklake_cleanup_old_files('ducklake', cleanup_all => true)
+
+query II
+SELECT SUM(i), COUNT(*) FROM ducklake.t
+----
+20855	191
+
+# a dropped and recreated table is not mistaken for the old one
+statement ok
+DROP TABLE ducklake.t
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT 7 AS i
+
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+7
+
+# with the cache turned off, every scan reads the file list
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+SET ducklake_cache_file_lists = false
+
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+7
+
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+7
+
+query I
+SELECT n FROM file_list_queries
+----
+2
+
+# turned back on, the entry cached before serves the same snapshot
+statement ok
+RESET ducklake_cache_file_lists
+
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+7
+
+query I
+SELECT SUM(i) FROM ducklake.t
+----
+7
+
+query I
+SELECT n FROM file_list_queries
+----
+2

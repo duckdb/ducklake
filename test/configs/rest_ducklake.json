@@ -47,7 +47,10 @@
         "test/sql/stats/count_star_optimization_cache.test",
         "test/sql/general/ducklake_metadata_logging.test",
         "test/sql/transaction/commit_skips_catalog_load.test",
-        "test/sql/transaction/commit_retry_skips_catalog_load.test"
+        "test/sql/transaction/commit_retry_skips_catalog_load.test",
+        "test/sql/general/file_list_cache.test",
+        "test/sql/general/file_list_cache_bypass.test",
+        "test/sql/general/file_list_cache_released_metadata.test"
       ]
     },
     {
@@ -210,7 +213,8 @@
         "test/sql/table_changes/table_changes_rewrite_data_files.test",
         "test/sql/table_changes/table_changes_rewrite_merged_twice.test",
         "test/sql/table_changes/table_deletions_unchanged_range.test",
-        "test/sql/transaction/drop_altered_table_local_changes.test"
+        "test/sql/transaction/drop_altered_table_local_changes.test",
+        "test/sql/general/file_list_cache_history.test"
       ]
     },
     {

@@ -93,6 +93,24 @@ struct DuckLakeTableNetRowCountCacheEntry : public ObjectCacheEntry {
 	}
 };
 
+//! Cached committed file list of a table at a snapshot, read without a filter
+struct DuckLakeFileListCacheEntry : public ObjectCacheEntry {
+	DuckLakeFileListCacheEntry(idx_t snapshot_id_p, shared_ptr<const vector<DuckLakeFileListEntry>> files_p)
+	    : snapshot_id(snapshot_id_p), files(std::move(files_p)) {
+	}
+
+	idx_t snapshot_id;
+	shared_ptr<const vector<DuckLakeFileListEntry>> files;
+
+	static string ObjectType() {
+		return "ducklake_file_list";
+	}
+	string GetObjectType() override {
+		return ObjectType();
+	}
+	optional_idx GetEstimatedCacheMemory() const override;
+};
+
 //! Cached record counts for a snapshot
 struct DuckLakeTableRecordCountCacheEntry : public ObjectCacheEntry {
 	static constexpr idx_t ESTIMATED_BYTES_PER_TABLE = 64;
@@ -305,6 +323,9 @@ public:
 	optional_idx GetTableNetRowCount(DuckLakeTransaction &transaction, DuckLakeTableEntry &table);
 	//! Returns zero when the table has no stats
 	idx_t GetTableRecordCount(DuckLakeTransaction &transaction, TableIndex table_id);
+	//! The committed data files of a table at a snapshot, without filter or transaction-local changes
+	shared_ptr<const vector<DuckLakeFileListEntry>>
+	GetCommittedFileList(DuckLakeTransaction &transaction, DuckLakeTableEntry &table, DuckLakeSnapshot snapshot);
 
 	optional_ptr<CatalogEntry> GetEntryById(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                        SchemaIndex schema_id);
@@ -518,6 +539,7 @@ private:
 	string StatsCacheKey(idx_t next_file_id, TableIndex table_id) const;
 	string RecordCountCacheKey(idx_t snapshot_id) const;
 	string NetRowCountCacheKey(TableIndex table_id) const;
+	string FileListCacheKey(TableIndex table_id) const;
 	string SchemaCacheKey(idx_t schema_version) const;
 	ObjectCache &GetObjectCacheInstance();
 	//! A table stats entry this DuckLake put in the object cache, kept without its key as there is one per table

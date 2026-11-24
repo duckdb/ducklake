@@ -262,6 +262,13 @@
       "paths": [
         "test/sql/retry/retry_conflict_read_shapes.test"
       ]
+    },
+    {
+      "reason": "A quack catalog shows concurrent commits, so scans do not use the file list cache and the fetch counts these tests assert do not hold",
+      "paths": [
+        "test/sql/general/file_list_cache.test",
+        "test/sql/general/file_list_cache_bypass.test"
+      ]
     }
   ]
 }

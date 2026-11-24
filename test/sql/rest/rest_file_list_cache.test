@@ -1,0 +1,71 @@
+# name: test/sql/rest/rest_file_list_cache.test
+# description: A REST commit replayed at the client's snapshot neither reads nor fills the file list cache
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok rest_db:rest_server_con
+CALL rest_lake.set_option('data_inlining_row_limit', 10)
+
+statement ok rest_db:rest_server_con
+CREATE TABLE rest_lake.t(i INTEGER)
+
+statement ok rest_db:rest_server_con
+CREATE TABLE rest_lake.u(x INTEGER)
+
+statement ok rest_db:rest_server_con
+INSERT INTO rest_lake.u VALUES (1)
+
+statement ok rest_db:rest_server_con
+INSERT INTO rest_lake.t VALUES (1), (2), (3), (NULL)
+
+statement ok rest_db:rest_server_con
+DELETE FROM rest_lake.t WHERE i IS NULL
+
+query I rest_db:rest_server_con
+SELECT count(*) FROM ducklake_list_files('rest_lake', 't')
+----
+0
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl
+
+# the client transaction starts at snapshot S
+statement ok
+BEGIN
+
+query I
+SELECT * FROM dl.u
+----
+1
+
+# a local transaction on the server starts at snapshot S, without reading t
+statement ok rest_db:l1
+BEGIN
+
+query I rest_db:l1
+SELECT * FROM rest_lake.u
+----
+1
+
+# a flush commits S+1, moving the inlined rows of t to a file
+statement ok rest_db:con2
+CALL ducklake_flush_inlined_data('rest_lake')
+
+# the client sets NOT NULL at snapshot S; the server replays it at S with a view that includes the flush
+statement ok
+ALTER TABLE dl.t ALTER COLUMN i SET NOT NULL
+
+statement ok
+COMMIT
+
+# the local transaction at S reads t
+query I rest_db:l1
+SELECT i FROM rest_lake.t ORDER BY i
+----
+1
+2
+3
+
+statement ok rest_db:l1
+COMMIT
