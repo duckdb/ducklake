@@ -1,0 +1,50 @@
+# name: test/sql/transaction/transaction_conflicts_inlined_delete_other_catalog.test
+# description: a delete file conflicts with the first inlined deletion of its table, committed through another catalog
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl1 (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl1.t AS SELECT i AS id FROM range(100) t(i)
+
+# a second attach of the lake
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl2 (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+SET immediate_transaction_mode=true
+
+# thirty rows go to a delete file
+statement ok con1
+BEGIN
+
+statement ok con1
+DELETE FROM dl1.t WHERE id >= 50 AND id < 80
+
+# one row becomes the first inlined deletion of the table, through the other catalog
+statement ok con2
+DELETE FROM dl2.t WHERE id = 50
+
+statement error con1
+COMMIT
+----
+conflict
+
+query II
+SELECT count(*), count(DISTINCT id) FROM dl1.t
+----
+99	99
+
+query II
+SELECT count(*), count(DISTINCT id) FROM dl2.t
+----
+99	99

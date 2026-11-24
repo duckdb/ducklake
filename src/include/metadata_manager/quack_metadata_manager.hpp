@@ -30,6 +30,7 @@ public:
 		return true;
 	}
 	void ProbeServerCapabilities() override;
+	bool ProbeMetadataColumns() override;
 	bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const override;
 	void FlushChangesServerSide(DuckLakeTransaction &transaction, DuckLakeSnapshot transaction_snapshot,
 	                            const TransactionChangeInformation &transaction_changes,
@@ -42,7 +43,10 @@ public:
 	void ClearCache() override;
 
 	bool MetadataExists() override;
-	bool InlinedDeletionTableExists(const Identifier &table_name) override;
+	bool ListsInlinedDeletionTables() const override {
+		return true;
+	}
+	unordered_set<string> ListInlinedDeletionTables() override;
 
 protected:
 	string MetadataExistsQuery() const override;

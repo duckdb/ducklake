@@ -24,8 +24,8 @@ COMMIT; BEGIN;
 DELETE FROM lake.p@{k} WHERE (id < 2048 AND id % 100 < 60) OR id = 3000;
 @end
 COMMIT;
-SELECT CASE WHEN (SELECT count(*) <> 100 FROM __ducklake_metadata_lake.ducklake_data_file WHERE end_snapshot IS NULL)
-OR (SELECT count(*) <> 100 FROM __ducklake_metadata_lake.ducklake_delete_file WHERE end_snapshot IS NULL)
+SELECT CASE WHEN (SELECT coalesce(sum(file_count), 0) <> 100 FROM ducklake_table_info('lake'))
+OR (SELECT coalesce(sum(delete_file_count), 0) <> 100 FROM ducklake_table_info('lake'))
 OR (SELECT count(*) <> 2847 FROM lake.p49)
 THEN error('unexpected rewrite partial fixture') END;
 CALL ducklake_delete_orphaned_files('lake', cleanup_all => true);
