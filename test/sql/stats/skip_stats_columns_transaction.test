@@ -86,7 +86,7 @@ INSERT INTO ducklake.cc VALUES (1, 'aaa')
 query III con1
 SELECT f.column_id, f.min_value IS NULL, f.max_value IS NULL
 FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
-WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='cc' AND end_snapshot IS NULL)
+WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='cc')
 ORDER BY f.column_id
 ----
 1	false	false
@@ -129,7 +129,7 @@ INSERT INTO ducklake.fc VALUES (1, 'aaa')
 query III con1
 SELECT f.column_id, f.min_value, f.max_value
 FROM ducklake_meta.ducklake_file_column_stats f JOIN ducklake_meta.ducklake_data_file d USING (data_file_id)
-WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='fc' AND end_snapshot IS NULL)
+WHERE d.table_id=(SELECT table_id FROM ducklake_meta.ducklake_table WHERE table_name='fc')
 ORDER BY f.column_id
 ----
 1	1	1

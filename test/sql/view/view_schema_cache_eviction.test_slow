@@ -89,12 +89,12 @@ endloop
 statement ok con1
 COMMIT
 
-# The view must be recorded against `target`.
+# The view must be recorded against `target`, it is the only view row ever written.
 query II
 SELECT s.schema_name, v.view_name
 FROM metadata.ducklake_view v
 JOIN metadata.ducklake_schema s ON s.schema_id = v.schema_id
-WHERE v.end_snapshot IS NULL
+ORDER BY v.begin_snapshot
 ----
 target	v1
 
@@ -111,12 +111,9 @@ SELECT * FROM ducklake.target.v1
 # No live view may point at a dropped schema, otherwise the catalog fails to load.
 query I
 SELECT COUNT(*)
-FROM metadata.ducklake_view v
-WHERE v.end_snapshot IS NULL
-  AND NOT EXISTS (
-    SELECT 1 FROM metadata.ducklake_schema s
-    WHERE s.schema_id = v.schema_id AND s.end_snapshot IS NULL
-  )
+FROM duckdb_views() v
+WHERE v.database_name = 'ducklake'
+  AND v.schema_name NOT IN (SELECT schema_name FROM duckdb_schemas() WHERE database_name = 'ducklake')
 ----
 0
 
