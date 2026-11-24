@@ -109,7 +109,7 @@ read-only mode
 statement ok
 DETACH dl
 
-# the first own snapshot of the branch
+# the first own snapshot of the branch and a delete event that ends the inherited file on dev
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS m (DATA_PATH '{DATA_PATH}/branch_attach_read_files',
     METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
@@ -121,6 +121,10 @@ INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, 
 
 statement ok
 INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, 3, TRUE FROM meta.ducklake_file_visibility
+WHERE branch_id = 0 AND is_delete = FALSE AND snapshot_id = 2
 
 statement ok
 DETACH m
@@ -140,7 +144,13 @@ SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
 ----
 [0, 1, 2, 3]
 
-# the inherited file at the fork
+# the delete event of the branch is authoritative, the file is gone at the branch head
+query I
+SELECT COUNT(*) FROM dl.t
+----
+0
+
+# and still there before its end on the branch
 query I
 SELECT * FROM dl.t AT (VERSION => 2)
 ----

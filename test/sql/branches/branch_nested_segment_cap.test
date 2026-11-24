@@ -98,21 +98,49 @@ SELECT list(snapshot_id ORDER BY snapshot_id) FROM early.snapshots()
 ----
 [0, 1, 2, 3, 4, 5]
 
-# the rows of the file of dev are asserted per branch once the files follow the lineage
-statement ok
+# dev wrote the file, so it reads every row although main owns the id of the add event
+query I
 SELECT i FROM dev.t ORDER BY i
+----
+1
+2
+100
+400
+500
 
-statement ok
+# feature reads dev up to 6, which holds every row of the file
+query I
 SELECT i FROM feature.t ORDER BY i
+----
+1
+2
+100
+400
+500
 
-statement ok
+# early reads dev up to 4, the row dev wrote at 5 stays invisible
+query I
 SELECT i FROM early.t ORDER BY i
+----
+1
+2
+100
+400
 
-statement ok
+# a read below the cap bounds the rows at the read snapshot
+query I
 SELECT i FROM feature.t AT (VERSION => 4) ORDER BY i
+----
+1
+2
+100
+400
 
-statement ok
+query I
 SELECT i FROM dev.t AT (VERSION => 2) ORDER BY i
+----
+1
+100
 
 # main never sees the file of dev
 query I

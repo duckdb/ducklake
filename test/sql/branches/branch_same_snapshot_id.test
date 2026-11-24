@@ -35,6 +35,10 @@ INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, 
 statement ok
 INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1)
 
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, 3, TRUE FROM meta.ducklake_file_visibility
+WHERE branch_id = 0 AND is_delete = FALSE AND snapshot_id = 2
+
 query II
 SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot WHERE snapshot_id = 3 ORDER BY branch_id
 ----
@@ -103,7 +107,7 @@ FROM ducklake_tags('dl')
 statement ok
 DETACH dl
 
-# the head of dev is its own snapshot 3, the second insert of main is not in its lineage
+# the head of dev is its own snapshot 3, its delete event dated 3 hides the inherited file there
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files',
     METADATA_CATALOG 'meta', BRANCH 'dev')
@@ -125,9 +129,17 @@ SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
 [0, 1, 2, 3]
 
 query I
+SELECT i FROM dl.t
+----
+
+query I
 SELECT i FROM dl.t AT (VERSION => 2)
 ----
 1
+
+query I
+SELECT i FROM dl.t AT (VERSION => 3)
+----
 
 statement ok
 DETACH dl
