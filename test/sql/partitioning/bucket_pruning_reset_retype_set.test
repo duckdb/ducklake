@@ -97,6 +97,6 @@ COMMIT
 
 query I
 SELECT count(*) FROM __ducklake_metadata_ducklake.ducklake_partition_info
-WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'same' AND end_snapshot IS NULL)
+WHERE table_id = (SELECT table_id FROM __ducklake_metadata_ducklake.ducklake_table WHERE table_name = 'same')
 ----
 1

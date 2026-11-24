@@ -36,9 +36,16 @@ SELECT max(schema_version) FROM __ducklake_metadata_ducklake.ducklake_schema_ver
 ----
 1
 
-# Verify sort data was cleared (end_snapshot set)
+# Verify sort data was cleared, the reset wrote no sort row and an insert keeps its own order
 query I
-SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_sort_info
-WHERE table_id = 1 AND end_snapshot IS NULL
+SELECT COUNT(*) FROM __ducklake_metadata_ducklake.ducklake_sort_info WHERE table_id = 1
 ----
-0
+1
+
+statement ok
+INSERT INTO ducklake.test VALUES (3, 'c'), (1, 'a'), (2, 'b');
+
+query I
+SELECT list(a ORDER BY file_row_number) FROM ducklake.test
+----
+[3, 1, 2]

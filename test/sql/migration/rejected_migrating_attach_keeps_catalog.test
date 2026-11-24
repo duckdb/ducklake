@@ -80,7 +80,7 @@ query I
 SELECT list(table_name ORDER BY table_name) FROM duckdb_tables() WHERE database_name = 'meta'
     AND schema_name IN ('main', 'public') AND table_name LIKE 'ducklake_snapshot%'
 ----
-[ducklake_snapshot, ducklake_snapshot_changes, ducklake_snapshot_tag]
+[ducklake_snapshot, ducklake_snapshot_changes, ducklake_snapshot_tag, ducklake_snapshot_tag_visibility]
 
 query I
 SELECT i FROM dl.t

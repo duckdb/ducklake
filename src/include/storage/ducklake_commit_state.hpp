@@ -75,6 +75,10 @@ struct DuckLakeCommitState {
 	map<TableIndex, set<FieldIndex>> float_bounds_to_clear;
 	//! The columns this commit retypes to a finer timestamp unit
 	map<TableIndex, set<FieldIndex>> refined_timestamp_columns;
+	//! The columns of a created table whose files hold a type the replaced version row no longer records
+	map<TableIndex, set<FieldIndex>> retyped_created_columns;
+	//! Whether a created table's columns are written once, as a 2.0 row has one version per birth
+	bool supports_row_visibility = false;
 	//! The oid of each entry that gets its id in this commit
 	ducklake_entry_oids_t new_entry_oids;
 	//! The existing tables that get a new inlined data table in this commit
@@ -86,6 +90,8 @@ struct DuckLakeCommitState {
 
 	//! Whether this commit widens a column of the given table from FLOAT to DOUBLE
 	bool WidensFloatColumns(TableIndex table_id) const;
+	//! Drop the bounds of a retyped column of a created table, no version row shows the type its files hold
+	void ClearRetypedCreatedBounds(TableIndex table_id, map<FieldIndex, DuckLakeColumnStats> &column_stats) const;
 	//! Widen the FLOAT bounds of a widened column, or clear them when they cannot be widened
 	void PrepareFloatBounds(TableIndex table_id, map<FieldIndex, DuckLakeColumnStats> &column_stats,
 	                        bool can_widen = true) const;

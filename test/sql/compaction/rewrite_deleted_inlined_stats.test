@@ -88,7 +88,7 @@ CALL ducklake_rewrite_data_files('lake', 'l', delete_threshold => 0.0)
 query III
 SELECT min_value, max_value, (SELECT record_count FROM meta.ducklake_table_stats WHERE table_id = c.table_id)
 FROM meta.ducklake_table_column_stats c
-WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'l' AND end_snapshot IS NULL)
+WHERE table_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'l')
 ----
 5	69	20
 

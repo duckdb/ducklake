@@ -52,6 +52,7 @@ public:
 	bool ProbeMetadataColumns() override;
 	string CommitErrorWithoutQuery(const string &message) const override;
 	string ConfigOptionLockSql() const override;
+	string RowCompanionRenameSql(const string &kind) const override;
 
 	unique_ptr<QueryResult> Execute(DuckLakeSnapshot snapshot, string &query) override;
 	unique_ptr<QueryResult> ExecuteDropInTransaction(string &query) override;
