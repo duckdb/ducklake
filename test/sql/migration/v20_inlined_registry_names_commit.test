@@ -1,0 +1,104 @@
+# name: test/sql/migration/v20_inlined_registry_names_commit.test
+# description: a commit refuses a registered payload whose name carries another table before it reads its bounds
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files',
+    METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 100)
+
+statement ok
+SELECT 1
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+CREATE TABLE dl.u(i INTEGER)
+
+statement ok
+SELECT 1
+
+statement ok
+CALL dl.set_option('skip_stats_columns', ['i'], table_name => 't')
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t VALUES (NULL),(2)
+
+statement ok
+INSERT INTO dl.u VALUES (NULL),(2)
+
+statement ok
+COMMIT
+
+statement ok
+DELETE FROM dl.u WHERE i=2
+
+statement ok
+CALL dl.set_option('skip_stats_columns', [], table_name => 't')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS meta
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_1_1 RENAME TO ducklake_inlined_data_2_99
+
+statement ok
+UPDATE meta.ducklake_inlined_data_tables SET table_name='ducklake_inlined_data_2_99' WHERE table_id=1
+
+statement ok
+DETACH meta
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_CATALOG 'meta')
+
+# the commit reads the bounds of the inlined rows by the payload name, so the mismatch is refused before the write
+statement error
+INSERT INTO dl.t VALUES (3)
+----
+inlined data table ducklake_inlined_data_2_99 is registered for table 1
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS meta
+
+statement ok
+ALTER TABLE meta.ducklake_inlined_data_2_99 RENAME TO ducklake_inlined_data_1_1
+
+statement ok
+UPDATE meta.ducklake_inlined_data_tables SET table_name='ducklake_inlined_data_1_1' WHERE table_id=1
+
+statement ok
+DETACH meta
+
+# the registry put right, the commit records the bounds of every live row
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_CATALOG 'meta')
+
+statement ok
+INSERT INTO dl.t VALUES (3)
+
+query I
+SELECT list(i ORDER BY i) FROM dl.t
+----
+[2, 3, NULL]
+
+query I
+SELECT i FROM dl.t WHERE i=2
+----
+2

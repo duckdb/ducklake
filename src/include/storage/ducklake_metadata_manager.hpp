@@ -392,9 +392,9 @@ public:
 	//! The versioned catalog kinds, the companion of a kind is ducklake_<kind>_visibility
 	static const vector<RowVisibilityKind> &RowVisibilityKinds();
 	static const RowVisibilityKind &RowKind(const string &kind);
-	//! The kind of an inlined data table, whose shared companion names the versions by table id and row id
 	//! Refuses a registered payload whose name carries another table, the readers take the table from the name
 	static void VerifyInlinedTableName(const Identifier &inlined_table_name, TableIndex table_id);
+	//! The kind of an inlined data table, whose shared companion names the versions by table id and row id
 	static RowVisibilityKind InlinedRowKind(const Identifier &inlined_table_name,
 	                                        const DuckLakeInlinedColNames &col_names);
 	//! The row table of a kind, the partition and sort specs keep their info suffix

@@ -5501,6 +5501,9 @@ string DuckLakeMetadataManager::WriteNewInlinedData(DuckLakeSnapshot &commit_sna
 					continue;
 				}
 				inlined_table_name = row.GetValue<Identifier>(0);
+				if (transaction.GetCatalog().SupportsRowVisibility()) {
+					VerifyInlinedTableName(inlined_table_name, entry.table_id);
+				}
 				insert_inlined_table_name_cache[entry.table_id.index] = inlined_table_name;
 			}
 		}

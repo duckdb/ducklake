@@ -1018,7 +1018,11 @@ static identifier_set_t ReadInlinedTablesBeforeSchemaChange(TableIndex table_id,
 	    snapshot, DuckLakeMetadataManager::GetInlinedTablesBeforeSchemaChangeSql(table_id));
 	tables->ThrowIfError("Failed to read the inlined data tables from DuckLake: ");
 	for (auto &row : *tables) {
-		result.insert(row.GetValue<Identifier>(0));
+		auto inlined_table_name = row.GetValue<Identifier>(0);
+		if (context.supports_row_visibility) {
+			DuckLakeMetadataManager::VerifyInlinedTableName(inlined_table_name, table_id);
+		}
+		result.insert(inlined_table_name);
 	}
 	return result;
 }
@@ -1031,10 +1035,14 @@ ReadInlinedTableColumns(TableIndex table_id, const DuckLakeCommitContext &contex
 	    DuckLakeMetadataManager::GetInlinedTableColumnsSql(table_id.index, context.supports_row_visibility));
 	columns->ThrowIfError("Failed to read the columns of the inlined data tables from DuckLake: ");
 	for (auto &row : *columns) {
+		auto inlined_table_name = row.GetValue<Identifier>(0);
+		if (context.supports_row_visibility) {
+			DuckLakeMetadataManager::VerifyInlinedTableName(inlined_table_name, table_id);
+		}
 		FieldIndex field_index(static_cast<idx_t>(row.GetValue<int64_t>(3)));
 		DuckLakeColumnSchemaEntry column {field_index, row.GetValue<Identifier>(1),
 		                                  DuckLakeTypes::FromString(row.GetValue<string>(2)), true};
-		result[row.GetValue<Identifier>(0)].emplace(field_index, std::move(column));
+		result[inlined_table_name].emplace(field_index, std::move(column));
 	}
 	return result;
 }

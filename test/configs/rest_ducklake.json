@@ -582,6 +582,7 @@
         "test/sql/migration/v20_inlined_visibility_collisions.test",
         "test/sql/migration/v20_inlined_visibility_resume_fenced_columns.test",
         "test/sql/migration/v20_inlined_registry_names.test",
+        "test/sql/migration/v20_inlined_registry_names_commit.test",
         "test/sql/catalog/catalog_tag_row_companions.test",
         "test/sql/alter/create_table_drop_column_same_transaction.test",
         "test/sql/metadata/file_visibility_layout.test",

@@ -616,7 +616,11 @@ vector<Identifier> DuckLakeServerSideCommit::LookupInlinedTableNames(TableIndex 
 	auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), transaction_snapshot);
 	auto result = RunQuery(sql, "lookup inlined table names");
 	for (auto &row : *result) {
-		names.push_back(row.GetValue<Identifier>(0));
+		auto inlined_table_name = row.GetValue<Identifier>(0);
+		if (supports_row_visibility) {
+			DuckLakeMetadataManager::VerifyInlinedTableName(inlined_table_name, table_id);
+		}
+		names.push_back(inlined_table_name);
 	}
 	return names;
 }
@@ -633,6 +637,9 @@ const Identifier &DuckLakeServerSideCommit::ResolveInlinedTableName(TableIndex t
 	Identifier name;
 	for (auto &row : *result) {
 		name = row.GetValue<Identifier>(0);
+		if (supports_row_visibility) {
+			DuckLakeMetadataManager::VerifyInlinedTableName(name, table_id);
+		}
 	}
 	return inlined_table_name_cache.emplace(table_id.index, std::move(name)).first->second;
 }
