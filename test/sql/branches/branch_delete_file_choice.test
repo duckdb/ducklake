@@ -1,8 +1,6 @@
 # name: test/sql/branches/branch_delete_file_choice.test
-# description: a branch reads the delete file of the segment nearest itself, capped by the segment that wrote it, and
+# description: a branch reads the delete file of the segment nearest itself capped by its writer, main reads its own
 # group: [branches]
-
-# main reads its own
 
 require ducklake
 

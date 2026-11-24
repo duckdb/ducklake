@@ -1,8 +1,6 @@
 # name: test/sql/branches/branch_nested_retro_delete_history.test
-# description: a flushed delete file of main is chosen on a nested branch below the begin of the files of its chain
+# description: a historical read of a nested branch below the delete files of its chain applies main's flushed one alone
 # group: [branches]
-
-# alone, so a historical read applies one delete file
 
 require ducklake
 

@@ -1,8 +1,6 @@
 # name: test/sql/branches/branch_insertions_delete_choice.test
-# description: the insertions feed of a branch joins one delete file per data file and begin, the one of the segment
+# description: a branch's insertions feed joins one delete file per data file and begin, that of the nearest segment
 # group: [branches]
-
-# nearest itself
 
 require ducklake
 

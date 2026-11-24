@@ -1,8 +1,6 @@
 # name: test/sql/branches/branch_feed_inherited_partial_file.test
-# description: the insertions feed of a branch reads an inherited flushed file up to the fork and skips it when nothing
+# description: a branch's insertions feed reads an inherited file up to the fork and skips it when nothing is in range
 # group: [branches]
-
-# of the range is in it
 
 require ducklake
 

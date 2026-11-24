@@ -1,8 +1,6 @@
 # name: test/sql/branches/branch_nested_feed_segments.test
-# description: the deletions feed of a nested branch reads each delete file of its chain up to the cap of the segment
+# description: a nested branch's deletions feed reads each delete file of its chain up to the cap of its writing segment
 # group: [branches]
-
-# that wrote it
 
 require ducklake
 

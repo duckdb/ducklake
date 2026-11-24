@@ -1,8 +1,6 @@
 # name: test/sql/branches/branch_delete_replacement.test
-# description: replacing a delete file on main deletes the events of a branch on the old file, the branch reads the
+# description: main replacing a delete file ends the branch events on it, the branch reads the replacement via its fork
 # group: [branches]
-
-# replacement through its fork
 
 require ducklake
 

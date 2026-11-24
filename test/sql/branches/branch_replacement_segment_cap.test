@@ -1,8 +1,6 @@
 # name: test/sql/branches/branch_replacement_segment_cap.test
-# description: the dated deletes of a replacement delete file apply up to the cap of the branch that wrote it, and a
+# description: a replacement's dated deletes apply up to its writer's cap, a branch copy of main's add reads as main's
 # group: [branches]
-
-# branch copy of an add event of main reads as main's
 
 require ducklake
 
