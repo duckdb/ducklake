@@ -45,8 +45,6 @@ struct DuckLakeCommitContext {
 	bool only_expires_snapshots = false;
 	//! The commit snapshot can be older than the metadata it reads, so even the first attempt checks conflicts
 	bool check_conflicts_first = false;
-	//! The files of the transaction belong to a client, which removes them itself if the commit fails
-	bool files_owned_by_client = false;
 	//! Rewrites the delete files whose new deletes are not dated to the commit snapshot.
 	std::function<void(idx_t)> set_delete_commit_snapshot = [](idx_t) {
 	};
@@ -337,6 +335,8 @@ public:
 	string data_path;
 	string separator;
 	DuckLakeSnapshotCommit commit_info;
+	//! The files of the transaction belong to a client, which removes them itself if the commit fails
+	bool files_owned_by_client = false;
 
 	map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> new_tables;
 	set<TableIndex> dropped_tables;

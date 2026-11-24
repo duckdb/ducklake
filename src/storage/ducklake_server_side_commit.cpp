@@ -161,6 +161,7 @@ void DuckLakeServerSideCommit::ReadCommitHeader() {
 	}
 	state = make_uniq<DuckLakeTransactionState>(*context.db, /*require_commit_message=*/false, new_name_maps,
 	                                            std::move(data_path), std::move(separator));
+	state->files_owned_by_client = files_owned_by_client;
 	state->commit_info.author = row.GetBaseValue(0);
 	state->commit_info.commit_message = row.GetBaseValue(1);
 	state->commit_info.commit_extra_info = row.GetBaseValue(2);
@@ -669,7 +670,6 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
                                                              idx_t &committed_schema_version) {
 	DuckLakeCommitContext ctx;
 	ctx.commit_info = state->commit_info;
-	ctx.files_owned_by_client = files_owned_by_client;
 	// a commit that a server passes on starts from the snapshot of its client, which other commits can have followed
 	ctx.check_conflicts_first = files_owned_by_client;
 	ctx.skip_drop_empty_inlined = true;

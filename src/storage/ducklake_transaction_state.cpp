@@ -91,6 +91,10 @@ DuckLakeTransactionState::~DuckLakeTransactionState() {
 }
 
 void DuckLakeTransactionState::CleanupFiles() {
+	if (files_owned_by_client) {
+		// the client that wrote the files removes them, also when the commit was passed on to another server
+		return;
+	}
 	// remove any files that were written
 	local_changes.CleanupFiles(db);
 }
@@ -3079,9 +3083,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			}
 			if (!retry_on_error || finished_retrying) {
 				// we abort after the max retry count
-				if (!context.files_owned_by_client) {
-					CleanupFiles();
-				}
+				CleanupFiles();
 				string error_message = "Failed to commit DuckLake transaction.\n";
 				// only an error that another retry could solve gets the advice to raise the retry count
 				if (retry_on_error) {

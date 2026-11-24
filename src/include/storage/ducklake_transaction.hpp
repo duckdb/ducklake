@@ -314,12 +314,8 @@ public:
 
 	bool ChangesMade() const;
 	//! The files of the transaction were written by a client of a REST server, which cleans them up itself
-	void SetFilesOwnedByClient() {
-		files_owned_by_client = true;
-	}
-	bool FilesOwnedByClient() const {
-		return files_owned_by_client;
-	}
+	void SetFilesOwnedByClient();
+	bool FilesOwnedByClient() const;
 	//! What is known about the publication of the commit, also after it failed
 	DuckLakeCommitOutcome GetCommitOutcome() const {
 		return commit_outcome;
@@ -554,7 +550,6 @@ private:
 	vector<unique_ptr<DuckLakeViewEntry>> outdated_transaction_views;
 
 private:
-	bool files_owned_by_client = false;
 	DuckLakeCommitOutcome commit_outcome = DuckLakeCommitOutcome::NOT_PUBLISHED;
 };
 
