@@ -78,12 +78,15 @@ SELECT k FROM ducklake.t WHERE s.b = 8
 ----
 2
 
-query III
-SELECT s.contains_null::BOOLEAN, s.min_value, s.max_value FROM ducklake_meta.ducklake_table_column_stats s
+# the dropped field keeps its stats row, the field added back in snapshot 3 starts over
+query IIII
+SELECT c.begin_snapshot, s.contains_null::BOOLEAN, s.min_value, s.max_value
+FROM ducklake_meta.ducklake_table_column_stats s
 JOIN ducklake_meta.ducklake_column c USING (table_id, column_id)
-WHERE c.column_name = 'b' AND c.end_snapshot IS NULL
+WHERE c.column_name = 'b' ORDER BY c.begin_snapshot
 ----
-true	8	8
+1	false	42	42
+3	true	8	8
 
 # rows inlined after the drop never had the field, so adding it back is allowed
 statement ok

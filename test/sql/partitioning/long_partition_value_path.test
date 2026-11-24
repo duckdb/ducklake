@@ -145,7 +145,7 @@ query I
 SELECT sum(f.record_count)
 FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM __ducklake_metadata_dl.ducklake_data_file f JOIN (SELECT data_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot, MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot FROM __ducklake_metadata_dl.ducklake_file_visibility WHERE branch_id = 0 GROUP BY data_file_id) v ON v.data_file_id = f.data_file_id) f
 JOIN __ducklake_metadata_dl.ducklake_table t USING (table_id)
-WHERE t.table_name = 'inlined' AND t.end_snapshot IS NULL AND f.end_snapshot IS NULL
+WHERE t.table_name = 'inlined' AND f.end_snapshot IS NULL
 ----
 3
 

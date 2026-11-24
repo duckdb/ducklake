@@ -26,7 +26,7 @@ DELETE FROM lake.c WHERE id < 60
 60
 
 statement ok
-SET VARIABLE c_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'c' AND end_snapshot IS NULL)
+SET VARIABLE c_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'c')
 
 statement ok con1
 BEGIN
@@ -77,7 +77,7 @@ DELETE FROM lake.p WHERE id < 60 OR id = 150
 61
 
 statement ok
-SET VARIABLE p_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'p' AND end_snapshot IS NULL)
+SET VARIABLE p_id = (SELECT table_id FROM meta.ducklake_table WHERE table_name = 'p')
 
 statement ok con1
 BEGIN

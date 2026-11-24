@@ -14,7 +14,7 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (
     METADATA_CATALOG 'metadata'
 )
 
-# A tag committed before the column is dropped must be closed with the column.
+# A tag committed before the column is dropped goes with the column.
 statement ok
 CREATE TABLE ducklake.test(a INTEGER, b INTEGER)
 
@@ -24,12 +24,17 @@ COMMENT ON COLUMN ducklake.test.b IS 'drop me'
 statement ok
 ALTER TABLE ducklake.test DROP COLUMN b
 
-query I
-SELECT count(*)
-FROM metadata.ducklake_column_tag
-WHERE end_snapshot IS NULL
+# the comment keeps its version row, born at the snapshot of the COMMENT
+query IIITT
+SELECT table_id, column_id, begin_snapshot, key, value FROM metadata.ducklake_column_tag
 ----
-0
+1	2	2	comment	drop me
+
+# the table has no commented column left
+query TT
+SELECT column_name, comment FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'test'
+----
+a	NULL
 
 # Adding, commenting on, and dropping a column in one transaction must not
 # commit a tag for a column that never becomes visible.
@@ -52,14 +57,12 @@ statement ok
 COMMIT
 
 query I
-SELECT count(*)
-FROM metadata.ducklake_column_tag
-WHERE end_snapshot IS NULL
+SELECT count(*) FROM metadata.ducklake_column_tag WHERE value = 'never committed'
 ----
 0
 
 # Commenting on an existing column and dropping it in one transaction must not
-# leave an active tag behind either.
+# leave a tag behind either.
 statement ok
 CREATE TABLE ducklake.comment_then_drop(a INTEGER, b INTEGER)
 
@@ -76,9 +79,7 @@ statement ok
 COMMIT
 
 query I
-SELECT count(*)
-FROM metadata.ducklake_column_tag
-WHERE end_snapshot IS NULL AND value = 'gone'
+SELECT count(*) FROM metadata.ducklake_column_tag WHERE value = 'gone'
 ----
 0
 
@@ -93,12 +94,12 @@ COMMENT ON COLUMN ducklake.renamed.c IS 'keep me'
 statement ok
 ALTER TABLE ducklake.renamed RENAME COLUMN c TO d
 
-query I
-SELECT count(*)
-FROM metadata.ducklake_column_tag
-WHERE end_snapshot IS NULL AND value = 'keep me'
+query TT
+SELECT column_name, comment FROM duckdb_columns() WHERE database_name = 'ducklake' AND table_name = 'renamed'
+ORDER BY column_index
 ----
-1
+a	NULL
+d	keep me
 
 # A comment set and renamed in one transaction must survive as well.
 statement ok
@@ -116,9 +117,17 @@ ALTER TABLE ducklake.comment_then_rename RENAME COLUMN c TO d
 statement ok
 COMMIT
 
-query I
-SELECT count(*)
-FROM metadata.ducklake_column_tag
-WHERE end_snapshot IS NULL AND value = 'survives rename'
+query TT
+SELECT column_name, comment FROM duckdb_columns()
+WHERE database_name = 'ducklake' AND table_name = 'comment_then_rename' ORDER BY column_index
 ----
-1
+a	NULL
+d	survives rename
+
+# every committed comment has one version row, the renames wrote no second row
+query IIITT
+SELECT table_id, column_id, begin_snapshot, key, value FROM metadata.ducklake_column_tag ORDER BY begin_snapshot
+----
+1	2	2	comment	drop me
+4	2	9	comment	keep me
+5	2	12	comment	survives rename

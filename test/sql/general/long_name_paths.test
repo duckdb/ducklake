@@ -38,7 +38,9 @@ statement ok
 INSERT INTO lake.uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu VALUES (3);
 
 query II
-SELECT length(path), path = 'uuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuuu/' FROM meta.ducklake_table WHERE end_snapshot IS NULL ORDER BY table_id
+SELECT length(path), path = repeat('u', 255) || '/' FROM meta.ducklake_table t
+WHERE t.begin_snapshot = (SELECT MAX(t2.begin_snapshot) FROM meta.ducklake_table t2 WHERE t2.table_id = t.table_id)
+ORDER BY table_id
 ----
 37	false
 256	true
