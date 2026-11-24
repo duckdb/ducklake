@@ -83,6 +83,23 @@ FROM ducklake_tags('dl')
 statement ok
 ROLLBACK
 
+# a committed tag of main's snapshot 3 reads the time of main's row on a fresh attach too
+statement ok
+CALL ducklake_create_tag('dl', 'release', version => 3)
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files',
+    METADATA_CATALOG 'meta')
+
+query III
+SELECT snapshot_id, snapshot_time IS NOT NULL, snapshot_time < TIMESTAMPTZ '2000-01-02 00:00:00+00'
+FROM ducklake_tags('dl')
+----
+3	true	false
+
 statement ok
 DETACH dl
 
@@ -95,6 +112,12 @@ query I
 SELECT id FROM dl.current_snapshot()
 ----
 3
+
+# the tag is born on main after the fork
+query I
+SELECT COUNT(*) FROM ducklake_tags('dl')
+----
+0
 
 query I
 SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
