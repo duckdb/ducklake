@@ -41,12 +41,13 @@ SELECT min(i), max(i), count(*), min(d), max(d) FROM ducklake.dropped
 0	149	150	0.0	74.5
 
 # the bounds are exact again after the deletes are rewritten away
+# the dropped column gone keeps a stats row, which stays out of the listing
 query IIII
 SELECT c.column_name, s.min_value, s.max_value, s.contains_nan::BOOLEAN
 FROM rewrite_stats_meta.ducklake_table_column_stats s
-JOIN rewrite_stats_meta.ducklake_table t ON t.table_id = s.table_id AND t.end_snapshot IS NULL
-JOIN rewrite_stats_meta.ducklake_column c ON c.table_id = s.table_id AND c.column_id = s.column_id AND c.end_snapshot IS NULL
-WHERE t.table_name = 'dropped'
+JOIN rewrite_stats_meta.ducklake_table t ON t.table_id = s.table_id
+JOIN rewrite_stats_meta.ducklake_column c ON c.table_id = s.table_id AND c.column_id = s.column_id
+WHERE t.table_name = 'dropped' AND c.column_name <> 'gone'
 ORDER BY ALL
 ----
 d	0.0	74.5	false
@@ -110,9 +111,9 @@ SELECT min(i), max(i), count(*) FROM ducklake.inlined
 query III
 SELECT c.column_name, s.min_value, s.max_value
 FROM rewrite_stats_meta.ducklake_table_column_stats s
-JOIN rewrite_stats_meta.ducklake_table t ON t.table_id = s.table_id AND t.end_snapshot IS NULL
-JOIN rewrite_stats_meta.ducklake_column c ON c.table_id = s.table_id AND c.column_id = s.column_id AND c.end_snapshot IS NULL
-WHERE t.table_name = 'inlined'
+JOIN rewrite_stats_meta.ducklake_table t ON t.table_id = s.table_id
+JOIN rewrite_stats_meta.ducklake_column c ON c.table_id = s.table_id AND c.column_id = s.column_id
+WHERE t.table_name = 'inlined' AND c.column_name <> 'j'
 ORDER BY ALL
 ----
 i	50	2001

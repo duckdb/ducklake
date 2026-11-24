@@ -384,6 +384,10 @@ public:
 	bool SupportsFileVisibilityEvents() const {
 		return ducklake_version >= DuckLakeVersion::V2_0_DEV1;
 	}
+	//! Whether the catalog rows keep their birth and end in companion tables, the layout of 2.0
+	bool SupportsRowVisibility() const {
+		return ducklake_version >= DuckLakeVersion::V2_0_DEV1;
+	}
 	//! Whether an expiry commits a snapshot whose changes list the expired snapshots
 	bool RecordsExpiredSnapshots() const {
 		return SupportsSnapshotTags();

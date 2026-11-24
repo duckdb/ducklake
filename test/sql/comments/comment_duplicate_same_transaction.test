@@ -32,10 +32,12 @@ SELECT comment FROM duckdb_tables() WHERE table_name = 'test'
 ----
 second
 
-query II
-SELECT key, value FROM __ducklake_metadata_ducklake.ducklake_tag WHERE end_snapshot IS NULL AND object_id = 1
+# the transaction writes one version row of the tag, with the value it ended on
+query TTI
+SELECT key, value, begin_snapshot FROM __ducklake_metadata_ducklake.ducklake_tag WHERE object_id = 1
+ORDER BY begin_snapshot
 ----
-comment	second
+comment	second	2
 
 # Check column-wise comment.
 statement ok
@@ -55,10 +57,11 @@ SELECT column_name, comment FROM duckdb_columns() WHERE table_name = 'test' AND 
 ----
 a	col second
 
-query II
-SELECT key, value FROM __ducklake_metadata_ducklake.ducklake_column_tag WHERE end_snapshot IS NULL AND table_id = 1
+query TTI
+SELECT key, value, begin_snapshot FROM __ducklake_metadata_ducklake.ducklake_column_tag WHERE table_id = 1
+ORDER BY begin_snapshot
 ----
-comment	col second
+comment	col second	3
 
 # Check view-wise comment.
 statement ok
@@ -80,3 +83,9 @@ query I
 SELECT comment FROM duckdb_views() WHERE view_name = 'test_view'
 ----
 view second
+
+query TTI
+SELECT key, value, begin_snapshot FROM __ducklake_metadata_ducklake.ducklake_tag WHERE object_id = 2
+ORDER BY begin_snapshot
+----
+comment	view second	5

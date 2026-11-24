@@ -29,9 +29,9 @@ endloop
 statement ok
 COMMIT
 
-# the 1200 columns of the commit do not go out as one VALUES list
+# the 1200 columns of the commit do not go out as one VALUES list, a 2.0 catalog names the columns
 query I
-SELECT sum(len(regexp_extract_all(query, 'INSERT INTO [^ ]*ducklake_column VALUES'))) > 1
+SELECT sum(len(regexp_extract_all(query, 'INSERT INTO [^ ]*ducklake_column( \([^)]*\))? VALUES'))) > 1
 FROM duckdb_logs_parsed('DuckLakeMetadata')
 ----
 true
@@ -63,7 +63,7 @@ statement ok
 COMMIT
 
 query I
-SELECT sum(len(regexp_extract_all(query, 'INSERT INTO [^ ]*ducklake_column VALUES')))
+SELECT sum(len(regexp_extract_all(query, 'INSERT INTO [^ ]*ducklake_column( \([^)]*\))? VALUES')))
 FROM duckdb_logs_parsed('DuckLakeMetadata')
 ----
 2

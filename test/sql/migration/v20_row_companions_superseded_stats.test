@@ -1,0 +1,87 @@
+# name: test/sql/migration/v20_row_companions_superseded_stats.test
+# description: the migration drops the bounds of a column whose superseded version row held the type of its files
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 0)
+
+# the 1.x writers keep the INTEGER version row of the column beside the FLOAT one, both born at snapshot 1
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE dl.t (v INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (16777219)
+
+statement ok
+ALTER TABLE dl.t ALTER COLUMN v TYPE FLOAT
+
+statement ok
+COMMIT
+
+query III
+SELECT column_type, begin_snapshot, end_snapshot FROM meta.ducklake_column ORDER BY column_type
+----
+float32	1	NULL
+int32	1	1
+
+query II
+SELECT min_value, max_value FROM meta.ducklake_table_column_stats
+----
+16777219	16777219
+
+statement ok
+DETACH dl
+
+# the superseded row goes, and with it the only record that the file holds INTEGER values, so the bounds go too
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 0)
+
+query III
+SELECT column_type, begin_snapshot, branch_id FROM meta.ducklake_column
+----
+float32	1	0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_column_visibility
+----
+0
+
+query II
+SELECT min_value, max_value FROM meta.ducklake_table_column_stats
+----
+NULL	NULL
+
+query II
+SELECT min_value, max_value FROM meta.ducklake_file_column_stats
+----
+NULL	NULL
+
+# the widening to DOUBLE reads the file value exactly, so no rounded bound may exclude it
+statement ok
+ALTER TABLE dl.t ALTER COLUMN v TYPE DOUBLE
+
+query I
+SELECT v FROM dl.t WHERE v < 16777219.5
+----
+16777219.0
+
+query II
+SELECT min_value, max_value FROM meta.ducklake_table_column_stats
+----
+NULL	NULL
+
+statement ok
+DETACH dl

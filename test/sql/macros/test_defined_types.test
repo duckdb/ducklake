@@ -20,10 +20,10 @@ statement ok
 CREATE MACRO add_one(x INTEGER) AS (x + 1);
 
 # Check Macro Tables
-query IIIII
-FROM __ducklake_metadata_ducklake.ducklake_macro;
+query IIII
+SELECT schema_id, macro_id, macro_name, begin_snapshot FROM __ducklake_metadata_ducklake.ducklake_macro;
 ----
-0	1	add_one	1	NULL
+0	1	add_one	1
 
 query IIIII
 FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
@@ -46,11 +46,11 @@ statement ok
 CREATE MACRO add_two_def(x INTEGER, y := 5) AS (x + y);
 
 # Check Macro Tables
-query IIIII
-FROM __ducklake_metadata_ducklake.ducklake_macro;
+query IIII
+SELECT schema_id, macro_id, macro_name, begin_snapshot FROM __ducklake_metadata_ducklake.ducklake_macro;
 ----
-0	1	add_one	1	NULL
-0	2	add_two_def	2	NULL
+0	1	add_one	1
+0	2	add_two_def	2
 
 query IIIII
 FROM __ducklake_metadata_ducklake.ducklake_macro_impl;
@@ -76,12 +76,12 @@ statement ok
 CREATE MACRO add_one_same(x BIGINT := 1) AS (x + 1);
 
 # Check Macro Tables
-query IIIII
-FROM __ducklake_metadata_ducklake.ducklake_macro;
+query IIII
+SELECT schema_id, macro_id, macro_name, begin_snapshot FROM __ducklake_metadata_ducklake.ducklake_macro;
 ----
-0	1	add_one	1	NULL
-0	2	add_two_def	2	NULL
-0	3	add_one_same	3	NULL
+0	1	add_one	1
+0	2	add_two_def	2
+0	3	add_one_same	3
 
 query IIIII
 FROM __ducklake_metadata_ducklake.ducklake_macro_impl;

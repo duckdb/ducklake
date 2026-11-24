@@ -25,11 +25,13 @@ INSERT INTO lake.other VALUES (1), (2)
 statement ok
 COMMENT ON COLUMN lake.tagged.v IS 'a comment'
 
+# the owner tag of id is a copy of the comment row of v, so it has the row layout of the catalog
 statement ok
 INSERT INTO __ducklake_metadata_lake.ducklake_column_tag
-SELECT c.table_id, c.column_id, c.begin_snapshot, NULL, 'owner', 'maintenance'
-FROM __ducklake_metadata_lake.ducklake_column c JOIN __ducklake_metadata_lake.ducklake_table t USING (table_id)
-WHERE t.table_name = 'tagged' AND c.column_name = 'id' AND c.end_snapshot IS NULL
+SELECT * REPLACE ((SELECT c.column_id FROM __ducklake_metadata_lake.ducklake_column c
+    WHERE c.table_id = t.table_id AND c.column_name = 'id') AS column_id, 'owner' AS key, 'maintenance' AS value)
+FROM __ducklake_metadata_lake.ducklake_column_tag t
+WHERE t.value = 'a comment'
 
 statement ok
 DETACH lake
