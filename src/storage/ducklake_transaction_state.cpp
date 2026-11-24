@@ -396,26 +396,41 @@ void DuckLakeTransactionState::CheckForConflicts(const TransactionChangeInformat
 	}
 }
 
+// the filter of a catalog before 2.0 alone lists the tagged snapshots, and tags need a 2.0 catalog
+// LCOV_EXCL_START
+string DuckLakeTransactionState::TaggedSnapshotIdList(const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &tags) {
+	vector<string> snapshot_ids;
+	for (auto &tag : tags) {
+		snapshot_ids.push_back(to_string(tag.second.snapshot_id));
+	}
+	return StringUtil::Join(snapshot_ids, ", ");
+}
+// LCOV_EXCL_STOP
+
 void DuckLakeTransactionState::CheckTaggedSnapshotsExist(const DuckLakeCommitContext &context) const {
 	if (new_snapshot_tags.empty()) {
 		return;
 	}
 	// a tag names a snapshot of a branch, other branches hold the same ids from 2.0 on
-	vector<string> targets;
-	for (auto &tag : new_snapshot_tags) {
-		if (context.supports_v2_0_metadata) {
+	string filter;
+	if (context.supports_v2_0_metadata) {
+		vector<string> targets;
+		for (auto &tag : new_snapshot_tags) {
 			targets.push_back(StringUtil::Format("(branch_id = %llu AND snapshot_id = %llu)",
 			                                     tag.second.snapshot_branch_id, tag.second.snapshot_id));
-		} else {
-			targets.push_back(StringUtil::Format("snapshot_id = %llu", tag.second.snapshot_id));
 		}
+		filter = StringUtil::Join(targets, " OR ");
+	} else {
+		// LCOV_EXCL_START
+		filter = StringUtil::Format("snapshot_id IN (%s)", TaggedSnapshotIdList(new_snapshot_tags));
+		// LCOV_EXCL_STOP
 	}
 	auto result = context.conflict_query_executor(
-	    StringUtil::Format("SELECT snapshot_id, %s FROM {METADATA_CATALOG}.ducklake_snapshot WHERE %s",
-	                       context.supports_v2_0_metadata ? "branch_id" : "0", StringUtil::Join(targets, " OR ")));
+	    StringUtil::Format("SELECT snapshot_id%s FROM {METADATA_CATALOG}.ducklake_snapshot WHERE %s",
+	                       context.supports_v2_0_metadata ? ", branch_id" : "", filter));
 	set<pair<idx_t, idx_t>> existing;
 	for (auto &row : *result) {
-		existing.emplace(row.GetValue<idx_t>(1), row.GetValue<idx_t>(0));
+		existing.emplace(context.supports_v2_0_metadata ? row.GetValue<idx_t>(1) : idx_t(0), row.GetValue<idx_t>(0));
 	}
 	for (auto &tag : new_snapshot_tags) {
 		auto target = make_pair(context.supports_v2_0_metadata ? tag.second.snapshot_branch_id : idx_t(0),

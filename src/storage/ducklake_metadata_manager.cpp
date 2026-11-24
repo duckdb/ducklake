@@ -1430,7 +1430,7 @@ DuckLakeMetadataManager::V2_0LineageColumns DuckLakeMetadataManager::ProbeV2_0Li
 }
 
 string DuckLakeMetadataManager::V2_0LineageColumnsSql(const V2_0LineageColumns &lineage) {
-	// a step interrupted after the ADD COLUMN probes as complete, so the rows are filled on every run
+	// the default of the ADD COLUMN fills the rows except on SQLite, where the UPDATE of the batch fills them
 	auto query = BranchColumnSql("ducklake_schema_versions", "branch_id", lineage.has_schema_versions_branch);
 	if (lineage.has_snapshot_tag_table) {
 		query += BranchColumnSql("ducklake_snapshot_tag", "snapshot_branch_id", lineage.has_snapshot_tag_target_branch);
@@ -2436,19 +2436,37 @@ string DuckLakeMetadataManager::InlinedTableRegistrations(bool row_visibility, c
 
 string DuckLakeMetadataManager::GetInlinedTableNamesSql(TableIndex table_id, bool row_visibility,
                                                         const DuckLakeBranchChain &chain) {
-	return StringUtil::Format(R"(
+	if (!row_visibility) {
+		return StringUtil::Format(R"(
 SELECT DISTINCT table_name
-FROM %s idt
+FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
 WHERE table_id = %d)",
+		                          table_id.index);
+	}
+	return StringUtil::Format(R"(
+SELECT DISTINCT idt.table_name
+FROM %s idt
+WHERE idt.table_id = %d)",
 	                          InlinedTableRegistrations(row_visibility, chain, table_id.index), table_id.index);
 }
 
 string DuckLakeMetadataManager::GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id, bool row_visibility,
                                                                       const DuckLakeBranchChain &chain) {
-	return StringUtil::Format(R"(
+	if (!row_visibility) {
+		return StringUtil::Format(R"(
 SELECT table_name
-FROM %s idt
+FROM {METADATA_CATALOG}.ducklake_inlined_data_tables
 WHERE table_id = %d AND schema_version < (
+	SELECT MAX(schema_version)
+	FROM {METADATA_CATALOG}.ducklake_schema_versions
+	WHERE table_id = %d AND begin_snapshot <= {SNAPSHOT_ID}
+))",
+		                          table_id.index, table_id.index);
+	}
+	return StringUtil::Format(R"(
+SELECT idt.table_name
+FROM %s idt
+WHERE idt.table_id = %d AND idt.schema_version < (
 	SELECT MAX(sv.schema_version)
 	FROM {METADATA_CATALOG}.ducklake_schema_versions sv
 	WHERE sv.table_id = %d AND sv.begin_snapshot <= {SNAPSHOT_ID}%s

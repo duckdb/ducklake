@@ -215,6 +215,8 @@ public:
 	                       DuckLakeSnapshot transaction_snapshot, const DuckLakeCommitContext &context) const;
 	//! Fails when a snapshot tagged by this transaction was expired meanwhile
 	void CheckTaggedSnapshotsExist(const DuckLakeCommitContext &context) const;
+	//! The ids of the snapshots the tags point at, as a SQL list
+	static string TaggedSnapshotIdList(const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &tags);
 	void CheckFileConflicts(const TransactionChangeInformation &changes, const SnapshotChangeInformation &other_changes,
 	                        const DuckLakeCommitContext &context) const;
 
