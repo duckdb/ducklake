@@ -47,7 +47,8 @@
         "test/sql/stats/count_star_optimization_cache.test",
         "test/sql/general/ducklake_metadata_logging.test",
         "test/sql/transaction/commit_skips_catalog_load.test",
-        "test/sql/transaction/commit_retry_skips_catalog_load.test"
+        "test/sql/transaction/commit_retry_skips_catalog_load.test",
+        "test/sql/branches/branchless_skips_guards.test"
       ]
     },
     {
@@ -743,6 +744,7 @@
         "test/sql/branches/branch_compacted_fork_rows.test",
         "test/sql/branches/branch_delete_file_choice.test",
         "test/sql/branches/branch_delete_replacement.test",
+        "test/sql/branches/branch_expire_dry_run.test",
         "test/sql/branches/branch_feed_full_delete_previous_file.test",
         "test/sql/branches/branch_feed_inherited_dated_deletes.test",
         "test/sql/branches/branch_feed_inherited_partial_file.test",
@@ -761,9 +763,11 @@
         "test/sql/branches/branch_nested_retro_delete_history.test",
         "test/sql/branches/branch_nested_segment_cap.test",
         "test/sql/branches/branch_only_file_attach.test",
+        "test/sql/branches/branch_protection.test",
         "test/sql/branches/branch_refork_historical.test",
         "test/sql/branches/branch_remove_data_files.test",
         "test/sql/branches/branch_replacement_segment_cap.test",
+        "test/sql/branches/branch_replacement_writes_no_branch_rows.test",
         "test/sql/branches/branch_rewrite_snapshots_view.test",
         "test/sql/branches/branch_root_without_parent.test",
         "test/sql/branches/branch_same_snapshot_id.test",

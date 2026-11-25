@@ -1,5 +1,5 @@
 # name: test/sql/branches/branch_root_without_parent.test
-# description: a branch row without a parent is a root of its own, it inherits no snapshot of main
+# description: a branch row without a parent is a root of its own, so the expiry of main inherits nothing to it
 # group: [branches]
 
 require ducklake
@@ -23,9 +23,30 @@ DELETE FROM dl.t
 statement ok
 INSERT INTO meta.ducklake_branch VALUES (1, 'island', NULL, NULL)
 
-# the expiry of main does not reach the root
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
 statement ok
 CALL ducklake_expire_snapshots('dl', versions => [1])
+
+statement ok
+CALL disable_logging()
+
+# the guard keeps the files the events of the branch reference, there is no cap of main to inherit through
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%NOT EXISTS (SELECT 1 FROM%ducklake_branch b%'
+----
+true
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%AND NOT ((f.begin_snapshot <=%'
+----
+0
 
 query I
 SELECT count(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)

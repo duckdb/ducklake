@@ -52,3 +52,41 @@ SELECT * FROM dl.t
 
 statement ok
 DETACH dl
+
+# a file a branch event references is skipped by compaction
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS m (DATA_PATH '{DATA_PATH}/branch_attach_compacted_files',
+    METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+INSERT INTO m.t VALUES (3)
+
+statement ok
+INSERT INTO m.t VALUES (4)
+
+# the event is dated at the first own snapshot id of the branch
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 1, v.table_id, v.data_file_id, 3, FALSE
+    FROM meta.ducklake_file_visibility v JOIN meta.ducklake_data_file f ON v.data_file_id = f.data_file_id
+    WHERE v.branch_id = 0 AND v.is_delete = FALSE AND NOT EXISTS (SELECT 1 FROM meta.ducklake_file_visibility d
+    WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.data_file_id = v.data_file_id) AND f.record_count = 1 LIMIT 1
+
+statement ok
+CALL ducklake_merge_adjacent_files('m')
+
+# the referenced file keeps its identity and stays live next to the merged file
+query I
+SELECT COUNT(*) FROM meta.ducklake_data_file WHERE data_file_id IN (SELECT data_file_id
+    FROM meta.ducklake_file_visibility WHERE branch_id = 1)
+----
+1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_visibility v
+    WHERE v.branch_id = 0 AND v.is_delete = FALSE AND NOT EXISTS (SELECT 1 FROM meta.ducklake_file_visibility d
+    WHERE d.branch_id = 0 AND d.is_delete = TRUE AND d.data_file_id = v.data_file_id)
+----
+2
+
+statement ok
+DETACH m
