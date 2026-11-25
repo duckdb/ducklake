@@ -1745,8 +1745,8 @@ void DuckLakeTransactionState::ResolveNullOnlyBounds(TableIndex table_id, const 
 		auto &column_stats = entry.second;
 		bool without_nulls = column_stats.has_null_count && column_stats.null_count == 0;
 		if (column_stats.bounds_unknown && !without_nulls &&
-		    !context.column_holds_values(table_id, entry.first, snapshot_id) &&
-		    NewDataSetsBounds(entry.first, column_stats.type, table_changes)) {
+		    NewDataSetsBounds(entry.first, column_stats.type, table_changes) &&
+		    !context.column_holds_values(table_id, entry.first, snapshot_id)) {
 			null_only_columns.insert(entry.first);
 		}
 	}
@@ -2526,21 +2526,20 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		return entry->second;
 	};
 	unordered_map<idx_t, string> table_paths;
-	auto get_table_path = [&](TableIndex table_id) -> const string & {
-		auto entry = table_paths.find(table_id.index);
-		if (entry == table_paths.end()) {
-			auto path = DuckLakeMetadataManager::GetPathForTable(table_id, new_tables_result, context.query_metadata,
-			                                                     data_path, separator);
-			entry = table_paths.emplace(table_id.index, std::move(path)).first;
-		}
-		return entry->second;
-	};
 	auto table_relative_paths = [&](const auto &files, auto path_member) {
+		set<TableIndex> unresolved;
+		for (auto &file : files) {
+			if (table_paths.find(file.table_id.index) == table_paths.end()) {
+				unresolved.insert(file.table_id);
+			}
+		}
+		DuckLakeMetadataManager::GetPathsForTables(unresolved, new_tables_result, context.get_table_path,
+		                                           context.query_metadata, data_path, separator, table_paths);
 		vector<DuckLakePath> result;
 		result.reserve(files.size());
 		for (auto &file : files) {
-			result.push_back(
-			    DuckLakeMetadataManager::GetRelativePath(file.*path_member, get_table_path(file.table_id), separator));
+			result.push_back(DuckLakeMetadataManager::GetRelativePath(file.*path_member,
+			                                                          table_paths[file.table_id.index], separator));
 		}
 		return result;
 	};

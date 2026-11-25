@@ -1821,7 +1821,19 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.get_table_stats = [&](TableIndex table_id) {
 		return ducklake_catalog.GetTableStats(*this, GetSnapshot(), table_id, &commit_tables);
 	};
+	context.get_table_path = [&](TableIndex table_id) {
+		// a table keeps the path it was created with, the commit does not load the catalog for it
+		return ducklake_catalog.GetLoadedTableDataPath(transaction_snapshot, table_id);
+	};
 	context.column_holds_values = [&](TableIndex table_id, FieldIndex column_id, idx_t snapshot_id) {
+		auto cached_snapshot = ducklake_catalog.OlderColumnsWithValuesSnapshot(table_id, column_id, snapshot_id);
+		if (cached_snapshot.IsValid()) {
+			// the commits of other catalogs keep the columns found with values of the tables they did not change
+			set<TableIndex> changed;
+			bool known = metadata_manager->GetTablesWithRemovedValues(cached_snapshot.GetIndex(), snapshot_id, changed);
+			ducklake_catalog.AdvanceColumnsWithValues(cached_snapshot.GetIndex(), snapshot_id,
+			                                          known ? &changed : nullptr);
+		}
 		return ducklake_catalog.ColumnHoldsValues(table_id, column_id, snapshot_id);
 	};
 	context.set_column_holds_values = [&](TableIndex table_id, FieldIndex column_id, idx_t snapshot_id) {
