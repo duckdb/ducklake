@@ -39,6 +39,12 @@ EXPLAIN ANALYZE SELECT * FROM ducklake.test
 ----
 analyzed_plan	<REGEX>:.*#HEAD: 0.*
 
+# a later scan reads the data file and the delete file from the cache
+query II
+EXPLAIN ANALYZE SELECT * FROM ducklake.test
+----
+analyzed_plan	<REGEX>:.*#GET: 0.*
+
 # we can time travel to see the state of the table before deletes
 query II
 EXPLAIN ANALYZE SELECT * FROM ducklake.test AT (VERSION => 1)
