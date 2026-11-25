@@ -11,6 +11,7 @@
 #include "ducklake_macro_entry.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/main/database.hpp"
+#include "common/ducklake_commit_outcome.hpp"
 #include "common/ducklake_data_file.hpp"
 #include "common/ducklake_snapshot.hpp"
 #include "duckdb/common/case_insensitive_map.hpp"
@@ -313,8 +314,21 @@ public:
 
 	bool ChangesMade() const;
 	//! The files of the transaction were written by a client of a REST server, which cleans them up itself
-	void SetFilesOwnedByClient() {
-		files_owned_by_client = true;
+	void SetFilesOwnedByClient();
+	bool FilesOwnedByClient() const;
+	//! What is known about the publication of the commit, also after it failed
+	DuckLakeCommitOutcome GetCommitOutcome() const {
+		return commit_outcome;
+	}
+	//! Whether the commit wrote its changes to the metadata, also if it failed after that
+	bool IsPublished() const {
+		return commit_outcome == DuckLakeCommitOutcome::PUBLISHED;
+	}
+	//! Moves the outcome of the commit to what an attempt reports, never back: PUBLISHED is final
+	void ReportCommitOutcome(DuckLakeCommitOutcome reported) {
+		if (reported > commit_outcome) {
+			commit_outcome = reported;
+		}
 	}
 	bool SchemaChangesMade() const;
 	idx_t GetLocalCatalogId();
@@ -538,7 +552,7 @@ private:
 	vector<unique_ptr<DuckLakeViewEntry>> outdated_transaction_views;
 
 private:
-	bool files_owned_by_client = false;
+	DuckLakeCommitOutcome commit_outcome = DuckLakeCommitOutcome::NOT_PUBLISHED;
 };
 
 } // namespace duckdb

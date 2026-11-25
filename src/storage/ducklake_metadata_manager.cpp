@@ -115,6 +115,10 @@ bool DuckLakeMetadataManager::IsRetryableCommitError(const string &message) cons
 	return rule && rule->retryable;
 }
 
+bool DuckLakeMetadataManager::IsCatalogRejection(const string &message) const {
+	return GetMetadataProfile().FindCommitErrorRule(message);
+}
+
 string DuckLakeMetadataManager::CommitErrorHint(const string &message) const {
 	auto rule = GetMetadataProfile().FindCommitErrorRule(message);
 	if (!rule) {

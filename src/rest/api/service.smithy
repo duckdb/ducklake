@@ -76,6 +76,7 @@ service DuckLake {
         Compact
         TableChanges
         CommitTransaction
+        GroupCommitTransaction
     ]
 }
 

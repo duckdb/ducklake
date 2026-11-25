@@ -1,0 +1,294 @@
+# name: test/sql/rest/rest_commit_group.test
+# description: Group commits share a queue with regular commits, concurrent appends keep all rows
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+# half of the clients inline their rows, the other half writes files
+loop i 0 4
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl{i} (DATA_INLINING_ROW_LIMIT 1000)
+
+endloop
+
+loop i 4 8
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl{i} (DATA_INLINING_ROW_LIMIT 0)
+
+endloop
+
+statement ok
+CREATE TABLE dl0.shared(i INTEGER)
+
+statement ok
+SET ducklake_rest_group_commit=true
+
+concurrentloop i 0 8
+
+statement ok
+SET ducklake_max_retry_count=0
+
+loop j 0 10
+
+statement ok
+INSERT INTO dl{i}.shared VALUES ({i} * 10 + {j})
+
+endloop
+
+endloop
+
+query III
+SELECT count(*), count(DISTINCT i), sum(i) FROM dl0.shared
+----
+80	80	3160
+
+query I
+SELECT count(*) > 0 FROM ducklake_list_files('dl0', 'shared')
+----
+true
+
+# group commits that wait together share one snapshot: the server holds them back until all four wait
+statement ok
+CREATE TABLE dl0.sharing(i INTEGER)
+
+statement ok
+SET VARIABLE snapshots_before = (SELECT count(*) FROM ducklake_snapshots('dl0'))
+
+statement ok rest_db:rest_server_con
+SET ducklake_debug_rest_commit_hold=4
+
+# two of the clients inline their rows, the other two write files
+concurrentloop i 2 6
+
+statement ok
+INSERT INTO dl{i}.sharing VALUES ({i})
+
+endloop
+
+statement ok rest_db:rest_server_con
+SET ducklake_debug_rest_commit_hold=0
+
+query II
+SELECT count(*), sum(i) FROM dl0.sharing
+----
+4	14
+
+query I
+SELECT count(*) - getvariable('snapshots_before') FROM ducklake_snapshots('dl0')
+----
+1
+
+# appends to tables created after the oldest snapshot of a group commit on their own
+concurrentloop i 0 8
+
+statement ok
+CREATE TABLE dl{i}.own{i}(i INTEGER)
+
+loop j 0 5
+
+statement ok
+INSERT INTO dl{i}.shared VALUES (100 + {i} * 10 + {j})
+
+statement ok
+INSERT INTO dl{i}.own{i} VALUES ({j})
+
+endloop
+
+endloop
+
+query II
+SELECT count(*), count(DISTINCT i) FROM dl0.shared
+----
+120	120
+
+loop i 0 8
+
+query II
+SELECT count(*), sum(i) FROM dl0.own{i}
+----
+5	10
+
+endloop
+
+# an update conflicts with a group commit as it does with a regular commit
+statement ok con1
+BEGIN
+
+statement ok con1
+UPDATE dl0.shared SET i = -1 WHERE i = 0
+
+statement ok con2
+UPDATE dl1.shared SET i = -2 WHERE i = 0
+
+statement error con1
+COMMIT
+----
+conflict
+
+# regular commits and group commits wait in the same queue
+statement ok
+CREATE TABLE dl0.mixed(i INTEGER)
+
+concurrentloop i 0 8
+
+statement ok
+SET SESSION ducklake_rest_group_commit=({i} % 2 = 0)
+
+statement ok
+SET ducklake_max_retry_count=0
+
+loop j 0 10
+
+statement ok
+INSERT INTO dl{i}.mixed VALUES ({i} * 10 + {j})
+
+endloop
+
+endloop
+
+query III
+SELECT count(*), count(DISTINCT i), sum(i) FROM dl0.mixed
+----
+80	80	3160
+
+# a regular commit publishes a snapshot of its own
+statement ok
+SET ducklake_rest_group_commit=false
+
+statement ok
+SET VARIABLE snapshots_before = (SELECT count(*) FROM ducklake_snapshots('dl0'))
+
+concurrentloop i 0 8
+
+statement ok
+INSERT INTO dl{i}.mixed VALUES (1000 + {i})
+
+endloop
+
+query I
+SELECT count(*) - getvariable('snapshots_before') FROM ducklake_snapshots('dl0')
+----
+8
+
+# a group commit with other changes than appends commits as a regular commit does
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/group-commit', '{"requests":[{"create_schema":{"placeholder_id":-1,"schema_name":"grouped"}}]}')
+----
+200
+
+query I
+SELECT count(*) FROM information_schema.schemata WHERE catalog_name = 'dl0' AND schema_name = 'grouped'
+----
+1
+
+# a group commit that fails reports its error
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/group-commit', '{"requests":[{"create_schema":{"placeholder_id":-1,"schema_name":"grouped"}}]}')
+----
+404
+
+# a group commit that cannot be read is answered by the commit itself
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/group-commit', '{"requests":5}')
+----
+400
+
+# rows that keep their row ids are the rows of an update, which does not share a snapshot
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/group-commit', '{"requests":[{"insert_rows":{"table_id":1,"row_ids":[0]}}]}')
+----
+400
+
+# group commits without a snapshot are based on the latest one, they share a snapshot too
+statement ok
+CREATE TABLE dl0.unpinned(i INTEGER)
+
+loop i 0 2
+
+statement ok
+COPY (SELECT {i}::INTEGER AS i) TO '{TEST_DIR}/{BASE_TEST_NAME}_unpinned_{i}.parquet' (FORMAT PARQUET, FIELD_IDS {i: 1})
+
+endloop
+
+statement ok
+CREATE TABLE unpinned_id AS SELECT (j->>'$.table_id')::BIGINT AS id FROM (SELECT unnest(from_json(response->'$.catalog.tables', '["JSON"]')) AS j FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest?include_catalog=true', '')) WHERE j->>'$.table_name' = 'unpinned'
+
+statement ok
+CREATE TABLE unpinned_outcomes(i INTEGER, status INTEGER, snapshot_id VARCHAR)
+
+statement ok rest_db:rest_server_con
+SET ducklake_debug_rest_commit_hold=2
+
+concurrentloop i 0 2
+
+statement ok
+SET VARIABLE body = json_object('requests', [json_object('insert_files', json_object('table_id', (SELECT id FROM unpinned_id), 'files', [json_object('path', '{TEST_DIR}/{BASE_TEST_NAME}_unpinned_{i}.parquet', 'record_count', 1, 'file_size_bytes', (SELECT size FROM read_blob('{TEST_DIR}/{BASE_TEST_NAME}_unpinned_{i}.parquet')))]))])
+
+statement ok
+INSERT INTO unpinned_outcomes SELECT {i}, status, response->>'$.snapshot.snapshot_id' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/group-commit', getvariable('body'))
+
+endloop
+
+statement ok rest_db:rest_server_con
+SET ducklake_debug_rest_commit_hold=0
+
+query III
+SELECT count(*), count(*) FILTER (WHERE status = 200), count(DISTINCT snapshot_id) FROM unpinned_outcomes
+----
+2	2	1
+
+query II
+SELECT count(*), sum(i) FROM dl0.unpinned
+----
+2	1
+
+# a group with a commit that cannot be applied: the commits run one by one, and only that one is rejected
+loop i 2 4
+
+statement ok
+COPY (SELECT {i}::INTEGER AS i) TO '{TEST_DIR}/{BASE_TEST_NAME}_unpinned_{i}.parquet' (FORMAT PARQUET, FIELD_IDS {i: 1})
+
+endloop
+
+statement ok
+DELETE FROM unpinned_outcomes
+
+statement ok rest_db:rest_server_con
+SET ducklake_debug_rest_commit_hold=2
+
+concurrentloop i 2 4
+
+statement ok
+SET VARIABLE body = json_object('requests', [json_object('insert_files', json_object('table_id', (SELECT CASE WHEN {i} = 3 THEN 999999 ELSE id END FROM unpinned_id), 'files', [json_object('path', '{TEST_DIR}/{BASE_TEST_NAME}_unpinned_{i}.parquet', 'record_count', 1, 'file_size_bytes', (SELECT size FROM read_blob('{TEST_DIR}/{BASE_TEST_NAME}_unpinned_{i}.parquet')))]))])
+
+statement ok
+INSERT INTO unpinned_outcomes SELECT {i}, status, response->>'$.snapshot.snapshot_id' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/group-commit', getvariable('body'))
+
+endloop
+
+statement ok rest_db:rest_server_con
+SET ducklake_debug_rest_commit_hold=0
+
+query II
+SELECT i, status FROM unpinned_outcomes ORDER BY i
+----
+2	200
+3	404
+
+query II
+SELECT count(*), sum(i) FROM dl0.unpinned
+----
+3	3
+
+loop i 0 8
+
+statement ok
+DETACH dl{i}
+
+endloop
+
+include test/template/rest_teardown.test_template

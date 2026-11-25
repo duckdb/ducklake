@@ -54,6 +54,10 @@ struct DuckLakeCommitContext {
 	std::function<bool(const string &)> is_retryable_metadata_error = [](const string &) {
 		return false;
 	};
+	//! Whether the catalog rejected the commit with the error: it rolled back, so nothing was published.
+	std::function<bool(const string &)> is_catalog_rejection = [](const string &) {
+		return false;
+	};
 	//! The commit error without the failed query text that it repeats.
 	std::function<string(const string &)> commit_error_without_query = [](const string &message) {
 		return message;
@@ -69,6 +73,9 @@ struct DuckLakeCommitContext {
 	//! Commits the underlying metadata connection.
 	// LCOV_EXCL_START
 	std::function<void()> commit_connection = []() {
+	};
+	//! Tells the committer whether its changes are in the metadata, or may be, whatever fails after that.
+	std::function<void(DuckLakeCommitOutcome)> report_commit_outcome = [](DuckLakeCommitOutcome) {
 	};
 	//! Rolls back the metadata connection if a transaction is active.
 	std::function<void()> try_rollback = []() {
@@ -174,6 +181,8 @@ struct DuckLakeCommitContext {
 	bool write_snapshot = true;
 	//! Whether the commit batch locks the options of the transaction, also when it writes no snapshot.
 	bool locks_config_options = false;
+	//! Whether the commit batch publishes the changes itself, as the catalog commits each statement.
+	bool publishes_with_batch = false;
 	//! Author / message / extra info for the snapshot row.
 	DuckLakeSnapshotCommit commit_info;
 	//! When true, Commit() skips the post-commit DropEmptySupersededInlinedTables cleanup.
@@ -205,6 +214,10 @@ public:
 
 	void Commit(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &transaction_changes,
 	            const DuckLakeRetryConfig &retry_config, const DuckLakeCommitContext &context);
+	//! Whether the error is of a metadata commit that is durable: DuckDB reports the checkpoint that fails after it
+	static bool IsDurableCommitError(const ErrorData &error);
+	//! Whether a commit that failed with the error may have been published anyway, as after a lost answer
+	static bool CommitMayHaveBeenPublished(const ErrorData &error);
 
 	SnapshotAndStats CheckForConflicts(DuckLakeSnapshot transaction_snapshot,
 	                                   const TransactionChangeInformation &changes,
@@ -321,6 +334,8 @@ public:
 	string data_path;
 	string separator;
 	DuckLakeSnapshotCommit commit_info;
+	//! The files of the transaction belong to a client, which removes them itself if the commit fails
+	bool files_owned_by_client = false;
 
 	map<SchemaIndex, unique_ptr<DuckLakeCatalogSet>> new_tables;
 	set<TableIndex> dropped_tables;
@@ -361,5 +376,11 @@ public:
 	//! The oids of the entries the commit created, by their committed id
 	ducklake_entry_oids_t committed_entry_oids;
 };
+
+//! The error of a commit that failed after it published its changes: an IO error, as for a lost response, so that
+//! the client does not remove the files of the transaction
+ErrorData ErrorAfterPublication(const ErrorData &error);
+//! The error of a commit that can be published: an IO error as well, so that its client keeps the files
+ErrorData ErrorOfUnknownPublication(const ErrorData &error);
 
 } // namespace duckdb

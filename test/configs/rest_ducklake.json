@@ -659,6 +659,12 @@
       ]
     },
     {
+      "reason": "Expects concurrent commits to exhaust their retries, but the REST server runs the commits one at a time",
+      "paths": [
+        "test/sql/settings/max_retry_count.test"
+      ]
+    },
+    {
       "reason": "Tests a PostgreSQL, SQLite or Quack metadata catalog, but the REST server serves the DuckLake from a DuckDB database",
       "paths": [
         "test/sql/benchmark/postgres_catalog.test",

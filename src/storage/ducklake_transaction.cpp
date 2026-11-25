@@ -926,7 +926,9 @@ void DuckLakeTransaction::Commit() {
 		}
 	} catch (...) {
 		// a failed commit never reaches Rollback - the transaction manager only reports the error
-		UndoConfigOptions();
+		if (!IsPublished()) {
+			UndoConfigOptions();
+		}
 		ClearMaintenanceChanges();
 		throw;
 	}
@@ -970,9 +972,7 @@ void DuckLakeTransaction::Rollback() {
 		}
 		connection.reset();
 	}
-	if (!files_owned_by_client) {
-		state->CleanupFiles();
-	}
+	state->CleanupFiles();
 	state->local_changes.Clear();
 	state->new_snapshot_tags.clear();
 	state->dropped_snapshot_tags.clear();
@@ -1604,6 +1604,14 @@ void DuckLakeTransaction::CleanupFiles() {
 	state->CleanupFiles();
 }
 
+void DuckLakeTransaction::SetFilesOwnedByClient() {
+	state->files_owned_by_client = true;
+}
+
+bool DuckLakeTransaction::FilesOwnedByClient() const {
+	return state->files_owned_by_client;
+}
+
 void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version, optional_idx committed_next_file_id) {
 	if (snapshot) {
 		// as a local commit does, the stats of the committed snapshot are invalidated, older snapshots keep theirs
@@ -1722,6 +1730,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.is_retryable_metadata_error = [&](const string &message) {
 		return option_lock_failed || metadata_manager->IsRetryableCommitError(message);
 	};
+	context.is_catalog_rejection = [&](const string &message) {
+		return metadata_manager->IsCatalogRejection(message);
+	};
 	// a retry rolls back what the statements wrote to the metadata
 	context.skip_retry = [&]() {
 		return option_lock_failed && metadata_written;
@@ -1744,6 +1755,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.commit_connection = [&]() {
 		connection->Commit();
+	};
+	context.report_commit_outcome = [&](DuckLakeCommitOutcome reported) {
+		ReportCommitOutcome(reported);
 	};
 	context.try_rollback = [&]() {
 		if (connection->context->transaction.HasActiveTransaction()) {
@@ -1902,7 +1916,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.write_snapshot = ChangesMade();
 	// a REST server commits from the snapshot of its client, its metadata transaction sees later commits
-	context.check_conflicts_first = files_owned_by_client;
+	context.check_conflicts_first = state->files_owned_by_client;
+	// a catalog that commits each statement publishes the changes when it runs the batch
+	context.publishes_with_batch = metadata_manager->CommitsEachStatement();
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
 	context.supports_v2_0_metadata = ducklake_catalog.SupportsBranching();
@@ -2732,7 +2748,7 @@ void DuckLakeTransaction::DropTable(DuckLakeTableEntry &table) {
 		DropLocalEntry(state->new_tables, table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId(), table.name);
 		// if we have written any files for this table - clean them up
 		auto context_ref = context.lock();
-		if (files_owned_by_client) {
+		if (state->files_owned_by_client) {
 			state->local_changes.Forget(table_id);
 		} else {
 			state->local_changes.CleanupFiles(*context_ref, table_id);
