@@ -1,0 +1,69 @@
+# name: test/sql/transaction/commit_table_paths_from_catalog.test
+# description: A commit takes the paths of the tables it writes files for from the catalog, not from a query per table
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE SCHEMA dl.s
+
+statement ok
+CREATE TABLE dl.t1 AS SELECT i AS id FROM range(10) t(i)
+
+statement ok
+CREATE TABLE dl.s.t2 AS SELECT i AS id FROM range(10) t(i)
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# new data files and delete files of two tables in two schemas
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t1 VALUES (100)
+
+statement ok
+INSERT INTO dl.s.t2 VALUES (100)
+
+statement ok
+DELETE FROM dl.t1 WHERE id < 3
+
+statement ok
+DELETE FROM dl.s.t2 WHERE id < 3
+
+statement ok
+COMMIT
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE contains(query, 's_path')
+----
+0
+
+# the files are stored relative to the path of their table
+query II
+SELECT count(*), count(*) FILTER (WHERE path_is_relative AND path LIKE 'ducklake-%' AND NOT contains(path, '/')) FROM meta.ducklake_delete_file
+----
+2	2
+
+query II
+SELECT count(*), count(*) FILTER (WHERE path_is_relative AND path LIKE 'ducklake-%.parquet') FROM meta.ducklake_data_file
+----
+4	4
+
+query II
+SELECT (SELECT sum(id) FROM dl.t1), (SELECT sum(id) FROM dl.s.t2)
+----
+142	142

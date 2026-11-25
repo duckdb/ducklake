@@ -1,0 +1,88 @@
+# name: test/sql/rest/rest_commit_group_unknown.test
+# description: The commits of a group do not run again when the commit of the metadata was sent and failed without a rejection
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok rest_db:rest_server_con
+CREATE TABLE rest_lake.grouped(i INTEGER)
+
+statement ok
+SET VARIABLE table_id = (SELECT (j->>'$.table_id')::BIGINT FROM (SELECT unnest(from_json(response->'$.catalog.tables', '["JSON"]')) AS j FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest?include_catalog=true', '')) WHERE j->>'$.table_name' = 'grouped')
+
+loop i 0 2
+
+statement ok
+COPY (SELECT (43 + {i})::INTEGER AS i) TO '{TEST_DIR}/{BASE_TEST_NAME}_member_{i}.parquet' (FORMAT PARQUET, FIELD_IDS {i: 1})
+
+endloop
+
+# a commit of each file
+statement ok
+CREATE TABLE bodies AS SELECT regexp_extract(filename, '_member_([0-9]+)\.parquet$', 1)::INTEGER AS member, json_object('requests', [json_object('insert_files', json_object('table_id', getvariable('table_id'), 'files', [json_object('path', filename, 'record_count', 1, 'file_size_bytes', size)]))]) AS body FROM read_blob('{TEST_DIR}/{BASE_TEST_NAME}_member_*.parquet')
+
+statement ok
+CREATE TABLE outcomes(status INTEGER, error_type VARCHAR, message VARCHAR)
+
+# two group commits that share a snapshot: the server holds them back until both wait
+statement ok rest_db:rest_server_con
+SET ducklake_debug_rest_commit_hold = 2
+
+# the commit of the metadata skips the WAL for a checkpoint that fails: it is in memory, and not durable
+statement ok rest_db:rest_server_con
+SET auto_checkpoint_skip_wal_threshold = 0
+
+statement ok rest_db:rest_server_con
+SET wal_autocheckpoint_entries = 1
+
+statement ok rest_db:rest_server_con
+PRAGMA debug_checkpoint_abort = 'before_header_non_fatal'
+
+concurrentloop i 0 2
+
+statement ok
+SET VARIABLE body = (SELECT body FROM bodies WHERE member = {i})
+
+statement ok
+INSERT INTO outcomes SELECT status, response->>'$.error.type', response->>'$.error.message' FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/group-commit', getvariable('body'))
+
+endloop
+
+statement ok rest_db:rest_server_con
+PRAGMA debug_checkpoint_abort = 'none'
+
+statement ok rest_db:rest_server_con
+SET wal_autocheckpoint_entries = 0
+
+statement ok rest_db:rest_server_con
+SET ducklake_debug_rest_commit_hold = 0
+
+# both commits get the IO error of the group with the error of its commit: they did not run one by one
+query ITII
+SELECT status, error_type, contains(message, 'It is unknown whether the transaction was committed')::INTEGER, contains(message, 'Failed to commit')::INTEGER FROM outcomes
+----
+500	IO	1	1
+500	IO	1	1
+
+# the server did not remove the files of its clients
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/{BASE_TEST_NAME}_member_*.parquet')
+----
+2
+
+include test/template/rest_teardown.test_template
+
+# the failed checkpoint invalidated the metadata database, it is attached again
+statement ok rest_db:rest_server_con
+DETACH rest_lake
+
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_rest_server.db' AS reopened (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_rest_files')
+
+# whatever the metadata kept of the group, no commit is in it twice
+query II rest_db:rest_server_con
+SELECT count(*) <= 2, count(*) = count(DISTINCT i) FROM reopened.grouped
+----
+true	true

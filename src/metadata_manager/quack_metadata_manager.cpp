@@ -7,6 +7,7 @@
 #include "storage/ducklake_staged_commit.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_transaction_changes.hpp"
+#include "storage/ducklake_transaction_state.hpp"
 
 namespace duckdb {
 
@@ -165,7 +166,14 @@ void QuackMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tra
 	if (!result) {
 		throw IOException("Failed to invoke server-side ducklake_commit: empty result");
 	}
+	if (result->HasError() && DuckLakeTransactionState::CommitMayHaveBeenPublished(result->GetErrorObject())) {
+		// LCOV_EXCL_START: the server did not answer, or its checkpoint failed after it committed
+		flush_transaction.ReportCommitOutcome(DuckLakeCommitOutcome::PUBLICATION_UNKNOWN);
+		// LCOV_EXCL_STOP
+	}
 	result->ThrowIfError("Failed to invoke server-side ducklake_commit: ");
+	// the server answered: the commit is published, also if applying its answer fails
+	flush_transaction.ReportCommitOutcome(DuckLakeCommitOutcome::PUBLISHED);
 	auto row = result->begin();
 	if (row == result->end()) {
 		throw IOException("Server-side ducklake_commit returned no rows");

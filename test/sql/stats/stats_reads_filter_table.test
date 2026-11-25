@@ -1,0 +1,92 @@
+# name: test/sql/stats/stats_reads_filter_table.test
+# description: The metadata reads of a commit filter each joined table by table id, so a scan of it gets the filter as well
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+# stats rows of another table
+statement ok
+CREATE TABLE dl.other AS SELECT i AS a, i AS b FROM range(10) t(i)
+
+statement ok
+CREATE TABLE dl.t (id INTEGER, s VARCHAR)
+
+statement ok
+INSERT INTO dl.t VALUES (1, NULL)
+
+statement ok
+INSERT INTO dl.t VALUES (2, NULL)
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# the first value of a column that is NULL in every live file
+statement ok
+INSERT INTO dl.t VALUES (10, 'v')
+
+statement ok
+CALL disable_logging()
+
+query II
+SELECT count(*) FILTER (WHERE regexp_matches(query, ' f ON f\.data_file_id = s\.data_file_id AND f\.table_id = \d+ AND')),
+       count(*) FILTER (WHERE regexp_matches(query, 'ducklake_file_column_stats s\s+ON s\.data_file_id = f\.data_file_id AND s\.table_id = \d+ AND'))
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1	1
+
+# so do the reads of the column stats and of the columns of the inlined data
+query II
+SELECT count(*) FILTER (WHERE regexp_matches(query, 'LEFT JOIN \(SELECT \* FROM \S+ducklake_table_column_stats WHERE table_id IN \(\d+\)\s*\) ducklake_table_column_stats USING \(table_id\)')),
+       count(*) FILTER (WHERE regexp_matches(query, 'ducklake_column col ON col\.table_id = inlined\.table_id AND col\.parent_column IS NULL AND col\.table_id = \d+\s'))
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1	1
+
+query III
+SELECT c.contains_null::BOOLEAN, c.min_value, c.max_value
+FROM meta.ducklake_table_column_stats c JOIN meta.ducklake_table t USING (table_id)
+WHERE t.table_name = 't' AND c.column_id = 2
+----
+true	v	v
+
+# a rewrite of the deletes of one file reads the stats of the files it keeps
+statement ok
+INSERT INTO dl.t VALUES (11, 'w'), (12, 'x')
+
+statement ok
+DELETE FROM dl.t WHERE id = 12
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+CALL ducklake_rewrite_data_files('dl', 't', delete_threshold => 0)
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE regexp_matches(query, 'ducklake_file_column_stats stats\s+ON stats\.data_file_id = data\.data_file_id AND stats\.table_id = \d+\s')
+----
+1
+
+query III
+SELECT c.contains_null::BOOLEAN, c.min_value, c.max_value
+FROM meta.ducklake_table_column_stats c JOIN meta.ducklake_table t USING (table_id)
+WHERE t.table_name = 't' AND c.column_id = 2
+----
+true	v	w
+
+query II
+SELECT count(*), max(s) FROM dl.t
+----
+4	w

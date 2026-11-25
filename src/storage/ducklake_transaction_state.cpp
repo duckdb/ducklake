@@ -107,6 +107,10 @@ DuckLakeTransactionState::~DuckLakeTransactionState() {
 }
 
 void DuckLakeTransactionState::CleanupFiles() {
+	if (files_owned_by_client) {
+		// the client that wrote the files removes them, also when the commit was passed on to another server
+		return;
+	}
 	// remove any files that were written
 	local_changes.CleanupFiles(db);
 }
@@ -1750,8 +1754,8 @@ void DuckLakeTransactionState::ResolveNullOnlyBounds(TableIndex table_id, const 
 		auto &column_stats = entry.second;
 		bool without_nulls = column_stats.has_null_count && column_stats.null_count == 0;
 		if (column_stats.bounds_unknown && !without_nulls &&
-		    !context.column_holds_values(table_id, entry.first, snapshot_id) &&
-		    NewDataSetsBounds(entry.first, column_stats.type, table_changes)) {
+		    NewDataSetsBounds(entry.first, column_stats.type, table_changes) &&
+		    !context.column_holds_values(table_id, entry.first, snapshot_id)) {
 			null_only_columns.insert(entry.first);
 		}
 	}
@@ -2531,21 +2535,20 @@ string DuckLakeTransactionState::CommitChanges(DuckLakeCommitState &commit_state
 		return entry->second;
 	};
 	unordered_map<idx_t, string> table_paths;
-	auto get_table_path = [&](TableIndex table_id) -> const string & {
-		auto entry = table_paths.find(table_id.index);
-		if (entry == table_paths.end()) {
-			auto path = DuckLakeMetadataManager::GetPathForTable(table_id, new_tables_result, context.query_metadata,
-			                                                     data_path, separator);
-			entry = table_paths.emplace(table_id.index, std::move(path)).first;
-		}
-		return entry->second;
-	};
 	auto table_relative_paths = [&](const auto &files, auto path_member) {
+		set<TableIndex> unresolved;
+		for (auto &file : files) {
+			if (table_paths.find(file.table_id.index) == table_paths.end()) {
+				unresolved.insert(file.table_id);
+			}
+		}
+		DuckLakeMetadataManager::GetPathsForTables(unresolved, new_tables_result, context.get_table_path,
+		                                           context.query_metadata, data_path, separator, table_paths);
 		vector<DuckLakePath> result;
 		result.reserve(files.size());
 		for (auto &file : files) {
-			result.push_back(
-			    DuckLakeMetadataManager::GetRelativePath(file.*path_member, get_table_path(file.table_id), separator));
+			result.push_back(DuckLakeMetadataManager::GetRelativePath(file.*path_member,
+			                                                          table_paths[file.table_id.index], separator));
 		}
 		return result;
 	};
@@ -3071,10 +3074,46 @@ bool DuckLakeTransactionState::FindConflictWithOtherCommits(DuckLakeSnapshot tra
 	return found_conflict;
 }
 
+bool DuckLakeTransactionState::IsDurableCommitError(const ErrorData &error) {
+	return StringUtil::Contains(error.RawMessage(), "Transaction COMMIT succeeded and is durable");
+}
+
+bool DuckLakeTransactionState::CommitMayHaveBeenPublished(const ErrorData &error) {
+	return error.Type() == ExceptionType::IO || IsDurableCommitError(error);
+}
+
+ErrorData ErrorAfterPublication(const ErrorData &error) {
+	return ErrorData(ExceptionType::IO,
+	                 "The transaction was committed, but the server failed to respond: " + error.RawMessage());
+}
+
+ErrorData ErrorOfUnknownPublication(const ErrorData &error) {
+	return ErrorData(ExceptionType::IO, "It is unknown whether the transaction was committed, its commit was sent "
+	                                    "and failed without a rejection: " +
+	                                        error.RawMessage());
+}
+
+//! Commits the metadata connection. A commit that is durable although it reports an error is published: the error
+//! is kept for the end of the commit, as nothing can be rolled back, retried or cleaned up after it
+static void CommitMetadata(const DuckLakeCommitContext &context, ErrorData &error_after_commit, bool &commit_sent) {
+	commit_sent = true;
+	try {
+		context.commit_connection();
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		if (!DuckLakeTransactionState::IsDurableCommitError(error)) {
+			throw;
+		}
+		error_after_commit = std::move(error);
+	}
+	context.report_commit_outcome(DuckLakeCommitOutcome::PUBLISHED);
+}
+
 void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
                                       const TransactionChangeInformation &transaction_changes,
                                       const DuckLakeRetryConfig &retry_config, const DuckLakeCommitContext &context) {
 	SnapshotAndStats commit_stats_snapshot;
+	ErrorData error_after_commit;
 	auto &commit_snapshot = commit_stats_snapshot.snapshot;
 	optional_ptr<vector<DuckLakeGlobalStatsInfo>> stats;
 	bool flushed_inlined = false;
@@ -3082,6 +3121,8 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 	for (idx_t i = 0;; i++) {
 		bool can_retry;
 		bool retryable_metadata_error = false;
+		// only a commit that was sent can be published, a failure before that published nothing
+		bool commit_sent = false;
 		auto attempt_changes = transaction_changes;
 		auto attempt_dropped_file_stats = dropped_file_stats;
 		try {
@@ -3110,7 +3151,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			wrote_snapshot = context.write_snapshot &&
 			                 (!expired_snapshots.empty() || !expiry.tags.empty() || !context.only_expires_snapshots);
 			if (!wrote_snapshot && !context.locks_config_options) {
-				context.commit_connection();
+				CommitMetadata(context, error_after_commit, commit_sent);
 				break;
 			}
 			for (auto &snapshot : expired_snapshots) {
@@ -3137,6 +3178,8 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 				    CommitChanges(commit_state, attempt_changes, stats, context, attempt_dropped_file_stats);
 				batch_queries += WriteSnapshotChanges(commit_state, attempt_changes, context);
 			}
+			// on a catalog that commits each statement, running the batch already sends the commit
+			commit_sent = context.publishes_with_batch;
 			auto res = context.execute_commit_batch(commit_snapshot, batch_queries);
 			if (res->HasError()) {
 				auto &commit_error = res->GetErrorObject();
@@ -3148,9 +3191,10 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			}
 			flushed_inlined = !flushed_inlined_tables.empty();
 			context.flush_cache_if_pending();
-			context.commit_connection();
-			committed_tables = commit_state.committed_tables;
-			committed_entry_oids = std::move(commit_state.new_entry_oids);
+			CommitMetadata(context, error_after_commit, commit_sent);
+			// a swap cannot throw: nothing fails between the commit and the end of the attempt, which is never retried
+			committed_tables.swap(commit_state.committed_tables);
+			committed_entry_oids.swap(commit_state.new_entry_oids);
 			break;
 		} catch (std::exception &ex) {
 			ErrorData error(ex);
@@ -3158,11 +3202,17 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			retryable_metadata_error =
 			    retryable_metadata_error || context.is_retryable_metadata_error(error.RawMessage());
 			auto error_without_query = context.commit_error_without_query(error.RawMessage());
+			bool retryable =
+			    retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error_without_query));
+			// a rejection is an answer of the catalog: it rolled back, so nothing was published
+			bool rejected = retryable || context.is_catalog_rejection(error.RawMessage());
+			if (commit_sent && (!rejected || CommitMayHaveBeenPublished(error))) {
+				// sent and not rejected, as after a lost connection: the commit may have been published
+				context.report_commit_outcome(DuckLakeCommitOutcome::PUBLICATION_UNKNOWN);
+			}
 			// an internal error is a bug that a retry cannot fix
 			// a retryable metadata error in the conflict check is retried, a conflict that it finds is not
-			bool retry_on_error =
-			    error.Type() != ExceptionType::INTERNAL && !context.skip_retry() &&
-			    (retryable_metadata_error || (can_retry && DuckLakeTransaction::RetryOnError(error_without_query)));
+			bool retry_on_error = error.Type() != ExceptionType::INTERNAL && !context.skip_retry() && retryable;
 			if (retry_on_error) {
 				try {
 					context.verify_retry();
@@ -3208,7 +3258,14 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 			context.prepare_retry();
 		}
 	}
+	// the error of a commit that is durable is reported once the committer knows what it published
+	auto report_error_after_commit = [&]() {
+		if (error_after_commit.HasError()) {
+			error_after_commit.Throw();
+		}
+	};
 	if (!wrote_snapshot) {
+		report_error_after_commit();
 		return;
 	}
 	// If we got here, this snapshot was successful
@@ -3235,6 +3292,7 @@ void DuckLakeTransactionState::Commit(DuckLakeSnapshot transaction_snapshot,
 		// No-op if the previous schema version doesn't exist in cache.
 		context.invalidate_schema_cache(commit_snapshot.schema_version - 1);
 	}
+	report_error_after_commit();
 }
 
 } // namespace duckdb

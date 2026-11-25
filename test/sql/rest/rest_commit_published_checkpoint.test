@@ -1,0 +1,129 @@
+# name: test/sql/rest/rest_commit_published_checkpoint.test
+# description: A commit that is in the metadata keeps the files of its client when the checkpoint after it fails
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.regular(i INTEGER)
+
+statement ok
+CREATE TABLE dl.grouped(i INTEGER)
+
+statement ok rest_db:rest_server_con
+SET auto_checkpoint_skip_wal_threshold = 9999999999
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.regular VALUES (42)
+
+# the commit of the metadata is durable, the checkpoint that follows it fails
+statement ok rest_db:rest_server_con
+SET wal_autocheckpoint_entries = 1
+
+statement ok rest_db:rest_server_con
+PRAGMA debug_checkpoint_abort = 'before_header_non_fatal'
+
+statement error
+COMMIT
+----
+Transaction COMMIT succeeded
+
+statement ok rest_db:rest_server_con
+PRAGMA debug_checkpoint_abort = 'none'
+
+statement ok rest_db:rest_server_con
+SET wal_autocheckpoint_entries = 0
+
+include test/template/rest_teardown.test_template
+
+statement ok
+DETACH dl
+
+# the failed checkpoint invalidated the metadata database, it is attached again for the group commit
+statement ok rest_db:rest_server_con
+DETACH rest_lake
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+query II
+SELECT count(*), sum(i) FROM dl.regular
+----
+1	42
+
+# two group commits that share a snapshot: the server holds them back until both wait
+statement ok
+SET ducklake_rest_group_commit=true
+
+statement ok rest_db:rest_server_con
+SET ducklake_debug_rest_commit_hold = 2
+
+statement ok rest_db:rest_server_con
+SET wal_autocheckpoint_entries = 1
+
+statement ok rest_db:rest_server_con
+PRAGMA debug_checkpoint_abort = 'before_header_non_fatal'
+
+concurrentloop i 0 2
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.grouped VALUES (43 + {i})
+
+statement error
+COMMIT
+----
+Transaction COMMIT succeeded
+
+endloop
+
+statement ok rest_db:rest_server_con
+PRAGMA debug_checkpoint_abort = 'none'
+
+statement ok rest_db:rest_server_con
+SET ducklake_debug_rest_commit_hold = 0
+
+statement ok rest_db:rest_server_con
+SET wal_autocheckpoint_entries = 0
+
+include test/template/rest_teardown.test_template
+
+statement ok
+DETACH dl
+
+statement ok rest_db:rest_server_con
+DETACH rest_lake
+
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_rest_server.db' AS reopened (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_rest_files')
+
+# the commits are published once, the group as one snapshot, and their files are still there
+query II rest_db:rest_server_con
+SELECT (SELECT count(*) FROM ducklake_list_files('reopened', 'regular')), (SELECT count(*) FROM ducklake_list_files('reopened', 'grouped'))
+----
+1	2
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/{BASE_TEST_NAME}_rest_files/**/*.parquet')
+----
+3
+
+query III rest_db:rest_server_con
+SELECT (SELECT sum(i) FROM reopened.regular), (SELECT count(*) FROM reopened.grouped), (SELECT sum(i) FROM reopened.grouped)
+----
+42	2	87
+
+query I rest_db:rest_server_con
+SELECT count(DISTINCT snapshot_id) FROM reopened.grouped
+----
+1

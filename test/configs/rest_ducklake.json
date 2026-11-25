@@ -47,7 +47,10 @@
         "test/sql/stats/count_star_optimization_cache.test",
         "test/sql/general/ducklake_metadata_logging.test",
         "test/sql/transaction/commit_skips_catalog_load.test",
-        "test/sql/transaction/commit_retry_skips_catalog_load.test"
+        "test/sql/transaction/commit_retry_skips_catalog_load.test",
+        "test/sql/transaction/commit_table_paths_from_catalog.test",
+        "test/sql/stats/stats_reads_filter_table.test",
+        "test/sql/stats/null_first_bounds_unrelated_commits.test"
       ]
     },
     {
@@ -433,6 +436,7 @@
         "test/sql/partitioning/bucket_pruning.test",
         "test/sql/partitioning/bucket_pruning_type_promotion.test",
         "test/sql/partitioning/data_inlining_disable_hive_partitioning.test",
+        "test/sql/partitioning/disable_hive_partitioning.test",
         "test/sql/partitioning/epoch_timestamptz.test",
         "test/sql/partitioning/epoch_transforms.test",
         "test/sql/partitioning/merge_adjacent_null_partition.test",
@@ -666,6 +670,12 @@
       "reason": "Expects a commit that is not retried to fail after a concurrent commit, but the REST server checks for conflicts before its first attempt",
       "paths": [
         "test/sql/retry/max_retry_count_zero_conflict.test"
+      ]
+    },
+    {
+      "reason": "Expects concurrent commits to exhaust their retries, but the REST server runs the commits one at a time",
+      "paths": [
+        "test/sql/settings/max_retry_count.test"
       ]
     },
     {
