@@ -1104,14 +1104,14 @@ void DuckLakeMetadataManager::MigrateV11(bool from_dev1) {
 	string from_version = from_dev1 ? "2.0-dev1" : "1.1";
 	auto layout = ProbeV2_0Layout();
 	VerifyV2_0RowCompanions(layout.rows);
-	VerifyV2_0InlinedCompanion(layout.inlined);
+	VerifyV2_0InlinedStep(layout, from_version);
 	auto rename_query = V2_0SnapshotRenameSql(layout.additions) + V2_0FileRenameSql(layout.ranges);
 	if (!rename_query.empty()) {
 		ExecuteMigration(rename_query, false, from_version, "2.0-dev1");
 		transaction.ReleaseMetadataTransaction();
 		layout = ProbeV2_0Layout();
-		// the step drops the empty inlined tables, so they are checked against the fresh probe
-		VerifyV2_0InlinedCompanion(layout.inlined);
+		// a writer of the previous layout may have inlined rows before the renames fenced it
+		VerifyV2_0InlinedStep(layout, from_version);
 	}
 	auto migrate_query = V2_0SnapshotAdditionsSql(layout.additions) + V2_0FileEventsSql(layout.ranges) +
 	                     V2_0RowCompanionsSql(layout.rows) + V2_0InlinedCompanionSql(layout.inlined);
@@ -1361,7 +1361,7 @@ string DuckLakeMetadataManager::V2_0EndColumnSql(const RowVisibilityKind &kind, 
 }
 
 bool DuckLakeMetadataManager::V2_0InlinedPayload::Incomplete() const {
-	return present && (!has_branch_column || has_end_column);
+	return !present || !has_branch_column || has_end_column;
 }
 
 bool DuckLakeMetadataManager::V2_0InlinedCompanion::Incomplete() const {
@@ -1426,33 +1426,10 @@ DuckLakeMetadataManager::V2_0InlinedCompanion DuckLakeMetadataManager::ProbeV2_0
 		payload.table = row.GetValue<Identifier>(1);
 		auto &name = payload.table.GetIdentifierName();
 		payload.present = HasMetadataColumn(name, col_names.begin_snapshot.GetIdentifierName());
-		if (!payload.present) {
-			continue;
-		}
 		payload.has_branch_column = HasMetadataColumn(name, col_names.branch_id.GetIdentifierName());
 		payload.has_end_column = HasMetadataColumn(name, col_names.end_snapshot.GetIdentifierName());
 		// the previous layout had no branch column, so one next to the end column is a user column
 		payload.has_user_branch_column = payload.has_end_column && payload.has_branch_column;
-		if (payload.Incomplete()) {
-			// the recreated payload takes the user columns of the previous one in their order
-			auto probe = Query(StringUtil::Format("SELECT * FROM {METADATA_CATALOG}.%s LIMIT 0", name));
-			probe->ThrowIfError(StringUtil::Format("Failed to read the columns of %s in DuckLake: ", name));
-			auto &names = probe->GetNames();
-			for (idx_t i = 0; i < names.size(); i++) {
-				Identifier column(names[i]);
-				if (column == col_names.row_id || column == col_names.begin_snapshot ||
-				    column == col_names.end_snapshot) {
-					continue;
-				}
-				if (column == col_names.branch_id && !payload.has_user_branch_column) {
-					continue;
-				}
-				// the stored type stays, the storage mapping of a type is not a fixed point
-				payload.column_defs +=
-				    StringUtil::Format("%s%s %s", payload.column_defs.empty() ? "" : ", ",
-				                       SQLQuotedIdentifier::ToString(names[i]), probe->GetTypes()[i].ToString());
-			}
-		}
 		inlined.payloads.push_back(std::move(payload));
 	}
 	for (auto &name : ProbedInlinedDeletionTables()) {
@@ -1464,9 +1441,77 @@ DuckLakeMetadataManager::V2_0InlinedCompanion DuckLakeMetadataManager::ProbeV2_0
 	return inlined;
 }
 
-void DuckLakeMetadataManager::VerifyV2_0InlinedCompanion(const V2_0InlinedCompanion &inlined) {
-	DuckLakeInlinedColNames col_names(true);
+//! The table id a deletion table carries in its name
+static optional_idx InlinedDeletionTableId(const string &name) {
+	auto digits = name.substr(string(INLINED_DELETION_TABLE_PREFIX).size());
+	if (digits.empty() || digits.find_first_not_of("0123456789") != string::npos) {
+		return optional_idx();
+	}
+	return optional_idx(StringUtil::ToUnsigned(digits));
+}
+
+string DuckLakeMetadataManager::V2_0InlinedRowsMessage(const string &holder, idx_t table_id) {
 	auto catalog_name = transaction.GetCatalog().GetName().GetIdentifierName();
+	// a table is live by its open range in 1.x and by its companion once the catalog rows are converted
+	string live;
+	if (HasMetadataColumn("ducklake_table", "end_snapshot")) {
+		live = "tbl.end_snapshot IS NULL";
+	} else if (HasMetadataColumn(RowVisibilityTableName("table"), "branch_id")) {
+		live = RowVisibility("tbl", RowKind("table"), string());
+	}
+	string dropped_table;
+	if (!live.empty()) {
+		auto live_versions = Query(StringUtil::Format(
+		    "SELECT COUNT(*) FROM {METADATA_CATALOG}.ducklake_table tbl WHERE tbl.table_id = %d AND %s", table_id,
+		    live));
+		live_versions->ThrowIfError("Failed to read the table of inlined rows while migrating DuckLake: ");
+		bool is_live = true;
+		for (auto &row : *live_versions) {
+			is_live = row.GetValue<int64_t>(0) > 0;
+		}
+		if (!is_live) {
+			auto names = Query(StringUtil::Format("SELECT table_name FROM {METADATA_CATALOG}.ducklake_table WHERE "
+			                                      "table_id = %d ORDER BY begin_snapshot DESC LIMIT 1",
+			                                      table_id));
+			names->ThrowIfError("Failed to read the table of inlined rows while migrating DuckLake: ");
+			for (auto &row : *names) {
+				dropped_table = row.GetValue<string>(0);
+			}
+		}
+	}
+	if (dropped_table.empty()) {
+		return StringUtil::Format("Cannot migrate this DuckLake catalog: %s holds rows and the migration to 2.0 "
+		                          "converts no inlined rows. Attach the catalog at its current version, run CALL "
+		                          "ducklake_flush_inlined_data('%s') and attach again with the migration",
+		                          holder, catalog_name);
+	}
+	return StringUtil::Format("Cannot migrate this DuckLake catalog: %s holds rows of the dropped table %s, kept for "
+	                          "time travel, and the migration to 2.0 converts no inlined rows. Attach the catalog at "
+	                          "its current version, expire the snapshots that read the table with "
+	                          "ducklake_expire_snapshots and attach again with the migration",
+	                          holder, dropped_table);
+}
+
+bool DuckLakeMetadataManager::HasListedFileDeletions(const string &deletion_table) {
+	// the first batch moves the file table aside under its range name
+	auto range_table = RangeTableName("ducklake_data_file");
+	auto file_table = HasMetadataColumn(range_table, "data_file_id") ? range_table : "ducklake_data_file";
+	auto probe = Query(StringUtil::Format("SELECT COUNT(*) FROM (SELECT 1 FROM {METADATA_CATALOG}.%s d WHERE EXISTS ("
+	                                      "SELECT 1 FROM {METADATA_CATALOG}.%s f WHERE f.data_file_id = d.file_id) "
+	                                      "LIMIT 1) t",
+	                                      deletion_table, file_table));
+	probe->ThrowIfError("Failed to probe the rows of " + deletion_table + " in DuckLake: ");
+	for (auto &row : *probe) {
+		return row.GetValue<int64_t>(0) > 0;
+	}
+	// LCOV_EXCL_START
+	return false;
+	// LCOV_EXCL_STOP
+}
+
+void DuckLakeMetadataManager::VerifyV2_0InlinedCompanion(const V2_0Layout &layout) {
+	auto &inlined = layout.inlined;
+	DuckLakeInlinedColNames col_names(true);
 	for (auto &payload : inlined.payloads) {
 		auto &name = payload.table.GetIdentifierName();
 		idx_t schema_version;
@@ -1477,15 +1522,14 @@ void DuckLakeMetadataManager::VerifyV2_0InlinedCompanion(const V2_0InlinedCompan
 			                            "ducklake_inlined_data_<table>_<version>",
 			                            name, payload.table_id);
 		}
+		if (!payload.present) {
+			continue;
+		}
 		if (payload.Incomplete() && TableHasRows(name)) {
-			throw InvalidInputException(
-			    "Cannot migrate this DuckLake catalog: inlined data table %s holds rows and the migration to 2.0 "
-			    "converts no inlined rows. Attach the catalog at its current version, run CALL "
-			    "ducklake_flush_inlined_data('%s') and attach again with the migration",
-			    name, catalog_name);
+			throw InvalidInputException(V2_0InlinedRowsMessage("inlined data table " + name, payload.table_id));
 		}
 		// without the end column only a companion holds the ends, so a payload without one has to be empty
-		if (!inlined.has_companion && payload.present && !payload.has_end_column && TableHasRows(name)) {
+		if (!inlined.has_companion && !payload.has_end_column && TableHasRows(name)) {
 			throw InvalidInputException("Cannot migrate this DuckLake catalog: the end snapshots of the inlined rows "
 			                            "of %s were dropped and the end rows that replaced them are missing",
 			                            name);
@@ -1499,39 +1543,77 @@ void DuckLakeMetadataManager::VerifyV2_0InlinedCompanion(const V2_0InlinedCompan
 		}
 	}
 	for (auto &table : inlined.deletion_tables) {
-		if (!table.has_branch_column && TableHasRows(table.table.GetIdentifierName())) {
-			throw InvalidInputException(
-			    "Cannot migrate this DuckLake catalog: inlined deletion table %s holds rows and the migration to 2.0 "
-			    "converts no inlined rows. Attach the catalog at its current version, run CALL "
-			    "ducklake_flush_inlined_data('%s') and attach again with the migration",
-			    table.table.GetIdentifierName(), catalog_name);
+		auto &name = table.table.GetIdentifierName();
+		// a deletion whose data file left the catalog is unreachable, the step drops it with its table
+		if (table.has_branch_column || !HasListedFileDeletions(name)) {
+			continue;
 		}
+		auto table_id = InlinedDeletionTableId(name);
+		throw InvalidInputException(
+		    V2_0InlinedRowsMessage("inlined deletion table " + name, table_id.IsValid() ? table_id.GetIndex() : 0));
 	}
 }
 
 string DuckLakeMetadataManager::V2_0InlinedCompanionSql(const V2_0InlinedCompanion &inlined) const {
-	// the step converts no rows, the companion starts empty and the empty tables take the shape of 2.0
+	// the step converts no rows, a writer creates the payload and the deletion table it needs in the shape of 2.0
 	string query;
-	if (!inlined.has_companion) {
-		query += GetInlinedVisibilityTableStatement(RowVisibilityTableName("inlined_data")) + "\n";
-	}
-	DuckLakeInlinedColNames col_names(true);
 	for (auto &payload : inlined.payloads) {
 		if (!payload.Incomplete()) {
 			continue;
 		}
-		// recreated rather than altered, Postgres counts a dropped column toward its column limit
-		query += StringUtil::Format("DROP TABLE {METADATA_CATALOG}.%s;\n", payload.table);
-		query += InlinedTableDdlSql(payload.table, payload.column_defs, col_names, true) + "\n";
+		if (payload.present) {
+			query += StringUtil::Format("DROP TABLE {METADATA_CATALOG}.%s;\n", payload.table);
+		}
+		// the registration goes after its table, a stop between the two leaves one the next run removes
+		query +=
+		    StringUtil::Format("DELETE FROM {METADATA_CATALOG}.ducklake_inlined_data_tables WHERE table_name = %s;\n",
+		                       SQLString(payload.table.GetIdentifierName()));
 	}
 	for (auto &table : inlined.deletion_tables) {
-		if (table.has_branch_column) {
-			continue;
+		if (!table.has_branch_column) {
+			query += StringUtil::Format("DROP TABLE {METADATA_CATALOG}.%s;\n", table.table);
 		}
-		// the writer creates a deletion table in the shape of 2.0 when it needs one
-		query += StringUtil::Format("DROP TABLE {METADATA_CATALOG}.%s;\n", table.table);
+	}
+	// the companion closes the step, the probe of a complete layout binds it
+	if (!inlined.has_companion) {
+		query += GetInlinedVisibilityTableStatement(RowVisibilityTableName("inlined_data")) + "\n";
 	}
 	return query;
+}
+
+string DuckLakeMetadataManager::V2_0RenameUndoSql(const V2_0Layout &layout) {
+	string query;
+	auto &add = layout.additions;
+	if (add.has_snapshot_old && !add.has_snapshot_table && !add.has_snapshot_rebuild) {
+		query += "ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_old RENAME TO ducklake_snapshot;\n";
+	}
+	if (add.has_changes_old && !add.has_changes_table && !add.has_changes_rebuild) {
+		query += "ALTER TABLE {METADATA_CATALOG}.ducklake_snapshot_changes_old RENAME TO ducklake_snapshot_changes;\n";
+	}
+	if (layout.ranges.has_file_visibility || layout.ranges.has_delete_file_visibility) {
+		return query;
+	}
+	for (auto &table : layout.ranges.tables_to_convert) {
+		if (table.has_begin && table.has_end && !HasMetadataColumn(table.name, "table_id")) {
+			query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s RENAME TO %s;\n", RangeTableName(table.name),
+			                            table.name);
+		}
+	}
+	return query;
+}
+
+void DuckLakeMetadataManager::VerifyV2_0InlinedStep(const V2_0Layout &layout, const string &from_version) {
+	try {
+		VerifyV2_0InlinedCompanion(layout);
+	} catch (std::exception &) {
+		// a writer of the previous layout can commit until the first batch, its rows are flushed at that version
+		auto undo_query = V2_0RenameUndoSql(layout);
+		if (!undo_query.empty()) {
+			ExecuteMigration(undo_query, false, from_version, "2.0-dev1");
+			transaction.ReleaseMetadataTransaction();
+		}
+		throw;
+	}
 }
 
 //! Takes a snapshot table without its branch key away by name, the first batch of its rebuild
@@ -5537,8 +5619,8 @@ string DuckLakeMetadataManager::FormatInlinedDataInsert(const Identifier &inline
 	return InsertValuesSql(SQLIdentifier::ToString(inlined_table_name), tuples);
 }
 
-//! The latest version of each deleted row id born on main before the commit ends, the versions an update superseded
-//! already have their ends, so the companion is not probed
+//! Ends the latest version of each deleted row id born on main before the commit, without a probe of the companion:
+//! the callers list a row id for the payload that holds its live version
 static string EndDeletedInlinedRows(const DuckLakeMetadataManager::RowVisibilityKind &kind,
                                     const DuckLakeInlinedColNames &col_names) {
 	auto payload = DuckLakeMetadataManager::RowTableName(kind);

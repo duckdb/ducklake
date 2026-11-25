@@ -602,7 +602,11 @@
         "test/sql/compaction/user_columns_named_like_internal_columns.test",
         "test/sql/data_inlining/data_inlining_transaction_local_field_readd_rejected.test",
         "test/sql/data_inlining/data_inlining_variant_stats.test",
-        "test/sql/deletion_inlining/inlined_delete_ends_without_probe.test"
+        "test/sql/deletion_inlining/inlined_delete_ends_without_probe.test",
+        "test/sql/migration/v20_inlined_dropped_table_rows.test",
+        "test/sql/migration/v20_inlined_orphan_deletions.test",
+        "test/sql/migration/v20_inlined_rows_after_first_batch.test",
+        "test/sql/migration/v20_inlined_interrupted_step.test"
       ]
     },
     {

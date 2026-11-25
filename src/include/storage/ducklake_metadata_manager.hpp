@@ -933,16 +933,14 @@ public:
 		bool has_end_column = false;
 		//! Whether a user column of the previous layout carries the name of the branch column
 		bool has_user_branch_column = false;
-		//! The user columns of a payload the step recreates in the shape of 2.0
-		string column_defs;
-		//! Whether the payload still has the shape of the previous layout
+		//! Whether the step removes the payload: the previous shape, or a registration without its table
 		bool Incomplete() const;
 	};
 	struct V2_0InlinedDeletionTable {
 		Identifier table;
 		bool has_branch_column = false;
 	};
-	//! The shared companion of the inlined rows and the tables the step reshapes
+	//! The shared companion of the inlined rows and the tables the step removes
 	struct V2_0InlinedCompanion {
 		vector<V2_0InlinedPayload> payloads;
 		vector<V2_0InlinedDeletionTable> deletion_tables;
@@ -950,9 +948,7 @@ public:
 		bool Incomplete() const;
 	};
 	V2_0InlinedCompanion ProbeV2_0InlinedCompanion();
-	//! Refuses a payload or deletion table the step reshapes while it holds rows, and the reserved names
-	void VerifyV2_0InlinedCompanion(const V2_0InlinedCompanion &inlined);
-	//! The step: the empty companion, each empty payload recreated in the 2.0 shape, each empty deletion table dropped
+	//! The step: the empty payloads and deletion tables of the previous shape go, the companion comes last
 	string V2_0InlinedCompanionSql(const V2_0InlinedCompanion &inlined) const;
 	//! The shape of the catalog against the steps of 2.0, one probe of the metadata schema
 	struct V2_0Layout {
@@ -962,6 +958,16 @@ public:
 		V2_0InlinedCompanion inlined;
 	};
 	V2_0Layout ProbeV2_0Layout();
+	//! Refuses the names and columns the inlined step cannot take and the inlined rows it does not convert
+	void VerifyV2_0InlinedCompanion(const V2_0Layout &layout);
+	//! The refusal of inlined rows: a flush reaches those of a live table, an expiry those of a dropped one
+	string V2_0InlinedRowsMessage(const string &holder, idx_t table_id);
+	//! Whether a deletion table holds a deletion of a data file the catalog still lists
+	bool HasListedFileDeletions(const string &deletion_table);
+	//! The renames that move the tables of the first batch back, while nothing else of the migration ran
+	string V2_0RenameUndoSql(const V2_0Layout &layout);
+	//! Verifies the inlined step, a refused catalog gets its first batch moved back and attaches at its version
+	void VerifyV2_0InlinedStep(const V2_0Layout &layout, const string &from_version);
 	//! The first step of 2.0 the catalog lacks, empty for a complete layout
 	string MissingV2_0Step();
 	bool HasMetadataColumn(const string &table, const string &column);

@@ -1210,7 +1210,7 @@ SELECT COUNT(*) FROM ducklake_tags('dl')
 statement ok
 DETACH dl
 
-# a dev build ended its inlined rows in place and knew no shared companion, the step recreates the flushed payload
+# a dev build ended its inlined rows in place and knew no shared companion, the step removes the flushed payload
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
     DATA_INLINING_ROW_LIMIT 10)
@@ -1263,14 +1263,9 @@ SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_nam
 0
 
 query I
-SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
-    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_inlined_data_1_1')
-ORDER BY column_index
+SELECT COUNT(*) FROM meta.ducklake_inlined_data_tables WHERE table_name = 'ducklake_inlined_data_1_1'
 ----
-_ducklake_row_id
-_ducklake_begin_snapshot
-i
-_ducklake_branch_id
+0
 
 query I
 SELECT list(i ORDER BY i) FROM dl.t

@@ -122,7 +122,7 @@ SELECT COUNT(*) FROM meta.ducklake_inlined_delete_3
 statement ok
 DETACH dl
 
-# the step recreates the empty payloads in the shape of 2.0, drops the empty deletion table and creates the companion
+# the step drops the empty payloads with their registrations and the empty deletion table, then creates the companion
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
     AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
@@ -133,28 +133,7 @@ SELECT value FROM dl.options() WHERE option_name = 'version'
 2.0-dev1
 
 query I
-SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
-    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_inlined_data_1_2')
-ORDER BY column_index
-----
-_ducklake_row_id
-_ducklake_begin_snapshot
-i
-j
-_ducklake_branch_id
-
-query I
-SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
-    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_inlined_data_2_3')
-ORDER BY column_index
-----
-_ducklake_row_id
-_ducklake_begin_snapshot
-i
-_ducklake_branch_id
-
-query I
-SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_2
+SELECT COUNT(*) FROM meta.ducklake_inlined_data_tables
 ----
 0
 
@@ -165,7 +144,8 @@ SELECT COUNT(*) FROM meta.ducklake_inlined_data_visibility
 
 query I
 SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
-    AND table_name LIKE 'ducklake_inlined_delete_%'
+    AND (table_name LIKE 'ducklake_inlined_delete_%' OR table_name LIKE 'ducklake_inlined_data_%_%'
+        AND table_name NOT IN ('ducklake_inlined_data_tables', 'ducklake_inlined_data_visibility'))
 ----
 0
 
@@ -207,7 +187,8 @@ SELECT COUNT(*) FROM dl.f
 ----
 99
 
-# the writers inline into the recreated payloads and end through the companion
+# the writers create their payloads in the shape of 2.0, registered under the schema version of the
+# table's last change or of their commit, and end through the companion
 statement ok
 INSERT INTO dl.t VALUES (5, 50)
 
@@ -218,7 +199,7 @@ statement ok
 DELETE FROM dl.u WHERE i = 3
 
 query IIII
-SELECT _ducklake_row_id, _ducklake_begin_snapshot, _ducklake_branch_id, i FROM meta.ducklake_inlined_data_2_3
+SELECT _ducklake_row_id, _ducklake_begin_snapshot, _ducklake_branch_id, i FROM meta.ducklake_inlined_data_2_6
 ----
 2	15	0	3
 
@@ -240,6 +221,12 @@ SELECT i FROM dl.u ORDER BY i
 ----
 1
 2
+
+query I
+SELECT table_name FROM meta.ducklake_inlined_data_tables ORDER BY table_name
+----
+ducklake_inlined_data_1_2
+ducklake_inlined_data_2_6
 
 # an inlined deletion of a file row creates its deletion table in the shape of 2.0, listed after a fresh attach
 statement ok
@@ -266,3 +253,24 @@ query I
 SELECT COUNT(*) FROM dl.f
 ----
 98
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_inlined_data_1_2')
+ORDER BY column_index
+----
+_ducklake_row_id
+_ducklake_begin_snapshot
+i
+j
+_ducklake_branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_inlined_data_2_6')
+ORDER BY column_index
+----
+_ducklake_row_id
+_ducklake_begin_snapshot
+i
+_ducklake_branch_id

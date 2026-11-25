@@ -65,7 +65,7 @@ CALL ducklake_flush_inlined_data('dl')
 statement ok
 DETACH dl
 
-# the empty payload is refused for its column, which the recreated payload would carry twice
+# the empty payload is refused for its column, the payloads of 2.0 reserve the name
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
     AUTOMATIC_MIGRATION TRUE)

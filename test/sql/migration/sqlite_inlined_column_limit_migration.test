@@ -1,5 +1,5 @@
 # name: test/sql/migration/sqlite_inlined_column_limit_migration.test
-# description: the migration to 2.0-dev1 recreates a flushed inlined data table at the column limit of sqlite
+# description: a table at the column limit of sqlite inlines again after the migration to 2.0-dev1 dropped its flushed payload
 # group: [migration]
 
 require ducklake
@@ -40,18 +40,22 @@ CALL ducklake_flush_inlined_data('dl')
 statement ok
 DETACH dl
 
-# the recreated payload has the branch column within the limit
+# the step drops the payload, the writer creates it again with the branch column within the limit
 statement ok
 ATTACH 'ducklake:sqlite:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}',
-    AUTOMATIC_MIGRATION TRUE)
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 
 query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
 2.0-dev1
 
+statement ok
+INSERT INTO dl.fits (c0) VALUES (3)
+
+# the new payload is registered under the schema version of its commit
 query I
-SELECT count(*) FROM (DESCRIBE SELECT * FROM __ducklake_metadata_dl.ducklake_inlined_data_1_1)
+SELECT count(*) FROM (DESCRIBE SELECT * FROM __ducklake_metadata_dl.ducklake_inlined_data_1_2)
 ----
 2000
 
@@ -61,9 +65,10 @@ SELECT count(*) FROM __ducklake_metadata_dl.ducklake_inlined_data_visibility
 0
 
 query I
-SELECT c0 FROM dl.fits
+SELECT c0 FROM dl.fits ORDER BY c0
 ----
 2
+3
 
 query I
 SELECT c0 FROM dl.fits AT (VERSION => 3) ORDER BY c0
