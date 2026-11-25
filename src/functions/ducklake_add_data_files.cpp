@@ -20,63 +20,26 @@
 
 namespace duckdb {
 
-enum class HivePartitioningType { AUTOMATIC, YES, NO };
+//! The paths are the globs of the files to add
+struct DuckLakeAddDataFilesData : public DuckLakeDataFilesBindData {
+	using DuckLakeDataFilesBindData::DuckLakeDataFilesBindData;
 
-struct DuckLakeAddDataFilesData : public TableFunctionData {
-	DuckLakeAddDataFilesData(DuckLakeCatalog &catalog, DuckLakeTableEntry &table) : catalog(catalog), table(table) {
-	}
-
-	DuckLakeCatalog &catalog;
-	DuckLakeTableEntry &table;
-	vector<string> globs;
 	bool allow_missing = false;
 	bool ignore_extra_columns = false;
-	HivePartitioningType hive_partitioning = HivePartitioningType::AUTOMATIC;
+	bool hive_partitioning = true;
 };
 
 static unique_ptr<FunctionData> DuckLakeAddDataFilesBind(ClientContext &context, TableFunctionBindInput &input,
                                                          vector<LogicalType> &return_types, vector<Identifier> &names) {
-	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
-	catalog.VerifyWritable();
-	if (input.inputs[1].IsNull()) {
-		throw InvalidInputException("Table name cannot be NULL");
-	}
-	auto schema_name = DuckLakeTableFunctionUtil::GetStringOption(input, "schema");
-	const auto table_name = StringValue::Get(input.inputs[1]);
-	auto &table = DuckLakeBaseMetadataFunction::GetTableEntry(context, catalog, schema_name, table_name);
-	if (catalog.IsEncrypted()) {
+	auto result = make_uniq<DuckLakeAddDataFilesData>(context, input);
+	if (result->catalog.IsEncrypted()) {
 		// every data file of an encrypted catalog is read with its own key, which an added file does not have
 		throw NotImplementedException("ducklake_add_data_files is not supported for an encrypted DuckLake catalog");
 	}
-
-	auto result = make_uniq<DuckLakeAddDataFilesData>(catalog, table);
-	auto &file_list = input.inputs[2];
-	if (file_list.IsNull()) {
-		throw InvalidInputException("File list cannot be NULL");
-	}
-	if (file_list.type() == LogicalType::VARCHAR) {
-		result->globs.push_back(StringValue::Get(file_list));
-	} else if (file_list.type() == LogicalType::LIST(LogicalType::VARCHAR)) {
-		auto paths = ListValue::GetChildren(file_list);
-		for (const auto &path : paths) {
-			if (path.IsNull()) {
-				throw InvalidInputException("File list cannot contain NULL");
-			}
-			result->globs.push_back(StringValue::Get(path));
-		}
-	} else {
-		throw InvalidInputException("File list must be a string or a list of strings");
-	}
-	Value option;
-	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "allow_missing", "boolean", option)) {
-		result->allow_missing = BooleanValue::Get(option);
-	}
-	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "ignore_extra_columns", "boolean", option)) {
-		result->ignore_extra_columns = BooleanValue::Get(option);
-	}
-	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "hive_partitioning", "boolean", option)) {
-		result->hive_partitioning = BooleanValue::Get(option) ? HivePartitioningType::YES : HivePartitioningType::NO;
-	}
+	result->BindPaths(input.inputs[2]);
+	result->allow_missing = DuckLakeTableFunctionUtil::GetBooleanOption(input, "allow_missing", false);
+	result->ignore_extra_columns = DuckLakeTableFunctionUtil::GetBooleanOption(input, "ignore_extra_columns", false);
+	result->hive_partitioning = DuckLakeTableFunctionUtil::GetBooleanOption(input, "hive_partitioning", true);
 
 	names.emplace_back("filename");
 	return_types.emplace_back(LogicalType::VARCHAR);
@@ -215,7 +178,7 @@ private:
 	bool allow_missing;
 	bool ignore_extra_columns;
 	map<string, string> hive_partitions;
-	HivePartitioningType hive_partitioning;
+	bool hive_partitioning;
 	unordered_set<string> processed_files;
 	unordered_set<idx_t> skipped_fields;
 	//! The types bound from the DuckDB type strings of the files
@@ -517,18 +480,12 @@ public:
 	void CheckMatchingType();
 
 private:
-	void CheckSignedInteger();
-	void CheckUnsignedInteger();
-	void CheckFloatingPoints();
-	void CheckTimestamp();
-	void CheckTimestampWithTimeZone();
 	void CheckDecimal();
 
 	//! Called when a check fails
 	void Fail();
 
 private:
-	bool CheckType(const LogicalType &type);
 	//! Verify type is equivalent to one of the accepted types
 	bool CheckTypes(const vector<LogicalType> &types);
 
@@ -541,10 +498,42 @@ static string FormatExpectedError(const vector<LogicalType> &expected) {
 	return expected.size() > 1 ? "one of " + error : error;
 }
 
-bool DuckLakeParquetTypeChecker::CheckType(const LogicalType &type) {
-	vector<LogicalType> types;
-	types.push_back(type);
-	return CheckTypes(types);
+//! The types of a file that are read as a column of the type without losing values
+static vector<LogicalType> AcceptedSourceTypes(const LogicalType &type) {
+	switch (type.id()) {
+	case LogicalTypeId::TINYINT:
+	case LogicalTypeId::UTINYINT:
+	case LogicalTypeId::FLOAT:
+		return {type.id()};
+	case LogicalTypeId::SMALLINT:
+		return {LogicalTypeId::SMALLINT, LogicalTypeId::UTINYINT, LogicalTypeId::TINYINT};
+	case LogicalTypeId::INTEGER:
+		return {LogicalTypeId::INTEGER, LogicalTypeId::USMALLINT, LogicalTypeId::SMALLINT, LogicalTypeId::UTINYINT,
+		        LogicalTypeId::TINYINT};
+	case LogicalTypeId::BIGINT:
+		return {LogicalTypeId::BIGINT,   LogicalTypeId::UINTEGER, LogicalTypeId::INTEGER, LogicalTypeId::USMALLINT,
+		        LogicalTypeId::SMALLINT, LogicalTypeId::UTINYINT, LogicalTypeId::TINYINT};
+	case LogicalTypeId::USMALLINT:
+		return {LogicalTypeId::USMALLINT, LogicalTypeId::UTINYINT};
+	case LogicalTypeId::UINTEGER:
+		return {LogicalTypeId::UINTEGER, LogicalTypeId::USMALLINT, LogicalTypeId::UTINYINT};
+	case LogicalTypeId::UBIGINT:
+		return {LogicalTypeId::UBIGINT, LogicalTypeId::UINTEGER, LogicalTypeId::USMALLINT, LogicalTypeId::UTINYINT};
+	case LogicalTypeId::DOUBLE:
+		return {LogicalTypeId::DOUBLE, LogicalTypeId::FLOAT};
+	case LogicalTypeId::TIMESTAMP:
+	case LogicalTypeId::TIMESTAMP_NS:
+		return {LogicalTypeId::TIMESTAMP_NS, LogicalTypeId::TIMESTAMP, LogicalTypeId::TIMESTAMP_MS,
+		        LogicalTypeId::TIMESTAMP_SEC};
+	case LogicalTypeId::TIMESTAMP_SEC:
+	case LogicalTypeId::TIMESTAMP_MS:
+		return {LogicalTypeId::TIMESTAMP, LogicalTypeId::TIMESTAMP_MS, LogicalTypeId::TIMESTAMP_SEC};
+	case LogicalTypeId::TIMESTAMP_TZ:
+		return {LogicalTypeId::TIMESTAMP_TZ, LogicalTypeId::TIMESTAMP_TZ_NS};
+	default:
+		// any other type has to match exactly
+		return {type};
+	}
 }
 
 bool DuckLakeParquetTypeChecker::CheckTypes(const vector<LogicalType> &types) {
@@ -560,95 +549,6 @@ bool DuckLakeParquetTypeChecker::CheckTypes(const vector<LogicalType> &types) {
 void DuckLakeParquetTypeChecker::Fail() {
 	auto column_name = prefix.empty() ? column.name.GetIdentifierName() : prefix + "." + column.name;
 	throw MappingError(column_name, file_metadata.filepath, table, StringUtil::Join(failures, "\n* "));
-}
-
-void DuckLakeParquetTypeChecker::CheckSignedInteger() {
-	vector<LogicalType> accepted_types;
-
-	switch (type.id()) {
-	case LogicalTypeId::BIGINT:
-		accepted_types.push_back(LogicalType::BIGINT);
-		accepted_types.push_back(LogicalType::UINTEGER);
-		DUCKDB_EXPLICIT_FALLTHROUGH;
-	case LogicalTypeId::INTEGER:
-		accepted_types.push_back(LogicalType::INTEGER);
-		accepted_types.push_back(LogicalType::USMALLINT);
-		DUCKDB_EXPLICIT_FALLTHROUGH;
-	case LogicalTypeId::SMALLINT:
-		accepted_types.push_back(LogicalType::SMALLINT);
-		accepted_types.push_back(LogicalType::UTINYINT);
-		DUCKDB_EXPLICIT_FALLTHROUGH;
-	case LogicalTypeId::TINYINT:
-		accepted_types.push_back(LogicalType::TINYINT);
-		break;
-	default:
-		throw InternalException("Unknown signed type");
-	}
-	if (!CheckTypes(accepted_types)) {
-		Fail();
-	}
-}
-
-void DuckLakeParquetTypeChecker::CheckUnsignedInteger() {
-	vector<LogicalType> accepted_types;
-
-	switch (type.id()) {
-	case LogicalTypeId::UBIGINT:
-		accepted_types.push_back(LogicalType::UBIGINT);
-		DUCKDB_EXPLICIT_FALLTHROUGH;
-	case LogicalTypeId::UINTEGER:
-		accepted_types.push_back(LogicalType::UINTEGER);
-		DUCKDB_EXPLICIT_FALLTHROUGH;
-	case LogicalTypeId::USMALLINT:
-		accepted_types.push_back(LogicalType::USMALLINT);
-		DUCKDB_EXPLICIT_FALLTHROUGH;
-	case LogicalTypeId::UTINYINT:
-		accepted_types.push_back(LogicalType::UTINYINT);
-		break;
-	default:
-		throw InternalException("Unknown unsigned type");
-	}
-	if (!CheckTypes(accepted_types)) {
-		Fail();
-	}
-}
-
-void DuckLakeParquetTypeChecker::CheckFloatingPoints() {
-	vector<LogicalType> accepted_types;
-
-	switch (type.id()) {
-	case LogicalTypeId::DOUBLE:
-		accepted_types.push_back(LogicalType::DOUBLE);
-		DUCKDB_EXPLICIT_FALLTHROUGH;
-	case LogicalTypeId::FLOAT:
-		accepted_types.push_back(LogicalType::FLOAT);
-		break;
-	default:
-		throw InternalException("Unknown float type");
-	}
-	if (!CheckTypes(accepted_types)) {
-		Fail();
-	}
-}
-
-void DuckLakeParquetTypeChecker::CheckTimestamp() {
-	vector<LogicalType> accepted_types;
-
-	if (type.id() == LogicalTypeId::TIMESTAMP || type.id() == LogicalTypeId::TIMESTAMP_NS) {
-		accepted_types.push_back(LogicalTypeId::TIMESTAMP_NS);
-	}
-	accepted_types.push_back(LogicalTypeId::TIMESTAMP);
-	accepted_types.push_back(LogicalTypeId::TIMESTAMP_MS);
-	accepted_types.push_back(LogicalTypeId::TIMESTAMP_SEC);
-	if (!CheckTypes(accepted_types)) {
-		Fail();
-	}
-}
-
-void DuckLakeParquetTypeChecker::CheckTimestampWithTimeZone() {
-	if (!CheckTypes({LogicalType::TIMESTAMP_TZ, LogicalType::TIMESTAMP_TZ_NS})) {
-		Fail();
-	}
 }
 
 void DuckLakeParquetTypeChecker::CheckDecimal() {
@@ -703,22 +603,6 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 	}
 
 	switch (type.id()) {
-	case LogicalTypeId::TINYINT:
-	case LogicalTypeId::SMALLINT:
-	case LogicalTypeId::INTEGER:
-	case LogicalTypeId::BIGINT:
-		CheckSignedInteger();
-		break;
-	case LogicalTypeId::UTINYINT:
-	case LogicalTypeId::USMALLINT:
-	case LogicalTypeId::UINTEGER:
-	case LogicalTypeId::UBIGINT:
-		CheckUnsignedInteger();
-		break;
-	case LogicalTypeId::FLOAT:
-	case LogicalTypeId::DOUBLE:
-		CheckFloatingPoints();
-		break;
 	case LogicalTypeId::STRUCT:
 	case LogicalTypeId::LIST:
 	case LogicalTypeId::MAP:
@@ -728,26 +612,11 @@ void DuckLakeParquetTypeChecker::CheckMatchingType() {
 			Fail();
 		}
 		break;
-	case LogicalTypeId::TIMESTAMP:
-	case LogicalTypeId::TIMESTAMP_SEC:
-	case LogicalTypeId::TIMESTAMP_MS:
-	case LogicalTypeId::TIMESTAMP_NS:
-		CheckTimestamp();
-		break;
-	case LogicalTypeId::TIMESTAMP_TZ:
-		CheckTimestampWithTimeZone();
-		break;
 	case LogicalTypeId::DECIMAL:
 		CheckDecimal();
 		break;
-	case LogicalTypeId::BOOLEAN:
-	case LogicalTypeId::VARCHAR:
-	case LogicalTypeId::BLOB:
-	case LogicalTypeId::DATE:
-	case LogicalTypeId::TIME:
 	default:
-		// by default just verify that the type matches exactly
-		if (!CheckType(type)) {
+		if (!CheckTypes(AcceptedSourceTypes(type))) {
 			Fail();
 		}
 		break;
@@ -858,13 +727,6 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapColumn(ParquetFileMet
 	return map_entry;
 }
 
-static bool SupportsHivePartitioning(const LogicalType &type) {
-	if (type.IsNested()) {
-		return false;
-	}
-	return true;
-}
-
 static optional_idx GetIdentityPartitionKeyIndex(optional_ptr<DuckLakePartition> partition_data,
                                                  FieldIndex field_index) {
 	if (!partition_data) {
@@ -884,7 +746,7 @@ unique_ptr<DuckLakeNameMapEntry> DuckLakeFileProcessor::MapHiveColumn(ParquetFil
 	auto &target_type = field_id.Type();
 	auto target_field_id = field_id.GetFieldIndex();
 
-	if (!SupportsHivePartitioning(target_type)) {
+	if (target_type.IsNested()) {
 		throw InvalidInputException("Type \"%s\" is not supported for hive partitioning", target_type);
 	}
 
@@ -1176,7 +1038,7 @@ void DuckLakeFileProcessor::MapPartitionColumns(ParquetFileMetadata &file) {
 }
 
 void DuckLakeFileProcessor::DetermineMapping(ParquetFileMetadata &file) {
-	if (hive_partitioning != HivePartitioningType::NO) {
+	if (hive_partitioning) {
 		// we are mapping hive partitions - check if there are any hive partitioned columns
 		hive_partitions = HivePartitioning::Parse(file.filepath);
 	}
@@ -1277,29 +1139,18 @@ static void DuckLakeAddDataFilesExecute(ClientContext &context, TableFunctionInp
 	auto &bind_data = data_p.bind_data->Cast<DuckLakeAddDataFilesData>();
 	auto &transaction = DuckLakeTransaction::Get(context, bind_data.catalog);
 	DuckLakeFileProcessor processor(transaction, context, bind_data);
-	auto files_to_add = processor.AddFiles(bind_data.globs);
+	auto files_to_add = processor.AddFiles(bind_data.paths);
 	transaction.AppendFiles(bind_data.table.GetTableId(), std::move(files_to_add));
 }
 
 TableFunctionSet DuckLakeAddDataFilesFunction::GetFunctions() {
-	TableFunctionSet set("ducklake_add_data_files");
-	vector<LogicalType> at_types {LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)};
-	for (auto &type : at_types) {
-		TableFunction function("ducklake_add_data_files",
-		                       FunctionSignature()
-		                           .AddPositionalOnly("catalog", LogicalType::VARCHAR)
-		                           .AddPositionalOnly("table_name", LogicalType::VARCHAR)
-		                           .AddPositionalOnly(type.id() == LogicalTypeId::LIST ? "paths" : "path", type),
-		                       DuckLakeAddDataFilesExecute, DuckLakeAddDataFilesBind);
-		function.GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
-			options.Add("allow_missing", LogicalType::BOOLEAN)
-			    .Add("ignore_extra_columns", LogicalType::BOOLEAN)
-			    .Add("hive_partitioning", LogicalType::BOOLEAN)
-			    .Add("schema", LogicalType::VARCHAR);
-		});
-		set.AddFunction(function);
-	}
-	return set;
+	return DuckLakeDataFilesBindData::GetFunctions("ducklake_add_data_files", DuckLakeAddDataFilesExecute,
+	                                               DuckLakeAddDataFilesBind, [](TypedKwargs &options) {
+		                                               options.Add("allow_missing", LogicalType::BOOLEAN)
+		                                                   .Add("ignore_extra_columns", LogicalType::BOOLEAN)
+		                                                   .Add("hive_partitioning", LogicalType::BOOLEAN)
+		                                                   .Add("schema", LogicalType::VARCHAR);
+	                                               });
 }
 
 } // namespace duckdb

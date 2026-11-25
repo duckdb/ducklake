@@ -127,7 +127,7 @@ static string EscapeVarcharForSQL(const string &str_val) {
 	return "'" + ret + "'";
 }
 
-string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value) {
+static string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value) {
 	if (value.IsNull()) {
 		return value.ToString();
 	}
@@ -169,15 +169,9 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 		}
 		return value.ToSQLString();
 	}
-	case LogicalTypeId::FLOAT: {
-		float fval = FloatValue::Get(value);
-		if (!Value::FloatIsFinite(fval) || (fval == 0.0f && std::signbit(fval))) {
-			return StringUtil::Format("CAST('%s' AS %s)", value.ToString(), value_type);
-		}
-		return value.ToString();
-	}
+	case LogicalTypeId::FLOAT:
 	case LogicalTypeId::DOUBLE: {
-		double val = DoubleValue::Get(value);
+		auto val = value.GetValue<double>();
 		if (!Value::DoubleIsFinite(val) || (val == 0.0 && std::signbit(val))) {
 			return StringUtil::Format("CAST('%s' AS %s)", value.ToString(), value_type);
 		}
@@ -198,7 +192,7 @@ string ToSQLString(DuckLakeMetadataManager &metadata_manager, const Value &value
 	}
 }
 
-string ToByteaHexLiteral(const string &raw_bytes) {
+static string ToByteaHexLiteral(const string &raw_bytes) {
 	string hex(raw_bytes.size() * 2, '\0');
 	CryptoHash::ToHex(const_data_ptr_cast(raw_bytes.data()), raw_bytes.size(), &hex[0]);
 	return "'\\x" + hex + "'";
@@ -349,7 +343,7 @@ void DuckLakeUtil::ValidateInlinedSystemColumn(DuckLakeCatalog &catalog, ClientC
                                                TableIndex table_id, const Identifier &name,
                                                optional_ptr<const map<string, string>> table_options) {
 	bool prefixed_inlined_columns = catalog.SupportsV1_1Metadata();
-	if (!prefixed_inlined_columns && catalog.DataInliningRowLimit(context, schema_id, table_id, table_options) == 0) {
+	if (!prefixed_inlined_columns && catalog.DataInliningRowLimit(context, {schema_id, table_id, table_options}) == 0) {
 		return;
 	}
 	if (IsInlinedSystemColumn(name, prefixed_inlined_columns)) {
@@ -362,7 +356,7 @@ void DuckLakeUtil::ValidateNoInlinedSystemColumns(DuckLakeCatalog &catalog, Clie
                                                   optional_ptr<const map<string, string>> table_options) {
 	bool prefixed_inlined_columns = catalog.SupportsV1_1Metadata();
 	if (!prefixed_inlined_columns &&
-	    catalog.DataInliningRowLimit(context, schema_id, TableIndex(), table_options) == 0) {
+	    catalog.DataInliningRowLimit(context, {schema_id, TableIndex(), table_options}) == 0) {
 		return;
 	}
 	for (auto &col : columns.Logical()) {
@@ -672,14 +666,7 @@ using config_option_parser_t = string (*)(ClientContext &context, const string &
 static string ParseParquetCompression(ClientContext &, const string &, const Value &val) {
 	auto codec = val.DefaultCastAs(LogicalType::VARCHAR).GetValue<string>();
 	vector<string> supported_algorithms {"uncompressed", "snappy", "gzip", "zstd", "brotli", "lz4", "lz4_raw"};
-	bool found = false;
-	for (auto &algorithm : supported_algorithms) {
-		if (StringUtil::CIEquals(algorithm, codec)) {
-			found = true;
-			break;
-		}
-	}
-	if (!found) {
+	if (StringUtil::CIFind(supported_algorithms, codec) == DConstants::INVALID_INDEX) {
 		auto supported = StringUtil::Join(supported_algorithms, ", ");
 		throw NotImplementedException("Unsupported codec \"%s\" for parquet, supported options are %s", codec,
 		                              supported);
@@ -765,31 +752,71 @@ static string ParseSkippedStatsColumns(ClientContext &, const string &, const Va
 	return string();
 }
 
-static const unordered_map<string, config_option_parser_t> &ConfigOptionParsers() {
-	static const unordered_map<string, config_option_parser_t> parsers {
-	    {"parquet_compression", ParseParquetCompression},
-	    {"parquet_version", ParseParquetVersion},
-	    {"parquet_compression_level", ParseCompressionLevel},
-	    {"data_inlining_row_limit", ParseUnsignedInteger},
-	    {"parquet_row_group_size", ParseRowGroupSize},
-	    {"parquet_row_group_size_bytes", ParseRowGroupSizeBytes},
-	    {"target_file_size", ParseMemorySize},
-	    {"require_commit_message", ParseBoolean},
-	    {"hive_file_pattern", ParseBoolean},
-	    {"rewrite_delete_threshold", ParseDeleteThreshold},
-	    {"delete_older_than", ParseInterval},
-	    {"expire_older_than", ParseInterval},
-	    {"auto_compact", ParseBoolean},
-	    {"per_thread_output", ParseBoolean},
-	    {"write_deletion_vectors", ParseBoolean},
-	    {"sort_on_insert", ParseBoolean},
-	    {"skip_stats_columns", ParseSkippedStatsColumns},
-	};
-	return parsers;
+struct DuckLakeOptionDefinition {
+	const char *name;
+	const char *description;
+	//! Null for the options that only DuckLake itself sets
+	config_option_parser_t parser;
+};
+
+static constexpr DuckLakeOptionDefinition DUCKLAKE_OPTIONS[] = {
+    {"data_inlining_row_limit", "Maximum amount of rows to inline in a single insert", ParseUnsignedInteger},
+    {"parquet_compression",
+     "Compression algorithm for Parquet files (uncompressed, snappy, gzip, zstd, brotli, lz4, lz4_raw)",
+     ParseParquetCompression},
+    {"parquet_version", "Parquet format version (1 or 2)", ParseParquetVersion},
+    {"parquet_compression_level", "Compression level for Parquet files written with zstd", ParseCompressionLevel},
+    {"parquet_row_group_size", "Number of rows per row group in Parquet files", ParseRowGroupSize},
+    {"parquet_row_group_size_bytes", "Number of bytes per row group in Parquet files", ParseRowGroupSizeBytes},
+    {"hive_file_pattern", "If partitioned data should be written in a hive-like folder structure", ParseBoolean},
+    {"target_file_size", "The target data file size for insertion and compaction operations", ParseMemorySize},
+    {"version", "DuckLake format version", nullptr},
+    {"created_by", "Tool used to write the DuckLake", nullptr},
+    {"data_path", "Path to data files", nullptr},
+    {"require_commit_message", "If an explicit commit message is required for a snapshot commit.", ParseBoolean},
+    {"rewrite_delete_threshold",
+     "A threshold that determines the minimum amount of data that must be removed from a file before a rewrite is "
+     "warranted. From 0 - 1.",
+     ParseDeleteThreshold},
+    {"delete_older_than",
+     "How old unused files must be to be removed by the 'ducklake_delete_orphaned_files' and "
+     "'ducklake_cleanup_old_files' cleanup functions.",
+     ParseInterval},
+    {"expire_older_than", "How old snapshots must be, by default, to be expired by: 'ducklake_expire_snapshots'",
+     ParseInterval},
+    {"auto_compact",
+     "Pre-defined schema used as a default value for the following compaction functions "
+     "'ducklake_flush_inlined_data','ducklake_merge_adjacent_files', 'ducklake_rewrite_data_files', "
+     "'ducklake_delete_orphaned_files'",
+     ParseBoolean},
+    {"encrypted", "Whether or not to encrypt Parquet files written to the data path", nullptr},
+    {"per_thread_output", "Whether to create separate output files per thread during parallel insertion", ParseBoolean},
+    {"write_deletion_vectors",
+     "[EXPERIMENTAL - do not use outside testing] Whether to write Iceberg V3 deletion vectors (puffin) instead of "
+     "positional delete files (parquet), encrypted catalogs always write parquet",
+     ParseBoolean},
+    {"sort_on_insert", "Whether to sort data on INSERT according to SET SORTED BY (default: true)", ParseBoolean},
+    {"skip_stats_columns", "Columns for which min/max bounds are not recorded (counts are still recorded)",
+     ParseSkippedStatsColumns},
+};
+
+static optional_ptr<const DuckLakeOptionDefinition> FindConfigOption(const string &option) {
+	for (auto &definition : DUCKLAKE_OPTIONS) {
+		if (StringUtil::CIEquals(definition.name, option)) {
+			return definition;
+		}
+	}
+	return nullptr;
+}
+
+Value DuckLakeUtil::GetConfigOptionDescription(const string &option) {
+	auto definition = FindConfigOption(option);
+	return definition ? Value(definition->description) : Value();
 }
 
 void DuckLakeUtil::ValidateConfigOptionName(const string &option) {
-	if (!ConfigOptionParsers().count(option)) {
+	auto definition = FindConfigOption(option);
+	if (!definition || !definition->parser) {
 		throw NotImplementedException("Unsupported option %s", option);
 	}
 }
@@ -800,7 +827,7 @@ string DuckLakeUtil::ParseConfigOptionValue(ClientContext &context, const string
 	if (val.IsNull() && option != "skip_stats_columns") {
 		throw BinderException("The %s option can't be null.", option.c_str());
 	}
-	return ConfigOptionParsers().at(option)(context, option, val);
+	return FindConfigOption(option)->parser(context, option, val);
 }
 
 void DuckLakeUtil::ValidateConfigOptionScope(const string &option, bool has_schema, bool has_table) {

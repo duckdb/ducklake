@@ -36,11 +36,59 @@ unique_ptr<RESTInlinedRows> ReadInlinedRows(ClientContext &context, const shared
 	return result;
 }
 
-//! The JSON document of a response in its part of a multipart response
-template <class RESPONSE>
-RESPONSE ReadJSONPart(const shared_ptr<const string> &body, const RESTMultipartPart &part) {
-	RESTJsonReader document(body->substr(part.offset, part.size));
-	return DuckLakeRESTSerializer::Read<RESPONSE>(document.Root());
+//! The response with two lists of files: a multipart response with a part for each list, if the client accepts them
+template <class RESPONSE, class FIRST, class SECOND>
+string WriteLists(DuckLakeRESTRequest &request, RESPONSE &value, vector<FIRST> RESPONSE::*first_member,
+                  const char *first_name, vector<SECOND> RESPONSE::*second_member, const char *second_name) {
+	bool has_lists = !(value.*first_member).empty() || !(value.*second_member).empty() || value.inlined_data;
+	if (!request.accepts_arrow || !has_lists) {
+		return DuckLakeRESTSerializer::ToJSON(value);
+	}
+	auto &context = *request.connection.context;
+	RESTMultipartWriter multipart;
+	vector<FIRST> first;
+	first.swap(value.*first_member);
+	vector<SECOND> second;
+	second.swap(value.*second_member);
+	multipart.AddPart("response", "application/json", DuckLakeRESTSerializer::ToJSON(value));
+	if (!first.empty()) {
+		multipart.AddPart(first_name, REST_ARROW_STREAM, RESTArrowFiles::Write(context, first));
+	}
+	if (!second.empty()) {
+		multipart.AddPart(second_name, REST_ARROW_STREAM, RESTArrowFiles::Write(context, second));
+	}
+	if (value.inlined_data) {
+		multipart.AddPart("inlined_data", REST_ARROW_STREAM, WriteInlinedRows(context, *value.inlined_data));
+	}
+	return multipart.Finish(request.content_type);
+}
+
+template <class RESPONSE, class FIRST, class SECOND>
+RESPONSE ReadLists(RESTHttpResponse &response, vector<FIRST> RESPONSE::*first_member, const char *first_name,
+                   vector<SECOND> RESPONSE::*second_member, const char *second_name) {
+	if (!RESTMultipart::IsMultipart(response.content_type)) {
+		RESTJsonReader document(response.body);
+		return DuckLakeRESTSerializer::Read<RESPONSE>(document.Root());
+	}
+	auto body = make_shared_ptr<const string>(std::move(response.body));
+	auto parts = RESTMultipart::Parse(*body, response.content_type);
+	auto &json_part = RESTMultipart::Find(parts, "response");
+	RESTJsonReader document(body->substr(json_part.offset, json_part.size));
+	auto result = DuckLakeRESTSerializer::Read<RESPONSE>(document.Root());
+	auto &context = *response.context;
+	auto first = RESTMultipart::TryFind(parts, first_name);
+	if (first) {
+		RESTArrowFiles::Read(context, body, first->offset, first->size, result.*first_member);
+	}
+	auto second = RESTMultipart::TryFind(parts, second_name);
+	if (second) {
+		RESTArrowFiles::Read(context, body, second->offset, second->size, result.*second_member);
+	}
+	auto inlined_data = RESTMultipart::TryFind(parts, "inlined_data");
+	if (inlined_data) {
+		result.inlined_data = ReadInlinedRows(context, body, *inlined_data);
+	}
+	return result;
 }
 
 } // namespace
@@ -50,52 +98,14 @@ RESPONSE ReadJSONPart(const shared_ptr<const string> &body, const RESTMultipartP
 //===--------------------------------------------------------------------===//
 template <>
 string DuckLakeRESTSerializer::ToResponse<RESTSelectResponse>(DuckLakeRESTRequest &request, RESTSelectResponse &value) {
-	bool has_lists = !value.files.empty() || !value.extended_files.empty() || value.inlined_data;
-	if (!request.accepts_arrow || !has_lists) {
-		return ToJSON(value);
-	}
-	auto &context = *request.connection.context;
-	RESTMultipartWriter multipart;
-	vector<DuckLakeFileListEntry> files;
-	files.swap(value.files);
-	vector<DuckLakeFileListExtendedEntry> extended_files;
-	extended_files.swap(value.extended_files);
-	multipart.AddPart("response", "application/json", ToJSON(value));
-	if (!files.empty()) {
-		multipart.AddPart("files", REST_ARROW_STREAM, RESTArrowFiles::Write(context, files));
-	}
-	if (!extended_files.empty()) {
-		multipart.AddPart("extended_files", REST_ARROW_STREAM, RESTArrowFiles::Write(context, extended_files));
-	}
-	if (value.inlined_data) {
-		multipart.AddPart("inlined_data", REST_ARROW_STREAM, WriteInlinedRows(context, *value.inlined_data));
-	}
-	return multipart.Finish(request.content_type);
+	return WriteLists(request, value, &RESTSelectResponse::files, "files", &RESTSelectResponse::extended_files,
+	                  "extended_files");
 }
 
 template <>
 RESTSelectResponse DuckLakeRESTSerializer::ReadResponse<RESTSelectResponse>(RESTHttpResponse &response) {
-	if (!RESTMultipart::IsMultipart(response.content_type)) {
-		RESTJsonReader document(response.body);
-		return Read<RESTSelectResponse>(document.Root());
-	}
-	auto body = make_shared_ptr<const string>(std::move(response.body));
-	auto parts = RESTMultipart::Parse(*body, response.content_type);
-	auto result = ReadJSONPart<RESTSelectResponse>(body, RESTMultipart::Find(parts, "response"));
-	auto &context = *response.context;
-	auto files = RESTMultipart::TryFind(parts, "files");
-	if (files) {
-		RESTArrowFiles::Read(context, body, files->offset, files->size, result.files);
-	}
-	auto extended_files = RESTMultipart::TryFind(parts, "extended_files");
-	if (extended_files) {
-		RESTArrowFiles::Read(context, body, extended_files->offset, extended_files->size, result.extended_files);
-	}
-	auto inlined_data = RESTMultipart::TryFind(parts, "inlined_data");
-	if (inlined_data) {
-		result.inlined_data = ReadInlinedRows(context, body, *inlined_data);
-	}
-	return result;
+	return ReadLists(response, &RESTSelectResponse::files, "files", &RESTSelectResponse::extended_files,
+	                 "extended_files");
 }
 
 //===--------------------------------------------------------------------===//
@@ -104,52 +114,14 @@ RESTSelectResponse DuckLakeRESTSerializer::ReadResponse<RESTSelectResponse>(REST
 template <>
 string DuckLakeRESTSerializer::ToResponse<RESTTableChangesResponse>(DuckLakeRESTRequest &request,
                                                                     RESTTableChangesResponse &value) {
-	bool has_lists = !value.insertions.empty() || !value.deletions.empty() || value.inlined_data;
-	if (!request.accepts_arrow || !has_lists) {
-		return ToJSON(value);
-	}
-	auto &context = *request.connection.context;
-	RESTMultipartWriter multipart;
-	vector<DuckLakeFileListEntry> insertions;
-	insertions.swap(value.insertions);
-	vector<DuckLakeDeleteScanEntry> deletions;
-	deletions.swap(value.deletions);
-	multipart.AddPart("response", "application/json", ToJSON(value));
-	if (!insertions.empty()) {
-		multipart.AddPart("insertions", REST_ARROW_STREAM, RESTArrowFiles::Write(context, insertions));
-	}
-	if (!deletions.empty()) {
-		multipart.AddPart("deletions", REST_ARROW_STREAM, RESTArrowFiles::Write(context, deletions));
-	}
-	if (value.inlined_data) {
-		multipart.AddPart("inlined_data", REST_ARROW_STREAM, WriteInlinedRows(context, *value.inlined_data));
-	}
-	return multipart.Finish(request.content_type);
+	return WriteLists(request, value, &RESTTableChangesResponse::insertions, "insertions",
+	                  &RESTTableChangesResponse::deletions, "deletions");
 }
 
 template <>
 RESTTableChangesResponse DuckLakeRESTSerializer::ReadResponse<RESTTableChangesResponse>(RESTHttpResponse &response) {
-	if (!RESTMultipart::IsMultipart(response.content_type)) {
-		RESTJsonReader document(response.body);
-		return Read<RESTTableChangesResponse>(document.Root());
-	}
-	auto body = make_shared_ptr<const string>(std::move(response.body));
-	auto parts = RESTMultipart::Parse(*body, response.content_type);
-	auto result = ReadJSONPart<RESTTableChangesResponse>(body, RESTMultipart::Find(parts, "response"));
-	auto &context = *response.context;
-	auto insertions = RESTMultipart::TryFind(parts, "insertions");
-	if (insertions) {
-		RESTArrowFiles::Read(context, body, insertions->offset, insertions->size, result.insertions);
-	}
-	auto deletions = RESTMultipart::TryFind(parts, "deletions");
-	if (deletions) {
-		RESTArrowFiles::Read(context, body, deletions->offset, deletions->size, result.deletions);
-	}
-	auto inlined_data = RESTMultipart::TryFind(parts, "inlined_data");
-	if (inlined_data) {
-		result.inlined_data = ReadInlinedRows(context, body, *inlined_data);
-	}
-	return result;
+	return ReadLists(response, &RESTTableChangesResponse::insertions, "insertions",
+	                 &RESTTableChangesResponse::deletions, "deletions");
 }
 
 //===--------------------------------------------------------------------===//

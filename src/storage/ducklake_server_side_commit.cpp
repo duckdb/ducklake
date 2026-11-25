@@ -101,11 +101,7 @@ void DuckLakeServerSideCommit::SetFilesOwnedByClient(bool files_owned_by_client_
 }
 
 DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
-	auto catalog_version = ReadCatalogVersion();
-	supports_v1_1_metadata = catalog_version >= DuckLakeVersion::V1_1;
-	supports_v2_0_metadata = catalog_version >= DuckLakeVersion::V2_0_DEV1;
-	supports_file_visibility_events = catalog_version >= DuckLakeVersion::V2_0_DEV1;
-	supports_row_visibility = catalog_version >= DuckLakeVersion::V2_0_DEV1;
+	catalog_version = ReadCatalogVersion();
 	branch_keyed_lookups = BranchKeyedLookups();
 	ReadCommitHeader();
 	ReadColumnTypes();
@@ -119,23 +115,14 @@ DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	ReadStagedCompactions();
 	ReadStagedNameMaps();
 
-	// Derive transaction_changes from local_changes the same way DuckLakeTransaction does.
-	for (auto &entry : state->local_changes.Changes()) {
-		DuckLakeTransaction::AddTableChanges(entry.first, entry.second, transaction_changes);
-	}
-	// Mirror whole-file drops into the conflict-detection set.
-	transaction_changes.tables_deleted_from.insert(state->tables_deleted_from.begin(),
-	                                               state->tables_deleted_from.end());
-	transaction_changes.tables_delete_attempted.insert(state->tables_delete_attempted.begin(),
-	                                                   state->tables_delete_attempted.end());
+	state->AddDataChanges(transaction_changes);
 	commit_tables = transaction_changes.GetChangedTables();
 
 	idx_t committed_snapshot_id = 0;
 	idx_t committed_schema_version = static_cast<idx_t>(schema_version);
 	// Run the whole commit batch (snapshot + data/stats + changes) in one transaction
 	fresh_conn.BeginTransaction();
-	state->Commit(transaction_snapshot, transaction_changes, retry_config,
-	              BuildContext(committed_snapshot_id, committed_schema_version));
+	state->Commit(transaction_changes, retry_config, BuildContext(committed_snapshot_id, committed_schema_version));
 
 	DuckLakeServerSideCommitResult result;
 	result.committed_snapshot_id = static_cast<int64_t>(committed_snapshot_id);
@@ -227,16 +214,15 @@ void DuckLakeServerSideCommit::ReadColumnTypes() {
 	}
 	// the server commits on main, so the live columns are those of main at the transaction snapshot
 	string live = "col.end_snapshot IS NULL";
-	if (supports_row_visibility) {
+	if (SupportsRowVisibility(catalog_version)) {
 		live =
 		    DuckLakeMetadataManager::RowVisibility("col", DuckLakeMetadataManager::RowKind("column"), "{SNAPSHOT_ID}");
 	}
-	auto query = SubstitutePlaceholders(StringUtil::Format("SELECT col.table_id, col.column_id, col.column_type "
-	                                                       "FROM {METADATA_CATALOG}.ducklake_column col "
-	                                                       "WHERE %s AND col.table_id IN (%s)",
-	                                                       live, JoinIds(table_ids)),
-	                                    transaction_snapshot);
-	auto result = RunQuery(query, "read column types");
+	auto result = RunQuery(StringUtil::Format("SELECT col.table_id, col.column_id, col.column_type "
+	                                          "FROM {METADATA_CATALOG}.ducklake_column col "
+	                                          "WHERE %s AND col.table_id IN (%s)",
+	                                          live, JoinIds(table_ids)),
+	                       "read column types", transaction_snapshot);
 	for (auto &row : *result) {
 		column_types.emplace(make_pair(TableIndex(AsIdx(row, 0)), FieldIndex(AsIdx(row, 1))),
 		                     DuckLakeTypes::FromString(row.GetValue<string>(2)));
@@ -400,19 +386,16 @@ void DuckLakeServerSideCommit::ReadStagedDeleteFiles() {
 
 	map<pair<TableIndex, string>, vector<DuckLakeDeleteFile>> grouped;
 	for (auto &row : *result) {
+		DuckLakeDeleteFile f;
+		FillDeleteFileCommon(f, row, /*base=*/3);
+		f.row_group_count = OptIdx(row, 16);
 		if (!row.IsNull(15)) {
-			DuckLakeDeleteFile f;
-			FillDeleteFileCommon(f, row, /*base=*/3);
-			f.row_group_count = OptIdx(row, 16);
 			attached_deletes[AsIdx(row, 15)].push_back(std::move(f));
 			continue;
 		}
 		pair<TableIndex, string> key(TableIndex(AsIdx(row, 0)), row.GetValue<string>(1));
-		DuckLakeDeleteFile f;
 		f.data_file_id = DataFileIndex(AsIdx(row, 2));
 		f.data_file_path = key.second;
-		FillDeleteFileCommon(f, row, /*base=*/3);
-		f.row_group_count = OptIdx(row, 16);
 		f.overwrites_existing_delete = OptBoolFalse(row, 12);
 		if (!row.IsNull(13)) {
 			f.overwritten_delete_file.delete_file_id = DataFileIndex(AsIdx(row, 13));
@@ -559,17 +542,13 @@ shared_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::GetExistingTableStats(T
 		}
 	}
 	read_tables.push_back(table_id);
-	string sql =
-	    StringUtil::Replace(DuckLakeMetadataManager::GlobalTableStatsQuery(supports_v1_1_metadata, read_tables),
-	                        "{METADATA_CATALOG}", schema_id);
-	auto result = RunQuery(sql, "read existing table stats");
+	auto result =
+	    RunQuery(DuckLakeMetadataManager::GlobalTableStatsQuery(SupportsV1_1Metadata(catalog_version), read_tables),
+	             "read existing table stats");
 	auto global_stats = DuckLakeMetadataManager::ParseGlobalTableStats(*result);
 	DuckLakeMetadataManager::FillMissingTableSizes(
-	    global_stats,
-	    [&](string query) {
-		    return RunQuery(StringUtil::Replace(query, "{METADATA_CATALOG}", schema_id), "read missing table sizes");
-	    },
-	    supports_file_visibility_events);
+	    global_stats, [&](string query) { return RunQuery(std::move(query), "read missing table sizes"); },
+	    SupportsFileVisibilityEvents(catalog_version));
 	for (auto &read_table : read_tables) {
 		existing_table_stats[read_table] = nullptr;
 	}
@@ -580,9 +559,8 @@ shared_ptr<DuckLakeTableStats> DuckLakeServerSideCommit::GetExistingTableStats(T
 }
 
 DuckLakeVersion DuckLakeServerSideCommit::ReadCatalogVersion() {
-	string sql = StringUtil::Replace("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version'",
-	                                 "{METADATA_CATALOG}", schema_id);
-	auto result = RunQuery(sql, "read catalog version");
+	auto result = RunQuery("SELECT value FROM {METADATA_CATALOG}.ducklake_metadata WHERE key = 'version'",
+	                       "read catalog version");
 	for (auto &row : *result) {
 		return DuckLakeVersionFromString(row.GetValue<string>(0));
 	}
@@ -594,13 +572,12 @@ bool DuckLakeServerSideCommit::BranchKeyedLookups() const {
 	auto &database_manager = DatabaseManager::Get(*fresh_conn.context);
 	auto database = database_manager.GetDatabase(DatabaseManager::GetDefaultDatabase(*fresh_conn.context));
 	auto catalog_type = database ? database->GetCatalog().GetCatalogType() : string();
-	return supports_v2_0_metadata && !DuckLakeMetadataManager::IsDuckDBMetadataType(catalog_type);
+	return SupportsBranching(catalog_version) && !DuckLakeMetadataManager::IsDuckDBMetadataType(catalog_type);
 }
 
 DuckLakeSnapshot DuckLakeServerSideCommit::ReadLatestSnapshot() {
-	string sql = StringUtil::Replace(DuckLakeMetadataManager::LatestSnapshotQuery(branch_keyed_lookups, false),
-	                                 "{METADATA_CATALOG}", schema_id);
-	auto result = RunQuery(sql, "read latest snapshot");
+	auto result =
+	    RunQuery(DuckLakeMetadataManager::LatestSnapshotQuery(branch_keyed_lookups, false), "read latest snapshot");
 	auto snapshot = DuckLakeMetadataManager::ParseSnapshot(*result);
 	if (!snapshot) {
 		throw IOException("Server-side ducklake_commit: no snapshot found");
@@ -618,8 +595,8 @@ unique_ptr<DuckLakeStats> DuckLakeServerSideCommit::BuildStatsMap(vector<DuckLak
 
 vector<Identifier> DuckLakeServerSideCommit::LookupInlinedTableNames(TableIndex table_id) {
 	vector<Identifier> names;
-	auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), transaction_snapshot);
-	auto result = RunQuery(sql, "lookup inlined table names");
+	auto result = RunQuery(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), "lookup inlined table names",
+	                       transaction_snapshot);
 	for (auto &row : *result) {
 		names.push_back(row.GetValue<Identifier>(0));
 	}
@@ -631,10 +608,8 @@ const Identifier &DuckLakeServerSideCommit::ResolveInlinedTableName(TableIndex t
 	if (it != inlined_table_name_cache.end()) {
 		return it->second;
 	}
-	auto lookup = StringUtil::Replace(DuckLakeMetadataManager::LatestInlinedTableQuery(table_id.index),
-	                                  "{METADATA_CATALOG}", schema_id) +
-	              ";";
-	auto result = RunQuery(lookup, "lookup inlined table name");
+	auto result =
+	    RunQuery(DuckLakeMetadataManager::LatestInlinedTableQuery(table_id.index) + ";", "lookup inlined table name");
 	Identifier name;
 	for (auto &row : *result) {
 		name = row.GetValue<Identifier>(0);
@@ -676,20 +651,13 @@ string DuckLakeServerSideCommit::BuildInlinedDataInserts(const vector<DuckLakeIn
 DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_snapshot_id,
                                                              idx_t &committed_schema_version) {
 	DuckLakeCommitContext ctx;
-	ctx.commit_info = state->commit_info;
-	// a commit that a server passes on starts from the snapshot of its client, which other commits can have followed
-	ctx.check_conflicts_first = files_owned_by_client;
 	ctx.skip_drop_empty_inlined = true;
-	ctx.supports_v1_1_metadata = supports_v1_1_metadata;
-	ctx.supports_v2_0_metadata = supports_v2_0_metadata;
-	ctx.supports_file_visibility_events = supports_file_visibility_events;
-	ctx.supports_row_visibility = supports_row_visibility;
+	ctx.catalog_version = catalog_version;
 	ctx.branch_keyed_lookups = branch_keyed_lookups;
-	ctx.snapshot_and_stats_query =
-	    DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(supports_v1_1_metadata, branch_keyed_lookups, false);
-	ctx.conflict_query_executor = [this](string q) -> unique_ptr<QueryResult> {
-		auto sql = SubstitutePlaceholders(std::move(q), transaction_snapshot);
-		return fresh_conn.Query(sql);
+	ctx.snapshot_and_stats_query = DuckLakeMetadataManager::SnapshotAndStatsAndChangesQuery(
+	    ctx.SupportsV1_1Metadata(), branch_keyed_lookups, false);
+	ctx.conflict_query_executor = [this](string q) {
+		return Query(std::move(q), transaction_snapshot);
 	};
 	ctx.get_snapshot = [this]() {
 		return transaction_snapshot;
@@ -701,10 +669,6 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.commit_connection = [this]() {
 		fresh_conn.Commit();
 	};
-	// the outcome only moves forward: PUBLISHED is final
-	ctx.report_commit_outcome = [this](DuckLakeCommitOutcome reported) {
-		commit_outcome = MaxValue(commit_outcome, reported);
-	};
 	ctx.try_rollback = [this]() {
 		if (fresh_conn.context->transaction.HasActiveTransaction()) {
 			fresh_conn.Rollback();
@@ -713,15 +677,12 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	ctx.prepare_retry = [this]() {
 		fresh_conn.BeginTransaction();
 	};
-	ctx.query_metadata = [this](string q) -> unique_ptr<QueryResult> {
+	ctx.query_metadata = [this](string q) {
 		// Snapshot-scoped placeholders are absent on this path; empty snapshot is a no-op.
-		DuckLakeSnapshot empty {};
-		auto sql = SubstitutePlaceholders(std::move(q), empty);
-		return fresh_conn.Query(sql);
+		return Query(std::move(q), DuckLakeSnapshot());
 	};
-	ctx.query_metadata_with_snapshot = [this](DuckLakeSnapshot snapshot, string q) -> unique_ptr<QueryResult> {
-		auto sql = SubstitutePlaceholders(std::move(q), snapshot);
-		return fresh_conn.Query(sql);
+	ctx.query_metadata_with_snapshot = [this](DuckLakeSnapshot snapshot, string q) {
+		return Query(std::move(q), snapshot);
 	};
 	ctx.write_inlined_data = [this](DuckLakeSnapshot &, const vector<DuckLakeInlinedDataInfo> &new_data,
 	                                const vector<DuckLakeTableInfo> &, const vector<DuckLakeTableInfo> &) -> string {
@@ -739,13 +700,13 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	};
 	ctx.get_table_column_schema = [this](TableIndex table_id) {
 		vector<DuckLakeColumnSchemaEntry> schema;
-		auto sql = SubstitutePlaceholders(
-		    DuckLakeMetadataManager::GetTableColumnSchemaSql(table_id, supports_row_visibility), transaction_snapshot);
-		auto result = RunQuery(sql, "read table column schema");
+		auto result =
+		    RunQuery(DuckLakeMetadataManager::GetTableColumnSchemaSql(table_id, SupportsRowVisibility(catalog_version)),
+		             "read table column schema", transaction_snapshot);
 		for (auto &row : *result) {
 			// parent_column IS NULL => top-level root; otherwise a nested leaf carrying its own leaf type.
 			bool is_root = row.IsNull(3);
-			schema.push_back({FieldIndex(static_cast<idx_t>(row.GetValue<int64_t>(0))), row.GetValue<Identifier>(1),
+			schema.push_back({FieldIndex(AsIdx(row, 0)), row.GetValue<Identifier>(1),
 			                  DuckLakeTypes::FromString(row.GetValue<string>(2)), is_root});
 		}
 		return schema;
@@ -761,11 +722,10 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		if (InlinedFileDeletionTableExists(table_id)) {
 			inlined_deletion_table = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
 		}
-		auto sql =
-		    SubstitutePlaceholders(DuckLakeMetadataManager::GetNetDataFileRowCountSql(
-		                               table_id, inlined_deletion_table, supports_file_visibility_events, false, true),
-		                           transaction_snapshot);
-		auto result = RunQuery(sql, "read net data file row count");
+		auto result =
+		    RunQuery(DuckLakeMetadataManager::GetNetDataFileRowCountSql(
+		                 table_id, inlined_deletion_table, SupportsFileVisibilityEvents(catalog_version), false, true),
+		             "read net data file row count", transaction_snapshot);
 		for (auto &row : *result) {
 			return row.GetValue<idx_t>(0);
 		}
@@ -797,8 +757,13 @@ string DuckLakeServerSideCommit::SubstitutePlaceholders(string sql, const DuckLa
 	return sql;
 }
 
-unique_ptr<QueryResult> DuckLakeServerSideCommit::RunQuery(const string &query, const char *what) {
-	auto result = fresh_conn.Query(query);
+unique_ptr<QueryResult> DuckLakeServerSideCommit::Query(string query, const DuckLakeSnapshot &snapshot) {
+	return fresh_conn.Query(SubstitutePlaceholders(std::move(query), snapshot));
+}
+
+unique_ptr<QueryResult> DuckLakeServerSideCommit::RunQuery(string query, const char *what,
+                                                           const DuckLakeSnapshot &snapshot) {
+	auto result = Query(std::move(query), snapshot);
 	result->ThrowIfError(StringUtil::Format("Server-side ducklake_commit (%s) failed: ", what));
 	return result;
 }

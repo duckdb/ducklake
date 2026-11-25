@@ -61,9 +61,10 @@ public:
 	// ALTER VIEW
 	DuckLakeViewEntry(const DuckLakeViewEntry &parent, CreateViewInfo &info, LocalChange local_change);
 
-	unique_ptr<CatalogEntry> Alter(DuckLakeTransaction &transaction, SetColumnCommentInfo &info);
+	unique_ptr<CatalogEntry> Alter(ClientContext &context, DuckLakeTransaction &transaction, AlterInfo &info);
 
 private:
+	unique_ptr<CatalogEntry> Alter(DuckLakeTransaction &transaction, SetColumnCommentInfo &info);
 	unique_ptr<SelectStatement> ParseSelectStatement() const;
 
 private:

@@ -33,9 +33,9 @@ enum class RESTCompactionKind { MERGE_ADJACENT, REWRITE_DELETES, FLUSH_INLINED_D
 class DuckLakeCatalog;
 
 //! Binds a compaction function of a REST catalog: its server performs the compaction when the function is executed
-unique_ptr<LogicalOperator> BindRESTCompaction(ClientContext &context, TableFunctionBindInput &input,
-                                               TableIndex bind_index, DuckLakeCatalog &catalog,
-                                               RESTCompactionKind kind);
+unique_ptr<LogicalOperator> BindRESTCompaction(TableFunctionBindInput &input, TableIndex bind_index,
+                                               DuckLakeCatalog &catalog, RESTCompactionKind kind,
+                                               const vector<Identifier> &names, vector<LogicalType> types);
 //===--------------------------------------------------------------------===//
 // Logical Operator
 //===--------------------------------------------------------------------===//
@@ -90,9 +90,8 @@ public:
 class DuckLakeCompactor {
 public:
 	DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-	                  Binder &binder, TableIndex table_id, uint64_t max_files, DuckLakeMergeAdjacentOptions options);
-	DuckLakeCompactor(ClientContext &context, DuckLakeCatalog &catalog, DuckLakeTransaction &transaction,
-	                  Binder &binder, TableIndex table_id, uint64_t max_files, double delete_threshold);
+	                  Binder &binder, TableIndex table_id, CompactionType type, uint64_t max_files,
+	                  DuckLakeMergeAdjacentOptions options, double delete_threshold);
 	void GenerateCompactions(DuckLakeTableEntry &table, vector<unique_ptr<LogicalOperator>> &compactions);
 	unique_ptr<LogicalOperator> GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry> source_files,
 	                                                      bool bind_to_latest_schema = false);
@@ -124,7 +123,7 @@ private:
 	Binder &binder;
 	TableIndex table_id;
 	uint64_t max_files;
-	double delete_threshold = 0.95;
+	double delete_threshold;
 	DuckLakeMergeAdjacentOptions options;
 
 	CompactionType type;

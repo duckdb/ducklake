@@ -8,51 +8,18 @@
 
 namespace duckdb {
 
-struct DuckLakeRemoveDataFilesData : public TableFunctionData {
-	DuckLakeRemoveDataFilesData(DuckLakeCatalog &catalog, DuckLakeTableEntry &table) : catalog(catalog), table(table) {
-	}
-
-	DuckLakeCatalog &catalog;
-	DuckLakeTableEntry &table;
-	vector<string> paths;
-};
-
 static unique_ptr<FunctionData> DuckLakeRemoveDataFilesBind(ClientContext &context, TableFunctionBindInput &input,
                                                             vector<LogicalType> &return_types,
                                                             vector<Identifier> &names) {
-	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
-	catalog.VerifyWritable();
-	if (input.inputs[1].IsNull()) {
-		throw InvalidInputException("Table name cannot be NULL");
-	}
-	auto schema_name = DuckLakeTableFunctionUtil::GetStringOption(input, "schema");
-	const auto table_name = StringValue::Get(input.inputs[1]);
-	auto &table = DuckLakeBaseMetadataFunction::GetTableEntry(context, catalog, schema_name, table_name);
-
-	auto result = make_uniq<DuckLakeRemoveDataFilesData>(catalog, table);
-	auto &file_list = input.inputs[2];
-	if (file_list.IsNull()) {
-		throw InvalidInputException("File list cannot be NULL");
-	}
-	if (file_list.type() == LogicalType::VARCHAR) {
-		result->paths.push_back(StringValue::Get(file_list));
-	} else if (file_list.type() == LogicalType::LIST(LogicalType::VARCHAR)) {
-		for (auto &path : ListValue::GetChildren(file_list)) {
-			if (path.IsNull()) {
-				throw InvalidInputException("File list cannot contain NULL");
-			}
-			result->paths.push_back(StringValue::Get(path));
-		}
-	} else {
-		throw InvalidInputException("File list must be a string or a list of strings");
-	}
+	auto result = make_uniq<DuckLakeDataFilesBindData>(context, input);
+	result->BindPaths(input.inputs[2]);
 	names.emplace_back("filename");
 	return_types.emplace_back(LogicalType::VARCHAR);
 	return std::move(result);
 }
 
 static void DuckLakeRemoveDataFilesExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	auto &bind_data = data_p.bind_data->Cast<DuckLakeRemoveDataFilesData>();
+	auto &bind_data = data_p.bind_data->Cast<DuckLakeDataFilesBindData>();
 	auto &transaction = DuckLakeTransaction::Get(context, bind_data.catalog);
 	auto &table = bind_data.table;
 	auto table_id = table.GetTableId();
@@ -111,20 +78,9 @@ static void DuckLakeRemoveDataFilesExecute(ClientContext &context, TableFunction
 }
 
 TableFunctionSet DuckLakeRemoveDataFilesFunction::GetFunctions() {
-	TableFunctionSet set("ducklake_remove_data_files");
-	vector<LogicalType> path_types {LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)};
-	for (auto &type : path_types) {
-		TableFunction function("ducklake_remove_data_files",
-		                       FunctionSignature()
-		                           .AddPositionalOnly("catalog", LogicalType::VARCHAR)
-		                           .AddPositionalOnly("table_name", LogicalType::VARCHAR)
-		                           .AddPositionalOnly(type.id() == LogicalTypeId::LIST ? "paths" : "path", type),
-		                       DuckLakeRemoveDataFilesExecute, DuckLakeRemoveDataFilesBind);
-		function.GetSignature().WithTypedKwargs(
-		    "options", [&](TypedKwargs &options) { options.Add("schema", LogicalType::VARCHAR); });
-		set.AddFunction(function);
-	}
-	return set;
+	return DuckLakeDataFilesBindData::GetFunctions(
+	    "ducklake_remove_data_files", DuckLakeRemoveDataFilesExecute, DuckLakeRemoveDataFilesBind,
+	    [](TypedKwargs &options) { options.Add("schema", LogicalType::VARCHAR); });
 }
 
 } // namespace duckdb

@@ -62,6 +62,19 @@ public:
 	idx_t TotalEntryCount() const {
 		return catalog_entries.size() + table_entry_map.size() + macro_entry_map.size();
 	}
+	//! An entry of a transaction with the entries it replaced, newest first
+	template <class ENTRY>
+	static vector<reference<ENTRY>> EntryChain(CatalogEntry &newest) {
+		vector<reference<ENTRY>> chain;
+		reference<CatalogEntry> entry = newest;
+		while (true) {
+			chain.push_back(entry.get().Cast<ENTRY>());
+			if (!entry.get().HasChild()) {
+				return chain;
+			}
+			entry = entry.get().Child();
+		}
+	}
 
 private:
 	void RegisterSchema(DuckLakeSchemaEntry &schema);

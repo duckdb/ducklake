@@ -119,7 +119,6 @@ static void SplitIntoPages(DuckLakeRESTRequest &request, TableIndex table_id, ve
 	}
 }
 
-//! Adds the column mappings that the files refer to, except for the ones that the client has
 template <class T>
 static void AddMappingIds(const vector<T> &entries, set<idx_t> &mapping_ids) {
 	for (auto &entry : entries) {
@@ -129,8 +128,14 @@ static void AddMappingIds(const vector<T> &entries, set<idx_t> &mapping_ids) {
 	}
 }
 
-static vector<DuckLakeColumnMappingInfo> GetColumnMappings(DuckLakeRESTRequest &request, set<idx_t> mapping_ids,
+//! The column mappings that the files of two lists refer to, except for the ones that the client has
+template <class FIRST, class SECOND>
+static vector<DuckLakeColumnMappingInfo> GetColumnMappings(DuckLakeRESTRequest &request, const vector<FIRST> &first,
+                                                           const vector<SECOND> &second,
                                                            const set<idx_t> &known_mappings) {
+	set<idx_t> mapping_ids;
+	AddMappingIds(first, mapping_ids);
+	AddMappingIds(second, mapping_ids);
 	for (auto known : known_mappings) {
 		mapping_ids.erase(known);
 	}
@@ -575,10 +580,7 @@ RESTSelectResponse DuckLakeRESTEndpoints::Select(DuckLakeRESTRequest &request, c
 		RESTSelectResponse page;
 		GetPage(plan->files, plan->page_size, page_index, page.files);
 		GetPage(plan->extended_files, plan->page_size, page_index, page.extended_files);
-		set<idx_t> mapping_ids;
-		AddMappingIds(page.files, mapping_ids);
-		AddMappingIds(page.extended_files, mapping_ids);
-		page.column_mappings = GetColumnMappings(request, std::move(mapping_ids), plan->known_mappings);
+		page.column_mappings = GetColumnMappings(request, page.files, page.extended_files, plan->known_mappings);
 		return page;
 	}
 	auto snapshot = request.GetSnapshot(parameters);
@@ -607,10 +609,8 @@ RESTSelectResponse DuckLakeRESTEndpoints::Select(DuckLakeRESTRequest &request, c
 	               parameters.known_column_mappings, result.page_tokens);
 	SplitIntoPages(request, table.GetTableId(), result.extended_files, &DuckLakeRESTPlan::extended_files,
 	               parameters.known_column_mappings, result.page_tokens);
-	set<idx_t> mapping_ids;
-	AddMappingIds(result.files, mapping_ids);
-	AddMappingIds(result.extended_files, mapping_ids);
-	result.column_mappings = GetColumnMappings(request, std::move(mapping_ids), parameters.known_column_mappings);
+	result.column_mappings =
+	    GetColumnMappings(request, result.files, result.extended_files, parameters.known_column_mappings);
 	result.inlined_data = ReadInlinedRows(
 	    request, table, snapshot,
 	    [&](const Identifier &inlined_table_name, const vector<string> &columns) {
@@ -647,10 +647,7 @@ RESTTableChangesResponse DuckLakeRESTEndpoints::TableChanges(DuckLakeRESTRequest
 		RESTTableChangesResponse page;
 		GetPage(plan->insertions, plan->page_size, page_index, page.insertions);
 		GetPage(plan->deletions, plan->page_size, page_index, page.deletions);
-		set<idx_t> mapping_ids;
-		AddMappingIds(page.insertions, mapping_ids);
-		AddMappingIds(page.deletions, mapping_ids);
-		page.column_mappings = GetColumnMappings(request, std::move(mapping_ids), plan->known_mappings);
+		page.column_mappings = GetColumnMappings(request, page.insertions, page.deletions, plan->known_mappings);
 		return page;
 	}
 	if (parameters.changes.empty()) {
@@ -671,10 +668,8 @@ RESTTableChangesResponse DuckLakeRESTEndpoints::TableChanges(DuckLakeRESTRequest
 		SplitIntoPages(request, table.GetTableId(), result.insertions, &DuckLakeRESTPlan::insertions,
 		               parameters.known_column_mappings, result.page_tokens);
 	}
-	set<idx_t> mapping_ids;
-	AddMappingIds(result.insertions, mapping_ids);
-	AddMappingIds(result.deletions, mapping_ids);
-	result.column_mappings = GetColumnMappings(request, std::move(mapping_ids), parameters.known_column_mappings);
+	result.column_mappings =
+	    GetColumnMappings(request, result.insertions, result.deletions, parameters.known_column_mappings);
 	result.inlined_data = ReadInlinedRows(
 	    request, table, snapshot,
 	    [&](const Identifier &inlined_table_name, const vector<string> &columns) {
@@ -835,8 +830,6 @@ private:
 	map<int64_t, vector<string>> schema_paths;
 	//! The names of the entries that the requests refer to, by their ids
 	map<int64_t, RESTEntryName> entry_names;
-	//! The schemas of the tables created by the transaction
-	map<TableIndex, SchemaIndex> local_table_schemas;
 	//! The name maps of the client transaction, by their id in the client transaction
 	map<idx_t, MappingIndex> name_map_ids;
 	//! The partitionings set by the client transaction, by their id in the client transaction
@@ -852,32 +845,21 @@ void DuckLakeRESTCommit::AddCreatedEntry(optional_ptr<CatalogEntry> entry, int64
 }
 
 DuckLakeSchemaEntry &DuckLakeRESTCommit::GetSchema(const vector<string> &schema_path) {
-	vector<Identifier> path;
-	for (auto &name : schema_path) {
-		path.emplace_back(name);
-	}
-	D_ASSERT(!path.empty());
-	auto schema = catalog.GetSchema(catalog.GetCatalogTransaction(context), path, OnEntryNotFound::THROW_EXCEPTION);
+	D_ASSERT(!schema_path.empty());
+	auto schema = catalog.GetSchema(catalog.GetCatalogTransaction(context), StringsToIdentifiers(schema_path),
+	                                OnEntryNotFound::THROW_EXCEPTION);
 	return schema->Cast<DuckLakeSchemaEntry>();
 }
 
 QualifiedName DuckLakeRESTCommit::GetEntryQualifiedName(const vector<string> &schema_path, const string &name) {
-	vector<Identifier> path;
-	path.push_back(catalog.GetName());
-	for (auto &schema_name : schema_path) {
-		path.emplace_back(schema_name);
-	}
-	D_ASSERT(path.size() > 1);
+	D_ASSERT(!schema_path.empty());
+	auto path = StringsToIdentifiers(schema_path);
+	path.insert(path.begin(), catalog.GetName());
 	return QualifiedName(std::move(path), Identifier(name));
 }
 
 QualifiedName DuckLakeRESTCommit::GetSchemaName(const vector<string> &schema_path) {
-	vector<Identifier> path;
-	path.push_back(catalog.GetName());
-	for (auto &name : schema_path) {
-		path.emplace_back(name);
-	}
-	return QualifiedName(std::move(path), Identifier());
+	return GetEntryQualifiedName(schema_path, string());
 }
 
 static vector<string> GetPathOfSchema(DuckLakeSchemaEntry &schema) {
@@ -959,28 +941,14 @@ TableIndex DuckLakeRESTCommit::GetTableId(int64_t table_id) {
 }
 
 DuckLakeTableEntry &DuckLakeRESTCommit::GetTable(TableIndex table_id) {
-	if (!DuckLakeTransaction::IsTransactionLocal(table_id.index)) {
-		auto entry = catalog.GetEntryById(transaction, transaction.GetSnapshot(), table_id);
-		if (entry && entry->type == CatalogType::TABLE_ENTRY) {
-			return entry->Cast<DuckLakeTableEntry>();
-		}
+	// tables created by the transaction are not in the id map of their catalog set
+	auto entry = DuckLakeTransaction::IsTransactionLocal(table_id.index)
+	                 ? transaction.GetLocalEntryById(table_id)
+	                 : catalog.GetEntryById(transaction, transaction.GetSnapshot(), table_id);
+	if (!entry || entry->type != CatalogType::TABLE_ENTRY) {
 		throw CatalogException("Table with id %llu does not exist", table_id.index);
 	}
-	// tables created by the transaction are not in the id map of their catalog set
-	auto schema_id = local_table_schemas.find(table_id);
-	if (schema_id != local_table_schemas.end()) {
-		auto local_entries = transaction.GetTransactionLocalEntries(CatalogType::TABLE_ENTRY, schema_id->second);
-		if (local_entries) {
-			for (auto &local_entry : local_entries->GetEntries()) {
-				auto &catalog_entry = *local_entry.second;
-				if (catalog_entry.type == CatalogType::TABLE_ENTRY &&
-				    catalog_entry.Cast<DuckLakeTableEntry>().GetTableId() == table_id) {
-					return catalog_entry.Cast<DuckLakeTableEntry>();
-				}
-			}
-		}
-	}
-	throw CatalogException("Table with id %llu does not exist", table_id.index);
+	return entry->Cast<DuckLakeTableEntry>();
 }
 
 void DuckLakeRESTCommit::CreateSchema(RESTCreateSchemaRequest &parameters) {
@@ -1045,10 +1013,8 @@ void DuckLakeRESTCommit::CreateTable(RESTCreateTableRequest &parameters) {
 	}
 	AddCreatedEntry(entry, parameters.placeholder_id);
 	auto &table = entry->Cast<DuckLakeTableEntry>();
-	auto table_id = table.GetTableId();
-	local_table_schemas[table_id] = schema.GetSchemaId();
 	RegisterPartition(table, parameters.partition_id);
-	placeholder_ids[parameters.placeholder_id] = table_id;
+	placeholder_ids[parameters.placeholder_id] = table.GetTableId();
 	AddPlaceholder(parameters.placeholder_id, CatalogType::TABLE_ENTRY, schema_path, parameters.table_name);
 }
 
@@ -1062,9 +1028,7 @@ void DuckLakeRESTCommit::CreateView(RESTCreateViewRequest &parameters) {
 	auto info = make_uniq<CreateViewInfo>(schema, Identifier(parameters.view_name));
 	auto parser = Parser::GetBuiltinParser();
 	info->query = CreateViewInfo::ParseSelect(parser, parameters.sql);
-	for (auto &alias : parameters.column_aliases) {
-		info->aliases.emplace_back(alias);
-	}
+	info->aliases = StringsToIdentifiers(parameters.column_aliases);
 	if (parameters.comment.has_value) {
 		info->comment = Value(parameters.comment.value);
 	}

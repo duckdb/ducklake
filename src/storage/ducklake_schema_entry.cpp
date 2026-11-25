@@ -363,169 +363,70 @@ namespace {
 constexpr const char *NOT_A_TABLE_MESSAGE = "Cannot use ALTER TABLE on entry %s - it is not a table";
 constexpr const char *NOT_A_VIEW_MESSAGE = "Cannot use ALTER VIEW on entry %s - it is not a view";
 
+//! Applies an alter to the table or view (T) that it names, returns false if there is none
 template <class T>
-optional_ptr<T> TryGetAlterEntry(DuckLakeSchemaEntry &schema, CatalogTransaction catalog_transaction,
-                                 const AlterInfo &alter) {
-	optional_ptr<CatalogEntry> entry = schema.GetEntry(catalog_transaction, T::Type, alter.GetQualifiedName().Name());
+bool TryAlterAs(DuckLakeSchemaEntry &schema, CatalogTransaction catalog_transaction, AlterInfo &info) {
+	auto &old_name = info.GetQualifiedName().Name();
+	optional_ptr<CatalogEntry> entry = schema.GetEntry(catalog_transaction, T::Type, old_name);
 	if (!entry || entry->type != T::Type) {
-		return nullptr;
-	}
-	return entry->Cast<T>();
-}
-
-template <class T>
-T &GetAlterEntry(DuckLakeSchemaEntry &schema, CatalogTransaction catalog_transaction, const AlterInfo &alter,
-                 const char *wrong_type_message) {
-	auto entry = TryGetAlterEntry<T>(schema, catalog_transaction, alter);
-	if (!entry) {
-		throw BinderException(wrong_type_message, alter.GetQualifiedName().Name());
-	}
-	return *entry;
-}
-
-bool TryApplySetColumnCommentToTable(DuckLakeTransaction &transaction, CatalogTransaction catalog_transaction,
-                                     DuckLakeSchemaEntry &schema, SetColumnCommentInfo &alter) {
-	auto table = TryGetAlterEntry<DuckLakeTableEntry>(schema, catalog_transaction, alter);
-	if (!table) {
-		// LCOV_EXCL_START
 		return false;
-		// LCOV_EXCL_STOP
 	}
-	auto new_table = table->Alter(transaction, alter);
-	transaction.AlterEntry(*table, std::move(new_table));
+	auto &context = catalog_transaction.GetContext();
+	auto &transaction = DuckLakeTransaction::Get(context, schema.catalog);
+	// recorded before the alter is applied, applying it can move expressions out of the info
+	transaction.GetMetadataManager().OnAlterEntry(*entry, info);
+	auto new_entry = entry->Cast<T>().Alter(context, transaction, info);
+	if (new_entry && old_name != new_entry->name && schema.GetEntry(catalog_transaction, T::Type, new_entry->name)) {
+		throw CatalogException("Could not rename %s%s to %s: another entry with this name already exists!",
+		                       T::Type == CatalogType::VIEW_ENTRY ? "view " : "", old_name, new_entry->name);
+	}
+	transaction.AlterEntry(*entry, std::move(new_entry));
 	return true;
 }
 
-void ApplySetColumnCommentToTable(DuckLakeTransaction &transaction, CatalogTransaction catalog_transaction,
-                                  DuckLakeSchemaEntry &schema, SetColumnCommentInfo &alter,
-                                  const char *not_a_table_message) {
-	if (!TryApplySetColumnCommentToTable(transaction, catalog_transaction, schema, alter)) {
-		throw BinderException(not_a_table_message, alter.GetQualifiedName().Name());
+//! Applies an alter to the table or view (T) that it names, throws the message if there is none
+template <class T>
+void AlterAs(DuckLakeSchemaEntry &schema, CatalogTransaction catalog_transaction, AlterInfo &info,
+             const char *wrong_type_message) {
+	if (!TryAlterAs<T>(schema, catalog_transaction, info)) {
+		throw BinderException(wrong_type_message, info.GetQualifiedName().Name());
 	}
-}
-
-void ApplySetColumnCommentToView(DuckLakeTransaction &transaction, CatalogTransaction catalog_transaction,
-                                 DuckLakeSchemaEntry &schema, SetColumnCommentInfo &alter,
-                                 const char *not_a_view_message) {
-	auto &view = GetAlterEntry<DuckLakeViewEntry>(schema, catalog_transaction, alter, not_a_view_message);
-	auto new_view = view.Alter(transaction, alter);
-	transaction.AlterEntry(view, std::move(new_view));
-}
-
-//! The table or view that an alter changes, null if there is none
-optional_ptr<CatalogEntry> GetAlterTarget(DuckLakeSchemaEntry &schema, CatalogTransaction catalog_transaction,
-                                          const AlterInfo &info) {
-	CatalogType type = CatalogType::INVALID;
-	switch (info.type) {
-	case AlterType::ALTER_TABLE:
-		type = CatalogType::TABLE_ENTRY;
-		break;
-	case AlterType::ALTER_VIEW:
-		type = CatalogType::VIEW_ENTRY;
-		break;
-	case AlterType::SET_COMMENT:
-		type = info.Cast<SetCommentInfo>().entry_catalog_type;
-		break;
-	case AlterType::SET_COLUMN_COMMENT:
-		type = info.Cast<SetColumnCommentInfo>().catalog_entry_type;
-		break;
-	default:
-		// LCOV_EXCL_START
-		// Alter refuses the other types
-		return nullptr;
-		// LCOV_EXCL_STOP
-	}
-	if (type == CatalogType::TABLE_ENTRY || type == CatalogType::INVALID) {
-		auto table = TryGetAlterEntry<DuckLakeTableEntry>(schema, catalog_transaction, info);
-		if (table) {
-			return table.get();
-		}
-		if (type == CatalogType::TABLE_ENTRY) {
-			return nullptr;
-		}
-	}
-	if (type == CatalogType::VIEW_ENTRY || type == CatalogType::INVALID) {
-		return TryGetAlterEntry<DuckLakeViewEntry>(schema, catalog_transaction, info).get();
-	}
-	return nullptr;
 }
 
 } // namespace
 
 void DuckLakeSchemaEntry::Alter(CatalogTransaction catalog_transaction, AlterInfo &info) {
-	auto &context = catalog_transaction.GetContext();
-	auto &transaction = DuckLakeTransaction::Get(context, catalog);
-	// recorded before the alter is applied, applying it can move expressions out of the info
-	auto alter_target = GetAlterTarget(*this, catalog_transaction, info);
-	if (alter_target) {
-		transaction.GetMetadataManager().OnAlterEntry(*alter_target, info);
-	}
 	switch (info.type) {
-	case AlterType::ALTER_TABLE: {
-		auto &alter = info.Cast<AlterTableInfo>();
-		auto &table = GetAlterEntry<DuckLakeTableEntry>(*this, catalog_transaction, alter, NOT_A_TABLE_MESSAGE);
-		auto new_table = table.Alter(context, transaction, alter);
-		if (alter.alter_table_type == AlterTableType::RENAME_TABLE) {
-			auto existing_table = GetEntry(catalog_transaction, CatalogType::TABLE_ENTRY, new_table->name);
-			if (alter.GetQualifiedName().Name() != new_table->name && existing_table) {
-				throw CatalogException("Could not rename %s to %s: another entry with this name already exists!",
-				                       alter.GetQualifiedName().Name(), new_table->name);
-			}
-		}
-		transaction.AlterEntry(table, std::move(new_table));
-		break;
-	}
-	case AlterType::ALTER_VIEW: {
-		auto &alter = info.Cast<AlterViewInfo>();
-		auto &view = GetAlterEntry<DuckLakeViewEntry>(*this, catalog_transaction, alter, NOT_A_VIEW_MESSAGE);
-		auto new_view = view.AlterEntry(context, alter);
-		if (alter.alter_view_type == AlterViewType::RENAME_VIEW) {
-			// We must check if this view name does not yet exist.
-			auto existing_view = GetEntry(catalog_transaction, CatalogType::VIEW_ENTRY, new_view->name);
-			if (alter.GetQualifiedName().Name() != new_view->name && existing_view) {
-				throw CatalogException("Could not rename view %s to %s: another entry with this name already exists!",
-				                       alter.GetQualifiedName().Name(), new_view->name);
-			}
-		}
-		transaction.AlterEntry(view, std::move(new_view));
-		break;
-	}
-	case AlterType::SET_COMMENT: {
-		auto &alter = info.Cast<SetCommentInfo>();
-		switch (alter.entry_catalog_type) {
-		case CatalogType::TABLE_ENTRY: {
-			auto &table = GetAlterEntry<DuckLakeTableEntry>(*this, catalog_transaction, alter, NOT_A_TABLE_MESSAGE);
-			auto new_table = table.Alter(transaction, alter);
-			transaction.AlterEntry(table, std::move(new_table));
-			break;
-		}
-		case CatalogType::VIEW_ENTRY: {
-			auto &view = GetAlterEntry<DuckLakeViewEntry>(*this, catalog_transaction, alter, NOT_A_VIEW_MESSAGE);
-			auto new_view = view.AlterEntry(context, alter);
-			transaction.AlterEntry(view, std::move(new_view));
-			break;
-		}
+	case AlterType::ALTER_TABLE:
+		return AlterAs<DuckLakeTableEntry>(*this, catalog_transaction, info, NOT_A_TABLE_MESSAGE);
+	case AlterType::ALTER_VIEW:
+		return AlterAs<DuckLakeViewEntry>(*this, catalog_transaction, info, NOT_A_VIEW_MESSAGE);
+	case AlterType::SET_COMMENT:
+		switch (info.Cast<SetCommentInfo>().entry_catalog_type) {
+		case CatalogType::TABLE_ENTRY:
+			return AlterAs<DuckLakeTableEntry>(*this, catalog_transaction, info, NOT_A_TABLE_MESSAGE);
+		case CatalogType::VIEW_ENTRY:
+			return AlterAs<DuckLakeViewEntry>(*this, catalog_transaction, info, NOT_A_VIEW_MESSAGE);
 		default:
 			throw BinderException("Unsupported catalog type for SET COMMENT in DuckLake");
 		}
-		break;
-	}
-	case AlterType::SET_COLUMN_COMMENT: {
-		auto &alter = info.Cast<SetColumnCommentInfo>();
-		if (alter.catalog_entry_type == CatalogType::VIEW_ENTRY) {
-			ApplySetColumnCommentToView(transaction, catalog_transaction, *this, alter,
-			                            "Cannot comment on columns for entry %s - it is not a view");
-		} else if (alter.catalog_entry_type == CatalogType::TABLE_ENTRY) {
-			ApplySetColumnCommentToTable(transaction, catalog_transaction, *this, alter,
-			                             "Cannot comment on columns for entry %s - it is not a table");
-		} else if (!TryApplySetColumnCommentToTable(transaction, catalog_transaction, *this, alter)) {
+	case AlterType::SET_COLUMN_COMMENT:
+		switch (info.Cast<SetColumnCommentInfo>().catalog_entry_type) {
+		case CatalogType::VIEW_ENTRY:
+			return AlterAs<DuckLakeViewEntry>(*this, catalog_transaction, info,
+			                                  "Cannot comment on columns for entry %s - it is not a view");
+		case CatalogType::TABLE_ENTRY:
+			return AlterAs<DuckLakeTableEntry>(*this, catalog_transaction, info,
+			                                   "Cannot comment on columns for entry %s - it is not a table");
+		default:
 			// LCOV_EXCL_START
-			ApplySetColumnCommentToView(transaction, catalog_transaction, *this, alter,
-			                            "Cannot comment on columns for entry %s - could not find table or view");
+			if (!TryAlterAs<DuckLakeTableEntry>(*this, catalog_transaction, info)) {
+				AlterAs<DuckLakeViewEntry>(*this, catalog_transaction, info,
+				                           "Cannot comment on columns for entry %s - could not find table or view");
+			}
+			return;
 			// LCOV_EXCL_STOP
 		}
-		break;
-	}
 	default:
 		throw BinderException("Unsupported ALTER type for DuckLake");
 	}

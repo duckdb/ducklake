@@ -511,8 +511,6 @@ public:
 	static string GetNetDataFileRowCountSql(TableIndex table_id, const Identifier &inlined_deletion_table,
 	                                        bool file_events, bool require_exact = false,
 	                                        bool exclude_new_files = false);
-	static string GetNetInlinedRowCountSql(const Identifier &inlined_table_name,
-	                                       const DuckLakeInlinedColNames &col_names);
 	//! The rows that are stored, deleted ones included, and the rows that are live
 	static string GetInlinedRowCountsSql(const Identifier &inlined_table_name,
 	                                     const DuckLakeInlinedColNames &col_names);
@@ -595,8 +593,7 @@ public:
 	                                        bool file_events);
 	//! Opt-in fast-path: if this backend supports the DuckDB Appender API, write the files directly
 	bool TryAppendDataFiles(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
-	                        const vector<DuckLakeTableInfo> &new_tables,
-	                        vector<DuckLakeSchemaInfo> &new_schemas_result);
+	                        const vector<DuckLakeTableInfo> &new_tables);
 	virtual string WriteNewInlinedData(DuckLakeSnapshot &commit_snapshot,
 	                                   const vector<DuckLakeInlinedDataInfo> &new_data,
 	                                   const vector<DuckLakeTableInfo> &new_tables,
@@ -831,21 +828,19 @@ public:
 	bool HasV1_1Additions();
 	//! Whether the tables a migration to 2.0 moves aside are under their names, false for an interrupted first batch
 	bool HasV1_1Layout();
+	//! A snapshot table to rebuild, through a rebuild table and an old table so an interrupted rebuild resumes
+	struct V2_0SnapshotTable {
+		string name;
+		bool has_table = false;
+		bool has_branch_column = false;
+		bool has_rebuild = false;
+		bool has_old = false;
+	};
 	//! The snapshot additions of 2.0 a catalog is missing, probed so an interrupted migration resumes
 	struct V2_0SnapshotAdditions {
 		bool snapshot_tag_table = true;
 		bool branch_table = true;
-		//! Rebuilt through a rebuild table and an old table so an interrupted rebuild resumes
-		bool rebuild_snapshots = true;
-		bool has_snapshot_table = true;
-		bool snapshot_has_branch_column = false;
-		bool has_snapshot_rebuild = false;
-		bool has_snapshot_old = false;
-		bool rebuild_snapshot_changes = true;
-		bool has_changes_table = true;
-		bool changes_has_branch_column = false;
-		bool has_changes_rebuild = false;
-		bool has_changes_old = false;
+		vector<V2_0SnapshotTable> tables_to_rebuild;
 	};
 	V2_0SnapshotAdditions ProbeV2_0SnapshotAdditions();
 	//! The first batch of a rebuild, which takes the snapshot tables away by name and commits
@@ -965,8 +960,7 @@ public:
 	//! Get path relative to catalog path
 	DuckLakePath GetRelativePath(const string &path);
 	//! Get path relative to table path
-	DuckLakePath GetRelativePath(TableIndex table_id, const string &path, const vector<DuckLakeTableInfo> &new_tables,
-	                             vector<DuckLakeSchemaInfo> &new_schemas_result);
+	DuckLakePath GetRelativePath(TableIndex table_id, const string &path, const vector<DuckLakeTableInfo> &new_tables);
 
 	static string StorePath(string path, const string &separator);
 	static string LoadPath(string path, const string &separator);
@@ -992,22 +986,18 @@ protected:
 	string GetKnownFilesForCleanupQuery() const;
 
 	//! Optimized data file writing using DuckDB Appender API (DuckDB and SQLite metadata managers)
-	string WriteNewDataFilesWithAppender(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
-	                                     const vector<DuckLakeTableInfo> &new_tables,
-	                                     vector<DuckLakeSchemaInfo> &new_schemas_result);
+	void WriteNewDataFilesWithAppender(DuckLakeSnapshot &commit_snapshot, const vector<DuckLakeFileInfo> &new_files,
+	                                   const vector<DuckLakeTableInfo> &new_tables);
 	DuckLakePath GetRelativePath(const string &path, const string &data_path);
 	string FromRelativePath(const DuckLakePath &path, const string &base_path);
 	string FromRelativePath(const DuckLakePath &path);
 	string FromRelativePath(TableIndex table_id, const DuckLakePath &path);
-	string GetPath(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
-	               const vector<DuckLakeSchemaInfo> &new_schemas_result);
+	string GetPath(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables);
 	//! Loads the paths of tables that are not in the current snapshot with a single query
 	void LoadTablePaths(const vector<TableIndex> &table_ids);
 	FileSystem &GetFileSystem();
 
 private:
-	template <class T>
-	static string FlushDrop(const string &metadata_table_name, const string &id_name, const set<T> &dropped_entries);
 	DuckLakeFileData ReadFile(DuckLakeTableEntry &table, const QueryResultRow &row, idx_t &col_idx, bool is_encrypted);
 	DuckLakeFileData ReadDataFile(DuckLakeTableEntry &table, const QueryResultRow &row, idx_t &col_idx,
 	                              bool is_encrypted);
@@ -1015,6 +1005,8 @@ private:
 	                                bool is_encrypted);
 
 	bool IsEncrypted() const;
+	//! The row table of a kind from its columns, with the end of a 1.x row or the birth branch of a 2.0 row
+	string RowTableStatement(const string &kind, string columns) const;
 
 protected:
 	string GetFileSelectList(const string &prefix);

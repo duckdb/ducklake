@@ -15,12 +15,12 @@ static RESTInlinedField ToInlinedField(const DuckLakeProjectedColumn &column) {
 	return result;
 }
 
-RESTInlinedProjection RESTInlinedProjection::From(optional_ptr<const vector<DuckLakeProjectedColumn>> projection) {
-	RESTInlinedProjection result;
+RESTInlinedField RESTInlinedField::From(optional_ptr<const vector<DuckLakeProjectedColumn>> projection) {
+	RESTInlinedField result;
 	if (projection) {
 		result.all = false;
 		for (auto &column : *projection) {
-			result.columns[column.field_index.index] = ToInlinedField(column);
+			result.fields[column.field_index.index] = ToInlinedField(column);
 		}
 	}
 	return result;
@@ -33,28 +33,9 @@ bool RESTInlinedField::Covers(const RESTInlinedField &other) const {
 	if (other.all) {
 		return false;
 	}
-	// LCOV_EXCL_START
-	// a scan reads all columns or the columns that its file list fetched
 	for (auto &entry : other.fields) {
 		auto field = fields.find(entry.first);
 		if (field == fields.end() || !field->second.Covers(entry.second)) {
-			return false;
-		}
-	}
-	return true;
-	// LCOV_EXCL_STOP
-}
-
-bool RESTInlinedProjection::Covers(const RESTInlinedProjection &other) const {
-	if (all) {
-		return true;
-	}
-	if (other.all) {
-		return false;
-	}
-	for (auto &entry : other.columns) {
-		auto column = columns.find(entry.first);
-		if (column == columns.end() || !column->second.Covers(entry.second)) {
 			return false;
 		}
 	}
@@ -88,7 +69,7 @@ static bool HasColumn(const RESTInlinedRows &rows, const string &column_to_read)
 	return false; // LCOV_EXCL_LINE: the cached rows have the columns of the file list of the scan
 }
 
-bool RESTInlinedRowsCache::Covers(const RESTInlinedRowsKey &key, const RESTInlinedProjection &projection) const {
+bool RESTInlinedRowsCache::Covers(const RESTInlinedRowsKey &key, const RESTInlinedField &projection) const {
 	lock_guard<mutex> guard(lock);
 	auto entry = responses.find(key);
 	if (entry == responses.end()) {
@@ -121,7 +102,7 @@ bool RESTInlinedRowsCache::HasInlinedRows(idx_t snapshot_id, idx_t table_id, boo
 }
 
 shared_ptr<RESTInlinedRowsResponse> RESTInlinedRowsCache::Add(const RESTInlinedRowsKey &key,
-                                                              const RESTInlinedProjection &projection,
+                                                              const RESTInlinedField &projection,
                                                               unique_ptr<RESTInlinedRows> inlined_data) {
 	auto response = make_shared_ptr<RESTInlinedRowsResponse>();
 	response->projection = projection;

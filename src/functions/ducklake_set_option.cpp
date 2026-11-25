@@ -18,11 +18,11 @@ static void ValidateTablesWithoutOverride(const DuckLakeCatalog &catalog,
 		auto &table = table_ref.get();
 		SchemaIndex override_scope_id;
 		if (global_scope) {
-			override_scope_id = table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId();
+			override_scope_id = table.GetSchemaId();
 		}
 		string override_val;
-		if (catalog.TryGetScopedConfigOption("data_inlining_row_limit", override_val, override_scope_id,
-		                                     table.GetTableId(), &table.GetTableOptions()) &&
+		DuckLakeOptionScope scope(override_scope_id, table.GetTableId(), &table.GetTableOptions());
+		if (catalog.TryGetScopedConfigOption("data_inlining_row_limit", override_val, scope) &&
 		    std::stoull(override_val) == 0) {
 			continue;
 		}

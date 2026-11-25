@@ -9,18 +9,20 @@
 
 namespace duckdb {
 
-DuckLakeRESTClient::DuckLakeRESTClient(DatabaseInstance &db_p, string base_url_p, string token_p)
-    : base_url(std::move(base_url_p)), token(std::move(token_p)), db(db_p.shared_from_this()) {
+DuckLakeRESTClient::DuckLakeRESTClient(DatabaseInstance &db_p, string base_url, string token_p)
+    : token(std::move(token_p)), db(db_p.shared_from_this()) {
 	StringUtil::RTrim(base_url, "/");
+	server_url = ServerAddress(base_url);
 	// the path of the URL is the prefix of the catalog on the server
-	auto scheme_end = base_url.find("://");
-	auto path_start = base_url.find('/', scheme_end == string::npos ? 0 : scheme_end + 3);
-	if (path_start != string::npos) {
-		prefix = base_url.substr(path_start + 1);
-		server_url = base_url.substr(0, path_start);
-	} else {
-		server_url = base_url;
+	if (server_url.size() < base_url.size()) {
+		prefix = base_url.substr(server_url.size() + 1);
 	}
+}
+
+string DuckLakeRESTClient::ServerAddress(const string &uri) {
+	auto scheme_end = uri.find("://");
+	auto path_start = uri.find('/', scheme_end == string::npos ? 0 : scheme_end + 3);
+	return path_start == string::npos ? uri : uri.substr(0, path_start);
 }
 
 DuckLakeRESTClient::~DuckLakeRESTClient() {

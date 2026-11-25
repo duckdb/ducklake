@@ -28,6 +28,9 @@ public:
 	DuckLakeRESTClient(DatabaseInstance &db, string base_url, string token);
 	~DuckLakeRESTClient() override;
 
+	//! The address of a URI of a server or of one of its catalogs: the scheme, host and port
+	static string ServerAddress(const string &uri);
+
 	RESTHttpResponse Call(const string &endpoint, const string &json, bool idempotent,
 	                      const vector<RESTBodyPart> &parts) override;
 	shared_ptr<ClientContext> GetContext() override;
@@ -74,7 +77,6 @@ private:
 	map<string, string> defaults;
 	map<string, string> overrides;
 	//! The URL of the server and the prefix of the catalog on the server, which is the path of the URL
-	string base_url;
 	string server_url;
 	string prefix;
 	string token;

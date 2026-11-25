@@ -317,19 +317,13 @@ public:
 	void SetFilesOwnedByClient();
 	bool FilesOwnedByClient() const;
 	//! What is known about the publication of the commit, also after it failed
-	DuckLakeCommitOutcome GetCommitOutcome() const {
-		return commit_outcome;
-	}
+	DuckLakeCommitOutcome GetCommitOutcome() const;
 	//! Whether the commit wrote its changes to the metadata, also if it failed after that
 	bool IsPublished() const {
-		return commit_outcome == DuckLakeCommitOutcome::PUBLISHED;
+		return GetCommitOutcome() == DuckLakeCommitOutcome::PUBLISHED;
 	}
 	//! Moves the outcome of the commit to what an attempt reports, never back: PUBLISHED is final
-	void ReportCommitOutcome(DuckLakeCommitOutcome reported) {
-		if (reported > commit_outcome) {
-			commit_outcome = reported;
-		}
-	}
+	void ReportCommitOutcome(DuckLakeCommitOutcome reported);
 	bool SchemaChangesMade() const;
 	idx_t GetLocalCatalogId();
 	static bool IsTransactionLocal(idx_t id) {
@@ -396,12 +390,6 @@ public:
 	//! The committed view, or a copy of it with its own binding once this transaction changed the schema
 	DuckLakeViewEntry &GetTransactionView(DuckLakeViewEntry &view);
 
-protected:
-	void SetMetadataManager(unique_ptr<DuckLakeMetadataManager> metadata_manager) {
-		this->metadata_manager = std::move(metadata_manager);
-	}
-
-public:
 	void RunCommitLoop(DuckLakeSnapshot transaction_snapshot, const TransactionChangeInformation &transaction_changes,
 	                   const DuckLakeRetryConfig &retry_config);
 	//! Applies a commit that the server made, the next file id of the committed snapshot is the key of its stats
@@ -550,9 +538,6 @@ private:
 	unordered_map<const DuckLakeViewEntry *, unique_ptr<DuckLakeViewEntry>> transaction_views;
 	//! Copies of an earlier catalog version, kept alive for the references to them
 	vector<unique_ptr<DuckLakeViewEntry>> outdated_transaction_views;
-
-private:
-	DuckLakeCommitOutcome commit_outcome = DuckLakeCommitOutcome::NOT_PUBLISHED;
 };
 
 } // namespace duckdb

@@ -175,9 +175,6 @@ struct StatsNumericFallbackOperator {
 	static bool GreaterThan(const LogicalType &type, string_t left, string_t right) {
 		return StatsBoundLessThan(Value(right).DefaultCastAs(type), Value(left).DefaultCastAs(type));
 	}
-	static string GetFinalStats(string_t input) {
-		return input.GetString();
-	}
 };
 
 struct StatsFallbackOperator {
@@ -187,17 +184,15 @@ struct StatsFallbackOperator {
 	static bool GreaterThan(const LogicalType &type, string_t left, string_t right) {
 		return left > right;
 	}
-	static string GetFinalStats(string_t input) {
-		return input.GetString();
-	}
 };
 
-template <class T, class OP>
-DuckLakeColumnStats TemplatedUpdateStats(Vector &input_vec, const LogicalType &type, idx_t row_count) {
+//! The statistics of values cast to strings, which OP orders
+template <class OP>
+static DuckLakeColumnStats StringUpdateStats(Vector &input_vec, const LogicalType &type, idx_t row_count) {
 	UnifiedVectorFormat format;
 	input_vec.ToUnifiedFormat(format);
 
-	auto data = UnifiedVectorFormat::GetData<T>(format);
+	auto data = UnifiedVectorFormat::GetData<string_t>(format);
 	auto &validity = format.validity;
 	DuckLakeColumnStats result(type);
 	result.any_valid = false;
@@ -227,8 +222,8 @@ DuckLakeColumnStats TemplatedUpdateStats(Vector &input_vec, const LogicalType &t
 	if (min_idx.IsValid()) {
 		result.has_min = true;
 		result.has_max = true;
-		result.min = OP::GetFinalStats(data[min_idx.GetIndex()]);
-		result.max = OP::GetFinalStats(data[max_idx.GetIndex()]);
+		result.min = data[min_idx.GetIndex()].GetString();
+		result.max = data[max_idx.GetIndex()].GetString();
 		result.min_is_exact = true;
 		result.max_is_exact = true;
 	}
@@ -283,7 +278,7 @@ static DuckLakeColumnStats GetVariantStats(Vector &input_vec, idx_t row_count) {
 	return result;
 }
 
-DuckLakeColumnStats GetVectorStats(Vector &input_vec, idx_t row_count) {
+static DuckLakeColumnStats GetVectorStats(Vector &input_vec, idx_t row_count) {
 	auto &type = input_vec.GetType();
 	if (type.id() == LogicalTypeId::VARIANT) {
 		return GetVariantStats(input_vec, row_count);
@@ -293,9 +288,9 @@ DuckLakeColumnStats GetVectorStats(Vector &input_vec, idx_t row_count) {
 	// FIXME: we can be more efficient here by templating on other types (numerics...)
 	DuckLakeColumnStats result(type);
 	if (RequiresValueComparison(type)) {
-		result = TemplatedUpdateStats<string_t, StatsNumericFallbackOperator>(str_vector, type, row_count);
+		result = StringUpdateStats<StatsNumericFallbackOperator>(str_vector, type, row_count);
 	} else {
-		result = TemplatedUpdateStats<string_t, StatsFallbackOperator>(str_vector, type, row_count);
+		result = StringUpdateStats<StatsFallbackOperator>(str_vector, type, row_count);
 	}
 	if (type.id() == LogicalTypeId::FLOAT) {
 		result.has_contains_nan = true;
@@ -307,8 +302,8 @@ DuckLakeColumnStats GetVectorStats(Vector &input_vec, idx_t row_count) {
 	return result;
 }
 
-void UpdateStats(vector<DuckLakeBaseColumnStats> &stats, idx_t c, Vector &data, idx_t row_count,
-                 const DuckLakeFieldId &field_id, const unordered_set<idx_t> &skipped_fields) {
+static void UpdateStats(vector<DuckLakeBaseColumnStats> &stats, idx_t c, Vector &data, idx_t row_count,
+                        const DuckLakeFieldId &field_id, const unordered_set<idx_t> &skipped_fields) {
 	if (c >= stats.size()) {
 		if (c != stats.size()) {
 			throw InternalException("Column stats not accessed in order?");
@@ -363,7 +358,7 @@ void UpdateStats(vector<DuckLakeBaseColumnStats> &stats, idx_t c, Vector &data, 
 	}
 }
 
-void SetFinalStats(DuckLakeBaseColumnStats &stats, DuckLakeInlinedData &result) {
+static void SetFinalStats(DuckLakeBaseColumnStats &stats, DuckLakeInlinedData &result) {
 	if (stats.has_stats) {
 		result.column_stats.insert(make_pair(stats.field_id, std::move(stats.stats)));
 	}

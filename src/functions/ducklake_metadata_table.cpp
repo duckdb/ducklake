@@ -26,18 +26,9 @@ static unique_ptr<FunctionData> DuckLakeMetadataTableBind(ClientContext &context
 	return std::move(result);
 }
 
-static void DuckLakeMetadataTableExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	auto &data = data_p.bind_data->Cast<MetadataBindData>();
-	auto &state = data_p.global_state->Cast<DuckLakeRunOnceState>();
-	DuckLakeBaseMetadataFunction::ScanRows(data.rows, state.offset, output);
-}
-
 DuckLakeMetadataTableFunction::DuckLakeMetadataTableFunction()
-    : TableFunction("ducklake_metadata_table",
-                    FunctionSignature()
-                        .AddPositionalOnly("catalog", LogicalType::VARCHAR)
-                        .AddPositionalOnly("table_name", LogicalType::VARCHAR),
-                    DuckLakeMetadataTableExecute, DuckLakeMetadataTableBind, DuckLakeRunOnceState::Init) {
+    : DuckLakeBaseMetadataFunction("ducklake_metadata_table", DuckLakeMetadataTableBind) {
+	GetSignature().AddPositionalOnly("table_name", LogicalType::VARCHAR);
 }
 
 } // namespace duckdb

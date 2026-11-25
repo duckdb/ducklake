@@ -42,7 +42,6 @@ struct TransactionChangeInformation {
 	set<TableIndex> tables_inserted_inlined;
 	set<TableIndex> tables_deleted_inlined;
 	set<TableIndex> tables_flushed_inlined;
-	set<TableIndex> tables_compacted;
 	set<TableIndex> tables_merge_adjacent;
 	set<TableIndex> tables_rewrite_delete;
 	//! The snapshot tags created and dropped, by name
@@ -62,7 +61,7 @@ struct TransactionChangeInformation {
 		for (auto tables :
 		     {&altered_tables, &altered_tables_with_schema_version_changes, &tables_set_not_null, &tables_inserted_into,
 		      &tables_deleted_from, &tables_delete_attempted, &tables_inserted_inlined, &tables_deleted_inlined,
-		      &tables_flushed_inlined, &tables_compacted, &tables_merge_adjacent, &tables_rewrite_delete}) {
+		      &tables_flushed_inlined, &tables_merge_adjacent, &tables_rewrite_delete}) {
 			result.insert(tables->begin(), tables->end());
 		}
 		return vector<TableIndex>(result.begin(), result.end());

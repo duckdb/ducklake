@@ -310,27 +310,14 @@ void DuckLakeColumnStats::MergeStats(const DuckLakeColumnStats &new_stats) {
 	if (types_differ) {
 		type = new_stats.type;
 	}
-	if (!new_stats.has_null_count) {
-		has_null_count = false;
-	} else if (has_null_count) {
-		// both stats have a null count - add them up
-		null_count += new_stats.null_count;
-	}
-	if (!new_stats.has_num_values) {
-		has_num_values = false;
-	} else if (has_num_values) {
-		// both stats have a null count - add them up
-		num_values += new_stats.num_values;
-	}
+	// a count or the NaN flag stays known only if both stats know it
+	has_null_count = has_null_count && new_stats.has_null_count;
+	null_count += has_null_count ? new_stats.null_count : 0;
+	has_num_values = has_num_values && new_stats.has_num_values;
+	num_values += has_num_values ? new_stats.num_values : 0;
 	column_size_bytes += new_stats.column_size_bytes;
-	if (!new_stats.has_contains_nan) {
-		has_contains_nan = false;
-	} else if (has_contains_nan) {
-		// both stats have a null count - add them up
-		if (new_stats.contains_nan) {
-			contains_nan = true;
-		}
-	}
+	has_contains_nan = has_contains_nan && new_stats.has_contains_nan;
+	contains_nan = contains_nan || (has_contains_nan && new_stats.contains_nan);
 
 	if (!new_stats.AnyValid()) {
 		// all values in the source are NULL - don't update min/max

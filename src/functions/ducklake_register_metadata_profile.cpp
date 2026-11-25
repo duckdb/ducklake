@@ -24,11 +24,7 @@ static unique_ptr<FunctionData> DuckLakeRegisterMetadataProfileBind(ClientContex
 			throw InvalidInputException("ducklake_register_metadata_profile does not accept NULL arguments");
 		}
 	}
-	bool replace = true;
-	Value replace_value;
-	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "replace", "boolean", replace_value)) {
-		replace = BooleanValue::Get(replace_value);
-	}
+	bool replace = DuckLakeTableFunctionUtil::GetBooleanOption(input, "replace", true);
 	return_types.push_back(LogicalType::BOOLEAN);
 	names.push_back("Success");
 	return make_uniq<DuckLakeRegisterMetadataProfileData>(StringValue::Get(input.inputs[0]),

@@ -9,8 +9,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
-#include "common/index.hpp"
-#include "duckdb/common/enums/order_type.hpp"
+#include "storage/ducklake_metadata_info.hpp"
 
 namespace duckdb {
 
@@ -18,22 +17,9 @@ class DuckLakeTableEntry;
 class ClientContext;
 struct BoundOrderByNode;
 
-struct DuckLakeSortField {
-	idx_t sort_key_index = 0;
-	string expression;
-	string dialect;
-	OrderType sort_direction;
-	OrderByNullType null_order;
-
-	bool operator==(const DuckLakeSortField &other) const {
-		return sort_key_index == other.sort_key_index && expression == other.expression && dialect == other.dialect &&
-		       sort_direction == other.sort_direction && null_order == other.null_order;
-	}
-};
-
 struct DuckLakeSort {
 	idx_t sort_id = 0;
-	vector<DuckLakeSortField> fields;
+	vector<DuckLakeSortFieldInfo> fields;
 
 	//! Build a SQL ORDER BY clause from the bound sort orders, mapping inlined columns
 	static string BuildSortOrderSQL(ClientContext &context, const vector<BoundOrderByNode> &orders,

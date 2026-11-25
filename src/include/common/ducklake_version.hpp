@@ -28,6 +28,23 @@ enum class DuckLakeVersion : uint8_t {
 
 static constexpr DuckLakeVersion DUCKLAKE_LATEST_VERSION = DuckLakeVersion::V2_0_DEV1;
 
+//! Whether the metadata schema has the 1.1 additions
+inline bool SupportsV1_1Metadata(DuckLakeVersion version) {
+	return version >= DuckLakeVersion::V1_1;
+}
+//! Whether the snapshot tables are keyed by branch and snapshot, the layout of 2.0
+inline bool SupportsBranching(DuckLakeVersion version) {
+	return version >= DuckLakeVersion::V2_0_DEV1;
+}
+//! Whether the file tables keep their visibility as events, the layout of 2.0
+inline bool SupportsFileVisibilityEvents(DuckLakeVersion version) {
+	return version >= DuckLakeVersion::V2_0_DEV1;
+}
+//! Whether the catalog rows keep their birth and end in companion tables, the layout of 2.0
+inline bool SupportsRowVisibility(DuckLakeVersion version) {
+	return version >= DuckLakeVersion::V2_0_DEV1;
+}
+
 DuckLakeVersion DuckLakeVersionFromString(const string &version_str);
 //! The versions this build attaches without a migration, the releases and the version it writes
 bool DuckLakeVersionIsSupported(DuckLakeVersion version);

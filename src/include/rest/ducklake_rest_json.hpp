@@ -21,7 +21,6 @@ public:
 	RESTJsonWriter();
 
 	void SetRoot(JSONMutableValue value) {
-		root = value;
 		writer.SetRoot(value);
 	}
 	string ToString() const {
@@ -29,7 +28,6 @@ public:
 	}
 
 	JSONWriter writer;
-	JSONMutableValue root;
 };
 
 //! A handle to an immutable JSON value that is owned by a JSONDocument

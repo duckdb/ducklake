@@ -57,6 +57,40 @@ constexpr StringUtil::EnumStringLiteral CHANGE_TYPE_NAMES[] = {
     {static_cast<uint32_t>(ChangeType::DROPPED_SNAPSHOT_TAG), "dropped_tag"},
     {static_cast<uint32_t>(ChangeType::EXPIRED_SNAPSHOT), "expired_snapshot"}};
 
+//! A change that names a table or view by its id, with the set that collects it
+struct TableChange {
+	ChangeType type;
+	set<TableIndex> SnapshotChangeInformation::*tables;
+};
+
+constexpr TableChange TABLE_CHANGES[] = {
+    {ChangeType::DROPPED_TABLE, &SnapshotChangeInformation::dropped_tables},
+    {ChangeType::DROPPED_VIEW, &SnapshotChangeInformation::dropped_views},
+    {ChangeType::INSERTED_INTO_TABLE, &SnapshotChangeInformation::inserted_tables},
+    {ChangeType::DELETED_FROM_TABLE, &SnapshotChangeInformation::tables_deleted_from},
+    {ChangeType::ALTERED_TABLE, &SnapshotChangeInformation::altered_tables},
+    {ChangeType::ALTERED_VIEW, &SnapshotChangeInformation::altered_views},
+    {ChangeType::COMPACTED_TABLE, &SnapshotChangeInformation::tables_compacted},
+    {ChangeType::MERGE_ADJACENT, &SnapshotChangeInformation::tables_merge_adjacent},
+    {ChangeType::REWRITE_DELETE, &SnapshotChangeInformation::tables_rewrite_delete},
+    {ChangeType::INSERTED_INTO_TABLE_INLINED, &SnapshotChangeInformation::tables_inserted_inlined},
+    {ChangeType::DELETED_FROM_TABLE_INLINED, &SnapshotChangeInformation::tables_deleted_inlined},
+    {ChangeType::FLUSHED_INLINE_DATA_FOR_TABLE, &SnapshotChangeInformation::tables_flushed_inlined}};
+
+set<TableIndex> &ChangedTables(SnapshotChangeInformation &changes, ChangeType type) {
+	for (auto &change : TABLE_CHANGES) {
+		if (change.type == type) {
+			return changes.*change.tables;
+		}
+	}
+	throw InternalException("Unsupported change type in ParseChangesMade");
+}
+
+void AddCreatedEntry(case_insensitive_map_t<identifier_map_t<string>> &created, const string &value, const char *type) {
+	auto catalog_value = DuckLakeUtil::ParseCatalogEntry(value);
+	created[catalog_value.SchemaKey()].insert(make_pair(std::move(catalog_value.name), type));
+}
+
 struct ParsedChange {
 	ChangeType change_type;
 	string change_value;
@@ -130,28 +164,18 @@ SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const stri
 	SnapshotChangeInformation result;
 	for (auto &entry : change_list) {
 		switch (entry.change_type) {
-		case ChangeType::CREATED_TABLE: {
-			auto catalog_value = DuckLakeUtil::ParseCatalogEntry(entry.change_value);
-			result.created_tables[catalog_value.SchemaKey()].insert(make_pair(std::move(catalog_value.name), "table"));
+		case ChangeType::CREATED_TABLE:
+			AddCreatedEntry(result.created_tables, entry.change_value, "table");
 			break;
-		}
-		case ChangeType::CREATED_SCALAR_MACRO: {
-			auto catalog_value = DuckLakeUtil::ParseCatalogEntry(entry.change_value);
-			result.created_scalar_macros[catalog_value.SchemaKey()].insert(
-			    make_pair(std::move(catalog_value.name), "scalar_macro"));
+		case ChangeType::CREATED_SCALAR_MACRO:
+			AddCreatedEntry(result.created_scalar_macros, entry.change_value, "scalar_macro");
 			break;
-		}
-		case ChangeType::CREATED_TABLE_MACRO: {
-			auto catalog_value = DuckLakeUtil::ParseCatalogEntry(entry.change_value);
-			result.created_table_macros[catalog_value.SchemaKey()].insert(
-			    make_pair(std::move(catalog_value.name), "table_macro"));
+		case ChangeType::CREATED_TABLE_MACRO:
+			AddCreatedEntry(result.created_table_macros, entry.change_value, "table_macro");
 			break;
-		}
-		case ChangeType::CREATED_VIEW: {
-			auto catalog_value = DuckLakeUtil::ParseCatalogEntry(entry.change_value);
-			result.created_tables[catalog_value.SchemaKey()].insert(make_pair(std::move(catalog_value.name), "view"));
+		case ChangeType::CREATED_VIEW:
+			AddCreatedEntry(result.created_tables, entry.change_value, "view");
 			break;
-		}
 		case ChangeType::CREATED_SCHEMA: {
 			auto schema_path = StringsToIdentifiers(DuckLakeUtil::ParseQuotedList(entry.change_value, '.'));
 			result.created_schemas.insert(DuckLakeUtil::ToQuotedList(schema_path, '.'));
@@ -160,47 +184,11 @@ SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const stri
 		case ChangeType::DROPPED_SCHEMA:
 			result.dropped_schemas.insert(SchemaIndex(StringUtil::ToUnsigned(entry.change_value)));
 			break;
-		case ChangeType::DROPPED_TABLE:
-			result.dropped_tables.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
-			break;
 		case ChangeType::DROPPED_SCALAR_MACRO:
 			result.dropped_scalar_macros.insert(MacroIndex(StringUtil::ToUnsigned(entry.change_value)));
 			break;
 		case ChangeType::DROPPED_TABLE_MACRO:
 			result.dropped_table_macros.insert(MacroIndex(StringUtil::ToUnsigned(entry.change_value)));
-			break;
-		case ChangeType::DROPPED_VIEW:
-			result.dropped_views.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
-			break;
-		case ChangeType::INSERTED_INTO_TABLE:
-			result.inserted_tables.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
-			break;
-		case ChangeType::DELETED_FROM_TABLE:
-			result.tables_deleted_from.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
-			break;
-		case ChangeType::ALTERED_TABLE:
-			result.altered_tables.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
-			break;
-		case ChangeType::ALTERED_VIEW:
-			result.altered_views.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
-			break;
-		case ChangeType::COMPACTED_TABLE:
-			result.tables_compacted.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
-			break;
-		case ChangeType::MERGE_ADJACENT:
-			result.tables_merge_adjacent.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
-			break;
-		case ChangeType::REWRITE_DELETE:
-			result.tables_rewrite_delete.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
-			break;
-		case ChangeType::INSERTED_INTO_TABLE_INLINED:
-			result.tables_inserted_inlined.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
-			break;
-		case ChangeType::DELETED_FROM_TABLE_INLINED:
-			result.tables_deleted_inlined.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
-			break;
-		case ChangeType::FLUSHED_INLINE_DATA_FOR_TABLE:
-			result.tables_flushed_inlined.insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
 			break;
 		case ChangeType::CREATED_SNAPSHOT_TAG: {
 			idx_t pos = 0;
@@ -216,7 +204,7 @@ SnapshotChangeInformation SnapshotChangeInformation::ParseChangesMade(const stri
 			result.expired_snapshots.insert(StringUtil::ToUnsigned(entry.change_value));
 			break;
 		default:
-			throw InternalException("Unsupported change type in ParseChangesMade");
+			ChangedTables(result, entry.change_type).insert(TableIndex(StringUtil::ToUnsigned(entry.change_value)));
 		}
 	}
 	return result;

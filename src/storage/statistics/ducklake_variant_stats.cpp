@@ -257,7 +257,7 @@ struct NestedVariantStats {
 	}
 };
 
-void ToNestedVariantStats(const string &field_name, reference<NestedVariantStats> stats) {
+static void ToNestedVariantStats(const string &field_name, reference<NestedVariantStats> stats) {
 	if (field_name == "root") {
 		// special case: top-level variant - no need to parse
 		stats.get().full_field_name = field_name;
@@ -363,7 +363,7 @@ bool DuckLakeColumnVariantStats::ParseStats(const string &stats_name, const vect
 	// LCOV_EXCL_STOP
 }
 
-vector<string> ExtractVariantFieldNames(const vector<string> &path, idx_t variant_field_start) {
+static vector<string> ExtractVariantFieldNames(const vector<string> &path, idx_t variant_field_start) {
 	vector<string> field_names;
 	for (idx_t i = variant_field_start; i + 1 < path.size(); i += 2) {
 		if (path[i] != "typed_value") {
@@ -377,8 +377,8 @@ vector<string> ExtractVariantFieldNames(const vector<string> &path, idx_t varian
 	return field_names;
 }
 
-LogicalType ExtractVariantType(const LogicalType &variant_type, const vector<string> &field_names,
-                               string &variant_field_name, idx_t field_idx = 0) {
+static LogicalType ExtractVariantType(const LogicalType &variant_type, const vector<string> &field_names,
+                                      string &variant_field_name, idx_t field_idx = 0) {
 	if (field_idx == 0 && field_names.empty()) {
 		variant_field_name = "root";
 	}
