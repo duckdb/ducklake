@@ -311,6 +311,8 @@ public:
 	//! Marks the inlined file deletions of the table flushed up to the snapshot, the commit deletes them
 	void MarkInlinedFileDeletionsFlushed(TableIndex table_id, idx_t flush_snapshot_id);
 	bool InlinedFileDeletionsFlushed(TableIndex table_id);
+	//! Lock serializing flushes of a table's inlined file deletions within this transaction
+	shared_ptr<mutex> GetInlinedFileDeletionsFlushLock(TableIndex table_id);
 
 	bool ChangesMade() const;
 	//! The files of the transaction were written by a client of a REST server, which cleans them up itself
@@ -491,6 +493,8 @@ private:
 	unique_ptr<Connection> connection;
 	//! Flushes of several tables finalize in parallel while scans check the flushed tables
 	mutex flushed_inlined_lock;
+	mutex flush_deletions_locks_lock;
+	map<TableIndex, shared_ptr<mutex>> flush_deletions_locks;
 	//! The delete and insert actions of a MERGE finalize in parallel
 	mutex delete_attempted_lock;
 	//! The tag functions of one statement execute in parallel

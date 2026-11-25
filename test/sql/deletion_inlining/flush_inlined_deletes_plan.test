@@ -1,0 +1,26 @@
+# name: test/sql/deletion_inlining/flush_inlined_deletes_plan.test
+# description: flushing inlined file deletions is an operator in the plan
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}__ducklake.db.files', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE ducklake.t AS SELECT i FROM range(20) t(i)
+
+statement ok
+DELETE FROM ducklake.t WHERE i < 3
+
+statement ok
+SET explain_output = 'physical_only'
+
+query II
+EXPLAIN CALL ducklake_flush_inlined_data('ducklake')
+----
+physical_plan	<REGEX>:.*Ducklake Flush Deletions.*
