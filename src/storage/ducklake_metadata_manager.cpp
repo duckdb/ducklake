@@ -5605,6 +5605,29 @@ string DuckLakeMetadataManager::FormatInlinedDataInsert(const Identifier &inline
 	return InsertValuesSql(SQLIdentifier::ToString(inlined_table_name), tuples);
 }
 
+//! The latest version of each deleted row id born on main before the commit ends, the versions an update superseded
+//! already have their ends, so the companion is not probed
+static string EndDeletedInlinedRows(const DuckLakeMetadataManager::RowVisibilityKind &kind,
+                                    const DuckLakeInlinedColNames &col_names) {
+	auto payload = DuckLakeMetadataManager::RowTableName(kind);
+	return StringUtil::Format(R"(INSERT INTO {METADATA_CATALOG}.ducklake_%s_visibility
+    (branch_id, %s, row_branch_id, row_snapshot, end_snapshot)
+SELECT 0, %s, t.%s, t.%s, {SNAPSHOT_ID}
+FROM {METADATA_CATALOG}.%s t
+JOIN (
+    SELECT v.%s AS live_row_id, MAX(v.%s) AS live_snapshot
+    FROM {METADATA_CATALOG}.%s v
+    WHERE v.%s IN (SELECT deleted_row_id FROM deleted_row_list) AND v.%s = 0 AND v.%s < {SNAPSHOT_ID}
+    GROUP BY v.%s
+) live ON live.live_row_id = t.%s AND live.live_snapshot = t.%s
+WHERE t.%s = 0;
+)",
+	                          kind.kind, StringUtil::Join(kind.key_columns, ", "), KeyValues(kind, "t"),
+	                          kind.branch_column, kind.begin_column, payload, col_names.row_id, kind.begin_column,
+	                          payload, col_names.row_id, kind.branch_column, kind.begin_column, col_names.row_id,
+	                          col_names.row_id, kind.begin_column, kind.branch_column);
+}
+
 string DuckLakeMetadataManager::WriteNewInlinedDeletes(const vector<DuckLakeDeletedInlinedDataInfo> &new_deletes,
                                                        const DuckLakeInlinedColNames &col_names, bool row_visibility) {
 	string batch_queries;
@@ -5622,12 +5645,7 @@ string DuckLakeMetadataManager::WriteNewInlinedDeletes(const vector<DuckLakeDele
 			auto deleted_rows =
 			    StringUtil::Format("\nWITH deleted_row_list(deleted_row_id) AS (\nVALUES %s\n)\n", row_id_list);
 			if (row_visibility) {
-				// the live version of each row ends, not one born at this commit, whose insert precedes in the batch
-				auto kind = InlinedRowKind(entry.table_name, col_names);
-				auto filter = StringUtil::Format("t.%s IN (SELECT deleted_row_id FROM deleted_row_list) AND t.%s != "
-				                                 "{SNAPSHOT_ID}",
-				                                 col_names.row_id, col_names.begin_snapshot);
-				return deleted_rows + EndRows(kind, filter);
+				return deleted_rows + EndDeletedInlinedRows(InlinedRowKind(entry.table_name, col_names), col_names);
 			}
 			// the live version of each row id ends in place
 			return deleted_rows + StringUtil::Format(R"(UPDATE {METADATA_CATALOG}.%s
