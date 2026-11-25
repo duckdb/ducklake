@@ -952,7 +952,7 @@ public:
 	V2_0InlinedCompanion ProbeV2_0InlinedCompanion();
 	//! Refuses a payload or deletion table the step reshapes while it holds rows, and the reserved names
 	void VerifyV2_0InlinedCompanion(const V2_0InlinedCompanion &inlined);
-	//! The step: the empty companion, the empty payloads recreated in the shape of 2.0, the empty deletion tables dropped
+	//! The step: the empty companion, each empty payload recreated in the 2.0 shape, each empty deletion table dropped
 	string V2_0InlinedCompanionSql(const V2_0InlinedCompanion &inlined) const;
 	//! The shape of the catalog against the steps of 2.0, one probe of the metadata schema
 	struct V2_0Layout {

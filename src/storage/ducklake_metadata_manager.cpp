@@ -1448,9 +1448,9 @@ DuckLakeMetadataManager::V2_0InlinedCompanion DuckLakeMetadataManager::ProbeV2_0
 					continue;
 				}
 				// the stored type stays, the storage mapping of a type is not a fixed point
-				payload.column_defs += StringUtil::Format("%s%s %s", payload.column_defs.empty() ? "" : ", ",
-				                                          SQLQuotedIdentifier::ToString(names[i]),
-				                                          probe->GetTypes()[i].ToString());
+				payload.column_defs +=
+				    StringUtil::Format("%s%s %s", payload.column_defs.empty() ? "" : ", ",
+				                       SQLQuotedIdentifier::ToString(names[i]), probe->GetTypes()[i].ToString());
 			}
 		}
 		inlined.payloads.push_back(std::move(payload));
