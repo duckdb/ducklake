@@ -1510,6 +1510,11 @@ void DuckLakeCatalog::VerifyWritable() const {
 	}
 }
 
+bool DuckLakeCatalog::UseHiveFilePattern(bool default_value, DuckLakeTableEntry &table) const {
+	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
+	return UseHiveFilePattern(default_value, schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
+}
+
 bool DuckLakeCatalog::WriteDeletionVectors(DuckLakeTableEntry &table) const {
 	auto &schema = table.ParentSchema().Cast<DuckLakeSchemaEntry>();
 	return WriteDeletionVectors(schema.GetSchemaId(), table.GetTableId(), &table.GetTableOptions());
