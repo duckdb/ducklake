@@ -2197,10 +2197,18 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshots(const DuckL
 }
 
 vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshotsInternal(const DuckLakeSnapshotFilter &filter) {
-	auto tagged_snapshots = TaggedSnapshotsInternal();
+	auto protected_snapshots = TaggedSnapshotsInternal();
+	auto branch_protected =
+	    GetMetadataManager().GetBranchProtectedSnapshots(ducklake_catalog.AttachedBranchId(), start_time);
+	protected_snapshots.insert(branch_protected.begin(), branch_protected.end());
+	auto lineage_filter = filter;
+	if (ducklake_catalog.SupportsBranching()) {
+		// an expiry removes snapshots of the attached branch alone, other branches number theirs alike
+		lineage_filter.branch_id = ducklake_catalog.AttachedBranchId();
+	}
 	vector<DuckLakeSnapshotInfo> result;
-	for (auto &snapshot : GetMetadataManager().GetAllSnapshots(filter)) {
-		if (tagged_snapshots.find(snapshot.id) == tagged_snapshots.end()) {
+	for (auto &snapshot : GetMetadataManager().GetAllSnapshots(lineage_filter)) {
+		if (protected_snapshots.find(snapshot.id) == protected_snapshots.end()) {
 			result.push_back(std::move(snapshot));
 		}
 	}
@@ -2208,9 +2216,11 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshotsInternal(con
 }
 
 set<idx_t> DuckLakeTransaction::TaggedSnapshotsInternal() {
+	// an expiry removes snapshots of the attached branch, so only the tags naming those protect
 	set<idx_t> result;
+	auto branch_id = ducklake_catalog.AttachedBranchId();
 	for (auto &tag : GetSnapshotTagsInternal(false)) {
-		if (!SnapshotTagExpired(tag)) {
+		if (!SnapshotTagExpired(tag) && tag.snapshot_branch_id == branch_id) {
 			result.insert(tag.snapshot_id);
 		}
 	}

@@ -842,7 +842,9 @@ public:
 	                                      const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped);
 	//! Ends the row of a committed tag at the snapshot of the commit
 	static string EndSnapshotTagSql(const DuckLakeSnapshotTagInfo &tag);
-	static string DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots, bool branch_aware);
+	//! The branch id is a placeholder in a commit batch and a literal where no snapshot substitutes it
+	static string DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots, bool branch_aware,
+	                                 const string &branch_id = "{BRANCH_ID}");
 	//! Deletes the snapshots once the caller checked the catalog version
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	//! Deletes the metadata that only the deleted snapshots referenced, once the caller checked the catalog version
@@ -891,6 +893,17 @@ public:
 	static string GetMainBranchRowStatement();
 	//! Every branch of the catalog
 	vector<DuckLakeBranchInfo> LoadBranches();
+	//! Whether the catalog holds any branch besides main, false before 2.0
+	bool HasBranches();
+	//! The resolved chain of every branch other than main
+	vector<DuckLakeBranchChain> LoadBranchChains();
+	//! The snapshots of a branch that the chains of the other branches continue from, the root caps for main
+	set<idx_t> LoadBranchCaps(idx_t branch_id);
+	//! The snapshots of a branch an expiry keeps, its head, the forks and the unexpired tag targets of other branches
+	set<idx_t> GetBranchProtectedSnapshots(idx_t branch_id, timestamp_tz_t start_time);
+	//! Keeps the files a branch references through its events or, with the root caps, inherits from main
+	string FileVisibilityGuard(const string &visibility_table, const string &file_id_column, const string &alias = "f",
+	                           bool include_inherited = true);
 	//! Whether the catalog already has every metadata table and column of v1.1
 	bool HasV1_1Additions();
 	//! Whether the catalog has the tables of 1.1 under their names in their shape, false once a migration to 2.0 began
