@@ -21,6 +21,8 @@ ParquetFileScanner::ParquetFileScanner(ClientContext &context, const DuckLakeFil
 		file_entry.emplace_back("file_size", Value::UBIGINT(file.file_size_bytes));
 		file_entry.emplace_back("etag", Value(""));
 		file_entry.emplace_back("last_modified", Value::TIMESTAMP(timestamp_t(0)));
+		// files managed by DuckLake are never modified - we can keep them cached
+		file_entry.emplace_back("validate_external_file_cache", Value::BOOLEAN(false));
 		if (!file.encryption_key.empty()) {
 			file_entry.emplace_back("encryption_key", Value::BLOB_RAW(file.encryption_key));
 		}

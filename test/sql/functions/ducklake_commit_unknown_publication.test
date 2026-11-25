@@ -1,0 +1,110 @@
+# name: test/sql/functions/ducklake_commit_unknown_publication.test
+# description: A staged commit that fails after its commit was sent reports whether it is published, or can be
+# group: [functions]
+
+require ducklake
+
+load {TEST_DIR}/ducklake_commit_unknown_publication_host.db
+
+# the metadata of a lake in the schema of the database, as on a server that runs staged commits
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/ducklake_commit_unknown_publication.db' AS dl (DATA_PATH '{TEST_DIR}/ducklake_commit_unknown_publication_files')
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+COPY FROM DATABASE __ducklake_metadata_dl TO ducklake_commit_unknown_publication_host
+
+statement ok
+DETACH dl
+
+query I
+SELECT count(*) FROM ducklake_snapshot
+----
+2
+
+# stage a commit by hand in the staging tables of the session, like a client does before it calls ducklake_commit
+statement ok
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_commit(commit_author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR, transaction_snapshot_id BIGINT, data_path VARCHAR, path_separator VARCHAR, transaction_next_catalog_id UBIGINT, transaction_next_file_id UBIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_data_file(data_file_id BIGINT, table_id BIGINT, file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, record_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, row_id_start BIGINT, partition_id BIGINT, encryption_key VARCHAR, mapping_id UBIGINT, partial_max BIGINT, begin_snapshot BIGINT, compaction_id BIGINT, row_group_count BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_data_file_column_stats(data_file_id BIGINT, table_id BIGINT, column_id BIGINT, column_size_bytes BIGINT, has_num_values BOOLEAN, num_values BIGINT, has_null_count BOOLEAN, null_count BIGINT, has_min BOOLEAN, min_value VARCHAR, has_max BOOLEAN, max_value VARCHAR, has_contains_nan BOOLEAN, contains_nan BOOLEAN, any_valid BOOLEAN, extra_stats VARCHAR, min_is_exact BOOLEAN, max_is_exact BOOLEAN);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_data_file_partition(local_file_id BIGINT, partition_column_idx BIGINT, partition_value VARCHAR);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_delete_file(table_id BIGINT, data_file_path VARCHAR, data_file_id BIGINT, file_name VARCHAR, format VARCHAR, delete_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR, begin_snapshot BIGINT, max_snapshot BIGINT, source VARCHAR, overwrites_existing_delete BOOLEAN, overwrite_delete_file_id BIGINT, overwrite_delete_file_path VARCHAR, attached_local_file_id BIGINT, row_group_count BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_inlined_data(table_id BIGINT, has_preserved_row_ids BOOLEAN);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_inlined_row(table_id BIGINT, row_order BIGINT, preserved_row_id BIGINT, value_literals VARCHAR);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_inlined_column_stats(table_id BIGINT, column_id BIGINT, column_size_bytes BIGINT, has_num_values BOOLEAN, num_values BIGINT, has_null_count BOOLEAN, null_count BIGINT, has_min BOOLEAN, min_value VARCHAR, has_max BOOLEAN, max_value VARCHAR, has_contains_nan BOOLEAN, contains_nan BOOLEAN, any_valid BOOLEAN, extra_stats VARCHAR, min_is_exact BOOLEAN, max_is_exact BOOLEAN);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_inlined_delete(table_id BIGINT, inlined_table_name VARCHAR, deleted_row_id BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_inlined_file_delete(table_id BIGINT, file_id BIGINT, deleted_row_id BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_dropped_file(path VARCHAR, data_file_id BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_tables_deleted_from(table_id BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_tables_delete_attempted(table_id BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_flushed_inlined(inlined_table_name VARCHAR, schema_version BIGINT, flush_snapshot_id BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_compaction(compaction_id BIGINT, table_id BIGINT, compaction_type VARCHAR, row_id_start BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_compaction_source(compaction_id BIGINT, source_order BIGINT, source_data_file_id BIGINT, source_path VARCHAR, source_row_count BIGINT, source_begin_snapshot BIGINT, source_max_partial_file_snapshot BIGINT, source_inlined_delete_count BIGINT, last_delete_file_id BIGINT, last_delete_path VARCHAR, last_delete_row_count BIGINT, last_delete_end_snapshot BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_name_map(map_id UBIGINT, table_id BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_name_map_entry(map_id UBIGINT, entry_id BIGINT, parent_entry_id BIGINT, source_name VARCHAR, target_field_id BIGINT, hive_partition BOOLEAN);
+
+statement ok
+INSERT INTO ducklake_staged_commit SELECT NULL, NULL, NULL, snapshot_id, NULL, NULL, next_catalog_id, next_file_id FROM ducklake_snapshot ORDER BY snapshot_id DESC LIMIT 1
+
+# the commit of the metadata is durable, the checkpoint that follows it fails
+statement ok
+SET auto_checkpoint_skip_wal_threshold = 9999999999
+
+statement ok
+SET wal_autocheckpoint_entries = 1
+
+statement ok
+PRAGMA debug_checkpoint_abort = 'before_header_non_fatal'
+
+statement error
+SELECT * FROM ducklake_commit('main', 1, files_owned_by_client => true, max_retry_count => 0)
+----
+The transaction was committed
+
+# the failed checkpoint invalidated the database, it is opened again: the commit is published
+restart
+
+query I
+SELECT count(*) FROM ducklake_snapshot
+----
+3
+
+statement ok
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_commit(commit_author VARCHAR, commit_message VARCHAR, commit_extra_info VARCHAR, transaction_snapshot_id BIGINT, data_path VARCHAR, path_separator VARCHAR, transaction_next_catalog_id UBIGINT, transaction_next_file_id UBIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_data_file(data_file_id BIGINT, table_id BIGINT, file_order BIGINT, path VARCHAR, path_is_relative BOOLEAN, file_format VARCHAR, record_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, row_id_start BIGINT, partition_id BIGINT, encryption_key VARCHAR, mapping_id UBIGINT, partial_max BIGINT, begin_snapshot BIGINT, compaction_id BIGINT, row_group_count BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_data_file_column_stats(data_file_id BIGINT, table_id BIGINT, column_id BIGINT, column_size_bytes BIGINT, has_num_values BOOLEAN, num_values BIGINT, has_null_count BOOLEAN, null_count BIGINT, has_min BOOLEAN, min_value VARCHAR, has_max BOOLEAN, max_value VARCHAR, has_contains_nan BOOLEAN, contains_nan BOOLEAN, any_valid BOOLEAN, extra_stats VARCHAR, min_is_exact BOOLEAN, max_is_exact BOOLEAN);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_data_file_partition(local_file_id BIGINT, partition_column_idx BIGINT, partition_value VARCHAR);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_delete_file(table_id BIGINT, data_file_path VARCHAR, data_file_id BIGINT, file_name VARCHAR, format VARCHAR, delete_count BIGINT, file_size_bytes BIGINT, footer_size BIGINT, encryption_key VARCHAR, begin_snapshot BIGINT, max_snapshot BIGINT, source VARCHAR, overwrites_existing_delete BOOLEAN, overwrite_delete_file_id BIGINT, overwrite_delete_file_path VARCHAR, attached_local_file_id BIGINT, row_group_count BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_inlined_data(table_id BIGINT, has_preserved_row_ids BOOLEAN);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_inlined_row(table_id BIGINT, row_order BIGINT, preserved_row_id BIGINT, value_literals VARCHAR);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_inlined_column_stats(table_id BIGINT, column_id BIGINT, column_size_bytes BIGINT, has_num_values BOOLEAN, num_values BIGINT, has_null_count BOOLEAN, null_count BIGINT, has_min BOOLEAN, min_value VARCHAR, has_max BOOLEAN, max_value VARCHAR, has_contains_nan BOOLEAN, contains_nan BOOLEAN, any_valid BOOLEAN, extra_stats VARCHAR, min_is_exact BOOLEAN, max_is_exact BOOLEAN);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_inlined_delete(table_id BIGINT, inlined_table_name VARCHAR, deleted_row_id BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_inlined_file_delete(table_id BIGINT, file_id BIGINT, deleted_row_id BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_dropped_file(path VARCHAR, data_file_id BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_tables_deleted_from(table_id BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_tables_delete_attempted(table_id BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_flushed_inlined(inlined_table_name VARCHAR, schema_version BIGINT, flush_snapshot_id BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_compaction(compaction_id BIGINT, table_id BIGINT, compaction_type VARCHAR, row_id_start BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_compaction_source(compaction_id BIGINT, source_order BIGINT, source_data_file_id BIGINT, source_path VARCHAR, source_row_count BIGINT, source_begin_snapshot BIGINT, source_max_partial_file_snapshot BIGINT, source_inlined_delete_count BIGINT, last_delete_file_id BIGINT, last_delete_path VARCHAR, last_delete_row_count BIGINT, last_delete_end_snapshot BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_name_map(map_id UBIGINT, table_id BIGINT);
+CREATE TEMPORARY TABLE IF NOT EXISTS ducklake_staged_name_map_entry(map_id UBIGINT, entry_id BIGINT, parent_entry_id BIGINT, source_name VARCHAR, target_field_id BIGINT, hive_partition BOOLEAN);
+
+statement ok
+INSERT INTO ducklake_staged_commit SELECT NULL, NULL, NULL, snapshot_id, NULL, NULL, next_catalog_id, next_file_id FROM ducklake_snapshot ORDER BY snapshot_id DESC LIMIT 1
+
+# the commit of the metadata skips the WAL for a checkpoint that fails: it is in memory, and not durable
+statement ok
+SET auto_checkpoint_skip_wal_threshold = 0
+
+statement ok
+SET wal_autocheckpoint_entries = 1
+
+statement ok
+PRAGMA debug_checkpoint_abort = 'before_header_non_fatal'
+
+statement error
+SELECT * FROM ducklake_commit('main', 1, files_owned_by_client => true, max_retry_count => 0)
+----
+It is unknown whether the transaction was committed
