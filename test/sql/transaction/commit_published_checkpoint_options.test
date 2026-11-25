@@ -1,0 +1,59 @@
+# name: test/sql/transaction/commit_published_checkpoint_options.test
+# description: A commit of an option and data that is in the metadata keeps both when the checkpoint after it fails
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/commit_published_checkpoint_options.db' AS dl (DATA_PATH '{TEST_DIR}/commit_published_checkpoint_options_files', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+SET auto_checkpoint_skip_wal_threshold = 9999999999
+
+statement ok
+BEGIN
+
+statement ok
+CALL dl.set_option('target_file_size', '10MB')
+
+statement ok
+INSERT INTO dl.t VALUES (42)
+
+# the commit of the metadata is durable, the checkpoint that follows it fails
+statement ok
+SET wal_autocheckpoint_entries = 1
+
+statement ok
+PRAGMA debug_checkpoint_abort = 'before_header_non_fatal'
+
+statement error
+COMMIT
+----
+Transaction COMMIT succeeded
+
+statement ok
+PRAGMA debug_checkpoint_abort = 'none'
+
+statement ok
+SET wal_autocheckpoint_entries = 0
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/commit_published_checkpoint_options.db' AS dl (DATA_PATH '{TEST_DIR}/commit_published_checkpoint_options_files')
+
+query I
+SELECT value FROM ducklake_options('dl') WHERE option_name = 'target_file_size' AND scope = 'GLOBAL'
+----
+10000000
+
+query I
+SELECT sum(i) FROM dl.t
+----
+42

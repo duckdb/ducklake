@@ -930,6 +930,14 @@ void DuckLakeTransaction::UndoConfigOptions() {
 	config_option_undo.clear();
 }
 
+void DuckLakeTransaction::CommitConfigOptions() {
+	if (config_option_undo.empty()) {
+		return;
+	}
+	ducklake_catalog.CommitConfigOptions(config_option_undo);
+	config_option_undo.clear();
+}
+
 void DuckLakeTransaction::ReloadConfigOptions(bool catalog_unreadable) {
 	DuckLakeConfigOptionReload reload;
 	reload.changes = std::move(config_option_undo);
@@ -1087,15 +1095,15 @@ void DuckLakeTransaction::Commit() {
 		// a failed commit never reaches Rollback - the transaction manager only reports the error
 		if (!IsPublished()) {
 			UndoConfigOptions();
+		} else {
+			// the options of a published commit are in the catalog, also when it reports an error
+			CommitConfigOptions();
 		}
 		ClearMaintenanceChanges();
 		throw;
 	}
 	ClearMaintenanceChanges();
-	if (!config_option_undo.empty()) {
-		ducklake_catalog.CommitConfigOptions(config_option_undo);
-		config_option_undo.clear();
-	}
+	CommitConfigOptions();
 	FlushNameMapCacheInvalidations();
 	connection.reset();
 	state->local_changes.Clear();

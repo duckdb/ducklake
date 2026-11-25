@@ -439,6 +439,8 @@ private:
 	void FlushNameMapCacheInvalidations();
 	//! Puts back the config options this transaction replaced in the catalog
 	void UndoConfigOptions();
+	//! Takes the config options this transaction changed as the catalog's values
+	void CommitConfigOptions();
 	//! Takes the options the commit changed from the catalog, for a commit whose outcome is unknown
 	void ReloadConfigOptions(bool catalog_unreadable);
 	//! Takes the option changes of a commit from the catalog into the cache, false when the catalog cannot be read
