@@ -44,6 +44,16 @@ DETACH dl
 
 # migrating to v1.1 renames the metadata columns
 statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_rename_files', METADATA_CATALOG 'dlmeta', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
+
+# the migration to 2.0 converts no inlined rows, the flush writes them to files first
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+DETACH dl
+
+statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_rename_files', METADATA_CATALOG 'dlmeta', AUTOMATIC_MIGRATION TRUE)
 
 statement error

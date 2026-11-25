@@ -22,6 +22,10 @@ INSERT INTO dl.t VALUES (1),(2)
 statement ok
 DELETE FROM dl.t WHERE i=1
 
+# the migration converts no inlined rows, the flush empties the payload first
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
 statement ok
 DETACH dl
 

@@ -1,5 +1,5 @@
 # name: test/sql/migration/v20_inlined_visibility_collisions.test
-# description: the migration to 2.0-dev1 refuses an inlined data table whose name or user columns collide with the shared companion
+# description: the migration to 2.0-dev1 refuses an inlined data table with rows, with a reserved user column or named for another table
 # group: [migration]
 
 require ducklake
@@ -37,12 +37,12 @@ CALL dl.set_option('data_inlining_row_limit', 10)
 statement ok
 DETACH dl
 
-# the step refuses the column, the catalog stays at 1.0 or at 1.1 where the rename of the metadata columns committed
+# the step refuses the inlined rows first, the catalog stays at 1.0 or at 1.1 where the rename of the metadata columns committed
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
     AUTOMATIC_MIGRATION TRUE)
 ----
-inlined data table ducklake_inlined_data_1_1 has a column _ducklake_branch_id, which the inlined data tables of 2.0 reserve
+inlined data table ducklake_inlined_data_1_1 holds rows and the migration to 2.0 converts no inlined rows
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
@@ -59,7 +59,23 @@ SELECT i, _ducklake_branch_id FROM dl.t ORDER BY i
 2	NULL
 3	0
 
-# renaming the column and flushing the rows leaves no payload with the column
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+DETACH dl
+
+# the empty payload is refused for its column, which the recreated payload would carry twice
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE)
+----
+inlined data table ducklake_inlined_data_1_1 has a column _ducklake_branch_id, which the inlined data tables of 2.0 reserve
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
+
+# renaming the column and flushing leaves no payload with the column
 statement ok
 ALTER TABLE dl.t RENAME COLUMN _ducklake_branch_id TO b
 

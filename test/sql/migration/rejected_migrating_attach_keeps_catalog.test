@@ -63,6 +63,10 @@ SELECT i FROM dl.t
 ----
 42
 
+# the migration converts no inlined rows, the flush writes the row to a file
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
 statement ok
 DETACH dl
 

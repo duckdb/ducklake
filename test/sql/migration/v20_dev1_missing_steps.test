@@ -1210,16 +1210,21 @@ SELECT COUNT(*) FROM ducklake_tags('dl')
 statement ok
 DETACH dl
 
-# a dev build ended its inlined rows in place and knew no shared companion, the step folds the end column into it
+# a dev build ended its inlined rows in place and knew no shared companion, the step recreates the flushed payload
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
     DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
-ALTER TABLE meta.ducklake_inlined_data_1_1 ADD COLUMN _ducklake_end_snapshot BIGINT
+CALL ducklake_flush_inlined_data('dl')
+
+# the flush dropped the payload, the dev build left an empty one in the previous shape
+statement ok
+CREATE TABLE meta.ducklake_inlined_data_1_1(_ducklake_row_id BIGINT, _ducklake_begin_snapshot BIGINT,
+    _ducklake_end_snapshot BIGINT, i INTEGER)
 
 statement ok
-ALTER TABLE meta.ducklake_inlined_data_1_1 DROP COLUMN _ducklake_branch_id
+INSERT INTO meta.ducklake_inlined_data_tables VALUES (1, 'ducklake_inlined_data_1_1', 1)
 
 statement ok
 DROP TABLE meta.ducklake_inlined_data_visibility

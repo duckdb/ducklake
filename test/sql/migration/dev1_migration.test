@@ -49,6 +49,16 @@ AUTOMATIC_MIGRATION
 
 # the migration adds every schema addition and renames the inlined metadata columns
 statement ok
+ATTACH 'ducklake:{TEST_DIR}/dev1_plain.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_plain_files', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
+
+# the migration to 2.0 converts no inlined rows, the flush writes them to files first
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+DETACH dl
+
+statement ok
 ATTACH 'ducklake:{TEST_DIR}/dev1_plain.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_plain_files', AUTOMATIC_MIGRATION TRUE)
 
 query II

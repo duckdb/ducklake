@@ -928,33 +928,27 @@ public:
 		bool has_end_column = false;
 		//! Whether a user column of the previous layout carries the name of the branch column
 		bool has_user_branch_column = false;
-		//! Whether the payload stands renamed for its rebuild, with the user columns the rebuilt table gets
-		bool has_old_table = false;
+		//! The user columns of a payload the step recreates in the shape of 2.0
 		string column_defs;
-		vector<string> user_columns;
-		//! Whether the rebuilt table waits under its new name for its rename after the folds
-		bool has_new_table = false;
+		//! Whether the payload still has the shape of the previous layout
+		bool Incomplete() const;
 	};
 	struct V2_0InlinedDeletionTable {
 		Identifier table;
 		bool has_branch_column = false;
 	};
-	//! The shared companion of the inlined rows, probed so an interrupted step resumes
+	//! The shared companion of the inlined rows and the tables the step reshapes
 	struct V2_0InlinedCompanion {
 		vector<V2_0InlinedPayload> payloads;
 		vector<V2_0InlinedDeletionTable> deletion_tables;
-		//! Whether the companion still stands under its pending name, the rename into place closes the step
-		bool has_pending = false;
 		bool has_companion = false;
 		bool Incomplete() const;
 	};
 	V2_0InlinedCompanion ProbeV2_0InlinedCompanion();
-	//! Refuses a payload whose end column is gone while no companion holds its ends and it holds rows
+	//! Refuses a payload or deletion table the step reshapes while it holds rows, and the reserved names
 	void VerifyV2_0InlinedCompanion(const V2_0InlinedCompanion &inlined);
-	//! The renames of the payloads to rebuild, batches that commit before the rebuild reads them
-	static vector<string> V2_0InlinedRenameSql(const V2_0InlinedCompanion &inlined);
-	//! The batches of the step, one metadata transaction each, the rename into place closes the last one
-	vector<string> V2_0InlinedCompanionSql(const V2_0InlinedCompanion &inlined) const;
+	//! The step: the empty companion, the empty payloads recreated in the shape of 2.0, the empty deletion tables dropped
+	string V2_0InlinedCompanionSql(const V2_0InlinedCompanion &inlined) const;
 	//! The shape of the catalog against the steps of 2.0, one probe of the metadata schema
 	struct V2_0Layout {
 		V2_0SnapshotAdditions additions;

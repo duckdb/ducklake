@@ -1,5 +1,5 @@
 # name: test/sql/migration/sqlite_inlined_column_limit_migration.test
-# description: the migration to 2.0-dev1 converts an inlined data table at the column limit of sqlite
+# description: the migration to 2.0-dev1 recreates a flushed inlined data table at the column limit of sqlite
 # group: [migration]
 
 require ducklake
@@ -33,10 +33,14 @@ SELECT (SELECT count(*) FROM dl.fits), (SELECT count(*) FROM ducklake_list_files
 ----
 1	0
 
+# the migration converts no inlined rows, the flush writes them to a file
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
 statement ok
 DETACH dl
 
-# the rebuilt payload has the branch column within the limit
+# the recreated payload has the branch column within the limit
 statement ok
 ATTACH 'ducklake:sqlite:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}',
     AUTOMATIC_MIGRATION TRUE)
@@ -51,10 +55,10 @@ SELECT count(*) FROM (DESCRIBE SELECT * FROM __ducklake_metadata_dl.ducklake_inl
 ----
 2000
 
-query IIIIII
-FROM __ducklake_metadata_dl.ducklake_inlined_data_visibility
+query I
+SELECT count(*) FROM __ducklake_metadata_dl.ducklake_inlined_data_visibility
 ----
-1	0	0	2	0	4
+0
 
 query I
 SELECT c0 FROM dl.fits

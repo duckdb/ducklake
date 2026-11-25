@@ -1,5 +1,5 @@
 # name: test/sql/migration/postgres_inlined_column_limit_migration.test
-# description: the migration to 2.0-dev1 rebuilds an inlined data table at the column limit of postgres, which counts dropped columns
+# description: the migration to 2.0-dev1 recreates a flushed inlined data table at the column limit of postgres, which counts dropped columns
 # group: [migration]
 
 require ducklake
@@ -46,10 +46,14 @@ SELECT (SELECT count(*) FROM dl.fits), (SELECT count(*) FROM ducklake_list_files
 ----
 1	0
 
+# the migration converts no inlined rows, the flush writes them to a file
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
 statement ok
 DETACH dl
 
-# the rebuilt payload has the branch column within the limit, a dropped column would still count
+# the recreated payload has the branch column within the limit, a dropped column would still count
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_limit_migration',
     METADATA_SCHEMA 'inlined_limit_migration', AUTOMATIC_MIGRATION TRUE)
@@ -64,10 +68,10 @@ SELECT count(*) FROM (DESCRIBE SELECT * FROM __ducklake_metadata_dl.inlined_limi
 ----
 1600
 
-query IIIIII
-FROM __ducklake_metadata_dl.inlined_limit_migration.ducklake_inlined_data_visibility
+query I
+SELECT count(*) FROM __ducklake_metadata_dl.inlined_limit_migration.ducklake_inlined_data_visibility
 ----
-1	0	0	2	0	4
+0
 
 query I
 SELECT c0 FROM dl.fits
