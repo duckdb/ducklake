@@ -35,3 +35,49 @@ ORDER BY ALL
 ----
 0	2	(empty)
 1	2	(empty)
+
+# merge_adjacent_files and rewrite_data_files also do not leak partition values into paths
+statement ok
+INSERT INTO partitioned_tbl SELECT i%2, concat('batch2_', i) FROM range(10000) t(i)
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'partitioned_tbl')
+
+statement ok
+DELETE FROM partitioned_tbl WHERE values IN ('batch2_0', 'batch2_1')
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'partitioned_tbl', delete_threshold => 0)
+
+query II
+SELECT COUNT(*) FILTER (WHERE end_snapshot IS NULL), bool_or(contains(path, 'part_key='))
+FROM ducklake_metadata.ducklake_data_file
+----
+2	false
+
+# explicit opt-in: hive_file_pattern = true on an encrypted table is honored by compaction
+statement ok
+CREATE TABLE opt_in_hive_tbl(part_key INTEGER, values VARCHAR);
+
+statement ok
+CALL ducklake.set_option('hive_file_pattern', true, table_name => 'opt_in_hive_tbl')
+
+statement ok
+ALTER TABLE opt_in_hive_tbl SET PARTITIONED BY (part_key);
+
+statement ok
+INSERT INTO opt_in_hive_tbl SELECT i%2, concat('v_', i) FROM range(100) t(i)
+
+statement ok
+INSERT INTO opt_in_hive_tbl SELECT i%2, concat('w_', i) FROM range(100) t(i)
+
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'opt_in_hive_tbl')
+
+query II
+SELECT COUNT(*), bool_and(contains(df.path, 'part_key='))
+FROM ducklake_metadata.ducklake_data_file df
+JOIN ducklake_metadata.ducklake_table t USING (table_id)
+WHERE t.table_name = 'opt_in_hive_tbl' AND df.end_snapshot IS NULL
+----
+2	true

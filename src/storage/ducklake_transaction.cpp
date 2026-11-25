@@ -930,6 +930,14 @@ void DuckLakeTransaction::UndoConfigOptions() {
 	config_option_undo.clear();
 }
 
+void DuckLakeTransaction::CommitConfigOptions() {
+	if (config_option_undo.empty()) {
+		return;
+	}
+	ducklake_catalog.CommitConfigOptions(config_option_undo);
+	config_option_undo.clear();
+}
+
 void DuckLakeTransaction::ReloadConfigOptions(bool catalog_unreadable) {
 	DuckLakeConfigOptionReload reload;
 	reload.changes = std::move(config_option_undo);
@@ -1085,15 +1093,17 @@ void DuckLakeTransaction::Commit() {
 		}
 	} catch (...) {
 		// a failed commit never reaches Rollback - the transaction manager only reports the error
-		UndoConfigOptions();
+		if (!IsPublished()) {
+			UndoConfigOptions();
+		} else {
+			// the options of a published commit are in the catalog, also when it reports an error
+			CommitConfigOptions();
+		}
 		ClearMaintenanceChanges();
 		throw;
 	}
 	ClearMaintenanceChanges();
-	if (!config_option_undo.empty()) {
-		ducklake_catalog.CommitConfigOptions(config_option_undo);
-		config_option_undo.clear();
-	}
+	CommitConfigOptions();
 	FlushNameMapCacheInvalidations();
 	connection.reset();
 	state->local_changes.Clear();
@@ -1121,9 +1131,7 @@ void DuckLakeTransaction::Rollback() {
 		}
 		connection.reset();
 	}
-	if (!files_owned_by_client) {
-		state->CleanupFiles();
-	}
+	state->CleanupFiles();
 	state->local_changes.Clear();
 	state->new_snapshot_tags.clear();
 	state->dropped_snapshot_tags.clear();
@@ -1755,12 +1763,20 @@ void DuckLakeTransaction::CleanupFiles() {
 	state->CleanupFiles();
 }
 
-DuckLakeCommitOutcome DuckLakeTransaction::CommitOutcome(const DuckLakeCommitState &commit_state) {
+void DuckLakeTransaction::SetFilesOwnedByClient() {
+	state->files_owned_by_client = true;
+}
+
+bool DuckLakeTransaction::FilesOwnedByClient() const {
+	return state->files_owned_by_client;
+}
+
+DuckLakeCommitOutcome DuckLakeTransaction::ReadCommitOutcome(const DuckLakeCommitState &commit_state) {
 	vector<DuckLakeCreatedFile> created_files;
 	state->local_changes.GetCreatedFiles(commit_state.commit_snapshot.snapshot_id, created_files);
 	if (created_files.empty()) {
 		// without a file of its own the commit cannot be recognized, and there is no file to keep or to remove
-		return DuckLakeCommitOutcome::UNKNOWN;
+		return DuckLakeCommitOutcome::PUBLICATION_UNKNOWN;
 	}
 	// another table can register the same path, so a file counts for the table and snapshot of this commit alone
 	static constexpr idx_t MAX_FILES_CHECKED = 8;
@@ -1789,7 +1805,7 @@ DuckLakeCommitOutcome DuckLakeTransaction::CommitOutcome(const DuckLakeCommitSta
 			if (!result->HasError()) {
 				auto chunk = result->Fetch();
 				if (chunk && chunk->size() > 0 && chunk->GetValue(0, 0).GetValue<int64_t>() > 0) {
-					return DuckLakeCommitOutcome::COMMITTED;
+					return DuckLakeCommitOutcome::PUBLISHED;
 				}
 			}
 		} catch (std::exception &) { // NOLINT
@@ -1799,7 +1815,7 @@ DuckLakeCommitOutcome DuckLakeTransaction::CommitOutcome(const DuckLakeCommitSta
 #endif
 	}
 	// an absent file does not prove a rollback, the server can still be committing
-	return DuckLakeCommitOutcome::UNKNOWN;
+	return DuckLakeCommitOutcome::PUBLICATION_UNKNOWN;
 }
 
 void DuckLakeTransaction::ApplyServerSideCommit(idx_t schema_version, optional_idx committed_next_file_id) {
@@ -1920,6 +1936,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.is_retryable_metadata_error = [&](const string &message) {
 		return option_lock_failed || metadata_manager->IsRetryableCommitError(message);
 	};
+	context.is_catalog_rejection = [&](const string &message) {
+		return metadata_manager->IsCatalogRejection(message);
+	};
 	// a retry rolls back what the statements wrote to the metadata
 	context.skip_retry = [&]() {
 		return option_lock_failed && metadata_written;
@@ -1958,16 +1977,19 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 			                  "(ducklake_debug_lose_commit_reply)");
 		}
 	};
-	context.commit_outcome = [&](const ErrorData &error, const DuckLakeCommitState &commit_state) {
+	context.read_commit_outcome = [&](const ErrorData &error, const DuckLakeCommitState &commit_state) {
 		// a COMMIT the catalog refused was rolled back, only a lost connection leaves the outcome open
 		if (lost_reply_debug.empty() && !metadata_manager->IsCommitOutcomeUnknown(error.RawMessage())) {
-			return DuckLakeCommitOutcome::NOT_COMMITTED;
+			return DuckLakeCommitOutcome::NOT_PUBLISHED;
 		}
-		auto outcome = CommitOutcome(commit_state);
-		if (outcome == DuckLakeCommitOutcome::UNKNOWN) {
+		auto outcome = ReadCommitOutcome(commit_state);
+		if (outcome == DuckLakeCommitOutcome::PUBLICATION_UNKNOWN) {
 			ReloadConfigOptions(lost_reply_debug == "before_unreadable");
 		}
 		return outcome;
+	};
+	context.report_commit_outcome = [&](DuckLakeCommitOutcome reported) {
+		ReportCommitOutcome(reported);
 	};
 	context.try_rollback = [&]() {
 		if (connection->context->transaction.HasActiveTransaction()) {
@@ -2031,7 +2053,19 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.get_table_stats = [&](TableIndex table_id) {
 		return ducklake_catalog.GetTableStats(*this, GetSnapshot(), table_id, &commit_tables);
 	};
+	context.get_table_path = [&](TableIndex table_id) {
+		// a table keeps the path it was created with, the commit does not load the catalog for it
+		return ducklake_catalog.GetLoadedTableDataPath(transaction_snapshot, table_id);
+	};
 	context.column_holds_values = [&](TableIndex table_id, FieldIndex column_id, idx_t snapshot_id) {
+		auto cached_snapshot = ducklake_catalog.OlderColumnsWithValuesSnapshot(table_id, column_id, snapshot_id);
+		if (cached_snapshot.IsValid()) {
+			// the commits of other catalogs keep the columns found with values of the tables they did not change
+			set<TableIndex> changed;
+			bool known = metadata_manager->GetTablesWithRemovedValues(cached_snapshot.GetIndex(), snapshot_id, changed);
+			ducklake_catalog.AdvanceColumnsWithValues(cached_snapshot.GetIndex(), snapshot_id,
+			                                          known ? &changed : nullptr);
+		}
 		return ducklake_catalog.ColumnHoldsValues(table_id, column_id, snapshot_id);
 	};
 	context.set_column_holds_values = [&](TableIndex table_id, FieldIndex column_id, idx_t snapshot_id) {
@@ -2126,7 +2160,9 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	};
 	context.write_snapshot = ChangesMade();
 	// a REST server commits from the snapshot of its client, its metadata transaction sees later commits
-	context.check_conflicts_first = files_owned_by_client;
+	context.check_conflicts_first = state->files_owned_by_client;
+	// a catalog that commits each statement publishes the changes when it runs the batch
+	context.publishes_with_batch = metadata_manager->CommitsEachStatement();
 	context.commit_info = state->commit_info;
 	context.supports_v1_1_metadata = ducklake_catalog.SupportsV1_1Metadata();
 	context.supports_v2_0_metadata = ducklake_catalog.SupportsBranching();
@@ -2964,7 +3000,7 @@ void DuckLakeTransaction::DropTable(DuckLakeTableEntry &table) {
 		DropLocalEntry(state->new_tables, table.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId(), table.name);
 		// if we have written any files for this table - clean them up
 		auto context_ref = context.lock();
-		if (files_owned_by_client) {
+		if (state->files_owned_by_client) {
 			state->local_changes.Forget(table_id);
 		} else {
 			state->local_changes.CleanupFiles(*context_ref, table_id);
