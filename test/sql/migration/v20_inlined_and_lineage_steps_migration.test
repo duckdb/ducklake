@@ -87,6 +87,9 @@ inlined data table ducklake_inlined_data_1_2 holds rows and the migration to 2.0
 
 # the refused migration changed nothing, the payload keeps the shape of the older layout
 statement ok
+DETACH DATABASE IF EXISTS meta
+
+statement ok
 ATTACH '{DUCKLAKE_CONNECTION}' AS meta
 
 query I
