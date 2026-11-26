@@ -564,8 +564,8 @@ public:
 	//! With require_exact, the count is NULL if any visible file is only partially visible to the snapshot.
 	//! With exclude_new_files, the files of the commit, which can already be in the catalog, are not counted.
 	static string GetNetDataFileRowCountSql(TableIndex table_id, const Identifier &inlined_deletion_table,
-	                                        bool file_events, bool require_exact = false,
-	                                        bool exclude_new_files = false);
+	                                        bool file_events, const DuckLakeBranchChain &chain,
+	                                        bool require_exact = false, bool exclude_new_files = false);
 	static string GetNetInlinedRowCountSql(const Identifier &inlined_table_name,
 	                                       const DuckLakeInlinedColNames &col_names, bool row_visibility);
 	//! The rows that are stored, deleted ones included, and the rows that are live
@@ -677,9 +677,16 @@ public:
 	//! SQL branch of WriteNewInlinedFileDeletes — returns the CREATE/INSERT statements and marks the
 	//! metadata-manager cache for clearing when a new per-table deletion table is created.
 	string WriteNewInlinedFileDeletesSqlBatch(const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes);
+	//! The inlined deletion rows of the alias that apply at the read snapshot, those of the chain from 2.0 on
+	static string InlinedDeletionView(bool branch_aware, const DuckLakeBranchChain &chain, const string &alias,
+	                                  const string &read_snapshot);
+	//! The same for the attached chain
+	string InlinedDeletionView(const string &alias, const string &read_snapshot) const;
 	//! Get the name of the inlined deletion table for a given table ID
 	virtual Identifier GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
 	                                               bool include_local_changes = true);
+	//! Whether the catalog keeps the verdicts of the deletion table probes across transactions
+	bool KeepsInlinedDeletionVerdicts() const;
 	//! Whether the inlined deletion table exists, for the reads of the transaction's snapshot
 	bool InlinedDeletionTableExists(const Identifier &table_name);
 	//! Whether the inlined deletion table exists now, for the checks of a commit
@@ -713,7 +720,8 @@ public:
 	static string DropDataFiles(const set<DataFileIndex> &dropped_files, bool file_events);
 	//! The deletes recorded against the given data files of the table at the snapshot
 	static string GetDeleteCountForDataFilesSql(TableIndex table_id, const set<DataFileIndex> &file_ids,
-	                                            const Identifier &inlined_deletion_table, bool file_events);
+	                                            const Identifier &inlined_deletion_table, bool file_events,
+	                                            const DuckLakeBranchChain &chain);
 	//! Selects the given data files that are still in the metadata
 	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
 	//! Selects the given columns that a live data file of the table records values of, or holds the default of
@@ -805,10 +813,11 @@ public:
 	                                                           const DuckLakeTableEntry &table,
 	                                                           const string &sort_order_sql,
 	                                                           const vector<string> &columns_to_read);
-	//! The deleted versions of the inlined rows that a flush writes
+	//! The deleted versions of the inlined rows that a flush writes, the ends of other branches on them rehomed
 	virtual DuckLakeDeletedRowVersions GetDeletedInlinedRowVersions(DuckLakeTableEntry &table,
 	                                                                const Identifier &inlined_table_name,
-	                                                                DuckLakeSnapshot snapshot);
+	                                                                DuckLakeSnapshot snapshot,
+	                                                                DuckLakeRehomedRowEnds &rehomed_rows);
 	//! The inlined deletions of rows of data files, which a flush writes to delete files
 	virtual vector<DuckLakeInlinedFileDeletionEntry> GetInlinedFileDeletionsForFlush(DuckLakeTableEntry &table,
 	                                                                                 DuckLakeSnapshot snapshot);

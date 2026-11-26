@@ -184,6 +184,8 @@ struct DuckLakeFileInfo {
 	MappingIndex mapping_id;
 	map<FieldIndex, DuckLakeColumnStats> column_stats;
 	vector<DuckLakeFilePartitionInfo> partition_values;
+	//! The ends of other branches on the rows of a flushed file
+	vector<DuckLakeRehomedDeletion> rehomed_deletions;
 };
 
 struct DuckLakeInlinedDataInfo {
@@ -198,11 +200,21 @@ struct DuckLakeDeletedInlinedDataInfo {
 	vector<idx_t> deleted_row_ids;
 };
 
+//! An end of another branch on a row of a flushed file, keyed by the file id the commit allocated
+struct DuckLakeRehomedFileDeletion {
+	DataFileIndex file_id;
+	idx_t position;
+	idx_t snapshot_id;
+	idx_t branch_id;
+};
+
 //! Info for all inlined file deletions for a single table
 struct DuckLakeInlinedFileDeletionInfo {
 	TableIndex table_id;
 	//! Maps file_id -> set of deleted row_ids
 	DuckLakeInlinedFileDeletes file_deletions;
+	//! The ends of other branches a flush rehomes onto its files, deletion rows of those branches
+	vector<DuckLakeRehomedFileDeletion> rehomed_deletions;
 };
 
 struct DuckLakeDeleteFileInfo {
@@ -551,6 +563,14 @@ struct DuckLakeInlinedFileDeletionEntry {
 
 //! End snapshots of deleted inlined row versions, keyed by row id and begin snapshot
 using DuckLakeDeletedRowVersions = map<pair<int64_t, int64_t>, int64_t>;
+
+//! An end another branch wrote on a version born on the flushing branch
+struct DuckLakeRehomedRowEnd {
+	idx_t branch_id;
+	idx_t snapshot_id;
+};
+//! The ends other branches wrote on the versions of a flushed table, keyed by (row_id, begin_snapshot)
+using DuckLakeRehomedRowEnds = map<pair<int64_t, int64_t>, vector<DuckLakeRehomedRowEnd>>;
 
 struct DuckLakeFileForCleanup {
 	DataFileIndex id;

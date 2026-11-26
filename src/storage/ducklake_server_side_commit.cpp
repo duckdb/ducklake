@@ -764,10 +764,10 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 		if (InlinedFileDeletionTableExists(table_id)) {
 			inlined_deletion_table = DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id);
 		}
-		auto sql =
-		    SubstitutePlaceholders(DuckLakeMetadataManager::GetNetDataFileRowCountSql(
-		                               table_id, inlined_deletion_table, supports_file_visibility_events, false, true),
-		                           transaction_snapshot);
+		auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetNetDataFileRowCountSql(
+		                                      table_id, inlined_deletion_table, supports_file_visibility_events,
+		                                      DuckLakeBranchChain::Main(), false, true),
+		                                  transaction_snapshot);
 		auto result = RunQuery(sql, "read net data file row count");
 		for (auto &row : *result) {
 			return row.GetValue<idx_t>(0);

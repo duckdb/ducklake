@@ -894,18 +894,23 @@ DuckLakeTransactionState::GetNewInlinedFileDeletes(DuckLakeCommitState &commit_s
 	for (auto &entry : local_changes.Changes()) {
 		auto table_id = commit_state.GetTableId(entry.first);
 		auto &table_changes = entry.second;
-		if (!table_changes.new_inlined_file_deletes) {
+		auto &own_deletes = table_changes.new_inlined_file_deletes;
+		bool has_own_deletes = own_deletes && !own_deletes->file_deletes.empty();
+		auto rehomed = commit_state.rehomed_file_deletions.find(table_id);
+		bool has_rehomed_deletes = rehomed != commit_state.rehomed_file_deletions.end();
+		if (!has_own_deletes && !has_rehomed_deletes) {
 			continue;
-		}
-		if (table_changes.new_inlined_file_deletes->file_deletes.empty()) {
-			// LCOV_EXCL_START
-			continue;
-			// LCOV_EXCL_STOP
 		}
 		DuckLakeInlinedFileDeletionInfo info;
 		info.table_id = table_id;
-		// copy, not move - data must survive commit retries in FlushChanges
-		info.file_deletions.file_deletes = table_changes.new_inlined_file_deletes->file_deletes;
+		if (has_own_deletes) {
+			// copy, not move - data must survive commit retries in FlushChanges
+			info.file_deletions.file_deletes = own_deletes->file_deletes;
+		}
+		if (has_rehomed_deletes) {
+			// the ends other branches wrote on the rows a flush of this commit moved
+			info.rehomed_deletions = rehomed->second;
+		}
 		result.push_back(std::move(info));
 	}
 	return result;
@@ -1584,7 +1589,8 @@ bool DuckLakeTransactionState::TryRecomputeGlobalStatsAfterDrop(TableIndex table
 	}
 	auto query_result = context.query_metadata_with_snapshot(
 	    snapshot, DuckLakeMetadataManager::GetDeleteCountForDataFilesSql(table_id, dropped_ids, inlined_deletion_table,
-	                                                                     context.supports_file_visibility_events));
+	                                                                     context.supports_file_visibility_events,
+	                                                                     DuckLakeBranchChain::Main()));
 	query_result->ThrowIfError("Failed to read the delete counts of dropped files from DuckLake: ");
 	idx_t dropped_delete_count = 0;
 	for (auto &row : *query_result) {
@@ -1836,6 +1842,7 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		                      context);
 		commit_state.PrepareFloatBounds(table_id, new_stats.column_stats);
 		vector<DuckLakeDeleteFile> delete_files;
+		vector<DuckLakeRehomedFileDeletion> rehomed_deletions;
 		for (auto &file : table_changes.new_data_files) {
 			// flushed files (with max_partial_file_snapshot) have embedded row_ids, we gotta use the original
 			// row_id_start
@@ -1848,6 +1855,10 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 				delete_file.data_file_id = data_file.id;
 				delete_files.push_back(std::move(delete_file));
 			}
+			for (auto &rehomed : data_file.rehomed_deletions) {
+				// the end of another branch on a row of this flushed file, keyed by the file id of this commit
+				rehomed_deletions.push_back({data_file.id, rehomed.position, rehomed.snapshot_id, rehomed.branch_id});
+			}
 
 			// merge the stats into the new global state
 			new_stats.MergeFileStats(file, data_file.column_stats);
@@ -1855,6 +1866,9 @@ NewDataInfo DuckLakeTransactionState::GetNewDataFiles(
 		}
 		// add any delete files that were made on top of these transaction-local files
 		commit_state.local_delete_files[table_id] = std::move(delete_files);
+		if (!rehomed_deletions.empty()) {
+			commit_state.rehomed_file_deletions[table_id] = std::move(rehomed_deletions);
+		}
 
 		if (table_changes.new_inlined_data) {
 			auto &inlined_data = *table_changes.new_inlined_data;
@@ -2851,9 +2865,11 @@ static set<DataFileIndex> GetFilesWithInlinedDeletesAfterSnapshot(TableIndex tab
 	if (!context.inlined_file_deletion_table_exists(table_id)) {
 		return result;
 	}
-	auto query =
-	    StringUtil::Format("SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s WHERE begin_snapshot > {SNAPSHOT_ID};",
-	                       DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id));
+	// only later deletions on the committing branch conflict
+	auto query = StringUtil::Format("SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s WHERE %sbegin_snapshot > "
+	                                "{SNAPSHOT_ID};",
+	                                DuckLakeMetadataManager::InlinedFileDeletionTableName(table_id),
+	                                context.supports_row_visibility ? "branch_id = {BRANCH_ID} AND " : "");
 	auto query_result = context.conflict_query_executor(query);
 	query_result->ThrowIfError("Failed to commit DuckLake transaction - failed to get files with "
 	                           "inlined deletions for conflict resolution:");
