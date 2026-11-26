@@ -234,6 +234,10 @@ static idx_t IdOf(idx_t id) {
 	return id;
 }
 
+static idx_t IdOf(const DuckLakeFileForCleanup &file) {
+	return file.id.index;
+}
+
 template <class T>
 static idx_t IdOf(const T &entry) {
 	return entry.index;
@@ -7333,13 +7337,8 @@ vector<DuckLakeFileForCleanup> DuckLakeMetadataManager::GetFilesForCleanup(const
 	}
 }
 
-static string CleanupFileIdList(const vector<DuckLakeFileForCleanup> &files) {
-	return StringUtil::Join(files, files.size(), ", ",
-	                        [](const DuckLakeFileForCleanup &file) { return to_string(file.id.index); });
-}
-
 void DuckLakeMetadataManager::RemoveFilesScheduledForCleanup(const vector<DuckLakeFileForCleanup> &cleaned_up_files) {
-	auto deleted_file_ids = CleanupFileIdList(cleaned_up_files);
+	auto deleted_file_ids = GenerateIDList(cleaned_up_files);
 	auto result = Execute(StringUtil::Format(R"(
 DELETE FROM {METADATA_CATALOG}.ducklake_files_scheduled_for_deletion
 WHERE data_file_id IN (%s);
@@ -7770,7 +7769,7 @@ AND NOT EXISTS (
 	auto file_events = WritesFileVisibilityEvents();
 	result = Query(UnusedFilesQuery(DataFiles(), "data_file_id", table_id_filter));
 	auto cleanup_files = read_cleanup_files(*result);
-	auto deleted_file_ids = CleanupFileIdList(cleanup_files);
+	auto deleted_file_ids = GenerateIDList(cleanup_files);
 	vector<string> tables_to_delete_from;
 	if (!cleanup_files.empty()) {
 		// delete the data files
@@ -7799,7 +7798,7 @@ WHERE data_file_id IN (%s);
 	result = Query(UnusedFilesQuery(DeleteFiles(), "delete_file_id", table_id_filter + file_id_filter));
 	auto cleanup_deletes = read_cleanup_files(*result);
 	if (!cleanup_deletes.empty()) {
-		result = Execute(DeleteDeleteFilesSql(CleanupFileIdList(cleanup_deletes), file_events));
+		result = Execute(DeleteDeleteFilesSql(GenerateIDList(cleanup_deletes), file_events));
 		result->ThrowIfError("Failed to delete old delete file information in DuckLake: ");
 		schedule_for_cleanup(cleanup_deletes);
 	}
