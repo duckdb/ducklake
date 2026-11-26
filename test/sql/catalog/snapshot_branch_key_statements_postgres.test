@@ -107,18 +107,25 @@ WHERE query LIKE '%DELETE FROM %ducklake_snapshot WHERE snapshot_id IN (1) AND b
 ----
 true
 
-# the listing joins the changes by branch and snapshot, the existence checks of the expiry scan the tables as in 1.x
+# the listing joins the changes by branch and snapshot
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
 WHERE query LIKE '%ducklake_snapshot_changes USING (snapshot_id, branch_id)%WHERE snapshot_id <= 2 AND (branch_id = 0)%'
 ----
 true
 
+# the row sweeps of the cleanup scan the snapshots of main, the table check of 1.x does not run
 query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%snapshot_id < end_snapshot AND branch_id%'
+WHERE query LIKE '%snapshot_id >= begin_snapshot AND snapshot_id < end_snapshot%'
 ----
 0
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%snapshot_id < e.end_snapshot AND branch_id = 0%'
+----
+true
 
 # the unused file checks of the cleanup scan the snapshots of main
 query I

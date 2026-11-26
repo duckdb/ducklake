@@ -77,7 +77,7 @@ SELECT COUNT(*) FROM ducklake_table_insertions('dl', 'main', 't', NOW(), NOW())
 ----
 0
 
-# the fork point cannot be expired, the snapshot 3 of main is not the branch snapshot and can
+# the fork point cannot be expired, the snapshot 3 of main shares its id with the branch snapshot and can go
 query I
 SELECT COUNT(*) FROM ducklake_expire_snapshots('dl', versions => [2], dry_run => true)
 ----
