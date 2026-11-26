@@ -498,7 +498,7 @@ static string FormatExpectedError(const vector<LogicalType> &expected) {
 	return expected.size() > 1 ? "one of " + error : error;
 }
 
-//! The types of a file that are read as a column of the type without losing values
+//! The types of a file that a column of the type accepts
 static vector<LogicalType> AcceptedSourceTypes(const LogicalType &type) {
 	switch (type.id()) {
 	case LogicalTypeId::TINYINT:
