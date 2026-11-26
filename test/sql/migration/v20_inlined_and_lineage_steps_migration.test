@@ -167,10 +167,9 @@ SELECT COUNT(*) FROM meta.ducklake_inlined_data_visibility
 statement ok
 INSERT INTO dl.t VALUES (5, 50)
 
+# the new payload is read through its own binding, the cached table listing of meta does not know it yet
 query I
-SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
-    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_inlined_data_1_2')
-ORDER BY column_index
+SELECT column_name FROM (DESCRIBE meta.ducklake_inlined_data_1_2)
 ----
 _ducklake_row_id
 _ducklake_begin_snapshot
