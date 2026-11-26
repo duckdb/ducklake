@@ -904,7 +904,7 @@ DuckLakeTransactionState::GetNewInlinedFileDeletes(DuckLakeCommitState &commit_s
 		DuckLakeInlinedFileDeletionInfo info;
 		info.table_id = table_id;
 		if (has_own_deletes) {
-			// copy, not move - data must survive commit retries in FlushChanges
+			// copied, not moved, the data must survive commit retries in FlushChanges
 			info.file_deletions.file_deletes = own_deletes->file_deletes;
 		}
 		if (has_rehomed_deletes) {
