@@ -6,7 +6,7 @@ require ducklake
 
 require parquet
 
-test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
 
 test-env DATA_PATH {TEST_DIR}
 
@@ -29,3 +29,25 @@ SELECT data_file = '{scheme}://example.invalid/warehouse/data.parquet' FROM duck
 true
 
 endloop
+
+# A stored UNC table path can be joined with a relative file path without opening the share.
+statement ok
+UPDATE meta.ducklake_table SET path = '//server/share/lake/', path_is_relative = false
+
+statement ok
+UPDATE meta.ducklake_data_file SET path = 'nested/data.parquet', path_is_relative = true
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/remote_path', METADATA_CATALOG 'meta')
+
+query I
+SELECT data_file = CASE
+    WHEN parse_path('a\b', 'system') = ['a', 'b']
+    THEN replace('//server/share/lake/nested/data.parquet', '/', chr(92))
+    ELSE '//server/share/lake/nested/data.parquet'
+END FROM ducklake_list_files('lake', 'items')
+----
+true
