@@ -142,6 +142,28 @@ SELECT tag_name, snapshot_id, snapshot_branch_id, branch_id FROM meta.ducklake_s
 ----
 first	2	0	0
 
+# the step drops the empty payload of the previous shape with its registration, the companion starts empty
+query I
+SELECT COUNT(*) FROM meta.ducklake_inlined_data_tables
+----
+0
+
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name LIKE 'ducklake_inlined_data_%_%'
+    AND table_name NOT IN ('ducklake_inlined_data_tables', 'ducklake_inlined_data_visibility')
+----
+0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_inlined_data_visibility
+----
+0
+
+# the writer recreates the payload in the shape of 2.0 on the first inlined insert, ends go through the companion
+statement ok
+INSERT INTO dl.t VALUES (5, 50)
+
 query I
 SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
     WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_inlined_data_1_2')
@@ -154,13 +176,9 @@ j
 _ducklake_branch_id
 
 query I
-SELECT COUNT(*) FROM meta.ducklake_inlined_data_visibility
+SELECT table_name FROM meta.ducklake_inlined_data_tables
 ----
-0
-
-# the migrated catalog inlines into the recreated payload, ends through the companion and flushes
-statement ok
-INSERT INTO dl.t VALUES (5, 50)
+ducklake_inlined_data_1_2
 
 query IIIII
 SELECT _ducklake_row_id, _ducklake_begin_snapshot, _ducklake_branch_id, i, j FROM meta.ducklake_inlined_data_1_2
