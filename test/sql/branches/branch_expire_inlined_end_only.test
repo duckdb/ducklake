@@ -1,0 +1,74 @@
+# name: test/sql/branches/branch_expire_inlined_end_only.test
+# description: an inlined end a branch alone wrote survives the expiry and cleanup of main
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id,
+    branch_id) SELECT 3, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot
+    WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1)
+
+# dev ends the version of the second row at its own snapshot 3, main holds no end
+statement ok
+INSERT INTO meta.ducklake_inlined_data_visibility VALUES (1, 1, 0, 2, 1, 3)
+
+statement ok
+INSERT INTO dl.t VALUES (4)
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [1])
+
+statement ok
+CALL ducklake_cleanup_old_files('dl', cleanup_all => true)
+
+# the end of dev names a version main still reads, so the sweeps of main leave it in place
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+1	1	0	2	1	3
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+3
+4
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I
+SELECT i FROM dev.t ORDER BY i
+----
+1
+3
+
+statement ok
+DETACH dev
+
+statement ok
+DETACH dl

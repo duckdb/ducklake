@@ -51,7 +51,8 @@
         "test/sql/branches/branchless_skips_guards.test",
         "test/sql/transaction/commit_table_paths_from_catalog.test",
         "test/sql/stats/stats_reads_filter_table.test",
-        "test/sql/stats/null_first_bounds_unrelated_commits.test"
+        "test/sql/stats/null_first_bounds_unrelated_commits.test",
+        "test/sql/deletion_inlining/inlined_file_deletes_concurrent_branch_column.test"
       ]
     },
     {
@@ -612,7 +613,8 @@
         "test/sql/migration/v20_inlined_dropped_table_rows.test",
         "test/sql/migration/v20_inlined_orphan_deletions.test",
         "test/sql/migration/v20_inlined_rows_after_first_batch.test",
-        "test/sql/migration/v20_inlined_interrupted_step.test"
+        "test/sql/migration/v20_inlined_interrupted_step.test",
+        "test/sql/deletion_inlining/inlined_file_delete_branch_column.test"
       ]
     },
     {
@@ -752,6 +754,7 @@
       "reason": "Attaches a BRANCH of the DuckLake, which a REST client cannot",
       "paths": [
         "test/sql/branches/branch_attach_compacted.test",
+        "test/sql/branches/branch_attach_inlined.test",
         "test/sql/branches/branch_attach_read.test",
         "test/sql/branches/branch_bare_inheritance.test",
         "test/sql/branches/branch_catalog_rows.test",
@@ -761,21 +764,35 @@
         "test/sql/branches/branch_delete_file_choice.test",
         "test/sql/branches/branch_delete_replacement.test",
         "test/sql/branches/branch_expire_dry_run.test",
+        "test/sql/branches/branch_expire_inlined_end_only.test",
         "test/sql/branches/branch_feed_full_delete_previous_file.test",
         "test/sql/branches/branch_feed_inherited_dated_deletes.test",
         "test/sql/branches/branch_feed_inherited_partial_file.test",
         "test/sql/branches/branch_feed_prefix_property.test",
         "test/sql/branches/branch_feed_previous_delete_tie.test",
         "test/sql/branches/branch_feed_undated_cumulative.test",
+        "test/sql/branches/branch_flush_direct_nested.test",
+        "test/sql/branches/branch_flush_dual_end.test",
+        "test/sql/branches/branch_flush_inlined.test",
+        "test/sql/branches/branch_flush_inlined_deletes.test",
+        "test/sql/branches/branch_flush_rehomes_branch_ends.test",
+        "test/sql/branches/branch_flush_skipped_payload.test",
         "test/sql/branches/branch_full_delete_feed_capped.test",
         "test/sql/branches/branch_guard_shared_cleanup.test",
         "test/sql/branches/branch_inlined_after_rename.test",
+        "test/sql/branches/branch_inlined_delete_after_fork.test",
+        "test/sql/branches/branch_inlined_end_row.test",
+        "test/sql/branches/branch_inlined_file_delete_row.test",
+        "test/sql/branches/branch_inlined_table_changes.test",
         "test/sql/branches/branch_insertions_delete_choice.test",
+        "test/sql/branches/branch_listing_after_main_flush.test",
         "test/sql/branches/branch_macro_rows.test",
         "test/sql/branches/branch_nested_chain.test",
         "test/sql/branches/branch_nested_delete_replacement.test",
         "test/sql/branches/branch_nested_feed_segments.test",
         "test/sql/branches/branch_nested_fork_below_parent.test",
+        "test/sql/branches/branch_nested_inlined.test",
+        "test/sql/branches/branch_nested_inlined_shared.test",
         "test/sql/branches/branch_nested_retro_delete.test",
         "test/sql/branches/branch_nested_retro_delete_history.test",
         "test/sql/branches/branch_nested_segment_cap.test",
