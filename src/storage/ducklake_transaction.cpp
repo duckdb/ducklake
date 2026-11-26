@@ -1088,6 +1088,10 @@ void DuckLakeTransaction::Commit() {
 				connection->Commit();
 			} catch (std::exception &ex) {
 				ErrorData error(ex);
+				if (DuckLakeTransactionState::IsDurableCommitError(error)) {
+					// the options of a durable commit are in the catalog, also when it reports an error
+					CommitConfigOptions();
+				}
 				error.Throw(GetMetadataManager().CommitErrorHint(error.Message()));
 			}
 		}
