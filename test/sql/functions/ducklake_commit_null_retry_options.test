@@ -15,6 +15,11 @@ SELECT * FROM ducklake_commit('missing_schema', 1, max_retry_count => 2, retry_w
 Server-side ducklake_commit
 
 statement error
+SELECT * FROM ducklake_commit('missing_schema', 1, files_owned_by_client => true)
+----
+Server-side ducklake_commit
+
+statement error
 SELECT * FROM ducklake_commit(NULL, 1, max_retry_count => NULL)
 ----
 ducklake_commit arguments cannot be NULL

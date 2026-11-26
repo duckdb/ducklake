@@ -1,0 +1,156 @@
+# name: test/sql/rest/rest_commit_queue.test
+# description: REST writers share a publication queue across prefixes and listeners without retrying
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+statement ok rest_db:rest_server_con
+SET VARIABLE alias_uri = (SELECT listen_uri FROM ducklake_rest_serve('rest_lake', port := regexp_extract(getvariable('rest_listen_uri'), ':([0-9]+)/', 1)::UBIGINT, prefix := 'alias'))
+
+set variable alias_server <variable:rest_server_con:alias_uri>
+
+statement ok rest_db:rest_server_con
+SET VARIABLE second_uri = (SELECT listen_uri FROM ducklake_rest_serve('rest_lake'))
+
+set variable second_server <variable:rest_server_con:second_uri>
+
+loop i 0 4
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl{i} (DATA_INLINING_ROW_LIMIT 1000)
+
+endloop
+
+loop i 4 6
+
+statement ok
+ATTACH 'ducklake:rest:{alias_server}' AS dl{i} (DATA_INLINING_ROW_LIMIT 1000)
+
+endloop
+
+loop i 6 8
+
+statement ok
+ATTACH 'ducklake:rest:{second_server}' AS dl{i} (DATA_INLINING_ROW_LIMIT 1000)
+
+endloop
+
+loop i 0 8
+
+statement ok
+CREATE TABLE dl{i}.t{i}(i INTEGER)
+
+statement ok
+INSERT INTO dl{i}.t{i} VALUES (-1)
+
+endloop
+
+statement ok
+CREATE TABLE dl0.shared(i INTEGER)
+
+statement ok
+INSERT INTO dl0.shared VALUES (-1)
+
+# Independent clients commit to disjoint tables with no metadata retries.
+concurrentloop i 0 8
+
+statement ok
+SET ducklake_max_retry_count=0
+
+loop j 0 10
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl{i}.t{i} VALUES ({j})
+
+statement ok
+COMMIT
+
+endloop
+
+endloop
+
+loop i 0 8
+
+query II
+SELECT count(*), sum(i) FROM dl0.t{i}
+----
+11	44
+
+endloop
+
+# A shared table also merges each writer's statistics into the latest publication.
+concurrentloop i 0 8
+
+statement ok
+SET ducklake_max_retry_count=0
+
+loop j 0 10
+
+statement ok
+INSERT INTO dl{i}.shared VALUES ({i} * 10 + {j})
+
+endloop
+
+endloop
+
+query III
+SELECT count(*), count(DISTINCT i), sum(i) FROM dl0.shared
+----
+81	81	3159
+
+statement ok con1
+SET ducklake_max_retry_count=0
+
+statement ok con1
+BEGIN
+
+statement ok con1
+UPDATE dl0.shared SET i = 100 WHERE i = -1
+
+statement ok con2
+UPDATE dl1.shared SET i = 200 WHERE i = -1
+
+statement error con1
+COMMIT
+----
+conflict
+
+# A rejected commit releases its place in the queue.
+statement ok con2
+INSERT INTO dl1.shared VALUES (300)
+
+query II
+SELECT count(*), sum(i) FROM dl0.shared
+----
+82	3660
+
+# An endpoint failure after applying a catalog change also rolls back and releases the queue.
+query I
+SELECT status FROM ducklake_rest_request('{rest_server}', 'POST', '/v1/transactions/commit', '{"requests":[{"create_schema":{"placeholder_id":-1,"schema_name":"aborted"}},{"create_schema":{"placeholder_id":-2,"schema_name":"aborted"}}]}')
+----
+404
+
+query I
+SELECT count(*) FROM information_schema.schemata WHERE catalog_name = 'dl0' AND schema_name = 'aborted'
+----
+0
+
+statement ok
+CREATE SCHEMA dl0.after_failure
+
+loop i 0 8
+
+statement ok
+DETACH dl{i}
+
+endloop
+
+statement ok rest_db:rest_server_con
+SELECT * FROM ducklake_rest_stop(regexp_extract(getvariable('second_uri'), '^(.*://[^/]+)', 1))
+
+include test/template/rest_teardown.test_template

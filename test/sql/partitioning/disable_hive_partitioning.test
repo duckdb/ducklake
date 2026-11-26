@@ -78,3 +78,19 @@ FROM partitioned_tbl where part_key = 0
 0	thisisastring_0
 0	thisisastring_2
 0	thisisastring_4
+
+# merge_adjacent_files and rewrite_data_files also respect hive_file_pattern = false
+statement ok
+CALL ducklake_merge_adjacent_files('ducklake', 'partitioned_tbl')
+
+statement ok
+DELETE FROM partitioned_tbl WHERE values = 'thisisastring_0'
+
+statement ok
+CALL ducklake_rewrite_data_files('ducklake', 'partitioned_tbl', delete_threshold => 0)
+
+query II
+SELECT COUNT(*), bool_or(contains(data_file, 'part_key='))
+FROM ducklake_list_files('ducklake', 'partitioned_tbl')
+----
+2	false

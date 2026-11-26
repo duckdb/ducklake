@@ -30,7 +30,6 @@
         "test/sql/migration/v20_dev1_new_catalog.test",
         "test/sql/migration/v20_lineage_columns_migration.test",
         "test/sql/migration/v20_inlined_and_lineage_steps_migration.test",
-        "test/sql/migration/v20_inlined_visibility_resume.test",
         "test/sql/catalog/snapshot_branch_key.test",
         "test/sql/migration/v20_dev1_missing_steps.test",
         "test/sql/metadata/row_group_count.test",
@@ -324,7 +323,8 @@
         "test/sql/data_inlining/inlined_shared_visibility_layout.test",
         "test/sql/data_inlining/inlined_flush_keeps_own_deletes.test",
         "test/sql/data_inlining/inlined_ends_expire.test",
-        "test/sql/deletion_inlining/inlined_deletion_table_branch.test"
+        "test/sql/deletion_inlining/inlined_deletion_table_branch.test",
+        "test/sql/deletion_inlining/inlined_delete_ends_without_probe.test"
       ]
     }
   ]

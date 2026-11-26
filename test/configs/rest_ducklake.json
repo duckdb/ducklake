@@ -48,7 +48,10 @@
         "test/sql/general/ducklake_metadata_logging.test",
         "test/sql/transaction/commit_skips_catalog_load.test",
         "test/sql/transaction/commit_retry_skips_catalog_load.test",
-        "test/sql/branches/branchless_skips_guards.test"
+        "test/sql/branches/branchless_skips_guards.test",
+        "test/sql/transaction/commit_table_paths_from_catalog.test",
+        "test/sql/stats/stats_reads_filter_table.test",
+        "test/sql/stats/null_first_bounds_unrelated_commits.test"
       ]
     },
     {
@@ -434,6 +437,7 @@
         "test/sql/partitioning/bucket_pruning.test",
         "test/sql/partitioning/bucket_pruning_type_promotion.test",
         "test/sql/partitioning/data_inlining_disable_hive_partitioning.test",
+        "test/sql/partitioning/disable_hive_partitioning.test",
         "test/sql/partitioning/epoch_timestamptz.test",
         "test/sql/partitioning/epoch_transforms.test",
         "test/sql/partitioning/merge_adjacent_null_partition.test",
@@ -579,13 +583,14 @@
         "test/sql/migration/v20_tag_row_companions_migration.test",
         "test/sql/migration/v20_tag_row_companions_resume.test",
         "test/sql/migration/v20_inlined_visibility_migration.test",
-        "test/sql/migration/v20_inlined_visibility_resume.test",
         "test/sql/migration/v20_inlined_and_lineage_steps_migration.test",
         "test/sql/migration/v20_lineage_columns_migration.test",
         "test/sql/catalog/snapshot_v11_statements.test",
         "test/sql/branches/branch_main_commit_beside_branch_rows.test",
         "test/sql/branches/schema_versions_branch_column.test",
         "test/sql/migration/v20_inlined_visibility_collisions.test",
+        "test/sql/migration/v20_inlined_registry_names.test",
+        "test/sql/migration/v20_inlined_registry_names_commit.test",
         "test/sql/catalog/catalog_tag_row_companions.test",
         "test/sql/alter/create_table_drop_column_same_transaction.test",
         "test/sql/metadata/file_visibility_layout.test",
@@ -602,7 +607,12 @@
         "test/sql/data_inlining/inlining_obstacle_log.test",
         "test/sql/compaction/user_columns_named_like_internal_columns.test",
         "test/sql/data_inlining/data_inlining_transaction_local_field_readd_rejected.test",
-        "test/sql/data_inlining/data_inlining_variant_stats.test"
+        "test/sql/data_inlining/data_inlining_variant_stats.test",
+        "test/sql/deletion_inlining/inlined_delete_ends_without_probe.test",
+        "test/sql/migration/v20_inlined_dropped_table_rows.test",
+        "test/sql/migration/v20_inlined_orphan_deletions.test",
+        "test/sql/migration/v20_inlined_rows_after_first_batch.test",
+        "test/sql/migration/v20_inlined_interrupted_step.test"
       ]
     },
     {
@@ -671,6 +681,12 @@
       "reason": "Expects a commit that is not retried to fail after a concurrent commit, but the REST server checks for conflicts before its first attempt",
       "paths": [
         "test/sql/retry/max_retry_count_zero_conflict.test"
+      ]
+    },
+    {
+      "reason": "Expects concurrent commits to exhaust their retries, but the REST server runs the commits one at a time",
+      "paths": [
+        "test/sql/settings/max_retry_count.test"
       ]
     },
     {

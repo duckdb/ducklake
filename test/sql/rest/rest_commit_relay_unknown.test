@@ -1,0 +1,71 @@
+# name: test/sql/rest/rest_commit_relay_unknown.test
+# description: A server that relays a regular commit answers with an IO error when the other server may have published it
+# group: [rest]
+
+require json
+
+include test/template/rest_setup.test_template
+
+# the lake of the relay is a client of the first server
+statement ok relay_db:relay_con
+ATTACH 'ducklake:rest:{rest_server}' AS relay
+
+statement ok relay_db:relay_con
+SET VARIABLE relay_uri = (SELECT listen_uri FROM ducklake_rest_serve('relay'))
+
+set variable relay_server <variable:relay_con:relay_uri>
+
+statement ok rest_db:rest_server_con
+CREATE TABLE rest_lake.t(i INTEGER)
+
+statement ok
+SET VARIABLE table_id = (SELECT (j->>'$.table_id')::BIGINT FROM (SELECT unnest(from_json(response->'$.catalog.tables', '["JSON"]')) AS j FROM ducklake_rest_request('{rest_server}', 'GET', '/v1/snapshots/latest?include_catalog=true', '')) WHERE j->>'$.table_name' = 't')
+
+statement ok
+COPY (SELECT 42::INTEGER AS i) TO '{TEST_DIR}/{BASE_TEST_NAME}_file.parquet' (FORMAT PARQUET, FIELD_IDS {i: 1})
+
+statement ok
+SET VARIABLE body = (SELECT json_object('requests', [json_object('insert_files', json_object('table_id', getvariable('table_id'), 'files', [json_object('path', filename, 'record_count', 1, 'file_size_bytes', size)]))]) FROM read_blob('{TEST_DIR}/{BASE_TEST_NAME}_file.parquet'))
+
+# the commit of the metadata of the first server is durable, the checkpoint that follows it fails
+statement ok rest_db:rest_server_con
+SET auto_checkpoint_skip_wal_threshold = 9999999999
+
+statement ok rest_db:rest_server_con
+SET wal_autocheckpoint_entries = 1
+
+statement ok rest_db:rest_server_con
+PRAGMA debug_checkpoint_abort = 'before_header_non_fatal'
+
+# the first server answers with an IO error, and so does the relay: a client keeps the files of such a commit
+query ITII
+SELECT status, response->>'$.error.type', contains(response->>'$.error.message', 'It is unknown whether the transaction was committed')::INTEGER, contains(response->>'$.error.message', 'Transaction COMMIT succeeded')::INTEGER FROM ducklake_rest_request('{relay_server}', 'POST', '/v1/transactions/commit', getvariable('body'))
+----
+500	IO	1	1
+
+statement ok rest_db:rest_server_con
+PRAGMA debug_checkpoint_abort = 'none'
+
+statement ok rest_db:rest_server_con
+SET wal_autocheckpoint_entries = 0
+
+statement ok relay_db:relay_con
+SELECT * FROM ducklake_rest_stop(regexp_extract(getvariable('relay_uri'), '^(.*://[^/]+)', 1))
+
+statement ok relay_db:relay_con
+DETACH relay
+
+include test/template/rest_teardown.test_template
+
+# the failed checkpoint invalidated the metadata database, it is attached again
+statement ok rest_db:rest_server_con
+DETACH rest_lake
+
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_rest_server.db' AS reopened (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_rest_files')
+
+# the commit is published
+query II rest_db:rest_server_con
+SELECT count(*), sum(i) FROM reopened.t
+----
+1	42

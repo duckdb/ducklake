@@ -1,0 +1,65 @@
+# name: test/sql/rest/rest_commit_unknown.test
+# description: A commit that runs alone keeps the files of its client when the commit of the metadata was sent and failed without a rejection
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+# a group commit that no other commit joins runs like a regular commit
+statement ok
+SET ducklake_rest_group_commit=true
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO dl.t VALUES (42)
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/{BASE_TEST_NAME}_rest_files/**/*.parquet')
+----
+1
+
+# the commit of the metadata skips the WAL for a checkpoint that fails: it is in memory, and not durable
+statement ok rest_db:rest_server_con
+SET auto_checkpoint_skip_wal_threshold = 0
+
+statement ok rest_db:rest_server_con
+SET wal_autocheckpoint_entries = 1
+
+statement ok rest_db:rest_server_con
+PRAGMA debug_checkpoint_abort = 'before_header_non_fatal'
+
+statement error
+COMMIT
+----
+It is unknown whether the transaction was committed
+
+statement ok rest_db:rest_server_con
+PRAGMA debug_checkpoint_abort = 'none'
+
+statement ok rest_db:rest_server_con
+SET wal_autocheckpoint_entries = 0
+
+# the client did not remove its file: the commit can be published
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/{BASE_TEST_NAME}_rest_files/**/*.parquet')
+----
+1
+
+include test/template/rest_teardown.test_template
+
+statement ok
+DETACH dl
+
+# the failed checkpoint invalidated the metadata database, it is attached again
+statement ok rest_db:rest_server_con
+DETACH rest_lake
+
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}_rest_server.db' AS reopened (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_rest_files')

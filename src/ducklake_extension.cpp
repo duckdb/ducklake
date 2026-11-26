@@ -52,6 +52,17 @@ static void LoadInternal(ExtensionLoader &loader) {
 	    "[EXPERIMENTAL] Write Iceberg V3 deletion vectors (puffin) instead of positional delete files (parquet)",
 	    LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);
 
+	config.AddExtensionOption("ducklake_rest_group_commit",
+	                          "Commit through the group commit of a DuckLake REST server, where transactions that only "
+	                          "insert data can share a snapshot with other transactions. SET changes it for all "
+	                          "connections of the database, SET SESSION for the connection only",
+	                          LogicalType::BOOLEAN, Value::BOOLEAN(false), nullptr, SetScope::GLOBAL);
+
+	config.AddExtensionOption("ducklake_debug_rest_commit_hold",
+	                          "DEBUG SETTING: the number of commits that have to wait in the queue of a DuckLake REST "
+	                          "server before they run, for tests that need their commits to wait together",
+	                          LogicalType::UBIGINT, Value::UBIGINT(0), nullptr, SetScope::GLOBAL);
+
 	DuckLakeRESTServeFunction rest_serve;
 	loader.RegisterFunction(rest_serve);
 

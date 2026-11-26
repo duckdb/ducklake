@@ -292,6 +292,8 @@ public:
 	//! Whether the client can skip the snapshot fetch and let the server read it.
 	virtual bool CanSkipSnapshotFetch(const TransactionChangeInformation &changes) const;
 	virtual bool IsRetryableCommitError(const string &message) const;
+	//! Whether the catalog rejected the commit with the error: it rolled back, so the commit is not in it
+	bool IsCatalogRejection(const string &message) const;
 	//! The error of a failed commit without the text of the failed query that it repeats
 	virtual string CommitErrorWithoutQuery(const string &message) const {
 		return message;
@@ -394,6 +396,8 @@ public:
 	//! The versioned catalog kinds, the companion of a kind is ducklake_<kind>_visibility
 	static const vector<RowVisibilityKind> &RowVisibilityKinds();
 	static const RowVisibilityKind &RowKind(const string &kind);
+	//! Refuses a registered payload whose name carries another table, the readers take the table from the name
+	static void VerifyInlinedTableName(const Identifier &inlined_table_name, TableIndex table_id);
 	//! The kind of an inlined data table, whose shared companion names the versions by table id and row id
 	static RowVisibilityKind InlinedRowKind(const Identifier &inlined_table_name,
 	                                        const DuckLakeInlinedColNames &col_names);
@@ -777,6 +781,9 @@ public:
 	//! Throws when the newest expired snapshot a time travel by timestamp could see is its resolved snapshot or newer
 	void CheckSnapshotAfterExpiredGap(const DuckLakeSnapshot &snapshot, const Value &timestamp,
 	                                  idx_t newest_snapshot_id, const set<idx_t> &expired_in_transaction);
+	//! The tables whose values the snapshots after `after_snapshot` up to `last_snapshot` may have removed
+	//! Returns false if their changes cannot all be read
+	bool GetTablesWithRemovedValues(idx_t after_snapshot, idx_t last_snapshot, set<TableIndex> &result);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot(BoundAtClause &at_clause, SnapshotBound bound,
 	                                                 idx_t newest_snapshot_id);
 
@@ -973,33 +980,25 @@ public:
 		bool present = false;
 		bool has_branch_column = false;
 		bool has_end_column = false;
-		//! Whether the payload stands renamed for its rebuild, with the user columns the rebuilt table gets
-		bool has_old_table = false;
-		string column_defs;
-		vector<string> user_columns;
-		//! Whether the rebuilt table waits under its new name for its rename after the folds
-		bool has_new_table = false;
+		//! Whether a user column of the previous layout carries the name of the branch column
+		bool has_user_branch_column = false;
+		//! Whether the step removes the payload: the previous shape, or a registration without its table
+		bool Incomplete() const;
 	};
 	struct V2_0InlinedDeletionTable {
 		Identifier table;
 		bool has_branch_column = false;
 	};
-	//! The shared companion of the inlined rows, probed so an interrupted step resumes
+	//! The shared companion of the inlined rows and the tables the step removes
 	struct V2_0InlinedCompanion {
 		vector<V2_0InlinedPayload> payloads;
 		vector<V2_0InlinedDeletionTable> deletion_tables;
-		//! Whether the companion still stands under its pending name, the rename into place closes the step
-		bool has_pending = false;
 		bool has_companion = false;
 		bool Incomplete() const;
 	};
 	V2_0InlinedCompanion ProbeV2_0InlinedCompanion();
-	//! Refuses a payload whose end column is gone while no companion holds its ends and it holds rows
-	void VerifyV2_0InlinedCompanion(const V2_0InlinedCompanion &inlined);
-	//! The renames of the payloads to rebuild, batches that commit before the rebuild reads them
-	static vector<string> V2_0InlinedRenameSql(const V2_0InlinedCompanion &inlined);
-	//! The batches of the step, one metadata transaction each, the rename into place closes the last one
-	vector<string> V2_0InlinedCompanionSql(const V2_0InlinedCompanion &inlined) const;
+	//! The step: the empty payloads and deletion tables of the previous shape go, the companion comes last
+	string V2_0InlinedCompanionSql(const V2_0InlinedCompanion &inlined) const;
 	//! The branch columns of the schema versions and the tagged snapshots, probed so an interrupted step resumes
 	struct V2_0LineageColumns {
 		bool has_schema_versions_branch = false;
@@ -1018,6 +1017,16 @@ public:
 		V2_0InlinedCompanion inlined;
 	};
 	V2_0Layout ProbeV2_0Layout();
+	//! Refuses the names and columns the inlined step cannot take and the inlined rows it does not convert
+	void VerifyV2_0InlinedCompanion(const V2_0Layout &layout);
+	//! The refusal of inlined rows: a flush reaches those of a live table, an expiry those of a dropped one
+	string V2_0InlinedRowsMessage(const string &holder, idx_t table_id);
+	//! Whether a deletion table holds a deletion of a data file the catalog still lists
+	bool HasListedFileDeletions(const string &deletion_table);
+	//! The renames that move the tables of the first batch back, while nothing else of the migration ran
+	string V2_0RenameUndoSql(const V2_0Layout &layout);
+	//! Verifies the inlined step, a refused catalog gets its first batch moved back and attaches at its version
+	void VerifyV2_0InlinedStep(const V2_0Layout &layout, const string &from_version);
 	//! The first step of 2.0 the catalog lacks, empty for a complete layout
 	string MissingV2_0Step();
 	bool HasMetadataColumn(const string &table, const string &column);
@@ -1105,9 +1114,12 @@ public:
 	static string GetPathForSchema(SchemaIndex schema_id, const vector<DuckLakeSchemaInfo> &new_schemas_result,
 	                               const std::function<unique_ptr<QueryResult>(string)> &query_executor,
 	                               const string &base_data_path, const string &separator);
-	static string GetPathForTable(TableIndex table_id, const vector<DuckLakeTableInfo> &new_tables,
+	//! Adds the paths of the tables to `paths`: from the new tables, then `known_path`, then one metadata query
+	static void GetPathsForTables(const set<TableIndex> &table_ids, const vector<DuckLakeTableInfo> &new_tables,
+	                              const std::function<string(TableIndex)> &known_path,
 	                              const std::function<unique_ptr<QueryResult>(string)> &query_executor,
-	                              const string &base_data_path, const string &separator);
+	                              const string &base_data_path, const string &separator,
+	                              unordered_map<idx_t, string> &paths);
 
 protected:
 	vector<DuckLakeColumnMappingInfo> GetColumnMappingsWhere(const string &filter);

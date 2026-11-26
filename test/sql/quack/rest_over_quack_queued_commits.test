@@ -1,0 +1,76 @@
+# name: test/sql/quack/rest_over_quack_queued_commits.test
+# description: The queued commits of a REST server in front of a Quack-backed lake need no retries
+# group: [quack]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
+
+require quack
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS direct (DATA_PATH '{TEST_DIR}/rest_over_quack_queued_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 1000)
+
+statement ok
+SET VARIABLE rest_uri = (SELECT listen_uri FROM ducklake_rest_serve('direct'))
+
+statement ok
+CREATE TABLE direct.t(i INTEGER, w INTEGER)
+
+# half of the clients inline their rows, the other half writes files
+loop i 0 4
+
+statement ok
+ATTACH 'ducklake:rest:' || getvariable('rest_uri') AS dl{i} (DATA_INLINING_ROW_LIMIT 1000)
+
+endloop
+
+loop i 4 8
+
+statement ok
+ATTACH 'ducklake:rest:' || getvariable('rest_uri') AS dl{i} (DATA_INLINING_ROW_LIMIT 0)
+
+endloop
+
+statement ok
+SET ducklake_max_retry_count=0
+
+# the commits of a round wait together and run one after another, all from the snapshot before the round
+statement ok
+SET ducklake_debug_rest_commit_hold=8
+
+concurrentloop i 0 8
+
+loop j 0 10
+
+statement ok
+INSERT INTO dl{i}.t VALUES ({j}, {i})
+
+endloop
+
+endloop
+
+statement ok
+SET ducklake_debug_rest_commit_hold=0
+
+query III
+SELECT count(*), count(DISTINCT (i, w)), sum(i) FROM direct.t
+----
+80	80	360
+
+query III
+SELECT count(*), count(DISTINCT (i, w)), sum(i) FROM dl0.t
+----
+80	80	360
+
+loop i 0 8
+
+statement ok
+DETACH dl{i}
+
+endloop
+
+statement ok
+SELECT * FROM ducklake_rest_stop(regexp_extract(getvariable('rest_uri'), '^(.*://[^/]+)', 1))

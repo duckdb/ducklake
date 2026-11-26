@@ -440,6 +440,51 @@ DuckLakeSnapshotCommit DuckLakeRESTSerializer::Read(RESTJsonIn in) {
 	return result;
 }
 
+JSONMutableValue DuckLakeRESTSerializer::Write(JSONWriter &writer, const RESTCommitTransactionRequest &value) {
+	auto result = writer.CreateObject();
+	RESTWriteOptional<RESTObjectCodec<DuckLakeSnapshot>>(writer, result, "snapshot", value.snapshot,
+	                                                     !RESTIsNull(value.snapshot));
+	RESTWriteOptional<RESTUInt64Codec>(writer, result, "snapshot_id", value.snapshot_id,
+	                                   !RESTIsNull(value.snapshot_id));
+	RESTWriteOptional<RESTObjectCodec<DuckLakeSnapshotCommit>>(writer, result, "commit_info", value.commit_info,
+	                                                           !RESTIsNull(value.commit_info));
+	RESTWriteOptional<RESTObjectCodec<RESTRetryConfig>>(writer, result, "retry", value.retry, !RESTIsNull(value.retry));
+	result.Add("requests", RESTWriteValue<RESTListCodec<RESTCommitRequestCodec>>(writer, value.requests));
+	return result;
+}
+
+template <>
+RESTCommitTransactionRequest DuckLakeRESTSerializer::Read(RESTJsonIn in) {
+	RESTExpectObject(in, "CommitTransactionRequest");
+	RESTCommitTransactionRequest result;
+	RESTReadOptional<RESTObjectCodec<DuckLakeSnapshot>>(in, "snapshot", result.snapshot);
+	RESTReadOptional<RESTUInt64Codec>(in, "snapshot_id", result.snapshot_id);
+	RESTReadOptional<RESTObjectCodec<DuckLakeSnapshotCommit>>(in, "commit_info", result.commit_info);
+	RESTReadOptional<RESTObjectCodec<RESTRetryConfig>>(in, "retry", result.retry);
+	RESTReadOptional<RESTListCodec<RESTCommitRequestCodec>>(in, "requests", result.requests);
+	return result;
+}
+
+JSONMutableValue DuckLakeRESTSerializer::Write(JSONWriter &writer, const RESTCommitTransactionResponse &value) {
+	auto result = writer.CreateObject();
+	RESTWriteOptional<RESTObjectCodec<DuckLakeSnapshot>>(writer, result, "snapshot", value.snapshot,
+	                                                     !RESTIsNull(value.snapshot));
+	result.Add("entry_ids", RESTWriteValue<RESTListCodec<RESTObjectCodec<RESTCreatedEntry>>>(writer, value.entry_ids));
+	result.Add("table_options",
+	           RESTWriteValue<RESTListCodec<RESTObjectCodec<RESTOptionSetting>>>(writer, value.table_options));
+	return result;
+}
+
+template <>
+RESTCommitTransactionResponse DuckLakeRESTSerializer::Read(RESTJsonIn in) {
+	RESTExpectObject(in, "CommitTransactionResponse");
+	RESTCommitTransactionResponse result;
+	RESTReadOptional<RESTObjectCodec<DuckLakeSnapshot>>(in, "snapshot", result.snapshot);
+	RESTReadOptional<RESTListCodec<RESTObjectCodec<RESTCreatedEntry>>>(in, "entry_ids", result.entry_ids);
+	RESTReadOptional<RESTListCodec<RESTObjectCodec<RESTOptionSetting>>>(in, "table_options", result.table_options);
+	return result;
+}
+
 JSONMutableValue DuckLakeRESTSerializer::Write(JSONWriter &writer, const RESTCompactionResult &value) {
 	auto result = writer.CreateObject();
 	result.Add("schema_name", RESTWriteValue<RESTStringCodec>(writer, value.schema_name));
@@ -1969,51 +2014,6 @@ RESTCompactResponse DuckLakeRESTSerializer::Read(RESTJsonIn in) {
 	return result;
 }
 
-JSONMutableValue DuckLakeRESTSerializer::Write(JSONWriter &writer, const RESTCommitTransactionRequest &value) {
-	auto result = writer.CreateObject();
-	RESTWriteOptional<RESTObjectCodec<DuckLakeSnapshot>>(writer, result, "snapshot", value.snapshot,
-	                                                     !RESTIsNull(value.snapshot));
-	RESTWriteOptional<RESTUInt64Codec>(writer, result, "snapshot_id", value.snapshot_id,
-	                                   !RESTIsNull(value.snapshot_id));
-	RESTWriteOptional<RESTObjectCodec<DuckLakeSnapshotCommit>>(writer, result, "commit_info", value.commit_info,
-	                                                           !RESTIsNull(value.commit_info));
-	RESTWriteOptional<RESTObjectCodec<RESTRetryConfig>>(writer, result, "retry", value.retry, !RESTIsNull(value.retry));
-	result.Add("requests", RESTWriteValue<RESTListCodec<RESTCommitRequestCodec>>(writer, value.requests));
-	return result;
-}
-
-template <>
-RESTCommitTransactionRequest DuckLakeRESTSerializer::Read(RESTJsonIn in) {
-	RESTExpectObject(in, "CommitTransactionRequest");
-	RESTCommitTransactionRequest result;
-	RESTReadOptional<RESTObjectCodec<DuckLakeSnapshot>>(in, "snapshot", result.snapshot);
-	RESTReadOptional<RESTUInt64Codec>(in, "snapshot_id", result.snapshot_id);
-	RESTReadOptional<RESTObjectCodec<DuckLakeSnapshotCommit>>(in, "commit_info", result.commit_info);
-	RESTReadOptional<RESTObjectCodec<RESTRetryConfig>>(in, "retry", result.retry);
-	RESTReadOptional<RESTListCodec<RESTCommitRequestCodec>>(in, "requests", result.requests);
-	return result;
-}
-
-JSONMutableValue DuckLakeRESTSerializer::Write(JSONWriter &writer, const RESTCommitTransactionResponse &value) {
-	auto result = writer.CreateObject();
-	RESTWriteOptional<RESTObjectCodec<DuckLakeSnapshot>>(writer, result, "snapshot", value.snapshot,
-	                                                     !RESTIsNull(value.snapshot));
-	result.Add("entry_ids", RESTWriteValue<RESTListCodec<RESTObjectCodec<RESTCreatedEntry>>>(writer, value.entry_ids));
-	result.Add("table_options",
-	           RESTWriteValue<RESTListCodec<RESTObjectCodec<RESTOptionSetting>>>(writer, value.table_options));
-	return result;
-}
-
-template <>
-RESTCommitTransactionResponse DuckLakeRESTSerializer::Read(RESTJsonIn in) {
-	RESTExpectObject(in, "CommitTransactionResponse");
-	RESTCommitTransactionResponse result;
-	RESTReadOptional<RESTObjectCodec<DuckLakeSnapshot>>(in, "snapshot", result.snapshot);
-	RESTReadOptional<RESTListCodec<RESTObjectCodec<RESTCreatedEntry>>>(in, "entry_ids", result.entry_ids);
-	RESTReadOptional<RESTListCodec<RESTObjectCodec<RESTOptionSetting>>>(in, "table_options", result.table_options);
-	return result;
-}
-
 JSONMutableValue DuckLakeRESTSerializer::Write(JSONWriter &writer, const RESTCreateSchemaRequest &value) {
 	auto result = writer.CreateObject();
 	result.Add("placeholder_id", RESTWriteValue<RESTInt64Codec>(writer, value.placeholder_id));
@@ -2613,6 +2613,12 @@ static string CommitTransactionEndpoint(DuckLakeRESTRequest &request, const stri
 	return DuckLakeRESTSerializer::ToResponse(request, result);
 }
 
+static string GroupCommitTransactionEndpoint(DuckLakeRESTRequest &request, const string &body) {
+	auto parameters = DuckLakeRESTSerializer::ReadRequest<RESTCommitTransactionRequest>(request, body);
+	auto result = DuckLakeRESTEndpoints::GroupCommitTransaction(request, parameters);
+	return DuckLakeRESTSerializer::ToResponse(request, result);
+}
+
 const unordered_map<string, rest_endpoint_t> &DuckLakeRESTAPI::GetEndpoints() {
 	static const unordered_map<string, rest_endpoint_t> endpoints = {
 	    {"config", ConfigEndpoint},
@@ -2624,6 +2630,7 @@ const unordered_map<string, rest_endpoint_t> &DuckLakeRESTAPI::GetEndpoints() {
 	    {"table_changes", TableChangesEndpoint},
 	    {"compact", CompactEndpoint},
 	    {"commit_transaction", CommitTransactionEndpoint},
+	    {"group_commit_transaction", GroupCommitTransactionEndpoint},
 	};
 	return endpoints;
 }
@@ -2662,6 +2669,7 @@ const vector<RESTRoute> &DuckLakeRESTAPI::GetRoutes() {
 	    {"table_changes", "POST", "/v1/tables/{table_id}/changes", {{"table_id", RESTParameterType::UINT, ""}}},
 	    {"compact", "POST", "/v1/compactions", {}},
 	    {"commit_transaction", "POST", "/v1/transactions/commit", {}},
+	    {"group_commit_transaction", "POST", "/v1/transactions/group-commit", {}},
 	};
 	return routes;
 }
@@ -2710,6 +2718,10 @@ void DuckLakeRESTAPI::ValidateResponse(const string &endpoint, const string &res
 		return;
 	}
 	if (endpoint == "commit_transaction") {
+		DuckLakeRESTSerializer::Read<RESTCommitTransactionResponse>(document.Root());
+		return;
+	}
+	if (endpoint == "group_commit_transaction") {
 		DuckLakeRESTSerializer::Read<RESTCommitTransactionResponse>(document.Root());
 		return;
 	}
@@ -2804,6 +2816,17 @@ RESTCommitTransactionResponse DuckLakeRESTClientAPI::CommitTransaction(const RES
 	vector<RESTBodyPart> parts;
 	DuckLakeRESTSerializer::AddParts(*context, request, parts);
 	auto response = Call("commit_transaction", DuckLakeRESTSerializer::ToJSON(request), false, parts);
+	response.context = context.get();
+	return DuckLakeRESTSerializer::ReadResponse<RESTCommitTransactionResponse>(response);
+}
+
+RESTCommitTransactionResponse
+DuckLakeRESTClientAPI::GroupCommitTransaction(const RESTCommitTransactionRequest &request) {
+	RESTPathScope paths(GetPathMapper());
+	auto context = GetContext();
+	vector<RESTBodyPart> parts;
+	DuckLakeRESTSerializer::AddParts(*context, request, parts);
+	auto response = Call("group_commit_transaction", DuckLakeRESTSerializer::ToJSON(request), false, parts);
 	response.context = context.get();
 	return DuckLakeRESTSerializer::ReadResponse<RESTCommitTransactionResponse>(response);
 }

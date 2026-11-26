@@ -55,6 +55,10 @@ SELECT COUNT(*) FROM ducklake_snapshots('dl')
 ----
 1
 
+# the migration to 2.0 converts no inlined rows, the flush writes the row to a file
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
 statement ok
 DETACH dl
 
@@ -62,13 +66,17 @@ DETACH dl
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/tags_version_gate_files', AUTOMATIC_MIGRATION TRUE)
 
+# the tag names the head, the flush added a snapshot where rows were inlined
+statement ok
+SET VARIABLE head = (SELECT max(snapshot_id) FROM ducklake_snapshots('dl'))
+
 statement ok
 CALL ducklake_create_tag('dl', 'v1')
 
 query II
-SELECT tag_name, snapshot_id FROM ducklake_tags('dl')
+SELECT tag_name, snapshot_id = getvariable('head') FROM ducklake_tags('dl')
 ----
-v1	1
+v1	true
 
 statement ok
 DETACH dl
@@ -93,9 +101,9 @@ CALL ducklake_set_tag_expiry('dl', 'v1', NULL)
 attached in read-only mode
 
 query II
-SELECT tag_name, snapshot_id FROM ducklake_tags('dl')
+SELECT tag_name, snapshot_id = getvariable('head') FROM ducklake_tags('dl')
 ----
-v1	1
+v1	true
 
 statement ok
 DETACH dl

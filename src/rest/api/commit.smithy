@@ -16,29 +16,46 @@ use ducklake.rest.codegen#cppType
 /// based on the latest snapshot.
 @http(method: "POST", uri: "/v1/transactions/commit")
 operation CommitTransaction {
-    input := with [SnapshotReference] {
-        /// The commit information of the snapshot.
-        commit_info: CommitInfo
+    input: CommitTransactionRequest
+    output: CommitTransactionResponse
+}
 
-        /// How the server retries the commit on conflicts.
-        retry: RetryConfig
+/// Commits a set of changes atomically, in a snapshot that it can share with other transactions.
+///
+/// The request and the response are those of `commit_transaction`. The server can publish the transactions that wait
+/// for their commit at the same time as one snapshot, if they only insert rows or files: their responses then return
+/// that same snapshot, which has the commit information of one of them. A transaction with other changes is committed
+/// as `commit_transaction` commits it.
+@http(method: "POST", uri: "/v1/transactions/group-commit")
+operation GroupCommitTransaction {
+    input: CommitTransactionRequest
+    output: CommitTransactionResponse
+}
 
-        /// The changes, applied in order, e.g. `[{"create_table": {...}}, {"insert_rows": {...}}]`.
-        requests: CommitRequestList = []
-    }
+/// The changes of a transaction to commit.
+structure CommitTransactionRequest with [SnapshotReference] {
+    /// The commit information of the snapshot.
+    commit_info: CommitInfo
 
-    output := {
-        /// The committed snapshot, absent if the requests did not create a snapshot (e.g. if they only set options).
-        /// If other transactions created snapshots since the snapshot of the request, its id is more than one above the
-        /// id of the snapshot of the request.
-        snapshot: Snapshot
+    /// How the server retries the commit on conflicts.
+    retry: RetryConfig
 
-        /// The entries the transaction created, with the ids the commit gave them.
-        entry_ids: CreatedEntryList = []
+    /// The changes, applied in order, e.g. `[{"create_table": {...}}, {"insert_rows": {...}}]`.
+    requests: CommitRequestList = []
+}
 
-        /// The options of the tables the transaction created or altered, with the ids the commit gave the tables.
-        table_options: OptionSettingList = []
-    }
+/// The result of a commit.
+structure CommitTransactionResponse {
+    /// The committed snapshot, absent if the requests did not create a snapshot (e.g. if they only set options).
+    /// If other transactions created snapshots since the snapshot of the request, its id is more than one above the
+    /// id of the snapshot of the request.
+    snapshot: Snapshot
+
+    /// The entries the transaction created, with the ids the commit gave them.
+    entry_ids: CreatedEntryList = []
+
+    /// The options of the tables the transaction created or altered, with the ids the commit gave the tables.
+    table_options: OptionSettingList = []
 }
 
 /// Creates a schema.
