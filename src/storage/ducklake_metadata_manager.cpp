@@ -8578,8 +8578,13 @@ string DuckLakeMetadataManager::WriteCompactions(const vector<DuckLakeCompactedF
 //! Selects the files that the filter matches or whose range no remaining snapshot lies in
 static string UnusedFilesQuery(const string &file_source, const string &file_id_column, const string &filter,
                                const string &visibility_guard, const string &snapshot_filter) {
-	string guard = visibility_guard.empty() ? string() : visibility_guard + " AND ";
-	// only the first remaining snapshot of main at or after begin_snapshot matters, the guard keeps what branches read
+	// only the first remaining snapshot of main at or after begin_snapshot matters
+	string unused =
+	    filter + "(f.end_snapshot IS NOT NULL AND (s.snapshot_id IS NULL OR s.snapshot_id >= f.end_snapshot))";
+	if (!visibility_guard.empty()) {
+		// the guard keeps what branches read, over every arm of the filter
+		unused = visibility_guard + " AND (" + unused + ")";
+	}
 	string snapshots = "{METADATA_CATALOG}.ducklake_snapshot";
 	if (!snapshot_filter.empty()) {
 		snapshots = "(SELECT snapshot_id FROM {METADATA_CATALOG}.ducklake_snapshot WHERE TRUE" + snapshot_filter + ")";
@@ -8588,8 +8593,8 @@ static string UnusedFilesQuery(const string &file_source, const string &file_id_
 SELECT f.%s, f.table_id, f.path, f.path_is_relative
 FROM %s f
 ASOF LEFT JOIN %s s ON f.begin_snapshot <= s.snapshot_id
-WHERE %s%s(f.end_snapshot IS NOT NULL AND (s.snapshot_id IS NULL OR s.snapshot_id >= f.end_snapshot));)",
-	                          file_id_column, file_source, snapshots, guard, filter);
+WHERE %s;)",
+	                          file_id_column, file_source, snapshots, unused);
 }
 
 string DuckLakeMetadataManager::FileVisibilityGuard(const string &visibility_table, const string &file_id_column,

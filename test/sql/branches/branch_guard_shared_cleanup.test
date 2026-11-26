@@ -1,0 +1,185 @@
+# name: test/sql/branches/branch_guard_shared_cleanup.test
+# description: the guard keeps the files a branch references when a dropped table or a cleaned file shares the cleanup
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+CREATE TABLE dl.u (i INTEGER)
+
+statement ok
+INSERT INTO dl.u VALUES (1)
+
+statement ok
+DROP TABLE dl.u
+
+# file 2 of t is born after the fork of the branch and ended by a full delete
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+# the rewrite ends file 4 and its delete file 5
+statement ok
+INSERT INTO dl.t VALUES (3), (4), (5)
+
+statement ok
+DELETE FROM dl.t WHERE i = 3
+
+statement ok
+CALL ducklake_rewrite_data_files('dl', 't', delete_threshold => 0)
+
+statement ok
+CREATE TABLE dl.v AS SELECT 1 AS i
+
+statement ok
+DELETE FROM dl.v
+
+query III
+SELECT data_file_id, snapshot_id, is_delete::BOOLEAN FROM meta.ducklake_file_visibility
+    ORDER BY data_file_id, snapshot_id
+----
+0	2	false
+1	4	false
+1	5	true
+2	6	false
+2	7	true
+4	8	false
+4	10	true
+6	10	false
+7	11	false
+7	12	true
+
+query III
+SELECT delete_file_id, snapshot_id, is_delete::BOOLEAN FROM meta.ducklake_delete_file_visibility
+    ORDER BY delete_file_id, snapshot_id
+----
+5	9	false
+5	10	true
+
+# the branch forks at the first insert, its own snapshot references file 2, file 4 and delete file 5 with events
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id,
+    branch_id) SELECT 100, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot
+    WHERE snapshot_id = 12 AND branch_id = 0
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (100, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_file_visibility SELECT 1, table_id, data_file_id, 100, FALSE
+    FROM meta.ducklake_file_visibility WHERE branch_id = 0 AND is_delete = FALSE AND data_file_id IN (2, 4)
+
+statement ok
+INSERT INTO meta.ducklake_delete_file_visibility SELECT 1, table_id, delete_file_id, 100, FALSE
+    FROM meta.ducklake_delete_file_visibility WHERE branch_id = 0 AND is_delete = FALSE AND delete_file_id = 5
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 0)
+
+# with nothing else to clean the guard keeps file 2, whose range of main is expired
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [6], dry_run => false)
+
+query I
+SELECT COUNT(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_data_file WHERE data_file_id = 2
+----
+1
+
+# the dropped table u becomes unreachable in the same cleanup, its file goes and file 2 stays
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [3, 4, 5], dry_run => false)
+
+query I
+SELECT COUNT(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_data_file WHERE data_file_id IN (1, 2)
+----
+1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_file_visibility WHERE branch_id = 1 AND data_file_id = 2
+----
+1
+
+# the file of v is cleaned in the same pass as delete file 5 loses its range of main, the delete file stays
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [9, 11], dry_run => false)
+
+query I
+SELECT COUNT(*) FROM ducklake_cleanup_old_files('dl', cleanup_all => true)
+----
+1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_data_file WHERE data_file_id = 7
+----
+0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file WHERE delete_file_id = 5
+----
+1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_delete_file_visibility WHERE branch_id = 1 AND delete_file_id = 5
+----
+1
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+4
+5
+
+statement ok
+DETACH dl
+
+# the branch reads the kept files through its events, delete file 5 removes the row 3 of file 4
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    BRANCH 'dev')
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+4
+5
+
+statement ok
+DETACH dl
