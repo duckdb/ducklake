@@ -567,7 +567,8 @@ public:
 	                                        bool file_events, const DuckLakeBranchChain &chain,
 	                                        bool require_exact = false, bool exclude_new_files = false);
 	static string GetNetInlinedRowCountSql(const Identifier &inlined_table_name,
-	                                       const DuckLakeInlinedColNames &col_names, bool row_visibility);
+	                                       const DuckLakeInlinedColNames &col_names, bool row_visibility,
+	                                       const DuckLakeBranchChain &chain);
 	//! The rows that are stored, deleted ones included, and the rows that are live
 	static string GetInlinedRowCountsSql(const Identifier &inlined_table_name, const DuckLakeInlinedColNames &col_names,
 	                                     bool row_visibility);

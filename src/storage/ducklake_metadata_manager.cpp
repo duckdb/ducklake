@@ -2495,8 +2495,19 @@ optional_idx DuckLakeMetadataManager::GetNetDataFileRowCountForStats(TableIndex 
 }
 
 string DuckLakeMetadataManager::GetNetInlinedRowCountSql(const Identifier &inlined_table_name,
-                                                         const DuckLakeInlinedColNames &col_names,
-                                                         bool row_visibility) {
+                                                         const DuckLakeInlinedColNames &col_names, bool row_visibility,
+                                                         const DuckLakeBranchChain &chain) {
+	if (chain.OnBranch()) {
+		// the versions born in the view of the chain that no end of the view closes
+		return StringUtil::Format(
+		    R"(
+SELECT COUNT(*)
+FROM {METADATA_CATALOG}.%s inlined_data
+WHERE %s;
+)",
+		    inlined_table_name,
+		    RowVisibility(chain, "inlined_data", InlinedRowKind(inlined_table_name, col_names), "{SNAPSHOT_ID}"));
+	}
 	return ReadInlinedDataAggregatesSql(inlined_table_name, "COUNT(*)", col_names, row_visibility);
 }
 
@@ -2520,8 +2531,9 @@ optional_idx DuckLakeMetadataManager::GetNetRowCount(DuckLakeTableEntry &table, 
 }
 
 idx_t DuckLakeMetadataManager::GetNetInlinedRowCount(const Identifier &inlined_table_name, DuckLakeSnapshot snapshot) {
+	auto &catalog = transaction.GetCatalog();
 	auto result = Query(snapshot, GetNetInlinedRowCountSql(inlined_table_name, InlinedColNames(),
-	                                                       transaction.GetCatalog().SupportsRowVisibility()));
+	                                                       catalog.SupportsRowVisibility(), catalog.AttachedChain()));
 	CheckInlinedDataReadError(*result, inlined_table_name);
 	for (auto &row : *result) {
 		return row.GetValue<idx_t>(0);
@@ -4383,13 +4395,13 @@ WITH inlined_dels AS (
 	       LIST(STRUCT_PACK(row_id := row_id, snapshot_id := begin_snapshot)) as deletions,
 	       MIN(begin_snapshot) as min_snapshot
 	FROM {METADATA_CATALOG}.%s
-	WHERE %s AND begin_snapshot >= %d
+	WHERE begin_snapshot >= %d AND %s
 	GROUP BY file_id
 ),
 main_results AS (
 )",
-		                           inlined_table_name, InlinedDeletionView("", "{SNAPSHOT_ID}"),
-		                           start_snapshot.snapshot_id);
+		                           inlined_table_name, start_snapshot.snapshot_id,
+		                           InlinedDeletionView("", "{SNAPSHOT_ID}"));
 	} else {
 		query = "WITH main_results AS (\n";
 	}
@@ -4620,14 +4632,19 @@ FROM main_results
 	for (auto &entry : deleted_files) {
 		deleted_file_ids.emplace_back(entry.first);
 	}
+	// on 2.0 only the deletion rows of the lineage apply
+	string lineage_filter;
+	if (transaction.GetCatalog().SupportsRowVisibility()) {
+		lineage_filter = InlinedDeletionView("", "{SNAPSHOT_ID}") + " AND ";
+	}
 	auto earlier_deletions =
 	    Query(end_snapshot, StringUtil::Format(R"(
 SELECT file_id, row_id, begin_snapshot
 FROM {METADATA_CATALOG}.%s
-WHERE %s AND begin_snapshot < %d AND file_id IN (%s)
+WHERE %sbegin_snapshot < %d AND file_id IN (%s)
 )",
-	                                           inlined_table_name, InlinedDeletionView("", "{SNAPSHOT_ID}"),
-	                                           start_snapshot.snapshot_id, GenerateIDList(deleted_file_ids)));
+	                                           inlined_table_name, lineage_filter, start_snapshot.snapshot_id,
+	                                           GenerateIDList(deleted_file_ids)));
 	earlier_deletions->ThrowIfError("Failed to get inlined deletions of deleted data files from DuckLake: ");
 	for (auto &row : *earlier_deletions) {
 		auto &entry = deleted_files.at(row.GetValue<idx_t>(0)).get();
@@ -6243,8 +6260,8 @@ map<idx_t, set<idx_t>> DuckLakeMetadataManager::ReadInlinedFileDeletions(TableIn
 	if (inlined_table_name.empty()) {
 		return result;
 	}
-	auto query = StringUtil::Format("SELECT file_id, row_id FROM {METADATA_CATALOG}.%s del WHERE %s",
-	                                inlined_table_name, InlinedDeletionView("del", "{SNAPSHOT_ID}"));
+	auto query = StringUtil::Format("SELECT file_id, row_id FROM {METADATA_CATALOG}.%s WHERE %s", inlined_table_name,
+	                                InlinedDeletionView("", "{SNAPSHOT_ID}"));
 	auto query_result = Query(snapshot, query);
 	query_result->ThrowIfError("Failed to read inlined file deletions from DuckLake: ");
 	for (auto &row : *query_result) {
@@ -6262,8 +6279,8 @@ unordered_set<idx_t> DuckLakeMetadataManager::GetFileIdsWithInlinedDeletions(Tab
 	if (inlined_table_name.empty()) {
 		return result;
 	}
-	auto query = StringUtil::Format("SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s del WHERE %s",
-	                                inlined_table_name, InlinedDeletionView("del", "{SNAPSHOT_ID}"));
+	auto query = StringUtil::Format("SELECT DISTINCT file_id FROM {METADATA_CATALOG}.%s WHERE %s", inlined_table_name,
+	                                InlinedDeletionView("", "{SNAPSHOT_ID}"));
 	auto query_result = Query(snapshot, query);
 	query_result->ThrowIfError("Failed to read inlined file deletion IDs from DuckLake: ");
 	for (auto &row : *query_result) {
