@@ -31,6 +31,9 @@ SET VARIABLE q = (
     FROM range(2000) t(i)
 )
 
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage = 'memory')
+
 query I
 SELECT i FROM query(getvariable('q')) ORDER BY i
 ----
@@ -41,3 +44,32 @@ query II
 EXPLAIN ANALYZE SELECT * FROM query(getvariable('q'))
 ----
 analyzed_plan	<REGEX>:.*Total Files Read: 2.*
+
+# A parser that charges each OR link has a default depth budget of 1000.
+query I
+SELECT max(len(regexp_extract_all(query, '(?i)\bOR\b'))) < 1000
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%ducklake_data_file%' AND query LIKE '%col_1_stats%'
+----
+true
+
+statement ok
+CALL disable_logging()
+
+statement ok
+SET VARIABLE q = (
+    SELECT 'SELECT i FROM dl.t WHERE i IN (' || string_agg((2 * i)::VARCHAR, ',') || ') ORDER BY i'
+    FROM range(8000) t(i)
+)
+
+statement ok
+SET GLOBAL max_expression_depth = 19
+
+query I
+SELECT * FROM query(getvariable('q'))
+----
+0
+3998
+
+statement ok
+RESET max_expression_depth

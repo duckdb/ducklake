@@ -578,6 +578,11 @@ string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnaps
 	return PostgresQuery(remote_query);
 }
 
+string PostgresMetadataManager::AnyFilterMatches(const string &predicates) const {
+	// PostgreSQL rewrites IN lists containing column references into a nested OR expression.
+	return "TRUE = ANY (ARRAY[" + predicates + "])";
+}
+
 bool PostgresMetadataManager::MaterializeStatsCTEs() const {
 	// Postgres misplans several inlined stats joins and rescans the stats for every surviving file
 	return true;
