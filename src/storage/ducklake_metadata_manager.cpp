@@ -2810,6 +2810,20 @@ string DuckLakeMetadataManager::GenerateConstantFilterDouble(ExpressionType comp
 	return GenerateConstantFilter(comparison_type, constant, type, referenced_stats, stats_alias);
 }
 
+// Keep the catalog parser's expression depth logarithmic in the number of IN-list terms.
+static void AppendBalancedDisjunction(string &result, const vector<string> &terms, idx_t begin, idx_t end) {
+	result += "(";
+	if (end - begin == 1) {
+		result += terms[begin];
+	} else {
+		const auto middle = begin + (end - begin) / 2;
+		AppendBalancedDisjunction(result, terms, begin, middle);
+		result += " OR ";
+		AppendBalancedDisjunction(result, terms, middle, end);
+	}
+	result += ")";
+}
+
 string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
                                                              unordered_set<string> &referenced_stats,
                                                              const string &stats_alias, bool &complete) {
@@ -2857,7 +2871,7 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 			    !ExpressionFilter::IsSimpleFilterColumnRef(*op_expr.GetChildren()[0])) {
 				return string();
 			}
-			string result;
+			vector<string> terms;
 			for (idx_t i = 1; i < op_expr.GetChildren().size(); i++) {
 				auto &child = *op_expr.GetChildren()[i];
 				if (child.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
@@ -2871,11 +2885,10 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 				if (next_filter.empty()) {
 					return string();
 				}
-				if (!result.empty()) {
-					result += " OR ";
-				}
-				result += "(" + next_filter + ")";
+				terms.push_back(std::move(next_filter));
 			}
+			string result;
+			AppendBalancedDisjunction(result, terms, 0, terms.size());
 			return result;
 		}
 		default:
