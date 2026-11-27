@@ -4843,14 +4843,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	string candidate_files_cte;
 	string data_file_source = DataFiles(table_id) + " data";
 	string delete_file_filter;
-	string file_filter_clause = " AND data.end_snapshot IS NULL";
-	if (transaction.GetCatalog().SupportsBranching()) {
-		// a file a branch event references keeps its identity, inherited files move into the rewrite
-		auto visibility_guard = FileVisibilityGuard("ducklake_file_visibility", "data_file_id", "data", false);
-		if (!visibility_guard.empty()) {
-			file_filter_clause += " AND " + visibility_guard;
-		}
-	}
+	string file_filter_clause = " AND data.end_snapshot IS NULL" + CompactionBranchGuard(type, table_id, snapshot);
 	auto partition_value_filter = StringUtil::Format("\n\tWHERE table_id=%d", table_id.index);
 
 	map<idx_t, set<idx_t>> inlined_deletions;
@@ -8723,16 +8716,21 @@ WHERE %s;)",
 	                          file_id_column, file_source, snapshots, unused);
 }
 
+//! Keeps the rows no branch references through the source, whose alias v carries the branch of the reference
+static string BranchReferenceGuard(const string &source, const string &reference) {
+	return StringUtil::Format("NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch b WHERE b.branch_id <> 0 "
+	                          "AND EXISTS (SELECT 1 FROM %s WHERE v.branch_id = b.branch_id AND %s))",
+	                          source, reference);
+}
+
 string DuckLakeMetadataManager::FileVisibilityGuard(const string &visibility_table, const string &file_id_column,
                                                     const string &alias, bool include_inherited) {
 	if (!HasBranches()) {
 		// the guard starts from the branch table, without branches it keeps nothing
 		return string();
 	}
-	auto guard = StringUtil::Format("NOT EXISTS (SELECT 1 FROM {METADATA_CATALOG}.ducklake_branch b "
-	                                "WHERE b.branch_id <> 0 AND EXISTS (SELECT 1 FROM {METADATA_CATALOG}.%s v "
-	                                "WHERE v.branch_id = b.branch_id AND v.%s = %s.%s))",
-	                                visibility_table, file_id_column, alias, file_id_column);
+	auto guard = BranchReferenceGuard(StringUtil::Format("{METADATA_CATALOG}.%s v", visibility_table),
+	                                  StringUtil::Format("v.%s = %s.%s", file_id_column, alias, file_id_column));
 	if (!include_inherited) {
 		return guard;
 	}
@@ -8747,6 +8745,30 @@ string DuckLakeMetadataManager::FileVisibilityGuard(const string &visibility_tab
 		return guard;
 	}
 	return guard + " AND NOT (" + StringUtil::Join(inherited, " OR ") + ")";
+}
+
+string DuckLakeMetadataManager::CompactionBranchGuard(CompactionType type, TableIndex table_id,
+                                                      DuckLakeSnapshot snapshot) {
+	if (!HasBranches()) {
+		return string();
+	}
+	// a file a branch event references keeps its identity, inherited files move into the rewrite
+	auto guard = " AND " + BranchReferenceGuard("{METADATA_CATALOG}.ducklake_file_visibility v",
+	                                            "v.data_file_id = data.data_file_id");
+	if (type != CompactionType::MERGE_ADJACENT_TABLES) {
+		return guard;
+	}
+	// a merge drops the rows of its sources, so a file the delete files or inlined deletions of a branch name stays
+	guard += " AND " + BranchReferenceGuard("{METADATA_CATALOG}.ducklake_delete_file_visibility v JOIN "
+	                                        "{METADATA_CATALOG}.ducklake_delete_file d ON d.delete_file_id = "
+	                                        "v.delete_file_id",
+	                                        "d.data_file_id = data.data_file_id");
+	auto inlined_table_name = GetInlinedDeletionTableName(table_id, snapshot);
+	if (!inlined_table_name.empty()) {
+		guard += " AND " + BranchReferenceGuard(StringUtil::Format("{METADATA_CATALOG}.%s v", inlined_table_name),
+		                                        "v.file_id = data.data_file_id");
+	}
+	return guard;
 }
 
 vector<DuckLakeSnapshotTagInfo> DuckLakeMetadataManager::GetSnapshotTags(bool with_snapshot_time) {

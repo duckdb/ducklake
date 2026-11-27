@@ -921,6 +921,8 @@ public:
 	//! Keeps the files a branch references through its events or, with the root caps, inherits from main
 	string FileVisibilityGuard(const string &visibility_table, const string &file_id_column, const string &alias = "f",
 	                           bool include_inherited = true);
+	//! Keeps the files a branch references through its events and, in a merge, through its deletions
+	string CompactionBranchGuard(CompactionType type, TableIndex table_id, DuckLakeSnapshot snapshot);
 	//! Whether the catalog already has every metadata table and column of v1.1
 	bool HasV1_1Additions();
 	//! Whether the catalog has the tables of 1.1 under their names in their shape, false once a migration to 2.0 began

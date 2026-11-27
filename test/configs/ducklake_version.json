@@ -239,6 +239,7 @@
         "test/sql/branches/branch_listing_after_main_flush.test",
         "test/sql/branches/branch_macro_rows.test",
         "test/sql/branches/branch_main_commit_beside_branch_rows.test",
+        "test/sql/branches/branch_merge_keeps_deleted_files.test",
         "test/sql/branches/branch_nested_chain.test",
         "test/sql/branches/branch_nested_delete_replacement.test",
         "test/sql/branches/branch_nested_feed_segments.test",
