@@ -9436,6 +9436,15 @@ vector<DuckLakeTableSizeInfo> DuckLakeMetadataManager::GetTableSizes(DuckLakeSna
 	vector<DuckLakeTableSizeInfo> table_sizes;
 	auto row_visibility = transaction.GetCatalog().SupportsRowVisibility();
 	auto &chain = transaction.GetCatalog().AttachedChain();
+	// a branch counts the delete file its scan reads per data file, the chosen one
+	auto delete_files = DeleteFiles();
+	if (chain.OnBranch()) {
+		delete_files = "(" +
+		               ChosenDeleteFiles(chain, DeleteFiles(),
+		                                 "{SNAPSHOT_ID} >= del_src.begin_snapshot AND ({SNAPSHOT_ID} < "
+		                                 "del_src.end_snapshot OR del_src.end_snapshot IS NULL)") +
+		               ")";
+	}
 	auto result =
 	    Query(snapshot, StringUtil::Format(R"(
 SELECT
@@ -9455,7 +9464,7 @@ FROM {METADATA_CATALOG}.ducklake_table tbl, LATERAL (
 ) delete_file_info
 WHERE %s
 )",
-	                                       DataFiles(), DeleteFiles(),
+	                                       DataFiles(), delete_files,
 	                                       LiveRowFilter(row_visibility, chain, "tbl", "table",
 	                                                     "{SNAPSHOT_ID} >= begin_snapshot AND ({SNAPSHOT_ID} < "
 	                                                     "end_snapshot OR end_snapshot IS NULL)")));

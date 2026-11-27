@@ -173,6 +173,32 @@ SELECT delete_file LIKE '%_dev_t_delete.parquet' FROM ducklake_list_files('lake'
 ----
 false
 
+# the table info of a branch counts the chosen delete file per data file, the one of dev, and its size alone
+query IIII
+SELECT table_name, file_count, delete_file_count, delete_file_size_bytes = (SELECT file_size_bytes
+    FROM meta.ducklake_delete_file df WHERE df.table_id = ti.table_id AND df.delete_file_id >= 1000)
+FROM ducklake_table_info('dev') ti ORDER BY table_name
+----
+t	1	1	true
+u	1	1	true
+
+query IIII
+SELECT table_name, file_count, delete_file_count, delete_file_size_bytes = (SELECT file_size_bytes
+    FROM meta.ducklake_delete_file df WHERE df.table_id = ti.table_id AND df.delete_file_id >= 1000)
+FROM ducklake_table_info('feature') ti ORDER BY table_name
+----
+t	1	1	true
+u	1	1	true
+
+# main counts its own file of t, u holds an inlined delete alone
+query IIII
+SELECT table_name, file_count, delete_file_count, delete_file_size_bytes = (SELECT file_size_bytes
+    FROM meta.ducklake_delete_file df WHERE df.table_id = ti.table_id AND df.delete_file_id < 1000)
+FROM ducklake_table_info('lake') ti ORDER BY table_name
+----
+t	1	1	true
+u	1	0	NULL
+
 # feature reads the file of dev up to the cap of the segment of dev, the delete dated 9 is above it
 query I
 SELECT i FROM feature.t ORDER BY i
@@ -260,6 +286,31 @@ query III
 SELECT rowid, snapshot_id, i FROM ducklake_table_deletions('lake', 'main', 'u', 7, 8) ORDER BY rowid
 ----
 0	7	1
+
+# dev and feature count the file of dev for u over the flushed one of main, main counts the flushed one
+query IIII
+SELECT table_name, file_count, delete_file_count, delete_file_size_bytes = (SELECT file_size_bytes
+    FROM meta.ducklake_delete_file df WHERE df.table_id = ti.table_id AND df.delete_file_id >= 1000)
+FROM ducklake_table_info('dev') ti ORDER BY table_name
+----
+t	1	1	true
+u	1	1	true
+
+query IIII
+SELECT table_name, file_count, delete_file_count, delete_file_size_bytes = (SELECT file_size_bytes
+    FROM meta.ducklake_delete_file df WHERE df.table_id = ti.table_id AND df.delete_file_id >= 1000)
+FROM ducklake_table_info('feature') ti ORDER BY table_name
+----
+t	1	1	true
+u	1	1	true
+
+query IIII
+SELECT table_name, file_count, delete_file_count, delete_file_size_bytes = (SELECT file_size_bytes
+    FROM meta.ducklake_delete_file df WHERE df.table_id = ti.table_id AND df.delete_file_id < 1000)
+FROM ducklake_table_info('lake') ti ORDER BY table_name
+----
+t	1	1	true
+u	1	1	true
 
 statement ok
 DETACH feature
