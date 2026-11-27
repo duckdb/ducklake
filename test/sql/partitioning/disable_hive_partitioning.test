@@ -89,11 +89,15 @@ DELETE FROM partitioned_tbl WHERE values = 'thisisastring_0'
 statement ok
 CALL ducklake_rewrite_data_files('ducklake', 'partitioned_tbl', delete_threshold => 0)
 
-query II
-SELECT COUNT(*) FILTER (WHERE df.end_snapshot IS NULL),
-       bool_or(contains(df.path, 'part_key='))
+query I
+SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'partitioned_tbl')
+----
+2
+
+query I
+SELECT bool_or(contains(df.path, 'part_key='))
 FROM ducklake_metadata.ducklake_data_file df
 JOIN ducklake_metadata.ducklake_table t USING (table_id)
 WHERE t.table_name = 'partitioned_tbl'
 ----
-2	false
+false
