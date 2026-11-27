@@ -50,8 +50,8 @@ statement ok
 CALL ducklake_rewrite_data_files('ducklake', 'partitioned_tbl', delete_threshold => 0)
 
 query II
-SELECT COUNT(*) FILTER (WHERE end_snapshot IS NULL), bool_or(contains(path, 'part_key='))
-FROM ducklake_metadata.ducklake_data_file
+SELECT (SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'partitioned_tbl')),
+       (SELECT bool_or(contains(path, 'part_key=')) FROM ducklake_metadata.ducklake_data_file)
 ----
 2	false
 
@@ -75,9 +75,7 @@ statement ok
 CALL ducklake_merge_adjacent_files('ducklake', 'opt_in_hive_tbl')
 
 query II
-SELECT COUNT(*), bool_and(contains(df.path, 'part_key='))
-FROM ducklake_metadata.ducklake_data_file df
-JOIN ducklake_metadata.ducklake_table t USING (table_id)
-WHERE t.table_name = 'opt_in_hive_tbl' AND df.end_snapshot IS NULL
+SELECT COUNT(*), bool_and(contains(data_file, 'part_key='))
+FROM ducklake_list_files('ducklake', 'opt_in_hive_tbl')
 ----
 2	true

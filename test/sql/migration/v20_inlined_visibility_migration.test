@@ -1,0 +1,276 @@
+# name: test/sql/migration/v20_inlined_visibility_migration.test
+# description: the migration to 2.0-dev1 converts no inlined rows, a catalog with inlined rows flushes them first
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 10)
+
+# snapshot 1 creates t, 2 fills it, 3 deletes a row, 4 updates one, 5 adds a column, 6 fills the new payload
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+statement ok
+UPDATE dl.t SET i = 30 WHERE i = 3
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN j INTEGER
+
+statement ok
+INSERT INTO dl.t VALUES (4, 40)
+
+# snapshot 7 creates u, 8 fills it, 9 creates f with a data file, 10 inlines a deletion
+statement ok
+CREATE TABLE dl.u(i INTEGER)
+
+statement ok
+INSERT INTO dl.u VALUES (1), (2)
+
+statement ok
+CREATE TABLE dl.f AS SELECT range AS i FROM range(100)
+
+statement ok
+DELETE FROM dl.f WHERE i = 5
+
+query IIII
+SELECT _ducklake_row_id, _ducklake_begin_snapshot, _ducklake_end_snapshot, i FROM meta.ducklake_inlined_data_1_1
+ORDER BY ALL
+----
+0	2	NULL	1
+1	2	3	2
+2	2	4	3
+2	4	NULL	30
+
+query II
+SELECT row_id, begin_snapshot FROM meta.ducklake_inlined_delete_3
+----
+5	10
+
+statement ok
+DETACH dl
+
+# the migration refuses the inlined rows, the catalog stays at 1.1
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
+----
+inlined data table ducklake_inlined_data_1_1 holds rows and the migration to 2.0 converts no inlined rows. Attach the catalog at its current version, run CALL ducklake_flush_inlined_data('dl') and attach again with the migration
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+1.1
+
+# the payloads flush, the superseded payload of t is dropped, the empty ones stay, the inlined deletion of f is refused on its own
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 't')
+
+statement ok
+CALL ducklake_flush_inlined_data('dl', table_name => 'u')
+
+query I
+SELECT table_name FROM meta.ducklake_inlined_data_tables ORDER BY table_name
+----
+ducklake_inlined_data_1_2
+ducklake_inlined_data_2_3
+ducklake_inlined_data_3_4
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_inlined_data_1_2
+----
+0
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
+----
+inlined deletion table ducklake_inlined_delete_3 holds rows and the migration to 2.0 converts no inlined rows
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_inlined_delete_3
+----
+0
+
+statement ok
+DETACH dl
+
+# the step drops the empty payloads with their registrations and the empty deletion table, then creates the companion
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_inlined_data_tables
+----
+0
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_inlined_data_visibility
+----
+0
+
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND (table_name LIKE 'ducklake_inlined_delete_%' OR table_name LIKE 'ducklake_inlined_data_%_%'
+        AND table_name NOT IN ('ducklake_inlined_data_tables', 'ducklake_inlined_data_visibility'))
+----
+0
+
+query I
+SELECT COUNT(*) FROM duckdb_tables() WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name LIKE '%_visibility_pending'
+----
+0
+
+# the reads come from the flushed files
+query II
+SELECT i, j FROM dl.t ORDER BY i
+----
+1	NULL
+4	40
+30	NULL
+
+query I
+SELECT i FROM dl.t AT (VERSION => 2) ORDER BY i
+----
+1
+2
+3
+
+query I
+SELECT i FROM dl.t AT (VERSION => 3) ORDER BY i
+----
+1
+3
+
+query I
+SELECT i FROM dl.u ORDER BY i
+----
+1
+2
+
+query I
+SELECT COUNT(*) FROM dl.f
+----
+99
+
+# the writers create their payloads in the shape of 2.0, registered under the schema version of the
+# table's last change or of their commit, and end through the companion
+statement ok
+INSERT INTO dl.t VALUES (5, 50)
+
+statement ok
+INSERT INTO dl.u VALUES (3)
+
+statement ok
+DELETE FROM dl.u WHERE i = 3
+
+query IIII
+SELECT _ducklake_row_id, _ducklake_begin_snapshot, _ducklake_branch_id, i FROM meta.ducklake_inlined_data_2_6
+----
+2	15	0	3
+
+query IIIIII
+FROM meta.ducklake_inlined_data_visibility ORDER BY ALL
+----
+2	2	0	15	0	16
+
+query II
+SELECT i, j FROM dl.t ORDER BY i
+----
+1	NULL
+4	40
+5	50
+30	NULL
+
+query I
+SELECT i FROM dl.u ORDER BY i
+----
+1
+2
+
+query I
+SELECT table_name FROM meta.ducklake_inlined_data_tables ORDER BY table_name
+----
+ducklake_inlined_data_1_2
+ducklake_inlined_data_2_6
+
+# an inlined deletion of a file row creates its deletion table in the shape of 2.0, listed after a fresh attach
+statement ok
+DELETE FROM dl.f WHERE i = 6
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_inlined_delete_3')
+ORDER BY column_index
+----
+file_id
+row_id
+begin_snapshot
+branch_id
+
+query I
+SELECT COUNT(*) FROM dl.f
+----
+98
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_inlined_data_1_2')
+ORDER BY column_index
+----
+_ducklake_row_id
+_ducklake_begin_snapshot
+i
+j
+_ducklake_branch_id
+
+query I
+SELECT column_name FROM (SELECT DISTINCT column_index, column_name FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public') AND table_name = 'ducklake_inlined_data_2_6')
+ORDER BY column_index
+----
+_ducklake_row_id
+_ducklake_begin_snapshot
+i
+_ducklake_branch_id

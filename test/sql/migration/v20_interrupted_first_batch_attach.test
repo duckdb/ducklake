@@ -36,12 +36,12 @@ DETACH dl
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta')
 ----
-a migration to 2.0-dev1 moved its tables aside
+a migration to 2.0-dev1 has begun on it
 
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY)
 ----
-a migration to 2.0-dev1 moved its tables aside
+a migration to 2.0-dev1 has begun on it
 
 statement error
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', READ_ONLY, AUTOMATIC_MIGRATION TRUE)

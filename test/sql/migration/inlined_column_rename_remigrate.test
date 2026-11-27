@@ -28,7 +28,7 @@ DETACH dl
 
 # reattaching with automatic migration keeps working
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/remigrate_files', METADATA_CATALOG 'dlmeta', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/remigrate_files', METADATA_CATALOG 'dlmeta', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 query III
 SELECT * FROM dl.t

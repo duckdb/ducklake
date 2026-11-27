@@ -1,0 +1,75 @@
+# name: test/sql/migration/v20_inlined_orphan_deletions.test
+# description: the migration to 2.0-dev1 ignores the inlined deletions of a data file that an expiry removed from the catalog
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t AS SELECT range AS i FROM range(100)
+
+# the deletion of a file row is inlined, the rewrite applies it to a new file, the expiry removes the old file
+statement ok
+DELETE FROM dl.t WHERE i = 5
+
+statement ok
+CALL ducklake_rewrite_data_files('dl', 't', delete_threshold => 0)
+
+statement ok
+CALL ducklake_expire_snapshots('dl', older_than => now())
+
+# the flush skips the deletion, its data file is gone
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_inlined_delete_1
+----
+1
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query I
+SELECT count(*) FROM dl.t
+----
+99
+
+# the step dropped the deletion table, a new inlined deletion creates it in the shape of 2.0
+statement ok
+DELETE FROM dl.t WHERE i = 6
+
+query I
+SELECT count(*) FROM dl.t
+----
+98
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
+
+query III
+SELECT row_id, branch_id, COUNT(*) FROM meta.ducklake_inlined_delete_1 GROUP BY ALL
+----
+5	0	1
