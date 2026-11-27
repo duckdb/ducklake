@@ -110,6 +110,45 @@ vector<string> DuckLakeMetadataManager::SystemColumnNames() const {
 	return GetMetadataProfile().system_column_names;
 }
 
+idx_t DuckLakeMetadataManager::MaxIdentifierLength() const {
+	return GetMetadataProfile().max_identifier_length;
+}
+
+bool DuckLakeMetadataManager::SupportsAppender() const {
+	return GetMetadataProfile().supports_appender;
+}
+
+bool DuckLakeMetadataManager::NewTablesRequireCacheClear() const {
+	return GetMetadataProfile().new_tables_require_cache_clear;
+}
+
+bool DuckLakeMetadataManager::ShowsConcurrentCommits() const {
+	if (CommitsEachStatement()) {
+		return true;
+	}
+	auto &parameters = transaction.GetCatalog().MetadataParameters();
+	for (auto &entry : GetMetadataProfile().shows_concurrent_commits_with_parameters) {
+		auto parameter = parameters.find(entry.first);
+		if (parameter != parameters.end() && StringUtil::CIEquals(parameter->second.ToString(), entry.second)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool DuckLakeMetadataManager::InsertsInlinedRowsAfterBatch(idx_t row_count) const {
+	if (CommitsEachStatement()) {
+		return false;
+	}
+	// the copy of a separate insert costs more round trips than parsing the VALUES text of a few rows
+	auto max_rows_in_batch = GetMetadataProfile().max_inlined_rows_in_batch;
+	return max_rows_in_batch == 0 || row_count > max_rows_in_batch;
+}
+
+string DuckLakeMetadataManager::ConfigOptionLockSql() const {
+	return GetMetadataProfile().config_option_lock_sql;
+}
+
 bool DuckLakeMetadataManager::IsRetryableCommitError(const string &message) const {
 	auto rule = GetMetadataProfile().FindCommitErrorRule(message);
 	return rule && rule->retryable;
@@ -3110,8 +3149,8 @@ string DuckLakeMetadataManager::GenerateCTESectionFromRequirements(const map<idx
 }
 
 bool DuckLakeMetadataManager::MaterializeStatsCTEs() const {
-	// each CTE is referenced by exactly one join, which DuckDB plans well when it inlines the CTE
-	return false;
+	// by default inlined, each CTE is referenced by exactly one join, which DuckDB plans well
+	return GetMetadataProfile().materialize_stats_ctes;
 }
 
 //! Whether equal values can hash to other buckets, as for NaNs and for zeros inside nested values
@@ -4349,7 +4388,8 @@ void DuckLakeMetadataManager::SubstituteSnapshotPlaceholders(const DuckLakeSnaps
 }
 
 string DuckLakeMetadataManager::SnapshotTimeSql() const {
-	return CurrentTimeLiteral();
+	auto &snapshot_time_sql = GetMetadataProfile().snapshot_time_sql;
+	return snapshot_time_sql.empty() ? CurrentTimeLiteral() : snapshot_time_sql;
 }
 
 void DuckLakeMetadataManager::SubstituteTransactionPlaceholders(DuckLakeSnapshot snapshot, string &query) const {
