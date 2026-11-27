@@ -2582,12 +2582,14 @@ string DuckLakeMetadataManager::InlinedTableRegistrations(bool row_visibility, c
 		table_filter = StringUtil::Format("idt.table_id = %d AND ", table_id.GetIndex());
 	}
 	// a registration without any version row is the creation version, which every lineage of the table reads
+	// the version row of main places a registration, a row of a branch sharing its number does not
 	return StringUtil::Format(R"((
 	SELECT idt.table_id, idt.table_name, idt.schema_version
 	FROM {METADATA_CATALOG}.ducklake_inlined_data_tables idt
 	LEFT JOIN (
 		SELECT sv.table_id, sv.schema_version, MAX(CASE WHEN %s THEN 1 ELSE 0 END) AS in_lineage
 		FROM {METADATA_CATALOG}.ducklake_schema_versions sv
+		WHERE sv.branch_id = 0
 		GROUP BY sv.table_id, sv.schema_version
 	) versions ON versions.table_id = idt.table_id AND versions.schema_version = idt.schema_version
 	WHERE %s(versions.table_id IS NULL OR versions.in_lineage = 1)
