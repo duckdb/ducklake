@@ -519,15 +519,147 @@ OpenFileInfo DuckLakeMultiFileList::GetFile(idx_t i) const {
 		// etag / last modified time can be set to dummy values
 		extended_info->options["etag"] = Value("");
 		extended_info->options["last_modified"] = Value::TIMESTAMP(timestamp_t(0));
-		if (!file_entry.delete_file.path.empty()) {
+		if (!file_entry.delete_file.path.empty() || !file_entry.inlined_file_deletions.empty()) {
 			extended_info->options["has_deletes"] = Value::BOOLEAN(true);
 		}
 		if (file_entry.mapping_id.IsValid()) {
 			extended_info->options["mapping_id"] = Value::UBIGINT(file_entry.mapping_id.index);
 		}
+		AddScanMetadata(file_entry, *extended_info);
 	}
 	result.extended_info = std::move(extended_info);
 	return result;
+}
+
+static Value UBigIntListValue(const vector<idx_t> &entries) {
+	vector<Value> values;
+	for (auto entry : entries) {
+		values.push_back(Value::UBIGINT(entry));
+	}
+	return Value::LIST(LogicalType::UBIGINT, std::move(values));
+}
+
+static Value ColumnStatsValue(const unordered_map<idx_t, DuckLakeFileColumnStats> &column_stats) {
+	child_list_t<LogicalType> stats_type;
+	stats_type.emplace_back("field_id", LogicalType::UBIGINT);
+	stats_type.emplace_back("min", LogicalType::VARCHAR);
+	stats_type.emplace_back("max", LogicalType::VARCHAR);
+	stats_type.emplace_back("contains_nan", LogicalType::BOOLEAN);
+
+	vector<idx_t> field_ids;
+	for (auto &entry : column_stats) {
+		field_ids.push_back(entry.first);
+	}
+	std::sort(field_ids.begin(), field_ids.end());
+	vector<Value> values;
+	for (auto field_id : field_ids) {
+		auto &stats = column_stats.at(field_id);
+		child_list_t<Value> children;
+		children.emplace_back("field_id", Value::UBIGINT(field_id));
+		children.emplace_back("min", stats.has_min ? Value(stats.min) : Value(LogicalType::VARCHAR));
+		children.emplace_back("max", stats.has_max ? Value(stats.max) : Value(LogicalType::VARCHAR));
+		children.emplace_back("contains_nan", stats.has_contains_nan ? Value::BOOLEAN(stats.contains_nan)
+		                                                             : Value(LogicalType::BOOLEAN));
+		values.push_back(Value::STRUCT(std::move(children)));
+	}
+	return Value::LIST(LogicalType::STRUCT(std::move(stats_type)), std::move(values));
+}
+
+void DuckLakeMultiFileList::AddScanMetadata(const DuckLakeFileListEntry &file_entry,
+                                            ExtendedOpenFileInfo &extended_info) const {
+	auto &options = extended_info.options;
+	// the options that change which rows of the file are visible
+	vector<Value> required_options;
+	auto &delete_file = file_entry.delete_file;
+	if (!delete_file.path.empty()) {
+		options["delete_file"] = Value(delete_file.path);
+		options["delete_file_format"] = Value(DeleteFileFormatToString(delete_file.format));
+		options["delete_file_size"] = Value::UBIGINT(delete_file.file_size_bytes);
+		if (delete_file.footer_size.IsValid()) {
+			options["delete_file_footer_size"] = Value::UBIGINT(delete_file.footer_size.GetIndex());
+		}
+		if (!delete_file.encryption_key.empty()) {
+			options["delete_file_encryption_key"] = Value::BLOB_RAW(delete_file.encryption_key);
+		}
+		auto delete_snapshot_filter = GetDeleteSnapshotFilter(file_entry);
+		if (delete_snapshot_filter.IsValid()) {
+			options["delete_snapshot_filter"] = Value::UBIGINT(delete_snapshot_filter.GetIndex());
+		}
+		required_options.emplace_back("delete_file");
+	}
+	if (!file_entry.inlined_file_deletions.empty()) {
+		vector<idx_t> deleted_rows(file_entry.inlined_file_deletions.begin(), file_entry.inlined_file_deletions.end());
+		options["inlined_file_deletions"] = UBigIntListValue(deleted_rows);
+		required_options.emplace_back("inlined_file_deletions");
+	}
+	if (file_entry.snapshot_filter_max.IsValid()) {
+		options["snapshot_filter_max"] = Value::UBIGINT(file_entry.snapshot_filter_max.GetIndex());
+		required_options.emplace_back("snapshot_filter_max");
+	}
+	if (file_entry.snapshot_filter_min.IsValid()) {
+		options["snapshot_filter_min"] = Value::UBIGINT(file_entry.snapshot_filter_min.GetIndex());
+		required_options.emplace_back("snapshot_filter_min");
+	}
+	if (!file_entry.snapshot_filter_excluded.empty()) {
+		options["snapshot_filter_excluded"] = UBigIntListValue(file_entry.snapshot_filter_excluded);
+		required_options.emplace_back("snapshot_filter_excluded");
+	}
+	if (file_entry.mapping_id.IsValid()) {
+		options["name_map"] = GetNameMap(file_entry.mapping_id);
+		required_options.emplace_back("mapping_id");
+	}
+	options["required_options"] = Value::LIST(LogicalType::VARCHAR, std::move(required_options));
+	if (!file_entry.column_min_max.empty()) {
+		// only skips files, so a reader does not have to use it
+		options["column_stats"] = ColumnStatsValue(file_entry.column_min_max);
+	}
+}
+
+Value DuckLakeMultiFileList::GetNameMap(MappingIndex mapping_id) const {
+	lock_guard<mutex> l(name_map_lock);
+	auto entry = name_maps.find(mapping_id.index);
+	if (entry != name_maps.end()) {
+		return entry->second;
+	}
+	child_list_t<LogicalType> column_type;
+	column_type.emplace_back("column_id", LogicalType::UBIGINT);
+	column_type.emplace_back("source_name", LogicalType::VARCHAR);
+	column_type.emplace_back("target_field_id", LogicalType::UBIGINT);
+	column_type.emplace_back("parent_column", LogicalType::UBIGINT);
+	column_type.emplace_back("is_partition", LogicalType::BOOLEAN);
+
+	auto transaction = read_info.GetTransaction();
+	auto name_map = transaction->GetMappingById(mapping_id);
+	vector<Value> columns;
+	for (auto &column : name_map->FlattenColumns()) {
+		child_list_t<Value> children;
+		children.emplace_back("column_id", Value::UBIGINT(column.column_id));
+		children.emplace_back("source_name", Value(column.source_name));
+		children.emplace_back("target_field_id", Value::UBIGINT(column.target_field_id.index));
+		children.emplace_back("parent_column", column.parent_column.IsValid()
+		                                           ? Value::UBIGINT(column.parent_column.GetIndex())
+		                                           : Value(LogicalType::UBIGINT));
+		children.emplace_back("is_partition", Value::BOOLEAN(column.hive_partition));
+		columns.push_back(Value::STRUCT(std::move(children)));
+	}
+	auto result = Value::LIST(LogicalType::STRUCT(std::move(column_type)), std::move(columns));
+	name_maps.emplace(mapping_id.index, result);
+	return result;
+}
+
+optional_idx DuckLakeMultiFileList::GetDeleteSnapshotFilter(const DuckLakeFileListEntry &file_entry) const {
+	if (read_info.scan_type == DuckLakeScanType::SCAN_INSERTIONS) {
+		// only the deletes of the snapshot that inserted the rows
+		return file_entry.snapshot_id.GetIndex();
+	}
+	auto transaction = read_info.GetTransaction();
+	if (read_info.include_local_changes &&
+	    transaction->HasLocalDeleteForFile(read_info.table_id, file_entry.file.path)) {
+		// We only set snapshot filter if this file is not a current running transaction
+		// OW, we are guaranteed to be on the latest valid snapshot
+		return optional_idx();
+	}
+	return read_info.snapshot.snapshot_id;
 }
 
 unique_ptr<MultiFileList> DuckLakeMultiFileList::Copy() const {

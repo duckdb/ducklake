@@ -393,16 +393,9 @@ ReaderInitializeType DuckLakeMultiFileReader::InitializeReader(MultiFileReaderDa
 				inlined_deletes.rows = file_entry.inlined_file_deletions;
 				delete_filter->Initialize(inlined_deletes);
 			}
-			auto txn = read_info.GetTransaction();
-			bool has_local_delete = read_info.include_local_changes && txn &&
-			                        txn->HasLocalDeleteForFile(read_info.table_id, reader.GetFileName());
-			if (read_info.scan_type == DuckLakeScanType::SCAN_INSERTIONS) {
-				// only the deletes of the snapshot that inserted the rows
-				delete_filter->SetSnapshotFilter(file_entry.snapshot_id.GetIndex());
-			} else if (!has_local_delete) {
-				// We only set snapshot filter if this file is not a current running transaction
-				// OW, we are guaranteed to be on the latest valid snapshot
-				delete_filter->SetSnapshotFilter(read_info.snapshot.snapshot_id);
+			auto delete_snapshot_filter = file_list.GetDeleteSnapshotFilter(file_entry);
+			if (delete_snapshot_filter.IsValid()) {
+				delete_filter->SetSnapshotFilter(delete_snapshot_filter.GetIndex());
 			}
 			reader.deletion_filter = std::move(delete_filter);
 		}

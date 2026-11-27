@@ -41,6 +41,9 @@ unique_ptr<FunctionData> DuckLakeScanDeserialize(Deserializer &deserializer, Bou
 enum class DuckLakeScanType { SCAN_TABLE, SCAN_INSERTIONS, SCAN_DELETIONS, SCAN_FOR_FLUSH };
 
 struct DuckLakeFunctionInfo : public TableFunctionInfo {
+	//! The version of the scan metadata that a reader outside of DuckLake gets
+	static constexpr idx_t SCAN_METADATA_VERSION = 1;
+
 	DuckLakeFunctionInfo(DuckLakeTableEntry &table, DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot);
 
 	static shared_ptr<DuckLakeFunctionInfo> Create(DuckLakeTableEntry &table, DuckLakeTransaction &transaction,

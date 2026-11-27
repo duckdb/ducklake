@@ -1,0 +1,44 @@
+# name: test/sql/scan_metadata/scan_metadata_inlined_data.test
+# description: Inlined data has no scan metadata, it is read by the DuckLake reader
+# group: [scan_metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/scan_metadata_inlined_data', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE lake.t(a INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1), (2)
+
+query IIII
+SELECT path = file_options['table_name'].value, file_options['inlined_data'].value,
+       file_options['schema_version'].type, file_options['required_options']
+FROM ducklake_scan_metadata('lake', 't')
+----
+true	true	BIGINT	NULL
+
+# the inlined data of the transaction
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO lake.t VALUES (3)
+
+query IIIII
+SELECT path, file_options['inlined_data'].value, file_options['snapshot_id'].type, file_options['snapshot_id'].value,
+       file_options['required_options']
+FROM ducklake_scan_metadata('lake', 't') WHERE file_options['transaction_local_data'] IS NOT NULL
+----
+__ducklake_inlined_transaction_local_data	true	BIGINT	NULL	NULL
+
+statement ok
+ROLLBACK

@@ -22,8 +22,7 @@ static unique_ptr<FunctionData> DuckLakeTableChangesBind(ClientContext &context,
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	auto table_name = DuckLakeTableFunctionUtil::GetTableName(input.inputs[2]);
 	// the end of a change feed is the newest snapshot at or before its timestamp, also before expired snapshots
-	auto end_snapshot = transaction.GetSnapshot(end_at_clause, SnapshotBound::UPPER_BOUND);
-	BoundAtClause end_version_clause("version", Value::BIGINT(NumericCast<int64_t>(end_snapshot.snapshot_id)));
+	auto end_version_clause = DuckLakeTableFunctionUtil::ChangesEndAtClause(transaction, end_at_clause);
 	EntryLookupInfo lookup(CatalogType::TABLE_ENTRY, QualifiedName(Identifier(table_name)), end_version_clause,
 	                       QueryErrorContext());
 	if (input.inputs[1].IsNull()) {

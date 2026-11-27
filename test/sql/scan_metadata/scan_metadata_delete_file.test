@@ -1,0 +1,169 @@
+# name: test/sql/scan_metadata/scan_metadata_delete_file.test
+# description: The scan metadata of a data file describes the delete file that applies to the scan
+# group: [scan_metadata]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/scan_metadata_delete_file', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CALL lake.set_option('write_deletion_vectors', 'false')
+
+statement ok
+CREATE TABLE lake.t AS SELECT range a FROM range(50)
+
+# a file without deletes requires nothing of its reader
+query IIII
+SELECT file_options['required_options'].type, file_options['required_options'].value, file_options['has_deletes'],
+       [key FOR key IN map_keys(file_options) IF key LIKE 'delete%']
+FROM ducklake_scan_metadata('lake', 't')
+----
+VARCHAR[]	[]	NULL	[]
+
+statement ok
+DELETE FROM lake.t WHERE a < 5
+
+statement ok
+SET VARIABLE delete_snapshot = (SELECT id FROM lake.current_snapshot())
+
+statement ok
+SET VARIABLE delete_file = (SELECT delete_file FROM ducklake_list_files('lake', 't'))
+
+query IIIIII
+SELECT o['required_options'].value,
+       o['has_deletes'].value,
+       o['delete_file_format'].value,
+       o['delete_file'].value = l.delete_file,
+       o['delete_file_size'].value::UBIGINT = l.delete_file_size_bytes,
+       o['delete_file_footer_size'].value::UBIGINT = l.delete_file_footer_size
+FROM (SELECT file_options o FROM ducklake_scan_metadata('lake', 't')), ducklake_list_files('lake', 't') l
+----
+[delete_file]	true	parquet	true	true	true
+
+query IIIIIII
+SELECT o['delete_file'].type, o['delete_file_format'].type, o['delete_file_size'].type,
+       o['delete_file_footer_size'].type, o['delete_snapshot_filter'].type, o['has_deletes'].type,
+       o['delete_file_encryption_key']
+FROM (SELECT file_options o FROM ducklake_scan_metadata('lake', 't'))
+----
+VARCHAR	VARCHAR	UBIGINT	UBIGINT	UBIGINT	BOOLEAN	NULL
+
+# only the deletes up to the snapshot of the scan apply
+query I
+SELECT file_options['delete_snapshot_filter'].value::UBIGINT = getvariable('delete_snapshot')
+FROM ducklake_scan_metadata('lake', 't')
+----
+true
+
+statement ok
+INSERT INTO lake.t SELECT range FROM range(100, 150)
+
+query II
+SELECT file_options['delete_snapshot_filter'].value::UBIGINT = getvariable('delete_snapshot') + 1,
+       file_options['required_options'].value
+FROM ducklake_scan_metadata('lake', 't') ORDER BY ALL
+----
+true	[delete_file]
+NULL	[]
+
+query II
+SELECT file_options['delete_file'].value = getvariable('delete_file'),
+       file_options['delete_snapshot_filter'].value::UBIGINT = getvariable('delete_snapshot')
+FROM ducklake_scan_metadata('lake', 't', snapshot_version => getvariable('delete_snapshot'))
+----
+true	true
+
+# before the delete
+query III
+SELECT file_options['required_options'].value, file_options['has_deletes'], file_options['delete_file']
+FROM ducklake_scan_metadata('lake', 't', snapshot_version => getvariable('delete_snapshot') - 1)
+----
+[]	NULL	NULL
+
+# the delete file of the transaction replaces the committed one, and all of its deletes apply
+statement ok
+BEGIN
+
+statement ok
+DELETE FROM lake.t WHERE a = 10
+
+query IIII
+SELECT file_options['required_options'].value,
+       file_options['delete_file'].value LIKE '%-delete.parquet',
+       file_options['delete_file'].value = getvariable('delete_file'),
+       file_options['delete_snapshot_filter']
+FROM ducklake_scan_metadata('lake', 't') WHERE file_options['has_deletes'] IS NOT NULL
+----
+[delete_file]	true	false	NULL
+
+# a time travel scan does not see the changes of the transaction
+query II
+SELECT file_options['delete_file'].value = getvariable('delete_file'),
+       file_options['delete_snapshot_filter'].value::UBIGINT = getvariable('delete_snapshot') + 1
+FROM ducklake_scan_metadata('lake', 't', snapshot_version => getvariable('delete_snapshot') + 1)
+WHERE file_options['has_deletes'] IS NOT NULL
+----
+true	true
+
+statement ok
+ROLLBACK
+
+# a delete from a file written by the transaction
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO lake.t SELECT range FROM range(200, 250)
+
+statement ok
+DELETE FROM lake.t WHERE a = 210
+
+query IIII
+SELECT file_options['required_options'].value, file_options['delete_file'].value LIKE '%-delete.parquet',
+       file_options['delete_snapshot_filter'], file_options['snapshot_id'].type
+FROM ducklake_scan_metadata('lake', 't') WHERE file_options['snapshot_id'].value IS NULL
+----
+[delete_file]	true	NULL	BIGINT
+
+statement ok
+ROLLBACK
+
+# a scan of insertions only applies the deletes of the snapshot that inserted the rows
+statement ok
+CREATE TABLE lake.u(a INTEGER)
+
+statement ok
+BEGIN
+
+statement ok
+INSERT INTO lake.u SELECT range FROM range(50)
+
+statement ok
+DELETE FROM lake.u WHERE a < 5
+
+statement ok
+COMMIT
+
+statement ok
+DELETE FROM lake.u WHERE a = 10
+
+query II
+SELECT file_options['required_options'].value,
+       file_options['delete_snapshot_filter'].value::UBIGINT - file_options['snapshot_id'].value::UBIGINT
+FROM ducklake_scan_metadata('lake', 'u')
+----
+[delete_file]	1
+
+query II
+SELECT file_options['required_options'].value,
+       file_options['delete_snapshot_filter'].value::UBIGINT - file_options['snapshot_id'].value::UBIGINT
+FROM ducklake_scan_metadata('lake', 'u', scan_type => 'insertions', start_snapshot => 0)
+----
+[delete_file]	0
