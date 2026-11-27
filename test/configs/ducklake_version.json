@@ -266,6 +266,7 @@
         "test/sql/branches/branch_tag_rows.test",
         "test/sql/branches/branch_version_space.test",
         "test/sql/branches/branchless_skips_guards.test",
+        "test/sql/rest/rest_flush_rehomes_branch_end.test",
         "test/sql/rest/rest_serve_branch_refused.test",
         "test/sql/rest/rest_snapshots_main_lineage.test"
       ]
