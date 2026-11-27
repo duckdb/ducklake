@@ -2444,8 +2444,8 @@ static FloatWidenedBounds GetFloatBoundsToRewrite(DuckLakeCommitState &commit_st
 	unique_ptr<QueryResult> query_result;
 	if (context.supports_row_visibility) {
 		// the live version rows are those no end of main closes at the commit snapshot
-		auto live = DuckLakeMetadataManager::RowVisibility(DuckLakeBranchChain::Main(), "c",
-		                                                   DuckLakeMetadataManager::RowKind("column"), "{SNAPSHOT_ID}");
+		auto live =
+		    DuckLakeMetadataManager::RowVisibility("c", DuckLakeMetadataManager::RowKind("column"), "{SNAPSHOT_ID}");
 		auto query = StringUtil::Format(R"(
 SELECT c.table_id, c.column_id, c.column_type, %s
 FROM {METADATA_CATALOG}.ducklake_column c WHERE (c.table_id, c.column_id) IN (%s))",

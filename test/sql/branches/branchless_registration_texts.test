@@ -1,0 +1,65 @@
+# name: test/sql/branches/branchless_registration_texts.test
+# description: a main attach reads the inlined table registrations with the texts of a catalog without branches
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN j INTEGER
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+# the insert after the schema change registers a second inlined table and reads the registrations before the change
+statement ok
+INSERT INTO dl.t VALUES (4, 40)
+
+query II
+SELECT table_id, schema_version FROM meta.ducklake_inlined_data_tables ORDER BY ALL
+----
+1	1
+1	2
+
+# a read of two registrations checks which of them are still registered
+query II
+SELECT count(*), sum(i) FROM dl.t
+----
+4	10
+
+statement ok
+CALL disable_logging()
+
+# main reads the registrations with the text of a catalog without branches, the lineage form stays with a branch
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%SELECT DISTINCT table_name%FROM%ducklake_inlined_data_tables%WHERE table_id = 1%'
+----
+true
+
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%DISTINCT idt.table_name%' OR query LIKE '%idt.schema_version < (%'
+----
+0
+
+statement ok
+DETACH dl

@@ -227,8 +227,8 @@ void DuckLakeServerSideCommit::ReadColumnTypes() {
 	// the server commits on main, so the live columns are those of main at the transaction snapshot
 	string live = "col.end_snapshot IS NULL";
 	if (supports_row_visibility) {
-		live = DuckLakeMetadataManager::RowVisibility(DuckLakeBranchChain::Main(), "col",
-		                                              DuckLakeMetadataManager::RowKind("column"), "{SNAPSHOT_ID}");
+		live =
+		    DuckLakeMetadataManager::RowVisibility("col", DuckLakeMetadataManager::RowKind("column"), "{SNAPSHOT_ID}");
 	}
 	auto query = SubstitutePlaceholders(StringUtil::Format("SELECT col.table_id, col.column_id, col.column_type "
 	                                                       "FROM {METADATA_CATALOG}.ducklake_column col "
