@@ -9,7 +9,7 @@
 namespace duckdb {
 
 static void ValidateCanEnableInlining(const DuckLakeCatalog &catalog, DuckLakeTableEntry &table) {
-	DuckLakeUtil::ValidateCanEnableInlining(table.GetColumns(), catalog.SupportsV1_1Metadata(), table.name);
+	DuckLakeUtil::ValidateCanEnableInlining(table.GetColumns(), catalog, table.name);
 }
 
 static void ValidateTablesWithoutOverride(const DuckLakeCatalog &catalog,

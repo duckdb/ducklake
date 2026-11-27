@@ -174,7 +174,7 @@ bool DuckLakeMetadataManager::CanInlineValues(DataChunk &chunk) {
 }
 
 bool DuckLakeInlinedColNames::ConflictsWith(const Identifier &name) const {
-	return name == row_id || name == begin_snapshot || name == end_snapshot || (prefixed && name == branch_id) ||
+	return name == row_id || name == begin_snapshot || name == end_snapshot || (has_branch_id && name == branch_id) ||
 	       name == "_ducklake_internal_snapshot_id" || name == "_ducklake_internal_row_id";
 }
 
@@ -5025,7 +5025,8 @@ string DuckLakeMetadataManager::InlinedRowSource(const Identifier &inlined_table
 }
 
 DuckLakeInlinedColNames DuckLakeMetadataManager::InlinedColNames() const {
-	return DuckLakeInlinedColNames(transaction.GetCatalog().SupportsV1_1Metadata());
+	auto &catalog = transaction.GetCatalog();
+	return DuckLakeInlinedColNames(catalog.SupportsV1_1Metadata(), catalog.SupportsRowVisibility());
 }
 
 string DuckLakeMetadataManager::InlinedTableDdlSql(const Identifier &table_name, const string &column_defs,

@@ -71,7 +71,8 @@ struct DuckLakeInlinedColNames {
 	//! Number of metadata columns an inlined data table adds
 	static constexpr idx_t COLUMN_COUNT = 3;
 
-	explicit DuckLakeInlinedColNames(bool prefixed_inlined_columns) : prefixed(prefixed_inlined_columns) {
+	explicit DuckLakeInlinedColNames(bool prefixed_inlined_columns, bool row_visibility = false)
+	    : prefixed(prefixed_inlined_columns), has_branch_id(row_visibility) {
 		if (prefixed) {
 			row_id = Identifier(PREFIX + row_id);
 			begin_snapshot = Identifier(PREFIX + begin_snapshot);
@@ -85,6 +86,8 @@ struct DuckLakeInlinedColNames {
 
 	//! Whether the names carry the reserved prefix, from 1.1 on
 	bool prefixed;
+	//! Whether the inlined data tables have the branch column, from 2.0 on
+	bool has_branch_id;
 	Identifier row_id = "row_id";
 	Identifier begin_snapshot = "begin_snapshot";
 	//! The end column before 2.0, the name the row sources give the end of main from 2.0 on
