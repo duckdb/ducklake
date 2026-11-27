@@ -65,6 +65,8 @@ public:
 
 	static ParsedCatalogEntry ParseCatalogEntry(const string &input);
 	static string JoinPath(FileSystem &fs, const string &a, const string &b);
+	//! Whether the path has a remote scheme, in any case of letters
+	static bool IsRemotePath(const string &path);
 	//! The separator of a path, always '/' for a remote path, also before its file system is loaded
 	static string PathSeparator(FileSystem &fs, const string &path);
 

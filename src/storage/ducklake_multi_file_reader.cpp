@@ -328,7 +328,22 @@ DuckLakeMultiFileReader::InitializeGlobalState(ClientContext &context, const Mul
 		}
 	}
 	file_list.Cast<DuckLakeMultiFileList>().SetProjection(std::move(projection));
-	file_list.Cast<DuckLakeMultiFileList>().GetFiles();
+	auto &files = file_list.Cast<DuckLakeMultiFileList>().GetFiles();
+	// The name maps of the files too: the open tasks run on the async pool, which the metadata query of a remote
+	// catalog needs for its block reads, so a lookup that misses the cache in an open task holds up the pool it waits
+	// for once the files outnumber its threads.
+	set<idx_t> mapping_ids;
+	for (auto &file : files) {
+		if (file.mapping_id.IsValid()) {
+			mapping_ids.insert(file.mapping_id.index);
+		}
+	}
+	if (!mapping_ids.empty()) {
+		auto transaction = read_info.GetTransaction();
+		for (auto mapping_id : mapping_ids) {
+			transaction->GetMappingById(MappingIndex(mapping_id));
+		}
+	}
 
 	optional_idx deletion_scan_snapshot_col;
 	optional_idx deletion_scan_file_row_number_col;

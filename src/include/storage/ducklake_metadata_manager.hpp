@@ -280,6 +280,8 @@ public:
 	virtual bool ShowsConcurrentCommits() const {
 		return CommitsEachStatement();
 	}
+	//! The type of a metadata column that a migration adds for a timestamp with time zone
+	string TimestampTzColumnType() const;
 	//! Whether transactions that started before a metadata table was dropped still read it
 	virtual bool DroppedTablesStayReadable() const;
 	//! Whether a commit inserts inlined rows after its batch instead of sending them as VALUES text in it
@@ -872,6 +874,8 @@ public:
 	//! The snapshot additions of 2.0 a catalog is missing, probed so an interrupted migration resumes
 	struct V2_0SnapshotAdditions {
 		bool snapshot_tag_table = true;
+		//! The expiry time of tags, which a 2.0-dev1 tag table can lack
+		bool snapshot_tag_expiry = false;
 		bool branch_table = true;
 		//! Rebuilt through a rebuild table and an old table so an interrupted rebuild resumes
 		bool rebuild_snapshots = true;
@@ -889,7 +893,7 @@ public:
 	//! The first batch of a rebuild, which takes the snapshot tables away by name and commits
 	static string V2_0SnapshotRenameSql(const V2_0SnapshotAdditions &add);
 	//! The other additions, the second batch of a rebuild copies from the renamed tables
-	static string V2_0SnapshotAdditionsSql(const V2_0SnapshotAdditions &add);
+	string V2_0SnapshotAdditionsSql(const V2_0SnapshotAdditions &add) const;
 	//! The shape of a catalog kind against the row companions, probed so an interrupted step resumes
 	struct V2_0RowCompanion {
 		string kind;
