@@ -1610,6 +1610,8 @@ void DuckLakeMetadataManager::VerifyV2_0InlinedStep(const V2_0Layout &layout, co
 		auto undo_query = V2_0RenameUndoSql(layout);
 		if (!undo_query.empty()) {
 			ExecuteMigration(undo_query, false, from_version, "2.0-dev1");
+			// the renames back commit before the refusal rolls the migration transaction back
+			CommitMigration();
 			transaction.ReleaseMetadataTransaction();
 		}
 		throw;
