@@ -2523,6 +2523,7 @@ WHERE {SNAPSHOT_ID} >= %s)",
 }
 
 optional_idx DuckLakeMetadataManager::GetNetRowCount(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot) {
+	// CanUseGlobalStats keeps the net count on main, both halves render the chain of the attach all the same
 	auto file_count = GetNetDataFileRowCountForStats(table.GetTableId(), snapshot);
 	if (!file_count.IsValid()) {
 		return optional_idx();
