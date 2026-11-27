@@ -209,7 +209,7 @@ struct DuckLakeCommitContext {
 	bool branch_keyed_lookups = false;
 	//! Column names of the inlined data tables under this catalog version.
 	DuckLakeInlinedColNames InlinedColNames() const {
-		return DuckLakeInlinedColNames(supports_v1_1_metadata);
+		return DuckLakeInlinedColNames(supports_v1_1_metadata, supports_row_visibility);
 	}
 };
 

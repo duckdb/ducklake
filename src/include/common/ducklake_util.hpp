@@ -109,7 +109,7 @@ public:
 	                                           const ColumnList &columns,
 	                                           optional_ptr<const map<string, string>> table_options = nullptr);
 	//! Throws if a column conflicts with inlined data metadata columns when enabling inlining
-	static void ValidateCanEnableInlining(const ColumnList &columns, bool prefixed_inlined_columns,
+	static void ValidateCanEnableInlining(const ColumnList &columns, const DuckLakeCatalog &catalog,
 	                                      const Identifier &table_name);
 
 	//! Copy extension-registered settings from one context onto another. Core engine settings

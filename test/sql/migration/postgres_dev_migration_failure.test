@@ -27,6 +27,10 @@ ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
 
+# the migration to 2.0 converts no inlined rows, the flush writes the row to a file
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
 statement ok
 DETACH dl
 

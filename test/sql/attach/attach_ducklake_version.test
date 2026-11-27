@@ -78,6 +78,10 @@ SELECT * FROM ducklake.t1
 ----
 42
 
+# the migration to 2.0 converts no inlined rows, the flush writes the row to a file
+statement ok
+CALL ducklake_flush_inlined_data('ducklake')
+
 statement ok
 DETACH ducklake
 

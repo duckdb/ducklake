@@ -1181,10 +1181,17 @@ void DuckLakeRESTCommit::AddInlinedDeletes(DuckLakeTableEntry &table, const set<
 			if (batch.empty()) {
 				return;
 			}
-			auto result = metadata_manager.Query(StringUtil::Format(
-			    "SELECT %s FROM {METADATA_CATALOG}.%s WHERE %s IN (%s)", SQLIdentifier::ToString(col_names.row_id),
-			    SQLIdentifier::ToString(inlined_table.table_name), SQLIdentifier::ToString(col_names.row_id),
-			    StringUtil::Join(batch, ", ")));
+			// an update can leave an ended version of a row in the payload of an older schema version
+			auto result = metadata_manager.Query(
+			    transaction.GetSnapshot(),
+			    StringUtil::Format("SELECT %s FROM %s inlined_data WHERE %s IN (%s) AND {SNAPSHOT_ID} >= %s AND "
+			                       "({SNAPSHOT_ID} < %s OR %s IS NULL)",
+			                       SQLIdentifier::ToString(col_names.row_id),
+			                       metadata_manager.InlinedRowSource(inlined_table.table_name),
+			                       SQLIdentifier::ToString(col_names.row_id), StringUtil::Join(batch, ", "),
+			                       SQLIdentifier::ToString(col_names.begin_snapshot),
+			                       SQLIdentifier::ToString(col_names.end_snapshot),
+			                       SQLIdentifier::ToString(col_names.end_snapshot)));
 			result->ThrowIfError("Failed to find the inlined rows to delete: ");
 			for (auto &row : *result) {
 				deleted_row_ids.insert(row.GetValue<idx_t>(0));

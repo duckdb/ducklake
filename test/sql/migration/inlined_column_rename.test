@@ -44,7 +44,7 @@ DETACH dl
 
 # migrating to v1.1 renames the metadata columns
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_rename_files', METADATA_CATALOG 'dlmeta', AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_rename_files', METADATA_CATALOG 'dlmeta', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 statement error
 SELECT row_id FROM dlmeta.ducklake_inlined_data_1_1 LIMIT 0;
@@ -53,6 +53,16 @@ row_id
 
 statement ok
 SELECT _ducklake_row_id, _ducklake_begin_snapshot, _ducklake_end_snapshot FROM dlmeta.ducklake_inlined_data_1_1 LIMIT 0;
+
+# the migration to 2.0 converts no inlined rows, the flush writes them to files first
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/inlined_rename_files', METADATA_CATALOG 'dlmeta', AUTOMATIC_MIGRATION TRUE)
 
 # row ids are preserved across the rename
 query III

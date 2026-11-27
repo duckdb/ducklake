@@ -34,8 +34,13 @@ query IIIII
 SELECT table_id, begin_snapshot, end_snapshot, delete_count, partial_max FROM (SELECT f.*, v.begin_snapshot, v.end_snapshot FROM ducklake_meta.ducklake_delete_file f JOIN (SELECT delete_file_id, MAX(CASE WHEN is_delete = FALSE THEN snapshot_id END) begin_snapshot, MAX(CASE WHEN is_delete = TRUE THEN snapshot_id END) end_snapshot FROM ducklake_meta.ducklake_delete_file_visibility WHERE branch_id = 0 GROUP BY delete_file_id) v ON v.delete_file_id = f.delete_file_id) ORDER BY begin_snapshot
 ----
 
+# the end of a row lives in the shared companion, keyed by the table and the birth of the version
 query IIII
-FROM ducklake_meta.ducklake_inlined_data_1_1 ORDER BY ALL
+SELECT d._ducklake_row_id, d._ducklake_begin_snapshot, e.end_snapshot, d.a
+FROM ducklake_meta.ducklake_inlined_data_1_1 d
+LEFT JOIN ducklake_meta.ducklake_inlined_data_visibility e ON e.table_id = 1 AND e.row_id = d._ducklake_row_id
+    AND e.row_branch_id = d._ducklake_branch_id AND e.row_snapshot = d._ducklake_begin_snapshot
+ORDER BY ALL
 ----
 10	2	NULL	11
 11	2	3	12

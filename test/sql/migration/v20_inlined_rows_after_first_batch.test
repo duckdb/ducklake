@@ -1,0 +1,88 @@
+# name: test/sql/migration/v20_inlined_rows_after_first_batch.test
+# description: a migration to 2.0-dev1 that finds an inlined row after its first batch moves the tables back, so the catalog attaches at 1.1 to flush
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+# the migrating attach checks the payloads here and finds them empty, then a 1.1 writer commits an inlined row
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+# the first batch of the migration renames the snapshot and file tables and commits with the version still 1.1
+statement ok
+ALTER TABLE meta.ducklake_snapshot RENAME TO ducklake_snapshot_old
+
+statement ok
+ALTER TABLE meta.ducklake_snapshot_changes RENAME TO ducklake_snapshot_changes_old
+
+statement ok
+ALTER TABLE meta.ducklake_data_file RENAME TO ducklake_data_file_ranges
+
+statement ok
+ALTER TABLE meta.ducklake_delete_file RENAME TO ducklake_delete_file_ranges
+
+statement ok
+DETACH dl
+
+# the migration finds the row after the renames, moves the tables back and asks for a flush at the current version
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
+----
+Attach the catalog at its current version, run CALL ducklake_flush_inlined_data
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+1.1
+
+query I
+SELECT i FROM dl.t
+----
+1
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query I
+SELECT i FROM dl.t
+----
+1
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2

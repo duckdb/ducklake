@@ -12,7 +12,7 @@ test-env DATA_PATH {TEST_DIR}
 
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    DUCKLAKE_VERSION '1.1')
+    DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 10)
 
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
@@ -30,6 +30,10 @@ query I
 SELECT COUNT(*) FROM meta.ducklake_snapshot
 ----
 5
+
+# the migration converts no inlined rows, the flush writes them to files
+statement ok
+CALL ducklake_flush_inlined_data('dl')
 
 statement ok
 DETACH dl
@@ -54,7 +58,7 @@ SELECT branch_id, branch_name, parent_id, parent_branch_snapshot FROM meta.duckl
 ----
 0	main	NULL	NULL
 
-# the rows are kept and belong to main
+# the rows are kept and belong to main, the flush added snapshot 5
 query II
 SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
 ----
@@ -63,6 +67,7 @@ SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot ORDER BY snapshot_id
 2	0
 3	0
 4	0
+5	0
 
 query II
 SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snapshot_id
@@ -72,6 +77,7 @@ SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot_changes ORDER BY snaps
 2	0
 3	0
 4	0
+5	0
 
 query I
 SELECT changes_made FROM meta.ducklake_snapshot_changes WHERE snapshot_id = 0
@@ -165,7 +171,7 @@ SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot WHERE snapshot_id = 5
 query I
 SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
 ----
-[0, 1, 2, 3, 4, 5]
+[0, 1, 2, 3, 4, 5, 6]
 
 statement ok
 DETACH dl
@@ -196,7 +202,7 @@ query III
 SELECT (SELECT count(*) FROM meta.ducklake_snapshot), (SELECT count(*) FROM meta.ducklake_branch),
     (SELECT count(*) FROM meta.ducklake_metadata WHERE key = 'heal_complete')
 ----
-6	1	0
+7	1	0
 
 query I
 SELECT list(i ORDER BY i) FROM dl.t

@@ -1,0 +1,53 @@
+# name: test/sql/rest/rest_delete_after_schema_change.test
+# description: a delete through a REST server ends the live version of an inlined row that an update moved to a newer payload
+# group: [rest]
+
+include test/template/rest_setup.test_template
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS dl (DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+SET ducklake_max_retry_count = 0
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1), (10)
+
+statement ok
+ALTER TABLE dl.t ADD COLUMN j INTEGER
+
+# the update ends the version in the payload of the first schema version and inlines the new one into the second
+statement ok
+UPDATE dl.t SET i = 2 WHERE i = 1
+
+query II
+SELECT i, j FROM dl.t ORDER BY i
+----
+2	NULL
+10	NULL
+
+# the first payload holds an ended version of the updated row and the live version of the other
+statement ok
+DELETE FROM dl.t WHERE i = 2
+
+query II
+SELECT i, j FROM dl.t
+----
+10	NULL
+
+statement ok
+DELETE FROM dl.t
+
+query I
+SELECT count(*) FROM dl.t
+----
+0
+
+query II
+SELECT i, j FROM dl.t AT (VERSION => 4) ORDER BY i
+----
+2	NULL
+10	NULL

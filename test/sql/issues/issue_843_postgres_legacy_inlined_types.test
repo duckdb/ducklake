@@ -50,8 +50,9 @@ CALL postgres_execute('__ducklake_metadata_dl', 'ALTER TABLE ducklake_inlined_da
 statement ok
 DETACH dl
 
+# the migration to 1.1 converts the column types, the migration to 2.0 follows the flush below
 statement ok
-ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_843', DATA_INLINING_ROW_LIMIT 10, AUTOMATIC_MIGRATION TRUE)
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_843', DATA_INLINING_ROW_LIMIT 10, DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
 
 query IIIIIII
 SELECT id, s2, j, d, ts, tz = TIMESTAMPTZ '2026-03-17 08:25:46+00', f FROM dl.t ORDER BY id
@@ -83,3 +84,23 @@ SELECT id, s2, j, d, ts, tz = TIMESTAMPTZ '2026-03-19 01:02:03+00', f FROM dl.t 
 2	(empty)	NULL	NULL	NULL	NULL	NULL
 3	renamed	[1]	2026-03-18	NULL	NULL	-2.5
 4	b	{}	2026-03-19	2026-03-19 01:02:03	true	0.25
+
+statement ok
+DETACH dl
+
+# the flushed catalog migrates to the latest version
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/issue_843', DATA_INLINING_ROW_LIMIT 10, AUTOMATIC_MIGRATION TRUE)
+
+query IIIIIII
+SELECT id, s2, j, d, ts, tz = TIMESTAMPTZ '2026-03-19 01:02:03+00', f FROM dl.t ORDER BY id
+----
+1	back\slash \x62 é漢	{"a": "line\nbreak"}	2026-03-17	2026-03-17 08:25:46.123456	false	1.5
+2	(empty)	NULL	NULL	NULL	NULL	NULL
+3	renamed	[1]	2026-03-18	NULL	NULL	-2.5
+4	b	{}	2026-03-19	2026-03-19 01:02:03	true	0.25
+
+query IIIII
+SELECT id, s, l, m, st FROM dl.nested ORDER BY id
+----
+1	x	[1, 2]	{a=1}	{'a': 5}

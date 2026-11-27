@@ -372,9 +372,9 @@ void DuckLakeUtil::ValidateNoInlinedSystemColumns(DuckLakeCatalog &catalog, Clie
 	}
 }
 
-void DuckLakeUtil::ValidateCanEnableInlining(const ColumnList &columns, bool prefixed_inlined_columns,
+void DuckLakeUtil::ValidateCanEnableInlining(const ColumnList &columns, const DuckLakeCatalog &catalog,
                                              const Identifier &table_name) {
-	DuckLakeInlinedColNames col_names(prefixed_inlined_columns);
+	DuckLakeInlinedColNames col_names(catalog.SupportsV1_1Metadata(), catalog.SupportsRowVisibility());
 	for (auto &col : columns.Logical()) {
 		if (col_names.ConflictsWith(col.Name())) {
 			throw BinderException(

@@ -258,6 +258,12 @@
       "reason": "Reads the metadata catalog of the DuckLake or configures it with attach options, but the REST server (in a database of its own) attaches the catalog and creates the DuckLake",
       "paths": [
         "test/sql/remove_files/remove_data_files_stats.test",
+        "test/sql/data_inlining/inlined_companion_layout.test",
+        "test/sql/data_inlining/inlined_shared_visibility_layout.test",
+        "test/sql/data_inlining/inlined_flush_keeps_own_deletes.test",
+        "test/sql/data_inlining/inlined_ends_expire.test",
+        "test/sql/data_inlining/inlining_branch_column_v11.test",
+        "test/sql/deletion_inlining/inlined_deletion_table_branch.test",
         "test/sql/add_files/add_file_epoch_partitioned.test",
         "test/sql/add_files/add_file_partitioned.test",
         "test/sql/add_files/add_file_repeated_bucket.test",
@@ -576,6 +582,10 @@
         "test/sql/catalog/catalog_entity_row_companions.test",
         "test/sql/migration/v20_tag_row_companions_migration.test",
         "test/sql/migration/v20_tag_row_companions_resume.test",
+        "test/sql/migration/v20_inlined_visibility_migration.test",
+        "test/sql/migration/v20_inlined_visibility_collisions.test",
+        "test/sql/migration/v20_inlined_registry_names.test",
+        "test/sql/migration/v20_inlined_registry_names_commit.test",
         "test/sql/catalog/catalog_tag_row_companions.test",
         "test/sql/alter/create_table_drop_column_same_transaction.test",
         "test/sql/metadata/file_visibility_layout.test",
@@ -592,7 +602,12 @@
         "test/sql/data_inlining/inlining_obstacle_log.test",
         "test/sql/compaction/user_columns_named_like_internal_columns.test",
         "test/sql/data_inlining/data_inlining_transaction_local_field_readd_rejected.test",
-        "test/sql/data_inlining/data_inlining_variant_stats.test"
+        "test/sql/data_inlining/data_inlining_variant_stats.test",
+        "test/sql/deletion_inlining/inlined_delete_ends_without_probe.test",
+        "test/sql/migration/v20_inlined_dropped_table_rows.test",
+        "test/sql/migration/v20_inlined_orphan_deletions.test",
+        "test/sql/migration/v20_inlined_rows_after_first_batch.test",
+        "test/sql/migration/v20_inlined_interrupted_step.test"
       ]
     },
     {
