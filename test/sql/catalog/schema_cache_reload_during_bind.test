@@ -1,0 +1,54 @@
+# name: test/sql/catalog/schema_cache_reload_during_bind.test
+# description: A transaction keeps its catalog version when another connection reloads its schema version
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/schema_cache_reload_during_bind')
+
+statement ok
+CREATE SCHEMA lake.s1
+
+statement ok
+CREATE SCHEMA lake.s2
+
+statement ok
+CREATE TABLE lake.s1.t(i INTEGER)
+
+statement ok
+CREATE TABLE lake.s2.t(i INTEGER)
+
+statement ok con1
+SET search_path = 'lake.s1'
+
+statement ok con1
+BEGIN
+
+statement ok con1
+PREPARE p AS INSERT INTO t VALUES (42)
+
+# evicts the cached schema of the version con1 is reading
+statement ok con2
+CREATE TABLE lake.other(i INTEGER)
+
+# a re-bind would resolve the table in the new search path
+statement ok con1
+SET search_path = 'lake.s2'
+
+statement ok con1
+EXECUTE p
+
+statement ok con1
+COMMIT
+
+query II
+SELECT (SELECT count(*) FROM lake.s1.t), (SELECT count(*) FROM lake.s2.t)
+----
+1	0
