@@ -81,6 +81,24 @@ static string ConstantSQL(const Value &value) {
 	return ConstantExpression::FromValue(value)->ToString();
 }
 
+//! The SQL of the children of an AND or an OR, empty if it cannot be expressed
+template <class CHILDREN, class TO_SQL>
+static string ConjunctionSQL(const CHILDREN &children, bool is_or, const TO_SQL &to_sql) {
+	vector<string> parts;
+	for (auto &child : children) {
+		auto child_sql = to_sql(*child);
+		if (child_sql.empty()) {
+			if (is_or) {
+				// leaving out a part of an OR would prune files that match it
+				return string();
+			}
+			continue;
+		}
+		parts.push_back("(" + child_sql + ")");
+	}
+	return StringUtil::Join(parts, is_or ? " OR " : " AND ");
+}
+
 //! The SQL of a single-column filter expression, empty if it cannot be expressed
 static string FilterExpressionSQL(const Expression &expr, const string &column) {
 	if (BoundComparisonExpression::IsComparison(expr)) {
@@ -124,22 +142,10 @@ static string FilterExpressionSQL(const Expression &expr, const string &column) 
 			return string();
 		}
 	}
-	case ExpressionClass::BOUND_CONJUNCTION: {
-		auto is_or = expr.GetExpressionType() == ExpressionType::CONJUNCTION_OR;
-		vector<string> children;
-		for (auto &child : expr.Cast<BoundConjunctionExpression>().GetChildren()) {
-			auto child_sql = FilterExpressionSQL(*child, column);
-			if (child_sql.empty()) {
-				if (is_or) {
-					// leaving out a part of an OR would prune files that match it
-					return string();
-				}
-				continue;
-			}
-			children.push_back("(" + child_sql + ")");
-		}
-		return StringUtil::Join(children, is_or ? " OR " : " AND ");
-	}
+	case ExpressionClass::BOUND_CONJUNCTION:
+		return ConjunctionSQL(expr.Cast<BoundConjunctionExpression>().GetChildren(),
+		                      expr.GetExpressionType() == ExpressionType::CONJUNCTION_OR,
+		                      [&](const Expression &child) { return FilterExpressionSQL(child, column); });
 	case ExpressionClass::BOUND_FUNCTION: {
 		auto optional_child = ExpressionFilter::GetOptionalFilterChild(expr);
 		return optional_child ? FilterExpressionSQL(*optional_child, column) : string();
@@ -173,21 +179,9 @@ static string FilterNodeSQL(const DuckLakeFilterNode &node, const DuckLakeTableE
 	case DuckLakeFilterNodeType::MATCH_NONE:
 		return "false";
 	case DuckLakeFilterNodeType::CONJUNCTION_AND:
-	case DuckLakeFilterNodeType::CONJUNCTION_OR: {
-		auto is_or = node.type == DuckLakeFilterNodeType::CONJUNCTION_OR;
-		vector<string> children;
-		for (auto &child : node.children) {
-			auto child_sql = FilterNodeSQL(*child, table);
-			if (child_sql.empty()) {
-				if (is_or) {
-					return string();
-				}
-				continue;
-			}
-			children.push_back("(" + child_sql + ")");
-		}
-		return StringUtil::Join(children, is_or ? " OR " : " AND ");
-	}
+	case DuckLakeFilterNodeType::CONJUNCTION_OR:
+		return ConjunctionSQL(node.children, node.type == DuckLakeFilterNodeType::CONJUNCTION_OR,
+		                      [&](const DuckLakeFilterNode &child) { return FilterNodeSQL(child, table); });
 	default:
 		return string(); // LCOV_EXCL_LINE
 	}

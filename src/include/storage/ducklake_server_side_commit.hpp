@@ -36,7 +36,7 @@ public:
 	void SetFilesOwnedByClient(bool files_owned_by_client);
 	//! What is known about the publication of the commit, also after it failed
 	DuckLakeCommitOutcome GetCommitOutcome() const {
-		return commit_outcome;
+		return state ? state->commit_outcome : DuckLakeCommitOutcome::NOT_PUBLISHED;
 	}
 
 private:
@@ -88,8 +88,11 @@ private:
 	//! Replace {METADATA_CATALOG}, {SNAPSHOT_ID}, etc. in SQL.
 	string SubstitutePlaceholders(string sql, const DuckLakeSnapshot &snapshot) const;
 	bool InlinedFileDeletionTableExists(TableIndex table_id);
-	//! Execute a query on the fresh connection; throw on error.
-	unique_ptr<QueryResult> RunQuery(const string &query, const char *what);
+	//! Execute a query on the fresh connection, with its placeholders replaced
+	unique_ptr<QueryResult> Query(string query, const DuckLakeSnapshot &snapshot);
+	//! The same, throwing on error
+	unique_ptr<QueryResult> RunQuery(string query, const char *what,
+	                                 const DuckLakeSnapshot &snapshot = DuckLakeSnapshot());
 	//! Scan a temporary staging table via the catalog API (no SQL, no lock).
 	unique_ptr<QueryResult> ScanStagedTable(DuckLakeStagedTableType kind);
 
@@ -101,7 +104,6 @@ private:
 	Connection fresh_conn;
 	DuckLakeRetryConfig retry_config;
 	bool files_owned_by_client = false;
-	DuckLakeCommitOutcome commit_outcome = DuckLakeCommitOutcome::NOT_PUBLISHED;
 
 	DuckLakeNameMapSet new_name_maps;
 	unique_ptr<DuckLakeTransactionState> state;
@@ -111,10 +113,8 @@ private:
 	map<TableIndex, shared_ptr<DuckLakeTableStats>> existing_table_stats;
 	//! The tables the commit writes, whose stats are read together
 	vector<TableIndex> commit_tables;
-	bool supports_v1_1_metadata = false;
-	bool supports_v2_0_metadata = false;
-	bool supports_file_visibility_events = false;
-	bool supports_row_visibility = false;
+	//! The version of the metadata schema, which picks the texts of the commit
+	DuckLakeVersion catalog_version = DuckLakeVersion::UNSET;
 	bool branch_keyed_lookups = false;
 	bool staged_dropped_files_read = false;
 	vector<pair<string, idx_t>> staged_dropped_files;

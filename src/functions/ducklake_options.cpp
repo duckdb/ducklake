@@ -1,5 +1,6 @@
 #include "duckdb/parser/qualified_name.hpp"
 #include "functions/ducklake_table_functions.hpp"
+#include "common/ducklake_util.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_catalog.hpp"
@@ -8,52 +9,11 @@
 
 namespace duckdb {
 
-struct DuckLakeOptionMetadata {
-	const char *name;
-	const char *description;
-};
-
-static constexpr DuckLakeOptionMetadata DUCKLAKE_OPTIONS[] = {
-    {"data_inlining_row_limit", "Maximum amount of rows to inline in a single insert"},
-    {"parquet_compression",
-     "Compression algorithm for Parquet files (uncompressed, snappy, gzip, zstd, brotli, lz4, lz4_raw)"},
-    {"parquet_version", "Parquet format version (1 or 2)"},
-    {"parquet_compression_level", "Compression level for Parquet files written with zstd"},
-    {"parquet_row_group_size", "Number of rows per row group in Parquet files"},
-    {"parquet_row_group_size_bytes", "Number of bytes per row group in Parquet files"},
-    {"hive_file_pattern", "If partitioned data should be written in a hive-like folder structure"},
-    {"target_file_size", "The target data file size for insertion and compaction operations"},
-    {"version", "DuckLake format version"},
-    {"created_by", "Tool used to write the DuckLake"},
-    {"data_path", "Path to data files"},
-    {"require_commit_message", "If an explicit commit message is required for a snapshot commit."},
-    {"rewrite_delete_threshold", "A threshold that determines the minimum amount of data that must be "
-                                 "removed from a file before a rewrite is warranted. From 0 - 1."},
-    {"delete_older_than", "How old unused files must be to be removed by the 'ducklake_delete_orphaned_files' and "
-                          "'ducklake_cleanup_old_files' cleanup functions."},
-    {"expire_older_than", "How old snapshots must be, by default, to be expired by: 'ducklake_expire_snapshots'"},
-    {"auto_compact", "Pre-defined schema used as a default value for the following compaction functions "
-                     "'ducklake_flush_inlined_data','ducklake_merge_adjacent_files', "
-                     "'ducklake_rewrite_data_files', 'ducklake_delete_orphaned_files'"},
-    {"encrypted", "Whether or not to encrypt Parquet files written to the data path"},
-    {"per_thread_output", "Whether to create separate output files per thread during parallel insertion"},
-    {"write_deletion_vectors", "[EXPERIMENTAL - do not use outside testing] Whether to write Iceberg V3 deletion "
-                               "vectors (puffin) instead of positional delete files (parquet), encrypted catalogs "
-                               "always write parquet"},
-    {"sort_on_insert", "Whether to sort data on INSERT according to SET SORTED BY (default: true)"},
-    {"skip_stats_columns", "Columns for which min/max bounds are not recorded (counts are still recorded)"},
-};
-
 struct DuckLakeOptionsData : public TableFunctionData {
 	explicit DuckLakeOptionsData(DuckLakeCatalog &catalog) : catalog(catalog) {
 	}
 
 	DuckLakeCatalog &catalog;
-};
-
-struct DuckLakeOptionsState : public GlobalTableFunctionState {
-	vector<vector<Value>> rows;
-	idx_t offset = 0;
 };
 
 static unique_ptr<FunctionData> DuckLakeOptionsBind(ClientContext &context, TableFunctionBindInput &input,
@@ -78,17 +38,8 @@ static unique_ptr<FunctionData> DuckLakeOptionsBind(ClientContext &context, Tabl
 	return make_uniq<DuckLakeOptionsData>(catalog);
 }
 
-static Value GetOptionDescription(const string &option_name) {
-	for (auto &opt : DUCKLAKE_OPTIONS) {
-		if (StringUtil::CIEquals(opt.name, option_name)) {
-			return opt.description;
-		}
-	}
-	return Value();
-}
-
 static vector<Value> GetOptionRow(const DuckLakeTag &tag, const string &scope, const string &scope_entry) {
-	return {Value(tag.key), GetOptionDescription(tag.key), Value(tag.value), Value(scope),
+	return {Value(tag.key), DuckLakeUtil::GetConfigOptionDescription(tag.key), Value(tag.value), Value(scope),
 	        scope_entry.empty() ? Value() : Value(scope_entry)};
 }
 
@@ -98,7 +49,7 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 	auto &transaction = DuckLakeTransaction::Get(context, ducklake_catalog);
 	auto &metadata_manager = transaction.GetMetadataManager();
 
-	auto result = make_uniq<DuckLakeOptionsState>();
+	auto result = make_uniq<DuckLakeRunOnceState>();
 	auto metadata = metadata_manager.LoadDuckLake();
 
 	// Global options
@@ -140,7 +91,7 @@ unique_ptr<GlobalTableFunctionState> DuckLakeOptionsInit(ClientContext &context,
 }
 
 void DuckLakeOptionsExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
-	auto &state = data_p.global_state->Cast<DuckLakeOptionsState>();
+	auto &state = data_p.global_state->Cast<DuckLakeRunOnceState>();
 	DuckLakeBaseMetadataFunction::ScanRows(state.rows, state.offset, output);
 }
 

@@ -34,16 +34,27 @@ class DuckLakeMetadataManager;
 class DuckLakeRESTServer;
 struct DuckLakeSnapshot;
 
-//! A commit request that waits in the queue of its catalog
-struct DuckLakeRESTPendingCommit {
-	//! The endpoint of the request: commit_transaction or group_commit_transaction
-	string endpoint;
-	string request_json;
-	shared_ptr<const string> request_data;
-	vector<RESTMultipartPart> request_parts;
+//! What a request has besides its JSON document
+struct DuckLakeRESTRequestContext {
+	//! The server and the prefix of the catalog that the request is for
 	optional_ptr<DuckLakeRESTServer> server;
 	string prefix;
+	//! Whether the lists of the response are Arrow IPC streams in a multipart response, rather than JSON
 	bool accepts_arrow = false;
+	//! The parts of the request that are tables, if it is a multipart request, and the data they are regions of
+	vector<RESTMultipartPart> request_parts;
+	shared_ptr<const string> request_data;
+};
+
+//! A commit request that waits in the queue of its catalog
+struct DuckLakeRESTPendingCommit : public DuckLakeRESTRequestContext {
+	explicit DuckLakeRESTPendingCommit(DuckLakeRESTRequestContext context)
+	    : DuckLakeRESTRequestContext(std::move(context)) {
+	}
+
+	//! The endpoint of the request: commit_transaction or group_commit_transaction
+	rest_endpoint_t endpoint = nullptr;
+	string request_json;
 	//! Whether the commit can share its snapshot with other commits: a group commit that only appends data
 	bool shares_snapshot = false;
 
@@ -87,9 +98,10 @@ struct DuckLakeRESTCommitGroup {
 };
 
 //! The state of a single REST request, which runs in its own transaction on the served catalog
-class DuckLakeRESTRequest {
+class DuckLakeRESTRequest : public DuckLakeRESTRequestContext {
 public:
-	DuckLakeRESTRequest(DatabaseInstance &db, const string &catalog_name);
+	DuckLakeRESTRequest(DatabaseInstance &db, const string &catalog_name,
+	                    DuckLakeRESTRequestContext request_context = DuckLakeRESTRequestContext());
 
 	DuckLakeMetadataManager &GetMetadataManager();
 	//! The snapshot of a request: the snapshot, the snapshot with the id, or the latest snapshot if both are absent
@@ -100,14 +112,6 @@ public:
 	Connection connection;
 	DuckLakeCatalog *catalog;
 	DuckLakeTransaction *transaction;
-	//! The server and the prefix of the catalog that the request is for
-	optional_ptr<DuckLakeRESTServer> server;
-	string prefix;
-	//! Whether the lists of the response are Arrow IPC streams in a multipart response, rather than JSON
-	bool accepts_arrow = false;
-	//! The parts of the request that are tables, if it is a multipart request, and the data they are regions of
-	vector<RESTMultipartPart> request_parts;
-	shared_ptr<const string> request_data;
 	//! The content type of the response, set by the endpoint if it is not JSON
 	string content_type = "application/json";
 	//! Whether the request published its changes: a failed commit only runs again if it published nothing
@@ -212,6 +216,10 @@ private:
 	};
 	//! The catalog of a request, throws if there is none
 	ServedCatalog GetCatalog(optional_ptr<const string> prefix);
+	//! Runs an endpoint in a request of its own. A request that fails is rolled back and sets its commit outcome
+	static void RunRequest(const ServedCatalog &served, const DuckLakeRESTRequestContext &context,
+	                       const std::function<string(DuckLakeRESTRequest &)> &endpoint, string &response,
+	                       string &content_type, DuckLakeCommitOutcome &outcome);
 	//! Runs a commit, or the commits that share a snapshot
 	static void RunCommits(const ServedCatalog &served, vector<reference<DuckLakeRESTPendingCommit>> &commits);
 	static void RunCommit(const ServedCatalog &served, DuckLakeRESTPendingCommit &commit);

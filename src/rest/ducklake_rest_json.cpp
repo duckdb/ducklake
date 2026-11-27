@@ -11,8 +11,7 @@ namespace duckdb {
 // Writer
 //===--------------------------------------------------------------------===//
 RESTJsonWriter::RESTJsonWriter() {
-	root = writer.CreateObject();
-	writer.SetRoot(root);
+	writer.SetRoot(writer.CreateObject());
 }
 
 //===--------------------------------------------------------------------===//

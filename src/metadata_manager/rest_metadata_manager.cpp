@@ -48,6 +48,14 @@ static int64_t ToRequestId(idx_t id) {
 	return NumericCast<int64_t>(id);
 }
 
+template <class T>
+static T &AddRequest(vector<unique_ptr<RESTCommitRequest>> &requests) {
+	auto request = make_uniq<T>();
+	auto &result = *request;
+	requests.push_back(std::move(request));
+	return result;
+}
+
 DuckLakeRESTClient &RESTMetadataManager::GetClient() {
 	return transaction.GetCatalog().GetRESTClient();
 }
@@ -350,7 +358,7 @@ static void SetProjection(REQUEST &request, const PLAN &plan) {
 		return;
 	}
 	vector<RESTColumnIdentifier> columns;
-	for (auto &column : projection.columns) {
+	for (auto &column : projection.fields) {
 		columns.push_back(ToColumnIdentifier(column.first, column.second));
 	}
 	request.columns = RESTOptional<vector<RESTColumnIdentifier>>(std::move(columns));
@@ -359,27 +367,25 @@ static void SetProjection(REQUEST &request, const PLAN &plan) {
 RESTMetadataManager::InlinedRowsPlan
 RESTMetadataManager::PlanInlinedRows(const RESTInlinedRowsKey &key,
                                      optional_ptr<const vector<DuckLakeProjectedColumn>> projection) {
-	auto wanted = RESTInlinedProjection::From(projection);
+	auto wanted = RESTInlinedField::From(projection);
 	if (inlined_rows_cache.Covers(key, wanted)) {
 		return {false, wanted};
 	}
 	if (inlined_rows_cache.HasResponse(key)) {
 		// other scans of the table need other columns: get all of them, so that no scan has to ask again
-		wanted = RESTInlinedProjection();
+		wanted = RESTInlinedField();
 	}
 	return {true, wanted};
 }
 
-vector<DuckLakeFileListEntry>
-RESTMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
-                                      const FilterPushdownInfo *filter_info, bool include_local_changes,
-                                      optional_ptr<const vector<DuckLakeProjectedColumn>> projection) {
-	if (IsTransactionLocal(table.GetTableId())) {
-		return {};
-	}
+RESTSelectResponse RESTMetadataManager::SelectFiles(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
+                                                    const FilterPushdownInfo *filter_info,
+                                                    optional_ptr<const vector<DuckLakeProjectedColumn>> projection,
+                                                    bool extended) {
 	RESTSelectRequest request;
 	request.snapshot = snapshot;
 	request.table_id = table.GetTableId().index;
+	request.extended = extended;
 	// the inlined rows of an earlier scan at this snapshot can have the columns already
 	RESTInlinedRowsKey inlined_key {RESTInlinedRowsKind::SCAN, 0, snapshot.snapshot_id, table.GetTableId().index};
 	auto plan = PlanInlinedRows(inlined_key, projection);
@@ -398,11 +404,24 @@ RESTMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapsho
 		    page_request.page_token = page_token;
 		    return GetClient().Select(page_request);
 	    },
-	    [&](RESTSelectResponse &page) { AppendEntries(response.files, page.files); });
+	    [&](RESTSelectResponse &page) {
+		    AppendEntries(response.files, page.files);
+		    AppendEntries(response.extended_files, page.extended_files);
+	    });
 	if (plan.fetch) {
 		inlined_rows_cache.Add(inlined_key, plan.projection, std::move(response.inlined_data));
 	}
-	return std::move(response.files);
+	return response;
+}
+
+vector<DuckLakeFileListEntry>
+RESTMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
+                                      const FilterPushdownInfo *filter_info, bool include_local_changes,
+                                      optional_ptr<const vector<DuckLakeProjectedColumn>> projection) {
+	if (IsTransactionLocal(table.GetTableId())) {
+		return {};
+	}
+	return std::move(SelectFiles(table, snapshot, filter_info, projection, false).files);
 }
 
 vector<DuckLakeFileListExtendedEntry>
@@ -410,32 +429,7 @@ RESTMetadataManager::GetExtendedFilesForTable(DuckLakeTableEntry &table, DuckLak
                                               const FilterPushdownInfo *filter_info,
                                               optional_ptr<const vector<DuckLakeProjectedColumn>> projection) {
 	D_ASSERT(!IsTransactionLocal(table.GetTableId()));
-	RESTSelectRequest request;
-	request.snapshot = snapshot;
-	request.table_id = table.GetTableId().index;
-	request.extended = true;
-	RESTInlinedRowsKey inlined_key {RESTInlinedRowsKind::SCAN, 0, snapshot.snapshot_id, table.GetTableId().index};
-	auto plan = PlanInlinedRows(inlined_key, projection);
-	SetProjection(request, plan);
-	if (filter_info) {
-		request.filters = make_uniq<RESTScanFilters>(DuckLakeRESTFilters::Write(*filter_info, table));
-	}
-	request.known_column_mappings = transaction.GetCatalog().GetLoadedNameMapIds();
-	auto response = GetClient().Select(request);
-	transaction.GetCatalog().AddNameMaps(std::move(response.column_mappings));
-	AddPages<RESTSelectResponse>(
-	    transaction.GetCatalog(), response.page_tokens,
-	    [&](const string &page_token) {
-		    RESTSelectRequest page_request;
-		    page_request.table_id = table.GetTableId().index;
-		    page_request.page_token = page_token;
-		    return GetClient().Select(page_request);
-	    },
-	    [&](RESTSelectResponse &page) { AppendEntries(response.extended_files, page.extended_files); });
-	if (plan.fetch) {
-		inlined_rows_cache.Add(inlined_key, plan.projection, std::move(response.inlined_data));
-	}
-	return std::move(response.extended_files);
+	return std::move(SelectFiles(table, snapshot, filter_info, projection, true).extended_files);
 }
 
 unique_ptr<QueryResult> RESTMetadataManager::ToQueryResult(RESTRowSet rows) {
@@ -468,7 +462,7 @@ shared_ptr<RESTInlinedRowsResponse> RESTMetadataManager::FetchInlinedRows(const 
 		inlined_data = std::move(GetClient().TableChanges(request).inlined_data);
 		// LCOV_EXCL_STOP
 	}
-	return inlined_rows_cache.Add(key, RESTInlinedProjection(), std::move(inlined_data));
+	return inlined_rows_cache.Add(key, RESTInlinedField(), std::move(inlined_data));
 }
 
 unique_ptr<QueryResult> RESTMetadataManager::ReadCachedInlinedRows(RESTInlinedRowsKind kind,
@@ -698,14 +692,14 @@ static RESTOptionSetting GetOptionSetting(const DuckLakeConfigOption &option) {
 }
 
 idx_t RESTMetadataManager::SetConfigOption(const DuckLakeConfigOption &option) {
-	auto &request = AddCommitRequest<RESTSetOptionRequest>();
+	auto &request = AddRequest<RESTSetOptionRequest>(catalog_requests);
 	request.option = GetOptionSetting(option);
 	// the server writes the option when the transaction commits
 	return 1;
 }
 
 bool RESTMetadataManager::ResetConfigOption(const DuckLakeConfigOption &option) {
-	auto &request = AddCommitRequest<RESTSetOptionRequest>();
+	auto &request = AddRequest<RESTSetOptionRequest>(catalog_requests);
 	request.option = GetOptionSetting(option);
 	request.reset = true;
 	return true;
@@ -820,7 +814,7 @@ void RESTMetadataManager::RemoveFilesScheduledForCleanup(const vector<DuckLakeFi
 // Catalog Changes
 //===--------------------------------------------------------------------===//
 void RESTMetadataManager::OnCreateSchema(DuckLakeSchemaEntry &schema) {
-	auto &request = AddCommitRequest<RESTCreateSchemaRequest>();
+	auto &request = AddRequest<RESTCreateSchemaRequest>(catalog_requests);
 	request.placeholder_id = ToRequestId(schema.GetSchemaId().index);
 	created_oids[request.placeholder_id] = schema.oid;
 	auto parent = schema.ParentDuckLakeSchema();
@@ -834,7 +828,7 @@ void RESTMetadataManager::OnCreateSchema(DuckLakeSchemaEntry &schema) {
 
 void RESTMetadataManager::OnCreateTable(DuckLakeSchemaEntry &schema, const CreateTableInfo &info,
                                         const DuckLakeTableEntry &table) {
-	auto &request = AddCommitRequest<RESTCreateTableRequest>();
+	auto &request = AddRequest<RESTCreateTableRequest>(catalog_requests);
 	request.placeholder_id = ToRequestId(table.GetTableId().index);
 	created_oids[request.placeholder_id] = table.oid;
 	request.schema_id = ToRequestId(schema.GetSchemaId().index);
@@ -866,7 +860,7 @@ void RESTMetadataManager::OnCreateTable(DuckLakeSchemaEntry &schema, const Creat
 }
 
 void RESTMetadataManager::OnCreateView(DuckLakeViewEntry &view) {
-	auto &request = AddCommitRequest<RESTCreateViewRequest>();
+	auto &request = AddRequest<RESTCreateViewRequest>(catalog_requests);
 	request.placeholder_id = ToRequestId(view.GetViewId().index);
 	created_oids[request.placeholder_id] = view.oid;
 	request.schema_id = ToRequestId(view.ParentSchema().Cast<DuckLakeSchemaEntry>().GetSchemaId().index);
@@ -874,9 +868,7 @@ void RESTMetadataManager::OnCreateView(DuckLakeViewEntry &view) {
 	request.view_uuid = view.GetViewUUID();
 	request.dialect = "duckdb";
 	request.sql = view.GetQuerySQL();
-	for (auto &alias : view.aliases) {
-		request.column_aliases.push_back(alias.GetIdentifierName());
-	}
+	request.column_aliases = IdentifiersToStrings(view.aliases);
 	if (!view.comment.IsNull()) {
 		request.comment = view.comment.ToString();
 	}
@@ -889,7 +881,7 @@ void RESTMetadataManager::OnCreateView(DuckLakeViewEntry &view) {
 }
 
 void RESTMetadataManager::OnCreateMacro(MacroCatalogEntry &macro) {
-	auto &request = AddCommitRequest<RESTCreateMacroRequest>();
+	auto &request = AddRequest<RESTCreateMacroRequest>(catalog_requests);
 	// macros have no id before the commit: the placeholder id is a local id
 	auto placeholder_id = ToRequestId(transaction.GetLocalCatalogId());
 	local_macros[macro] = placeholder_id;
@@ -946,7 +938,7 @@ void RESTMetadataManager::OnAlterEntry(CatalogEntry &entry, const AlterInfo &inf
 		DuckLakeTypes::ToString(altered_type);
 		DuckLakeTypes::CheckSupportedType(altered_type, transaction.GetCatalog().GetDuckLakeVersion());
 	}
-	auto &request = AddCommitRequest<RESTAlterRequest>();
+	auto &request = AddRequest<RESTAlterRequest>(catalog_requests);
 	if (entry.type == CatalogType::TABLE_ENTRY) {
 		request.entry_id = ToRequestId(entry.Cast<DuckLakeTableEntry>().GetTableId().index);
 	} else {
@@ -957,7 +949,7 @@ void RESTMetadataManager::OnAlterEntry(CatalogEntry &entry, const AlterInfo &inf
 }
 
 void RESTMetadataManager::OnDropEntry(CatalogEntry &entry) {
-	auto &request = AddCommitRequest<RESTDropRequest>();
+	auto &request = AddRequest<RESTDropRequest>(catalog_requests);
 	switch (entry.type) {
 	case CatalogType::SCHEMA_ENTRY:
 		request.entry_type = "schema";
@@ -1021,14 +1013,6 @@ void RESTMetadataManager::OnDropFile(TableIndex table_id, DataFileIndex data_fil
 //===--------------------------------------------------------------------===//
 // Commit
 //===--------------------------------------------------------------------===//
-template <class T>
-static T &AddRequest(vector<unique_ptr<RESTCommitRequest>> &requests) {
-	auto request = make_uniq<T>();
-	auto &result = *request;
-	requests.push_back(std::move(request));
-	return result;
-}
-
 void RESTMetadataManager::AddDeletes(const TransactionChangeInformation &transaction_changes,
                                      vector<unique_ptr<RESTCommitRequest>> &requests) {
 	auto &dropped_tables = transaction_changes.dropped_tables;

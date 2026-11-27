@@ -53,8 +53,8 @@ DuckLakeMultiFileList::DuckLakeMultiFileList(DuckLakeFunctionInfo &read_info,
 	inlined_data_tables.push_back(inlined_table);
 }
 
-optional_ptr<const DuckLakeFieldId> DuckLakeMultiFileList::ResolveFilterField(const Expression &subject,
-                                                                              column_t column_id) const {
+unique_ptr<DuckLakeFilterNode>
+DuckLakeMultiFileList::GetFieldFilterNode(const Expression &expr, const Expression &subject, column_t column_id) const {
 	if (IsVirtualColumn(column_id)) {
 		return nullptr;
 	}
@@ -77,7 +77,11 @@ optional_ptr<const DuckLakeFieldId> DuckLakeMultiFileList::ResolveFilterField(co
 			// LCOV_EXCL_STOP
 		}
 	}
-	return field_id;
+	// stats for a nested field are stored against that field, not against the column that contains it
+	auto rewritten =
+	    ExpressionIterator::ReplaceExpression(expr, subject, BoundReferenceExpression(field_id->Type(), 0U));
+	return make_uniq<DuckLakeFilterNode>(ColumnFilterInfo(field_id->GetFieldIndex().index, field_id->Type(),
+	                                                      make_uniq<ExpressionFilter>(std::move(rewritten))));
 }
 
 unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetColumnFilterNode(column_t column_id, const Expression &expr,
@@ -89,15 +93,7 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetColumnFilterNode(column
 			    ColumnFilterInfo(read_info.table.GetFieldId(PhysicalIndex(column_id)).GetFieldIndex().index,
 			                     column_type, make_uniq<ExpressionFilter>(expr.Copy())));
 		}
-		// stats for a nested field are stored against that field, not against the column that contains it
-		auto field_id = ResolveFilterField(*subject, column_id);
-		if (!field_id) {
-			return nullptr;
-		}
-		auto rewritten =
-		    ExpressionIterator::ReplaceExpression(expr, *subject, BoundReferenceExpression(field_id->Type(), 0U));
-		return make_uniq<DuckLakeFilterNode>(ColumnFilterInfo(field_id->GetFieldIndex().index, field_id->Type(),
-		                                                      make_uniq<ExpressionFilter>(std::move(rewritten))));
+		return GetFieldFilterNode(expr, *subject, column_id);
 	}
 	// a conjunction may constrain several nested fields of the same column, each with their own stats
 	if (expr.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
@@ -158,15 +154,7 @@ unique_ptr<DuckLakeFilterNode> DuckLakeMultiFileList::GetExpressionFilterNode(Mu
 		return nullptr;
 		// LCOV_EXCL_STOP
 	}
-	auto column_id = info.column_ids[projection_index];
-	auto field_id = ResolveFilterField(*subject, column_id);
-	if (!field_id) {
-		return nullptr;
-	}
-	auto rewritten =
-	    ExpressionIterator::ReplaceExpression(expr, *subject, BoundReferenceExpression(field_id->Type(), 0U));
-	return make_uniq<DuckLakeFilterNode>(ColumnFilterInfo(field_id->GetFieldIndex().index, field_id->Type(),
-	                                                      make_uniq<ExpressionFilter>(std::move(rewritten))));
+	return GetFieldFilterNode(expr, *subject, info.column_ids[projection_index]);
 }
 
 void DuckLakeMultiFileList::AddFilterToPushdownInfo(FilterPushdownInfo &pushdown_info, column_t column_id,
@@ -620,9 +608,8 @@ vector<DuckLakeFileListExtendedEntry> DuckLakeMultiFileList::GetFilesExtended() 
 	if (!IsTransactionLocal(read_info.table_id)) {
 		// not a transaction local table - read the file list from the metadata store
 		auto &metadata_manager = transaction.GetMetadataManager();
-		result = metadata_manager.GetExtendedFilesForTable(
-		    read_info.table, read_info.snapshot, filter_info.get(),
-		    has_projection ? optional_ptr<const vector<DuckLakeProjectedColumn>>(projection) : nullptr);
+		result = metadata_manager.GetExtendedFilesForTable(read_info.table, read_info.snapshot, filter_info.get(),
+		                                                   GetProjection());
 	}
 	ApplyLocalFileChanges(transaction, read_info.table_id, result);
 	idx_t transaction_row_start = DuckLakeConstants::TRANSACTION_LOCAL_ROW_ID_START;
@@ -694,11 +681,10 @@ vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
     DuckLakeTransaction &transaction, identifier_map_t<shared_ptr<DuckLakeCommittedInlinedRows>> &inlined_rows) const {
 	static constexpr idx_t MAX_ATTEMPTS = 10;
 	auto &metadata_manager = transaction.GetMetadataManager();
-	auto scan_projection = has_projection ? optional_ptr<const vector<DuckLakeProjectedColumn>>(projection) : nullptr;
 	// a remote metadata manager reads the files and the inlined rows of the same snapshot
 	if (!metadata_manager.CommitsEachStatement() || metadata_manager.IsRemote() || inlined_data_tables.empty()) {
 		return metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter_info.get(),
-		                                         read_info.include_local_changes, scan_projection);
+		                                         read_info.include_local_changes, GetProjection());
 	}
 	// every query sees the latest commits, so the inlined rows are read first and again if a file was written since
 	for (idx_t attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
@@ -730,7 +716,7 @@ vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
 			    DuckLakeInlinedDataReader::ReadCommittedRows(read_info, table.table_name, columns, next_file_id);
 		}
 		auto result = metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter_info.get(),
-		                                                read_info.include_local_changes, scan_projection);
+		                                                read_info.include_local_changes, GetProjection());
 		// without inlined rows a flush cannot move any of them
 		bool written_since = next_file_id.IsValid() &&
 		                     std::any_of(result.begin(), result.end(), [&](const DuckLakeFileListEntry &entry) {
@@ -785,36 +771,28 @@ void DuckLakeMultiFileList::GetFilesForTable() const {
 	}
 }
 
-void DuckLakeMultiFileList::GetTableInsertions() const {
+void DuckLakeMultiFileList::GetTableChanges() const {
 	if (IsTransactionLocal(read_info.table_id)) {
 		throw InternalException("Cannot get changes between snapshots for transaction-local files");
 	}
 	auto transaction_ref = read_info.GetTransaction();
 	auto &transaction = *transaction_ref;
 	auto &metadata_manager = transaction.GetMetadataManager();
-	files = metadata_manager.GetTableInsertions(
-	    read_info.table, *read_info.start_snapshot, read_info.snapshot,
-	    has_projection ? optional_ptr<const vector<DuckLakeProjectedColumn>>(projection) : nullptr);
-	AddInlinedDataTables(transaction);
-}
-
-void DuckLakeMultiFileList::GetTableDeletions() const {
-	if (IsTransactionLocal(read_info.table_id)) {
-		throw InternalException("Cannot get changes between snapshots for transaction-local files");
-	}
-	auto transaction_ref = read_info.GetTransaction();
-	auto &transaction = *transaction_ref;
-	auto &metadata_manager = transaction.GetMetadataManager();
-	delete_scans = metadata_manager.GetTableDeletions(
-	    read_info.table, *read_info.start_snapshot, read_info.snapshot, read_info.include_local_changes,
-	    has_projection ? optional_ptr<const vector<DuckLakeProjectedColumn>>(projection) : nullptr);
-	for (auto &file : delete_scans) {
-		DuckLakeFileListEntry file_entry;
-		file_entry.file = file.file;
-		file_entry.row_id_start = file.row_id_start;
-		file_entry.snapshot_id = file.snapshot_id;
-		file_entry.mapping_id = file.mapping_id;
-		files.emplace_back(std::move(file_entry));
+	if (read_info.scan_type == DuckLakeScanType::SCAN_INSERTIONS) {
+		files = metadata_manager.GetTableInsertions(read_info.table, *read_info.start_snapshot, read_info.snapshot,
+		                                            GetProjection());
+	} else {
+		delete_scans =
+		    metadata_manager.GetTableDeletions(read_info.table, *read_info.start_snapshot, read_info.snapshot,
+		                                       read_info.include_local_changes, GetProjection());
+		for (auto &file : delete_scans) {
+			DuckLakeFileListEntry file_entry;
+			file_entry.file = file.file;
+			file_entry.row_id_start = file.row_id_start;
+			file_entry.snapshot_id = file.snapshot_id;
+			file_entry.mapping_id = file.mapping_id;
+			files.emplace_back(std::move(file_entry));
+		}
 	}
 	AddInlinedDataTables(transaction);
 }
@@ -855,10 +833,8 @@ const vector<DuckLakeFileListEntry> &DuckLakeMultiFileList::GetFiles() const {
 			GetFilesForTable();
 			break;
 		case DuckLakeScanType::SCAN_INSERTIONS:
-			GetTableInsertions();
-			break;
 		case DuckLakeScanType::SCAN_DELETIONS:
-			GetTableDeletions();
+			GetTableChanges();
 			break;
 		default:
 			throw InternalException("Unknown DuckLake scan type");

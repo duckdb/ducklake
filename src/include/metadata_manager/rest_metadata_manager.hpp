@@ -114,20 +114,12 @@ public:
 
 private:
 	DuckLakeRESTClient &GetClient();
-	//! Adds a catalog change to the requests that are sent when the transaction commits
-	template <class T>
-	T &AddCommitRequest() {
-		auto request = make_uniq<T>();
-		auto &result = *request;
-		catalog_requests.push_back(std::move(request));
-		return result;
-	}
 	unique_ptr<QueryResult> ToQueryResult(RESTRowSet rows);
 	//! Whether a scan has to ask the server for the inlined rows, and for which columns: other scans of the table at
 	//! the snapshot can have the rows already, and scans that need other columns ask for all columns
 	struct InlinedRowsPlan {
 		bool fetch;
-		RESTInlinedProjection projection;
+		RESTInlinedField projection;
 	};
 	InlinedRowsPlan PlanInlinedRows(const RESTInlinedRowsKey &key,
 	                                optional_ptr<const vector<DuckLakeProjectedColumn>> projection);
@@ -139,6 +131,10 @@ private:
 	                                              DuckLakeSnapshot snapshot, const string &inlined_table_name,
 	                                              const vector<string> &columns_to_read);
 	RESTSnapshotData GetSnapshotData(DuckLakeSnapshot snapshot, bool include_catalog, bool include_stats);
+	//! Scans the files of a table, the response has the files of all pages of the scan
+	RESTSelectResponse SelectFiles(DuckLakeTableEntry &table, DuckLakeSnapshot snapshot,
+	                               const FilterPushdownInfo *filter_info,
+	                               optional_ptr<const vector<DuckLakeProjectedColumn>> projection, bool extended);
 	void AddDeletes(const TransactionChangeInformation &changes, vector<unique_ptr<RESTCommitRequest>> &requests);
 	void AddInserts(const TransactionChangeInformation &changes, vector<unique_ptr<RESTCommitRequest>> &requests);
 	RESTTableChangesResponse GetTableChanges(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot,

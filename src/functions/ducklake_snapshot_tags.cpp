@@ -22,8 +22,17 @@ struct DuckLakeSnapshotTagData : public TableFunctionData {
 	Value expires_at = Value(LogicalType::TIMESTAMP_TZ);
 };
 
-static DuckLakeCatalog &GetTagCatalog(ClientContext &context, TableFunctionBindInput &input,
-                                      DatabaseModificationType modification) {
+static string TagNameFromInput(const Value &input) {
+	if (input.IsNull() || StringValue::Get(input).empty()) {
+		throw BinderException("Tag name cannot be NULL or empty");
+	}
+	return StringValue::Get(input);
+}
+
+//! Binds a function that changes the tag named by its second argument
+static unique_ptr<DuckLakeSnapshotTagData> BindTag(ClientContext &context, TableFunctionBindInput &input,
+                                                   vector<LogicalType> &return_types, vector<Identifier> &names,
+                                                   DatabaseModificationType modification) {
 	auto &catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
 	if (!catalog.SupportsSnapshotTags()) {
 		ThrowUnsupportedByVersion(catalog.GetDuckLakeVersion(), "snapshot tags");
@@ -32,19 +41,9 @@ static DuckLakeCatalog &GetTagCatalog(ClientContext &context, TableFunctionBindI
 	if (input.binder) {
 		input.binder->GetStatementProperties().RegisterDBModify(catalog, context, modification);
 	}
-	return catalog;
-}
-
-static string TagNameFromInput(const Value &input) {
-	if (input.IsNull() || StringValue::Get(input).empty()) {
-		throw BinderException("Tag name cannot be NULL or empty");
-	}
-	return StringValue::Get(input);
-}
-
-static void TagReturnTypes(vector<LogicalType> &return_types, vector<Identifier> &names) {
 	return_types.push_back(LogicalType::BOOLEAN);
 	names.push_back("Success");
+	return make_uniq<DuckLakeSnapshotTagData>(catalog, TagNameFromInput(input.inputs[1]));
 }
 
 //! The snapshot of the version or timestamp option, or else the snapshot the transaction reads
@@ -69,14 +68,12 @@ static idx_t TagSnapshotFromInput(ClientContext &context, TableFunctionBindInput
 
 static unique_ptr<FunctionData> CreateTagBind(ClientContext &context, TableFunctionBindInput &input,
                                               vector<LogicalType> &return_types, vector<Identifier> &names) {
-	auto &catalog = GetTagCatalog(context, input, DatabaseModificationType::CREATE_CATALOG_ENTRY);
-	auto result = make_uniq<DuckLakeSnapshotTagData>(catalog, TagNameFromInput(input.inputs[1]));
+	auto result = BindTag(context, input, return_types, names, DatabaseModificationType::CREATE_CATALOG_ENTRY);
 	// a string that reads as a snapshot id keeps naming that snapshot
 	if (DuckLakeUtil::TryParseSnapshotId(input.inputs[1])) {
 		throw BinderException("A snapshot tag cannot be named like a snapshot id, got \"%s\"", result->name);
 	}
-	TagReturnTypes(return_types, names);
-	result->snapshot_id = TagSnapshotFromInput(context, input, catalog, "ducklake_create_tag");
+	result->snapshot_id = TagSnapshotFromInput(context, input, result->catalog, "ducklake_create_tag");
 	DuckLakeTableFunctionUtil::TryGetTimestampOption(input, "expires_at", result->expires_at);
 	return std::move(result);
 }
@@ -89,11 +86,10 @@ static void CreateTagExecute(ClientContext &context, TableFunctionInput &data_p,
 
 static unique_ptr<FunctionData> ReplaceTagBind(ClientContext &context, TableFunctionBindInput &input,
                                                vector<LogicalType> &return_types, vector<Identifier> &names) {
-	auto &catalog = GetTagCatalog(
-	    context, input, DatabaseModificationType::DROP_CATALOG_ENTRY | DatabaseModificationType::CREATE_CATALOG_ENTRY);
-	auto result = make_uniq<DuckLakeSnapshotTagData>(catalog, TagNameFromInput(input.inputs[1]));
-	TagReturnTypes(return_types, names);
-	result->snapshot_id = TagSnapshotFromInput(context, input, catalog, "ducklake_replace_tag");
+	auto result =
+	    BindTag(context, input, return_types, names,
+	            DatabaseModificationType::DROP_CATALOG_ENTRY | DatabaseModificationType::CREATE_CATALOG_ENTRY);
+	result->snapshot_id = TagSnapshotFromInput(context, input, result->catalog, "ducklake_replace_tag");
 	Value expected;
 	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "expected_snapshot", "integer", expected)) {
 		result->expected_snapshot_id = expected.DefaultCastAs(LogicalType::UBIGINT).GetValue<idx_t>();
@@ -109,11 +105,9 @@ static void ReplaceTagExecute(ClientContext &context, TableFunctionInput &data_p
 
 static unique_ptr<FunctionData> DropTagBind(ClientContext &context, TableFunctionBindInput &input,
                                             vector<LogicalType> &return_types, vector<Identifier> &names) {
-	auto &catalog = GetTagCatalog(context, input, DatabaseModificationType::DROP_CATALOG_ENTRY);
-	auto result = make_uniq<DuckLakeSnapshotTagData>(catalog, TagNameFromInput(input.inputs[1]));
-	TagReturnTypes(return_types, names);
+	auto result = BindTag(context, input, return_types, names, DatabaseModificationType::DROP_CATALOG_ENTRY);
 	// the commit conflicts with tag changes after the snapshot the drop was validated against
-	DuckLakeTransaction::Get(context, catalog).GetSnapshot();
+	DuckLakeTransaction::Get(context, result->catalog).GetSnapshot();
 	return std::move(result);
 }
 
@@ -125,16 +119,15 @@ static void DropTagExecute(ClientContext &context, TableFunctionInput &data_p, D
 
 static unique_ptr<FunctionData> SetTagExpiryBind(ClientContext &context, TableFunctionBindInput &input,
                                                  vector<LogicalType> &return_types, vector<Identifier> &names) {
-	auto &catalog = GetTagCatalog(
-	    context, input, DatabaseModificationType::DROP_CATALOG_ENTRY | DatabaseModificationType::CREATE_CATALOG_ENTRY);
-	auto result = make_uniq<DuckLakeSnapshotTagData>(catalog, TagNameFromInput(input.inputs[1]));
-	TagReturnTypes(return_types, names);
+	auto result =
+	    BindTag(context, input, return_types, names,
+	            DatabaseModificationType::DROP_CATALOG_ENTRY | DatabaseModificationType::CREATE_CATALOG_ENTRY);
 	if (!input.inputs[2].IsNull()) {
 		DuckLakeTableFunctionUtil::CheckTimestampOption("expires_at", input.inputs[2]);
 		result->expires_at = input.inputs[2];
 	}
 	// the commit conflicts with tag changes after the snapshot the change was validated against
-	DuckLakeTransaction::Get(context, catalog).GetSnapshot();
+	DuckLakeTransaction::Get(context, result->catalog).GetSnapshot();
 	return std::move(result);
 }
 

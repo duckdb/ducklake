@@ -35,6 +35,7 @@ public:
 	//! Fails unless the timestamp is finite and in the year 1 or later
 	static void CheckTimestampOption(const string &name, const Value &value);
 	static string GetStringOption(const TableFunctionBindInput &input, const string &name);
+	static bool GetBooleanOption(const TableFunctionBindInput &input, const string &name, bool default_value);
 	static string GetTableName(const Value &input);
 	static void VerifySnapshotIdentifier(const Value &input);
 	static BoundAtClause AtClauseFromValue(const Value &input);
@@ -52,8 +53,25 @@ struct MetadataBindData : public TableFunctionData {
 struct DuckLakeRunOnceState : public GlobalTableFunctionState {
 	bool executed = false;
 	idx_t offset = 0;
+	//! The rows of a function that produces them when it runs
+	vector<vector<Value>> rows;
 
 	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input);
+};
+
+//! The table and the paths that ducklake_add_data_files and ducklake_remove_data_files are called with
+struct DuckLakeDataFilesBindData : public TableFunctionData {
+	//! Binds the table, whose catalog has to be writable
+	DuckLakeDataFilesBindData(ClientContext &context, TableFunctionBindInput &input);
+	//! Reads a path or a list of paths
+	void BindPaths(const Value &input);
+	//! The overloads of a function for a path and for a list of paths
+	static TableFunctionSet GetFunctions(const char *name, table_function_t function, table_function_bind_t bind,
+	                                     const std::function<void(TypedKwargs &)> &add_options);
+
+	DuckLakeCatalog &catalog;
+	DuckLakeTableEntry &table;
+	vector<string> paths;
 };
 
 class DuckLakeBaseMetadataFunction : public TableFunction {
@@ -170,7 +188,7 @@ public:
 	DuckLakeOptionsFunction();
 };
 
-class DuckLakeMetadataTableFunction : public TableFunction {
+class DuckLakeMetadataTableFunction : public DuckLakeBaseMetadataFunction {
 public:
 	DuckLakeMetadataTableFunction();
 };

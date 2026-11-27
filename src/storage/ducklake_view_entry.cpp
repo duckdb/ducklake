@@ -58,6 +58,14 @@ unique_ptr<CatalogEntry> DuckLakeViewEntry::AlterEntry(ClientContext &context, A
 	}
 }
 
+unique_ptr<CatalogEntry> DuckLakeViewEntry::Alter(ClientContext &context, DuckLakeTransaction &transaction,
+                                                  AlterInfo &info) {
+	if (info.type == AlterType::SET_COLUMN_COMMENT) {
+		return Alter(transaction, info.Cast<SetColumnCommentInfo>());
+	}
+	return AlterEntry(context, info);
+}
+
 unique_ptr<CatalogEntry> DuckLakeViewEntry::Alter(DuckLakeTransaction &transaction, SetColumnCommentInfo &info) {
 	if (!transaction.GetCatalog().SupportsV1_1Metadata()) {
 		throw InvalidInputException("DuckLake 1.0 does not support COMMENT ON COLUMN for views");

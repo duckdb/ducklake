@@ -68,6 +68,12 @@ string DuckLakeTableFunctionUtil::GetStringOption(const TableFunctionBindInput &
 	return StringValue::Get(result);
 }
 
+bool DuckLakeTableFunctionUtil::GetBooleanOption(const TableFunctionBindInput &input, const string &name,
+                                                 bool default_value) {
+	Value result;
+	return TryGetNonNullOption(input, name, "boolean", result) ? BooleanValue::Get(result) : default_value;
+}
+
 string DuckLakeTableFunctionUtil::GetTableName(const Value &input) {
 	if (input.IsNull()) {
 		throw BinderException("Table cannot be NULL");
@@ -205,6 +211,58 @@ static void MetadataFunctionExecute(ClientContext &context, TableFunctionInput &
 
 unique_ptr<GlobalTableFunctionState> DuckLakeRunOnceState::Init(ClientContext &context, TableFunctionInitInput &input) {
 	return make_uniq<DuckLakeRunOnceState>();
+}
+
+static DuckLakeTableEntry &GetWritableTable(ClientContext &context, TableFunctionBindInput &input,
+                                            DuckLakeCatalog &catalog) {
+	catalog.VerifyWritable();
+	if (input.inputs[1].IsNull()) {
+		throw InvalidInputException("Table name cannot be NULL");
+	}
+	auto schema_name = DuckLakeTableFunctionUtil::GetStringOption(input, "schema");
+	return DuckLakeBaseMetadataFunction::GetTableEntry(context, catalog, schema_name,
+	                                                   StringValue::Get(input.inputs[1]));
+}
+
+DuckLakeDataFilesBindData::DuckLakeDataFilesBindData(ClientContext &context, TableFunctionBindInput &input)
+    : catalog(DuckLakeBaseMetadataFunction::GetCatalog(context, input)),
+      table(GetWritableTable(context, input, catalog)) {
+}
+
+void DuckLakeDataFilesBindData::BindPaths(const Value &input) {
+	if (input.IsNull()) {
+		throw InvalidInputException("File list cannot be NULL");
+	}
+	if (input.type() == LogicalType::VARCHAR) {
+		paths.push_back(StringValue::Get(input));
+	} else if (input.type() == LogicalType::LIST(LogicalType::VARCHAR)) {
+		for (auto &path : ListValue::GetChildren(input)) {
+			if (path.IsNull()) {
+				throw InvalidInputException("File list cannot contain NULL");
+			}
+			paths.push_back(StringValue::Get(path));
+		}
+	} else {
+		throw InvalidInputException("File list must be a string or a list of strings");
+	}
+}
+
+TableFunctionSet DuckLakeDataFilesBindData::GetFunctions(const char *name, table_function_t function,
+                                                         table_function_bind_t bind,
+                                                         const std::function<void(TypedKwargs &)> &add_options) {
+	TableFunctionSet set(name);
+	vector<LogicalType> path_types {LogicalType::VARCHAR, LogicalType::LIST(LogicalType::VARCHAR)};
+	for (auto &type : path_types) {
+		TableFunction overload(name,
+		                       FunctionSignature()
+		                           .AddPositionalOnly("catalog", LogicalType::VARCHAR)
+		                           .AddPositionalOnly("table_name", LogicalType::VARCHAR)
+		                           .AddPositionalOnly(type.id() == LogicalTypeId::LIST ? "paths" : "path", type),
+		                       function, bind);
+		overload.GetSignature().WithTypedKwargs("options", add_options);
+		set.AddFunction(overload);
+	}
+	return set;
 }
 
 DuckLakeBaseMetadataFunction::DuckLakeBaseMetadataFunction(Identifier name_p, table_function_bind_t bind)

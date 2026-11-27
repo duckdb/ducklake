@@ -1,6 +1,5 @@
 add_library(
   ducklake_metadata_manager OBJECT
-  ducklake_metadata_manager_v1_1.cpp ducklake_metadata_manager_v2_0.cpp
   postgres_metadata_manager.cpp quack_metadata_manager.cpp
   rest_inlined_rows_cache.cpp rest_metadata_manager.cpp)
 set(ALL_OBJECT_FILES

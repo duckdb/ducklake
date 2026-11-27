@@ -73,8 +73,12 @@ private:
 	vector<DuckLakeFileListEntry>
 	ReadCommittedFiles(DuckLakeTransaction &transaction,
 	                   identifier_map_t<shared_ptr<DuckLakeCommittedInlinedRows>> &inlined_rows) const;
-	void GetTableInsertions() const;
-	void GetTableDeletions() const;
+	//! Read the files of the insertions or deletions between the snapshots of the scan
+	void GetTableChanges() const;
+	//! The columns that the scan reads, null if they are not known
+	optional_ptr<const vector<DuckLakeProjectedColumn>> GetProjection() const {
+		return has_projection ? &projection : nullptr;
+	}
 	void AddInlinedDataTables(DuckLakeTransaction &transaction) const;
 	void AddFilterToPushdownInfo(FilterPushdownInfo &pushdown_info, column_t column_id,
 	                             unique_ptr<TableFilter> filter) const;
@@ -88,8 +92,9 @@ private:
 	void AddFilterNodeToPushdownInfo(FilterPushdownInfo &pushdown_info, DuckLakeFilterNode &node) const;
 	//! Build a leaf node directly from an expression that constrains a single column
 	unique_ptr<DuckLakeFilterNode> GetExpressionFilterNode(MultiFilePushdownInfo &info, const Expression &expr) const;
-	//! Resolve the field a filter subject reads, descending into nested fields
-	optional_ptr<const DuckLakeFieldId> ResolveFilterField(const Expression &subject, column_t column_id) const;
+	//! Build a leaf node on the field that the subject of a filter reads, descending into nested fields
+	unique_ptr<DuckLakeFilterNode> GetFieldFilterNode(const Expression &expr, const Expression &subject,
+	                                                  column_t column_id) const;
 	//! Reduce an expression to per-column filters using the FilterCombiner
 	unique_ptr<DuckLakeFilterNode> CombineFilterNode(ClientContext &context, MultiFilePushdownInfo &info,
 	                                                 const Expression &expr) const;

@@ -31,8 +31,8 @@ enum class LocalChangeType {
 };
 
 struct LocalChange {
-	LocalChange(LocalChangeType type) // NOLINT: allow implicit conversion from LocalChangeType
-	    : type(type) {
+	LocalChange(LocalChangeType type, FieldIndex field_index = FieldIndex()) // NOLINT: allow implicit conversion
+	    : type(type), field_index(field_index) {
 	}
 
 	LocalChangeType type;
@@ -41,48 +41,11 @@ struct LocalChange {
 	//! For SET_COLUMN_COMMENT on views
 	Identifier view_column_comment_name;
 
-	static LocalChange SetColumnComment(FieldIndex field_idx) {
-		LocalChange result(LocalChangeType::SET_COLUMN_COMMENT);
-		result.field_index = field_idx;
-		return result;
-	}
 	static LocalChange SetViewColumnComment(const Identifier &column_name) {
 		LocalChange result(LocalChangeType::SET_COLUMN_COMMENT);
 		result.view_column_comment_name = column_name;
 		return result;
 	}
-	static LocalChange SetNull(FieldIndex field_idx) {
-		LocalChange result(LocalChangeType::SET_NULL);
-		result.field_index = field_idx;
-		return result;
-	}
-	static LocalChange DropNull(FieldIndex field_idx) {
-		LocalChange result(LocalChangeType::DROP_NULL);
-		result.field_index = field_idx;
-		return result;
-	}
-	static LocalChange RenameColumn(FieldIndex field_idx) {
-		LocalChange result(LocalChangeType::RENAME_COLUMN);
-		result.field_index = field_idx;
-		return result;
-	}
-	static LocalChange RemoveColumn(FieldIndex field_idx) {
-		LocalChange result(LocalChangeType::REMOVE_COLUMN);
-		result.field_index = field_idx;
-		return result;
-	}
 };
 
-struct SetDefaultLocalChange : LocalChange {
-	explicit SetDefaultLocalChange(bool is_column_new)
-	    : LocalChange(LocalChangeType::SET_DEFAULT), is_column_new(is_column_new) {};
-
-	static SetDefaultLocalChange SetDefault(FieldIndex field_idx, bool is_column_new) {
-		SetDefaultLocalChange result(is_column_new);
-		result.field_index = field_idx;
-		return result;
-	}
-
-	bool is_column_new;
-};
 } // namespace duckdb

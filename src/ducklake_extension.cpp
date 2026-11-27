@@ -63,119 +63,50 @@ static void LoadInternal(ExtensionLoader &loader) {
 	                          "server before they run, for tests that need their commits to wait together",
 	                          LogicalType::UBIGINT, Value::UBIGINT(0), nullptr, SetScope::GLOBAL);
 
-	DuckLakeRESTServeFunction rest_serve;
-	loader.RegisterFunction(rest_serve);
-
-	DuckLakeRESTStopFunction rest_stop;
-	loader.RegisterFunction(rest_stop);
-
-	DuckLakeRESTRequestFunction rest_request;
-	loader.RegisterFunction(rest_request);
-
-	DuckLakeRESTRowsFunction rest_rows;
-	loader.RegisterFunction(rest_rows);
-
-	DuckLakeSnapshotsFunction snapshots;
-	loader.RegisterFunction(snapshots);
-
-	DuckLakeTableInfoFunction table_info;
-	loader.RegisterFunction(table_info);
-
-	auto table_insertions = DuckLakeTableInsertionsFunction::GetFunctions();
-	loader.RegisterFunction(table_insertions);
-
-	auto table_deletions = DuckLakeTableDeletionsFunction::GetFunctions();
-	loader.RegisterFunction(table_deletions);
-
-	auto merge_adjacent_files = DuckLakeMergeAdjacentFilesFunction::GetFunctions();
-	loader.RegisterFunction(merge_adjacent_files);
-
-	auto rewrite_files = DuckLakeRewriteDataFilesFunction::GetFunctions();
-	loader.RegisterFunction(rewrite_files);
-
-	DuckLakeCleanupOldFilesFunction cleanup_old_files;
-	loader.RegisterFunction(cleanup_old_files);
-
-	DuckLakeCleanupOrphanedFilesFunction cleanup_orphaned_files;
-	loader.RegisterFunction(cleanup_orphaned_files);
-
-	DuckLakeExpireSnapshotsFunction expire_snapshots;
-	loader.RegisterFunction(expire_snapshots);
-
-	DuckLakeFlushInlinedDataFunction flush_inlined_data;
-	loader.RegisterFunction(flush_inlined_data);
-
-	DuckLakeSetOptionFunction set_options;
-	loader.RegisterFunction(set_options);
-
-	DuckLakeOptionsFunction options;
-	loader.RegisterFunction(options);
-
-	DuckLakeSetCommitMessage set_commit_message;
-	loader.RegisterFunction(set_commit_message);
-
-	DuckLakeCreateTagFunction create_tag;
-	loader.RegisterFunction(create_tag);
-
-	DuckLakeReplaceTagFunction replace_tag;
-	loader.RegisterFunction(replace_tag);
-
-	DuckLakeDropTagFunction drop_tag;
-	loader.RegisterFunction(drop_tag);
-
-	DuckLakeSetTagExpiryFunction set_tag_expiry;
-	loader.RegisterFunction(set_tag_expiry);
-
-	DuckLakeTagsFunction tags;
-	loader.RegisterFunction(tags);
-
+	loader.RegisterFunction(DuckLakeRESTServeFunction());
+	loader.RegisterFunction(DuckLakeRESTStopFunction());
+	loader.RegisterFunction(DuckLakeRESTRequestFunction());
+	loader.RegisterFunction(DuckLakeRESTRowsFunction());
+	loader.RegisterFunction(DuckLakeSnapshotsFunction());
+	loader.RegisterFunction(DuckLakeTableInfoFunction());
+	loader.RegisterFunction(DuckLakeTableInsertionsFunction::GetFunctions());
+	loader.RegisterFunction(DuckLakeTableDeletionsFunction::GetFunctions());
+	loader.RegisterFunction(DuckLakeMergeAdjacentFilesFunction::GetFunctions());
+	loader.RegisterFunction(DuckLakeRewriteDataFilesFunction::GetFunctions());
+	loader.RegisterFunction(DuckLakeCleanupOldFilesFunction());
+	loader.RegisterFunction(DuckLakeCleanupOrphanedFilesFunction());
+	loader.RegisterFunction(DuckLakeExpireSnapshotsFunction());
+	loader.RegisterFunction(DuckLakeFlushInlinedDataFunction());
+	loader.RegisterFunction(DuckLakeSetOptionFunction());
+	loader.RegisterFunction(DuckLakeOptionsFunction());
+	loader.RegisterFunction(DuckLakeSetCommitMessage());
+	loader.RegisterFunction(DuckLakeCreateTagFunction());
+	loader.RegisterFunction(DuckLakeReplaceTagFunction());
+	loader.RegisterFunction(DuckLakeDropTagFunction());
+	loader.RegisterFunction(DuckLakeSetTagExpiryFunction());
+	loader.RegisterFunction(DuckLakeTagsFunction());
 	auto table_changes = DuckLakeTableInsertionsFunction::GetDuckLakeTableChanges();
 	loader.RegisterFunction(*table_changes);
-
-	DuckLakeListFilesFunction list_files;
-	loader.RegisterFunction(list_files);
-
-	auto add_files = DuckLakeAddDataFilesFunction::GetFunctions();
-	loader.RegisterFunction(add_files);
-
-	auto remove_files = DuckLakeRemoveDataFilesFunction::GetFunctions();
-	loader.RegisterFunction(remove_files);
-
-	DuckLakeCurrentSnapshotFunction current_snapshot;
-	loader.RegisterFunction(current_snapshot);
-
-	DuckLakeMetadataTableFunction metadata_table;
-	loader.RegisterFunction(metadata_table);
-
-	DuckLakeLastCommittedSnapshotFunction last_committed;
-	loader.RegisterFunction(last_committed);
-
-	DuckLakeSettingsFunction settings;
-	loader.RegisterFunction(settings);
-
-	DuckLakeCommitFunction commit;
-	loader.RegisterFunction(commit);
-
-	DuckLakeRegisterMetadataProfileFunction register_metadata_profile;
-	loader.RegisterFunction(register_metadata_profile);
+	loader.RegisterFunction(DuckLakeListFilesFunction());
+	loader.RegisterFunction(DuckLakeAddDataFilesFunction::GetFunctions());
+	loader.RegisterFunction(DuckLakeRemoveDataFilesFunction::GetFunctions());
+	loader.RegisterFunction(DuckLakeCurrentSnapshotFunction());
+	loader.RegisterFunction(DuckLakeMetadataTableFunction());
+	loader.RegisterFunction(DuckLakeLastCommittedSnapshotFunction());
+	loader.RegisterFunction(DuckLakeSettingsFunction());
+	loader.RegisterFunction(DuckLakeCommitFunction());
+	loader.RegisterFunction(DuckLakeRegisterMetadataProfileFunction());
 
 	// Register ducklake_scan so it can be found during deserialization
-	auto ducklake_scan = DuckLakeFunctions::GetDuckLakeScanFunction(loader.GetDatabaseInstance());
-	loader.RegisterFunction(ducklake_scan);
+	loader.RegisterFunction(DuckLakeFunctions::GetDuckLakeScanFunction(loader.GetDatabaseInstance()));
 
 	// secrets
-	auto secret_type = DuckLakeSecret::GetSecretType();
-	loader.RegisterSecretType(secret_type);
-
-	auto ducklake_secret_function = DuckLakeSecret::GetFunction();
-	loader.RegisterFunction(ducklake_secret_function);
+	loader.RegisterSecretType(DuckLakeSecret::GetSecretType());
+	loader.RegisterFunction(DuckLakeSecret::GetFunction());
 
 	// Register murmur3_32 scalar function for Iceberg-compatible bucket partitioning
-	auto murmur3_func = DuckLakeMurmur3Function();
-	loader.RegisterFunction(murmur3_func);
-
-	auto unreadable_macro_default_func = DuckLakeUnreadableMacroDefaultFunction();
-	loader.RegisterFunction(unreadable_macro_default_func);
+	loader.RegisterFunction(DuckLakeMurmur3Function());
+	loader.RegisterFunction(DuckLakeUnreadableMacroDefaultFunction());
 }
 
 // LCOV_EXCL_START

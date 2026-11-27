@@ -19,10 +19,7 @@
 #include "storage/ducklake_transaction.hpp"
 #include "storage/ducklake_schema_entry.hpp"
 #include "common/ducklake_version.hpp"
-#include "metadata_manager/ducklake_metadata_manager_v1_1.hpp"
-#include "metadata_manager/ducklake_metadata_manager_v2_0.hpp"
-#include "metadata_manager/postgres_metadata_manager.hpp"
-#include "metadata_manager/quack_metadata_manager.hpp"
+#include "storage/ducklake_metadata_manager.hpp"
 
 namespace duckdb {
 
@@ -258,7 +255,7 @@ void DuckLakeInitializer::InitializeNewDuckLake(DuckLakeTransaction &transaction
 		options.data_path = path + ".files";
 		InitializeDataPath();
 	}
-	SetVersionedMetadataManager(transaction, version);
+	catalog.SetDuckLakeVersion(version);
 	auto &metadata_manager = transaction.GetMetadataManager();
 	metadata_manager.InitializeDuckLake(has_explicit_schema, catalog.Encryption());
 	if (catalog.Encryption() == DuckLakeEncryption::AUTOMATIC) {
@@ -415,9 +412,8 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 	for (auto &entry : metadata.table_settings) {
 		options.table_options[entry.table_id][entry.tag.key] = entry.tag.value;
 	}
-	// set correct version metadata manager
 	if (resolved_version != DuckLakeVersion::UNSET) {
-		SetVersionedMetadataManager(transaction, resolved_version);
+		catalog.SetDuckLakeVersion(resolved_version);
 	}
 }
 
@@ -439,40 +435,6 @@ DuckLakeVersion DuckLakeInitializer::ResolveTargetVersion(DuckLakeVersion catalo
 	throw InvalidInputException("DuckLake catalog version mismatch: catalog version is %s, but the extension requires "
 	                            "version %s. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
 	                            catalog_version_str, DuckLakeVersionToString(DUCKLAKE_LATEST_VERSION));
-}
-
-//! The versioned manager for the metadata backend of the transaction
-template <template <class> class MANAGER>
-static unique_ptr<DuckLakeMetadataManager> MakeVersionedManager(DuckLakeTransaction &transaction) {
-	auto &current = transaction.GetMetadataManager();
-	if (dynamic_cast<QuackMetadataManager *>(&current)) {
-		return make_uniq<MANAGER<QuackMetadataManager>>(transaction);
-	}
-	if (dynamic_cast<PostgresMetadataManager *>(&current)) {
-		return make_uniq<MANAGER<PostgresMetadataManager>>(transaction);
-	}
-	return make_uniq<MANAGER<DuckLakeMetadataManager>>(transaction);
-}
-
-void DuckLakeInitializer::SetVersionedMetadataManager(DuckLakeTransaction &transaction, DuckLakeVersion version) {
-	catalog.SetDuckLakeVersion(version);
-	if (version == DuckLakeVersion::V1_0) {
-		// base metadata managers are already V1.0, nop
-		return;
-	}
-	if (transaction.GetMetadataManager().IsRemote()) {
-		// the server takes care of the metadata format
-		return;
-	}
-	unique_ptr<DuckLakeMetadataManager> new_manager;
-	if (version == DuckLakeVersion::V1_1) {
-		new_manager = MakeVersionedManager<DuckLakeMetadataManagerV1_1>(transaction);
-	} else if (version >= DuckLakeVersion::V2_0_DEV1) {
-		new_manager = MakeVersionedManager<DuckLakeMetadataManagerV2_0>(transaction);
-	} else {
-		throw InternalException("SetVersionedMetadataManager: unsupported version");
-	}
-	transaction.SetMetadataManager(std::move(new_manager));
 }
 
 } // namespace duckdb

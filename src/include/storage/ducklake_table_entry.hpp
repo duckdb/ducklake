@@ -50,6 +50,8 @@ public:
 	                   string table_uuid, string data_path, shared_ptr<DuckLakeFieldData> field_data,
 	                   optional_idx next_column_id, vector<DuckLakeInlinedTableInfo> inlined_data_tables,
 	                   LocalChange local_change);
+	//! The entry of an ALTER: a copy of the parent with the altered info
+	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change);
 
 public:
 	const ColumnList &GetColumns() const override;
@@ -57,6 +59,7 @@ public:
 	TableIndex GetTableId() const {
 		return table_id;
 	}
+	SchemaIndex GetSchemaId() const;
 	const string &GetTableUUID() const {
 		return table_uuid;
 	}
@@ -161,9 +164,8 @@ public:
 
 	TableStorageInfo GetStorageInfo(ClientContext &context) override;
 
-	unique_ptr<CatalogEntry> Alter(ClientContext &context, DuckLakeTransaction &transaction, AlterTableInfo &info);
-	unique_ptr<CatalogEntry> Alter(DuckLakeTransaction &transaction, SetCommentInfo &info);
-	unique_ptr<CatalogEntry> Alter(DuckLakeTransaction &transaction, SetColumnCommentInfo &info);
+	//! The altered entry, null if the alter changes nothing
+	unique_ptr<CatalogEntry> Alter(ClientContext &context, DuckLakeTransaction &transaction, AlterInfo &info);
 
 	void BindUpdateConstraints(Binder &binder, LogicalGet &get, LogicalProjection &proj, LogicalUpdate &update,
 	                           ClientContext &context) override;
@@ -207,6 +209,8 @@ public:
 	                                              const vector<unique_ptr<ParsedExpression>> &sort_keys);
 
 private:
+	unique_ptr<CatalogEntry> Alter(DuckLakeTransaction &transaction, SetCommentInfo &info);
+	unique_ptr<CatalogEntry> Alter(DuckLakeTransaction &transaction, SetColumnCommentInfo &info);
 	unique_ptr<CatalogEntry> AlterEntry(ClientContext &context, DuckLakeTransaction &transaction, AlterTableInfo &info);
 	bool CanUseGlobalStats(DuckLakeTransaction &transaction) const;
 	unique_ptr<CatalogEntry> AlterTable(DuckLakeTransaction &transaction, RenameTableInfo &info);
@@ -229,10 +233,10 @@ private:
 	                                    SetTableOptionsInfo &info);
 	unique_ptr<CatalogEntry> AlterTable(ClientContext &context, DuckLakeTransaction &transaction,
 	                                    ResetTableOptionsInfo &info);
-	//! The entry of a column type change, which starts a new partition spec when bucket hashes change
+	//! The entry with the new root field of a column, which starts a new partition spec when bucket hashes change
 	unique_ptr<CatalogEntry> AlterColumnType(DuckLakeTransaction &transaction, CreateTableInfo &info,
-	                                         unique_ptr<ColumnChangeInfo> change_info,
-	                                         shared_ptr<DuckLakeFieldData> new_field_data);
+	                                         ColumnDefinition &col, unique_ptr<DuckLakeFieldId> new_root_id,
+	                                         unique_ptr<ColumnChangeInfo> change_info);
 
 	unique_ptr<DuckLakeFieldId> GetNestedEvolution(const DuckLakeFieldId &source_id, const LogicalType &target,
 	                                               ColumnChangeInfo &result, optional_idx parent_idx);
@@ -240,29 +244,6 @@ private:
 	                                          ColumnChangeInfo &result, optional_idx parent_idx);
 
 	void CheckSupportedType(const LogicalType &type);
-
-public:
-	// ! Create a DuckLakeTableEntry from an ALTER
-	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change);
-	// ! Create a DuckLakeTableEntry from an ADD COLUMN, the context reads the default of the existing rows
-	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change,
-	                   ClientContext &context, const Value &initial_default = Value());
-	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, SetDefaultLocalChange local_change,
-	                   ClientContext &context);
-
-	// ! Create a DuckLakeTableEntry from a RENAME COLUMN
-	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change,
-	                   const Identifier &new_name);
-	// ! Create a DuckLakeTableEntry from a REMOVE COLUMN
-	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change,
-	                   unique_ptr<ColumnChangeInfo> changed_fields);
-	// ! Create a DuckLakeTableEntry from a CHANGE COLUMN TYPE
-	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, LocalChange local_change,
-	                   unique_ptr<ColumnChangeInfo> changed_fields, shared_ptr<DuckLakeFieldData> new_field_data);
-	// ! Create a DuckLakeTableEntry from a SET PARTITION KEY
-	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, unique_ptr<DuckLakePartition> partition_data);
-	// ! Create a DuckLakeTableEntry from a SET SORT KEY
-	DuckLakeTableEntry(DuckLakeTableEntry &parent, CreateTableInfo &info, unique_ptr<DuckLakeSort> sort_data);
 
 protected:
 	ColumnList columns;

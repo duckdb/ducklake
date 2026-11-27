@@ -163,11 +163,6 @@ struct DuckLakeVariantStatsInfo {
 	DuckLakeColumnStatsInfo field_stats;
 };
 
-struct DuckLakeFilePartitionInfo {
-	idx_t partition_column_idx;
-	Value partition_value;
-};
-
 struct DuckLakeFileInfo {
 	DataFileIndex id;
 	TableIndex table_id;
@@ -183,7 +178,7 @@ struct DuckLakeFileInfo {
 	string encryption_key;
 	MappingIndex mapping_id;
 	map<FieldIndex, DuckLakeColumnStats> column_stats;
-	vector<DuckLakeFilePartitionInfo> partition_values;
+	vector<DuckLakeFilePartition> partition_values;
 };
 
 struct DuckLakeInlinedDataInfo {

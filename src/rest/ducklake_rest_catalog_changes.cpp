@@ -10,22 +10,6 @@
 
 namespace duckdb {
 
-static vector<string> WritePath(const vector<Identifier> &path) {
-	vector<string> result;
-	for (auto &name : path) {
-		result.push_back(name.GetIdentifierName());
-	}
-	return result;
-}
-
-static vector<Identifier> ReadPath(const vector<string> &path) {
-	vector<Identifier> result;
-	for (auto &name : path) {
-		result.emplace_back(name);
-	}
-	return result;
-}
-
 static unique_ptr<ParsedExpression> ReadExpression(const string &expression) {
 	if (expression.empty()) {
 		return nullptr;
@@ -106,7 +90,7 @@ unique_ptr<RESTAlteration> DuckLakeRESTCatalogChanges::WriteAlter(ClientContext 
 		case AlterTableType::RENAME_FIELD: {
 			auto &rename = alter.Cast<RenameFieldInfo>();
 			auto result = make_uniq<RESTRenameField>();
-			result->column_path = WritePath(rename.column_path);
+			result->column_path = IdentifiersToStrings(rename.column_path);
 			result->new_name = rename.new_name.GetIdentifierName();
 			return std::move(result);
 		}
@@ -121,7 +105,7 @@ unique_ptr<RESTAlteration> DuckLakeRESTCatalogChanges::WriteAlter(ClientContext 
 		case AlterTableType::ADD_FIELD: {
 			auto &add = alter.Cast<AddFieldInfo>();
 			auto result = make_uniq<RESTAddField>();
-			result->column_path = WritePath(add.column_path);
+			result->column_path = IdentifiersToStrings(add.column_path);
 			result->field = WriteColumn(add.new_field, false, GetInitialDefault(context, add.new_field));
 			result->if_not_exists = add.if_field_not_exists;
 			return std::move(result);
@@ -137,7 +121,7 @@ unique_ptr<RESTAlteration> DuckLakeRESTCatalogChanges::WriteAlter(ClientContext 
 		case AlterTableType::REMOVE_FIELD: {
 			auto &remove = alter.Cast<RemoveFieldInfo>();
 			auto result = make_uniq<RESTRemoveField>();
-			result->column_path = WritePath(remove.column_path);
+			result->column_path = IdentifiersToStrings(remove.column_path);
 			result->if_exists = remove.if_column_exists;
 			result->cascade = remove.cascade;
 			return std::move(result);
@@ -145,7 +129,7 @@ unique_ptr<RESTAlteration> DuckLakeRESTCatalogChanges::WriteAlter(ClientContext 
 		case AlterTableType::ALTER_COLUMN_TYPE: {
 			auto &change = alter.Cast<ChangeColumnTypeInfo>();
 			auto result = make_uniq<RESTChangeColumnType>();
-			result->column_path = WritePath(change.column_path);
+			result->column_path = IdentifiersToStrings(change.column_path);
 			result->column_type = change.target_type;
 			if (change.expression) {
 				result->expression = change.expression->ToString();
@@ -155,7 +139,7 @@ unique_ptr<RESTAlteration> DuckLakeRESTCatalogChanges::WriteAlter(ClientContext 
 		case AlterTableType::SET_DEFAULT: {
 			auto &set_default = alter.Cast<SetDefaultInfo>();
 			auto result = make_uniq<RESTSetDefault>();
-			result->column_path = WritePath(set_default.column_path);
+			result->column_path = IdentifiersToStrings(set_default.column_path);
 			if (set_default.expression) {
 				result->expression = set_default.expression->ToString();
 			}
@@ -163,12 +147,12 @@ unique_ptr<RESTAlteration> DuckLakeRESTCatalogChanges::WriteAlter(ClientContext 
 		}
 		case AlterTableType::SET_NOT_NULL: {
 			auto result = make_uniq<RESTSetNotNull>();
-			result->column_path = WritePath(alter.Cast<SetNotNullInfo>().column_path);
+			result->column_path = IdentifiersToStrings(alter.Cast<SetNotNullInfo>().column_path);
 			return std::move(result);
 		}
 		case AlterTableType::DROP_NOT_NULL: {
 			auto result = make_uniq<RESTDropNotNull>();
-			result->column_path = WritePath(alter.Cast<DropNotNullInfo>().column_path);
+			result->column_path = IdentifiersToStrings(alter.Cast<DropNotNullInfo>().column_path);
 			return std::move(result);
 		}
 		case AlterTableType::SET_PARTITIONED_BY: {
@@ -252,7 +236,7 @@ unique_ptr<AlterInfo> DuckLakeRESTCatalogChanges::ReadAlter(ClientContext &conte
 	}
 	case RESTAlterationType::RENAME_FIELD: {
 		auto &rename = alteration.Cast<RESTRenameField>();
-		return make_uniq<RenameFieldInfo>(entry, ReadPath(rename.column_path), Identifier(rename.new_name));
+		return make_uniq<RenameFieldInfo>(entry, StringsToIdentifiers(rename.column_path), Identifier(rename.new_name));
 	}
 	case RESTAlterationType::ADD_COLUMN: {
 		auto &add = alteration.Cast<RESTAddColumn>();
@@ -262,7 +246,7 @@ unique_ptr<AlterInfo> DuckLakeRESTCatalogChanges::ReadAlter(ClientContext &conte
 	}
 	case RESTAlterationType::ADD_FIELD: {
 		auto &add = alteration.Cast<RESTAddField>();
-		return make_uniq<AddFieldInfo>(entry, ReadPath(add.column_path), ReadColumn(context, add.field),
+		return make_uniq<AddFieldInfo>(entry, StringsToIdentifiers(add.column_path), ReadColumn(context, add.field),
 		                               add.if_not_exists);
 	}
 	case RESTAlterationType::REMOVE_COLUMN: {
@@ -271,23 +255,24 @@ unique_ptr<AlterInfo> DuckLakeRESTCatalogChanges::ReadAlter(ClientContext &conte
 	}
 	case RESTAlterationType::REMOVE_FIELD: {
 		auto &remove = alteration.Cast<RESTRemoveField>();
-		return make_uniq<RemoveFieldInfo>(entry, ReadPath(remove.column_path), remove.if_exists, remove.cascade);
+		return make_uniq<RemoveFieldInfo>(entry, StringsToIdentifiers(remove.column_path), remove.if_exists,
+		                                  remove.cascade);
 	}
 	case RESTAlterationType::CHANGE_COLUMN_TYPE: {
 		auto &change = alteration.Cast<RESTChangeColumnType>();
 		auto target_type = change.column_type;
-		return make_uniq<ChangeColumnTypeInfo>(entry, ReadPath(change.column_path), std::move(target_type),
+		return make_uniq<ChangeColumnTypeInfo>(entry, StringsToIdentifiers(change.column_path), std::move(target_type),
 		                                       ReadExpression(change.expression));
 	}
 	case RESTAlterationType::SET_DEFAULT: {
 		auto &set_default = alteration.Cast<RESTSetDefault>();
-		return make_uniq<SetDefaultInfo>(entry, ReadPath(set_default.column_path),
+		return make_uniq<SetDefaultInfo>(entry, StringsToIdentifiers(set_default.column_path),
 		                                 ReadExpression(set_default.expression));
 	}
 	case RESTAlterationType::SET_NOT_NULL:
-		return make_uniq<SetNotNullInfo>(entry, ReadPath(alteration.Cast<RESTSetNotNull>().column_path));
+		return make_uniq<SetNotNullInfo>(entry, StringsToIdentifiers(alteration.Cast<RESTSetNotNull>().column_path));
 	case RESTAlterationType::DROP_NOT_NULL:
-		return make_uniq<DropNotNullInfo>(entry, ReadPath(alteration.Cast<RESTDropNotNull>().column_path));
+		return make_uniq<DropNotNullInfo>(entry, StringsToIdentifiers(alteration.Cast<RESTDropNotNull>().column_path));
 	case RESTAlterationType::SET_PARTITIONED_BY: {
 		vector<unique_ptr<ParsedExpression>> keys;
 		for (auto &key : alteration.Cast<RESTSetPartitionedBy>().partitioned_by) {

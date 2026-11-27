@@ -15,17 +15,6 @@ struct ExpireSnapshotsBindData : public MetadataBindData {
 	bool dry_run = false;
 };
 
-struct ExpireSnapshotsGlobalState : public GlobalTableFunctionState {
-	bool executed = false;
-	idx_t offset = 0;
-	//! The expired snapshots, or the candidates of a dry run
-	vector<vector<Value>> rows;
-
-	static unique_ptr<GlobalTableFunctionState> Init(ClientContext &context, TableFunctionInitInput &input) {
-		return make_uniq<ExpireSnapshotsGlobalState>();
-	}
-};
-
 static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &context, TableFunctionBindInput &input,
                                                             vector<LogicalType> &return_types,
                                                             vector<Identifier> &names) {
@@ -37,12 +26,9 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 	auto result = make_uniq<ExpireSnapshotsBindData>(ducklake_catalog);
 	DuckLakeSnapshotsFunction::GetSnapshotTypes(return_types, names);
 
-	const auto older_than_default = ducklake_catalog.GetConfigOption<string>("expire_older_than", {}, {}, "");
+	const auto older_than_default = ducklake_catalog.GetConfigOption<string>("expire_older_than", {}, "");
 
-	Value dry_run;
-	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "dry_run", "boolean", dry_run)) {
-		result->dry_run = BooleanValue::Get(dry_run);
-	}
+	result->dry_run = DuckLakeTableFunctionUtil::GetBooleanOption(input, "dry_run", false);
 	if (!result->dry_run) {
 		ducklake_catalog.VerifyWritable();
 	}
@@ -98,7 +84,8 @@ static unique_ptr<FunctionData> DuckLakeExpireSnapshotsBind(ClientContext &conte
 
 void DuckLakeExpireSnapshotsExecute(ClientContext &context, TableFunctionInput &data_p, DataChunk &output) {
 	auto &data = data_p.bind_data->Cast<ExpireSnapshotsBindData>();
-	auto &state = data_p.global_state->Cast<ExpireSnapshotsGlobalState>();
+	auto &state = data_p.global_state->Cast<DuckLakeRunOnceState>();
+	// the rows are the expired snapshots, or the candidates of a dry run
 	if (!state.executed) {
 		state.executed = true;
 		if (data.dry_run) {
@@ -118,7 +105,7 @@ void DuckLakeExpireSnapshotsExecute(ClientContext &context, TableFunctionInput &
 
 DuckLakeExpireSnapshotsFunction::DuckLakeExpireSnapshotsFunction()
     : TableFunction("ducklake_expire_snapshots", FunctionSignature().AddPositionalOnly("catalog", LogicalType::VARCHAR),
-                    DuckLakeExpireSnapshotsExecute, DuckLakeExpireSnapshotsBind, ExpireSnapshotsGlobalState::Init) {
+                    DuckLakeExpireSnapshotsExecute, DuckLakeExpireSnapshotsBind, DuckLakeRunOnceState::Init) {
 	GetSignature().WithTypedKwargs("options", [&](TypedKwargs &options) {
 		options
 		    .Add("older_than", LogicalType::TIMESTAMP_TZ)

@@ -189,13 +189,13 @@ static bool CanSkipFileByRuntimeFilter(const DuckLakeFileListEntry &file_entry, 
 }
 
 static MultiFileColumnDefinition RowIdColumn() {
-	MultiFileColumnDefinition column("_ducklake_internal_row_id", LogicalType::BIGINT);
+	MultiFileColumnDefinition column(DuckLakeInsert::ROW_ID_COLUMN, LogicalType::BIGINT);
 	column.identifier = Value::INTEGER(MultiFileReader::ROW_ID_FIELD_ID);
 	return column;
 }
 
 static MultiFileColumnDefinition SnapshotIdColumn() {
-	MultiFileColumnDefinition column("_ducklake_internal_snapshot_id", LogicalType::BIGINT);
+	MultiFileColumnDefinition column(DuckLakeInsert::SNAPSHOT_ID_COLUMN, LogicalType::BIGINT);
 	column.identifier = Value::INTEGER(MultiFileReader::LAST_UPDATED_SEQUENCE_NUMBER_ID);
 	return column;
 }
@@ -237,7 +237,7 @@ shared_ptr<MultiFileList> DuckLakeMultiFileReader::CreateFileList(ClientContext 
 	return std::move(result);
 }
 
-MultiFileColumnDefinition CreateColumnFromFieldId(const DuckLakeFieldId &field_id, bool emit_key_value) {
+static MultiFileColumnDefinition CreateColumnFromFieldId(const DuckLakeFieldId &field_id, bool emit_key_value) {
 	MultiFileColumnDefinition column(field_id.Name(), field_id.Type());
 	column.default_expression = field_id.GetInitialDefault();
 	column.identifier = Value::INTEGER(NumericCast<int32_t>(field_id.GetFieldIndex().index));
@@ -564,10 +564,10 @@ shared_ptr<BaseFileReader> DuckLakeMultiFileReader::CreateReader(ClientContext &
 }
 // LCOV_EXCL_STOP
 
-vector<MultiFileColumnDefinition> MapColumns(ClientContext &context, MultiFileReaderData &reader_data,
-                                             const vector<MultiFileColumnDefinition> &global_map,
-                                             const vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps,
-                                             bool parent_is_list = false) {
+static vector<MultiFileColumnDefinition> MapColumns(ClientContext &context, MultiFileReaderData &reader_data,
+                                                    const vector<MultiFileColumnDefinition> &global_map,
+                                                    const vector<unique_ptr<DuckLakeNameMapEntry>> &column_maps,
+                                                    bool parent_is_list = false) {
 	// create a map of field id -> column map index for the mapping at this level
 	unordered_map<idx_t, idx_t> field_id_map;
 	for (idx_t column_map_idx = 0; column_map_idx < column_maps.size(); column_map_idx++) {
@@ -627,12 +627,6 @@ vector<MultiFileColumnDefinition> MapColumns(ClientContext &context, MultiFileRe
 	return result;
 }
 
-vector<MultiFileColumnDefinition> CreateNewMapping(ClientContext &context, MultiFileReaderData &reader_data,
-                                                   const vector<MultiFileColumnDefinition> &global_map,
-                                                   const DuckLakeNameMap &name_map) {
-	return MapColumns(context, reader_data, global_map, name_map.column_maps);
-}
-
 // LCOV_EXCL_START
 ReaderInitializeType DuckLakeMultiFileReader::CreateMapping(
     ClientContext &context, MultiFileReaderData &reader_data, const vector<MultiFileColumnDefinition> &global_columns,
@@ -665,7 +659,7 @@ ReaderInitializeType DuckLakeMultiFileReader::CreateMappingWithGlobalState(
 		auto transaction = read_info.GetTransaction();
 		auto mapping = transaction->GetMappingById(MappingIndex(mapping_id));
 		// use the mapping to generate a new set of global columns for this file
-		auto mapped_columns = CreateNewMapping(context, reader_data, global_columns, *mapping);
+		auto mapped_columns = MapColumns(context, reader_data, global_columns, mapping->column_maps);
 		return MultiFileReader::CreateMapping(context, reader_data, mapped_columns, column_ids_to_use, filters,
 		                                      multi_file_list, bind_data, virtual_columns,
 		                                      MultiFileColumnMappingMode::BY_NAME);

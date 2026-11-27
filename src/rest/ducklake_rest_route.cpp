@@ -6,27 +6,6 @@
 
 namespace duckdb {
 
-static bool IsUnreserved(char c) {
-	return StringUtil::CharacterIsAlpha(c) || StringUtil::CharacterIsDigit(c) || c == '-' || c == '_' || c == '.' ||
-	       c == '~';
-}
-
-static string UrlEncode(const string &value) {
-	static constexpr const char *HEX = "0123456789ABCDEF";
-	string result;
-	for (auto c : value) {
-		if (IsUnreserved(c)) {
-			result += c;
-			continue;
-		}
-		auto byte = static_cast<uint8_t>(c);
-		result += '%';
-		result += HEX[byte >> 4];
-		result += HEX[byte & 15];
-	}
-	return result;
-}
-
 //! The text of a scalar of a request, as it is written in a URL
 static string ScalarText(const RESTJsonIn &value) {
 	return value.val.IsString() ? value.val.GetString() : value.val.ToString();
@@ -39,7 +18,7 @@ string RESTRoute::ClientTarget(const string &request_json, const string &prefix,
 		throw InternalException("DuckLake REST: the request of \"%s\" is not an object", endpoint);
 	}
 	// the paths start with the version
-	string target = prefix.empty() || no_prefix ? path : "/v1/" + UrlEncode(prefix) + path.substr(3);
+	string target = prefix.empty() || no_prefix ? path : "/v1/" + StringUtil::URLEncode(prefix) + path.substr(3);
 	string query;
 	RESTJsonWriter writer;
 	auto remaining = writer.writer.CreateObject();
@@ -61,7 +40,8 @@ string RESTRoute::ClientTarget(const string &request_json, const string &prefix,
 			continue; // LCOV_EXCL_LINE: the client leaves out null members
 		}
 		if (parameter->query_name.empty()) {
-			target = StringUtil::Replace(target, "{" + parameter->name + "}", UrlEncode(ScalarText(member.second)));
+			target = StringUtil::Replace(target, "{" + parameter->name + "}",
+			                             StringUtil::URLEncode(ScalarText(member.second)));
 			continue;
 		}
 		vector<string> values;
@@ -77,7 +57,7 @@ string RESTRoute::ClientTarget(const string &request_json, const string &prefix,
 		}
 		for (auto &value : values) {
 			query += query.empty() ? "?" : "&";
-			query += parameter->query_name + "=" + UrlEncode(value);
+			query += parameter->query_name + "=" + StringUtil::URLEncode(value);
 		}
 	}
 	if (method == "GET") {

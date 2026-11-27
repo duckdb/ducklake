@@ -113,7 +113,9 @@ void DuckLakeRESTCommitQueue::Submit(DuckLakeRESTPendingCommit &commit, idx_t ho
 //===--------------------------------------------------------------------===//
 // Request
 //===--------------------------------------------------------------------===//
-DuckLakeRESTRequest::DuckLakeRESTRequest(DatabaseInstance &db, const string &catalog_name) : connection(db) {
+DuckLakeRESTRequest::DuckLakeRESTRequest(DatabaseInstance &db, const string &catalog_name,
+                                         DuckLakeRESTRequestContext request_context)
+    : DuckLakeRESTRequestContext(std::move(request_context)), connection(db) {
 	connection.BeginTransaction();
 	auto &context = *connection.context;
 	auto &entry = Catalog::GetCatalog(context, Identifier(catalog_name));
@@ -311,31 +313,27 @@ int32_t DuckLakeRESTServer::HandleRequest(const RESTRoute &route, optional_ptr<c
 			throw InternalException("DuckLake REST: the endpoint \"%s\" has no handler", route.endpoint);
 		}
 		string json_body = body;
-		shared_ptr<const string> request_data;
-		vector<RESTMultipartPart> request_parts;
+		DuckLakeRESTRequestContext context;
+		context.server = this;
+		context.prefix = served.prefix;
 		if (RESTMultipart::IsMultipart(request_content_type)) {
 			// the JSON document is a part of the request, the other parts are tables
-			request_data = make_shared_ptr<const string>(body);
-			request_parts = RESTMultipart::Parse(*request_data, request_content_type);
-			auto &json_part = RESTMultipart::Find(request_parts, "request");
-			json_body = request_data->substr(json_part.offset, json_part.size);
+			context.request_data = make_shared_ptr<const string>(body);
+			context.request_parts = RESTMultipart::Parse(*context.request_data, request_content_type);
+			auto &json_part = RESTMultipart::Find(context.request_parts, "request");
+			json_body = context.request_data->substr(json_part.offset, json_part.size);
 		}
 		auto request_json = route.ServerRequest(path_values, query, json_body);
 		// lists are Arrow, unless the request asks for JSON only
-		bool accepts_arrow =
+		context.accepts_arrow =
 		    accept.empty() || accept.find("multipart/mixed") != string::npos || accept.find("*/*") != string::npos;
 		bool group_commit = route.endpoint == "group_commit_transaction";
 		if (group_commit || route.endpoint == "commit_transaction") {
 			// the commit runs after the queued ones, so that its metadata transaction sees what they published
-			DuckLakeRESTPendingCommit commit;
-			commit.endpoint = route.endpoint;
+			DuckLakeRESTPendingCommit commit(std::move(context));
+			commit.endpoint = entry->second;
 			commit.shares_snapshot = group_commit && DuckLakeRESTCommitGroup::IsAppendOnly(request_json);
 			commit.request_json = std::move(request_json);
-			commit.request_data = std::move(request_data);
-			commit.request_parts = std::move(request_parts);
-			commit.server = this;
-			commit.prefix = served.prefix;
-			commit.accepts_arrow = accepts_arrow;
 			served.commit_queue->Submit(
 			    commit, CommitHold(*served.db),
 			    [&](vector<reference<DuckLakeRESTPendingCommit>> &commits) { RunCommits(served, commits); });
@@ -353,24 +351,10 @@ int32_t DuckLakeRESTServer::HandleRequest(const RESTRoute &route, optional_ptr<c
 			content_type = commit.content_type;
 			return 200;
 		}
-		DuckLakeRESTRequest request(*served.db, served.catalog_name);
-		request.request_data = std::move(request_data);
-		request.request_parts = std::move(request_parts);
-		request.server = this;
-		request.prefix = served.prefix;
-		request.accepts_arrow = accepts_arrow;
-		try {
-			response = entry->second(request, request_json);
-			content_type = request.content_type;
-			if (request.connection.HasActiveTransaction()) {
-				request.connection.Commit();
-			}
-		} catch (...) {
-			if (request.connection.HasActiveTransaction()) {
-				request.connection.Rollback();
-			}
-			throw;
-		}
+		auto outcome = DuckLakeCommitOutcome::NOT_PUBLISHED;
+		RunRequest(
+		    served, context, [&](DuckLakeRESTRequest &request) { return entry->second(request, request_json); },
+		    response, content_type, outcome);
 		return 200;
 	} catch (std::exception &ex) {
 		ErrorData error(ex);
@@ -380,41 +364,35 @@ int32_t DuckLakeRESTServer::HandleRequest(const RESTRoute &route, optional_ptr<c
 	}
 }
 
-static void InitializeCommitRequest(DuckLakeRESTRequest &request, const DuckLakeRESTPendingCommit &commit) {
-	request.request_data = commit.request_data;
-	request.request_parts = commit.request_parts;
-	request.server = commit.server;
-	request.prefix = commit.prefix;
-	request.accepts_arrow = commit.accepts_arrow;
+void DuckLakeRESTServer::RunRequest(const ServedCatalog &served, const DuckLakeRESTRequestContext &context,
+                                    const std::function<string(DuckLakeRESTRequest &)> &endpoint, string &response,
+                                    string &content_type, DuckLakeCommitOutcome &outcome) {
+	DuckLakeRESTRequest request(*served.db, served.catalog_name, context);
+	try {
+		response = endpoint(request);
+		content_type = request.content_type;
+		// the endpoint of a commit commits the transaction of the request itself
+		if (request.connection.HasActiveTransaction()) {
+			request.connection.Commit();
+		}
+	} catch (...) {
+		outcome = request.commit_outcome;
+		if (request.connection.HasActiveTransaction()) {
+			request.connection.Rollback();
+		}
+		throw;
+	}
 }
 
 void DuckLakeRESTServer::RunCommit(const ServedCatalog &served, DuckLakeRESTPendingCommit &commit) {
 	auto outcome = DuckLakeCommitOutcome::NOT_PUBLISHED;
 	try {
-		auto endpoint = DuckLakeRESTAPI::GetEndpoints().at(commit.endpoint);
-		DuckLakeRESTRequest request(*served.db, served.catalog_name);
-		InitializeCommitRequest(request, commit);
-		try {
-			// the endpoint commits the transaction of the request
-			commit.response = endpoint(request, commit.request_json);
-			commit.content_type = request.content_type;
-		} catch (...) {
-			outcome = request.commit_outcome;
-			if (request.connection.HasActiveTransaction()) {
-				request.connection.Rollback();
-			}
-			throw;
-		}
+		RunRequest(
+		    served, commit, [&](DuckLakeRESTRequest &request) { return commit.endpoint(request, commit.request_json); },
+		    commit.response, commit.content_type, outcome);
 	} catch (std::exception &ex) {
-		ErrorData error(ex);
 		// as for a group: a commit that is published, or that can be, fails with an IO error
-		if (outcome == DuckLakeCommitOutcome::PUBLISHED) {
-			commit.error = ErrorAfterPublication(error);
-		} else if (outcome == DuckLakeCommitOutcome::PUBLICATION_UNKNOWN) {
-			commit.error = ErrorOfUnknownPublication(error);
-		} else {
-			commit.error = error;
-		}
+		commit.error = ErrorOfCommitOutcome(outcome, ErrorData(ex));
 	}
 }
 
@@ -425,26 +403,16 @@ bool DuckLakeRESTServer::RunCommitGroup(const ServedCatalog &served,
 	string content_type;
 	ErrorData error;
 	try {
-		DuckLakeRESTRequest request(*served.db, served.catalog_name);
-		InitializeCommitRequest(request, group[0].get());
-		try {
-			response = DuckLakeRESTCommitGroup::Commit(request, group);
-			content_type = request.content_type;
-		} catch (...) {
-			outcome = request.commit_outcome;
-			if (request.connection.HasActiveTransaction()) {
-				request.connection.Rollback();
-			}
-			throw;
-		}
+		RunRequest(
+		    served, group[0].get(),
+		    [&](DuckLakeRESTRequest &request) { return DuckLakeRESTCommitGroup::Commit(request, group); }, response,
+		    content_type, outcome);
 	} catch (std::exception &ex) {
 		if (outcome == DuckLakeCommitOutcome::NOT_PUBLISHED) {
 			return false;
 		}
 		// the commits of a group that is published, or that can be, never run again
-		ErrorData cause(ex);
-		bool published = outcome == DuckLakeCommitOutcome::PUBLISHED;
-		error = published ? ErrorAfterPublication(cause) : ErrorOfUnknownPublication(cause);
+		error = ErrorOfCommitOutcome(outcome, ErrorData(ex));
 	}
 	// a failure here does not reach the fallback either: the queue answers the commits that have no result
 	for (auto &entry : group) {
@@ -581,16 +549,9 @@ DuckLakeRESTServerRegistry &DuckLakeRESTServerRegistry::Get() {
 	return *registry;
 }
 
-//! The address of a URI of a server or of one of its catalogs: the scheme, host and port
-static string ServerAddress(const string &uri) {
-	auto scheme_end = uri.find("://");
-	auto path_start = uri.find('/', scheme_end == string::npos ? 0 : scheme_end + 3);
-	return path_start == string::npos ? uri : uri.substr(0, path_start);
-}
-
 //! The prefix of the catalog in a URI, empty if it has none
 static string UriPrefix(const string &uri) {
-	auto address = ServerAddress(uri);
+	auto address = DuckLakeRESTClient::ServerAddress(uri);
 	auto prefix = uri.substr(address.size());
 	while (StringUtil::StartsWith(prefix, "/")) {
 		prefix.erase(0, 1);
@@ -619,7 +580,7 @@ bool DuckLakeRESTServerRegistry::Stop(const string &uri) {
 	unique_ptr<DuckLakeRESTServer> server;
 	{
 		lock_guard<mutex> guard(lock);
-		auto entry = servers.find(ServerAddress(uri));
+		auto entry = servers.find(DuckLakeRESTClient::ServerAddress(uri));
 		if (entry == servers.end()) {
 			return false;
 		}
@@ -651,7 +612,7 @@ shared_ptr<DuckLakeRESTCommitQueue> DuckLakeRESTServerRegistry::GetCommitQueue(D
 
 optional_ptr<DuckLakeRESTServer> DuckLakeRESTServerRegistry::GetServer(const string &uri) {
 	lock_guard<mutex> guard(lock);
-	auto entry = servers.find(ServerAddress(uri));
+	auto entry = servers.find(DuckLakeRESTClient::ServerAddress(uri));
 	if (entry == servers.end()) {
 		return nullptr;
 	}
@@ -816,24 +777,31 @@ static void ValidateResponse(const string &method, const string &path, int32_t s
 	}
 }
 
-static unique_ptr<FunctionData> DuckLakeRESTRequestBind(ClientContext &context, TableFunctionBindInput &input,
-                                                        vector<LogicalType> &return_types, vector<Identifier> &names) {
+//! Sends the request of the arguments of a function: the listen URI, method, path and body. Returns the status code
+static int32_t SendRawRequest(ClientContext &context, TableFunctionBindInput &input, const char *function_name,
+                              const string &accept, string &response, string &content_type) {
 	for (auto &value : input.inputs) {
 		if (value.IsNull()) {
-			throw BinderException("ducklake_rest_request: the arguments cannot be NULL");
+			throw BinderException("%s: the arguments cannot be NULL", function_name);
 		}
 	}
 	auto token = GetNamedParameter(input, "token");
 	DuckLakeRESTClient client(*context.db, StringValue::Get(input.inputs[0]),
 	                          token.IsNull() ? string() : StringValue::Get(token));
+	return client.SendRaw(StringUtil::Upper(StringValue::Get(input.inputs[1])), StringValue::Get(input.inputs[2]),
+	                      StringValue::Get(input.inputs[3]), response, content_type, accept);
+}
+
+static unique_ptr<FunctionData> DuckLakeRESTRequestBind(ClientContext &context, TableFunctionBindInput &input,
+                                                        vector<LogicalType> &return_types, vector<Identifier> &names) {
 	auto accept = GetNamedParameter(input, "accept");
 	string response;
 	string content_type;
-	auto method = StringUtil::Upper(StringValue::Get(input.inputs[1]));
-	auto &path = StringValue::Get(input.inputs[2]);
-	auto status = client.SendRaw(method, path, StringValue::Get(input.inputs[3]), response, content_type,
-	                             accept.IsNull() ? "application/json" : StringValue::Get(accept));
-	ValidateResponse(method, path, status, content_type, response);
+	auto status =
+	    SendRawRequest(context, input, "ducklake_rest_request",
+	                   accept.IsNull() ? "application/json" : StringValue::Get(accept), response, content_type);
+	ValidateResponse(StringUtil::Upper(StringValue::Get(input.inputs[1])), StringValue::Get(input.inputs[2]), status,
+	                 content_type, response);
 	names.emplace_back("status");
 	return_types.emplace_back(LogicalType::INTEGER);
 	names.emplace_back("response");
@@ -886,20 +854,10 @@ DuckLakeRESTRequestFunction::DuckLakeRESTRequestFunction()
 
 static unique_ptr<FunctionData> DuckLakeRESTRowsBind(ClientContext &context, TableFunctionBindInput &input,
                                                      vector<LogicalType> &return_types, vector<Identifier> &names) {
-	for (auto &value : input.inputs) {
-		if (value.IsNull()) {
-			throw BinderException("ducklake_rest_rows: the arguments cannot be NULL");
-		}
-	}
-	auto token = GetNamedParameter(input, "token");
 	auto part_name = GetNamedParameter(input, "part");
-	DuckLakeRESTClient client(*context.db, StringValue::Get(input.inputs[0]),
-	                          token.IsNull() ? string() : StringValue::Get(token));
 	string response;
 	string content_type;
-	auto status =
-	    client.SendRaw(StringUtil::Upper(StringValue::Get(input.inputs[1])), StringValue::Get(input.inputs[2]),
-	                   StringValue::Get(input.inputs[3]), response, content_type, "multipart/mixed");
+	auto status = SendRawRequest(context, input, "ducklake_rest_rows", "multipart/mixed", response, content_type);
 	if (!RESTMultipart::IsMultipart(content_type)) {
 		throw InvalidInputException("ducklake_rest_rows: the response (status %d) has no tables: %s", status,
 		                            response.substr(0, 200));

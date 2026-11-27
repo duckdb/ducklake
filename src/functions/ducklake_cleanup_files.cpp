@@ -39,20 +39,13 @@ static unique_ptr<FunctionData> CleanupBind(ClientContext &context, TableFunctio
 	auto &ducklake_catalog = DuckLakeBaseMetadataFunction::GetCatalog(context, input);
 	auto result = make_uniq<CleanupBindData>(ducklake_catalog, type);
 
-	const auto older_than_default = ducklake_catalog.GetConfigOption<string>("delete_older_than", {}, {}, "2 days");
+	const auto older_than_default = ducklake_catalog.GetConfigOption<string>("delete_older_than", {}, "2 days");
 
-	Value dry_run;
-	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "dry_run", "boolean", dry_run)) {
-		result->dry_run = BooleanValue::Get(dry_run);
-	}
+	result->dry_run = DuckLakeTableFunctionUtil::GetBooleanOption(input, "dry_run", false);
 	if (!result->dry_run) {
 		ducklake_catalog.VerifyWritable();
 	}
-	bool cleanup_all = false;
-	Value cleanup_all_value;
-	if (DuckLakeTableFunctionUtil::TryGetNonNullOption(input, "cleanup_all", "boolean", cleanup_all_value)) {
-		cleanup_all = BooleanValue::Get(cleanup_all_value);
-	}
+	bool cleanup_all = DuckLakeTableFunctionUtil::GetBooleanOption(input, "cleanup_all", false);
 	Value older_than;
 	bool has_timestamp = DuckLakeTableFunctionUtil::TryGetTimestampOption(input, "older_than", older_than);
 	if ((cleanup_all == has_timestamp && cleanup_all == true) ||

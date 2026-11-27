@@ -19,22 +19,15 @@ namespace duckdb {
 //! Which inlined rows a response holds: the rows of a scan, or the rows that were inserted or deleted in a range
 enum class RESTInlinedRowsKind : uint8_t { SCAN, INSERTIONS, DELETIONS };
 
-//! A column of inlined rows, or a field of a struct: all of it, or the fields of the struct that are read
+//! The inlined rows, a column of them or a field of a struct: all of it, or its columns or fields that are read
 struct RESTInlinedField {
+	//! The columns of a scan, all of them without a projection
+	static RESTInlinedField From(optional_ptr<const vector<DuckLakeProjectedColumn>> projection);
+
 	bool Covers(const RESTInlinedField &other) const;
 
 	bool all = true;
 	map<idx_t, RESTInlinedField> fields;
-};
-
-//! The columns of inlined rows: all columns, or the field ids of top-level columns
-struct RESTInlinedProjection {
-	static RESTInlinedProjection From(optional_ptr<const vector<DuckLakeProjectedColumn>> projection);
-
-	bool Covers(const RESTInlinedProjection &other) const;
-
-	bool all = true;
-	map<idx_t, RESTInlinedField> columns;
 };
 
 //! The inlined rows of a table
@@ -46,7 +39,7 @@ struct RESTCachedInlinedRows {
 
 //! One response of the server: the inlined rows of the table, none if the table has no inlined rows
 struct RESTInlinedRowsResponse {
-	RESTInlinedProjection projection;
+	RESTInlinedField projection;
 	shared_ptr<RESTCachedInlinedRows> rows;
 };
 
@@ -67,13 +60,13 @@ struct RESTInlinedRowsKey {
 class RESTInlinedRowsCache {
 public:
 	//! Whether a response has the columns
-	bool Covers(const RESTInlinedRowsKey &key, const RESTInlinedProjection &projection) const;
+	bool Covers(const RESTInlinedRowsKey &key, const RESTInlinedField &projection) const;
 	//! Whether any response is known
 	bool HasResponse(const RESTInlinedRowsKey &key) const;
 	//! Whether a table has inlined rows at a snapshot, if a response of any kind knows
 	bool HasInlinedRows(idx_t snapshot_id, idx_t table_id, bool &has_inlined_rows) const;
 	//! Adds a response, which takes over the responses that have a subset of its columns
-	shared_ptr<RESTInlinedRowsResponse> Add(const RESTInlinedRowsKey &key, const RESTInlinedProjection &projection,
+	shared_ptr<RESTInlinedRowsResponse> Add(const RESTInlinedRowsKey &key, const RESTInlinedField &projection,
 	                                        unique_ptr<RESTInlinedRows> inlined_data);
 	//! The rows of a response that has the columns to read, which are column names that are optionally cast
 	shared_ptr<RESTCachedInlinedRows> Find(const RESTInlinedRowsKey &key, const vector<string> &columns_to_read) const;

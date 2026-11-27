@@ -78,10 +78,6 @@ template <class K, class V>
 bool RESTIsNull(const map<K, V> &value) {
 	return value.empty();
 }
-template <class K, class V>
-bool RESTIsNull(const unordered_map<K, V> &value) {
-	return value.empty();
-}
 template <class T>
 bool RESTIsNull(const unique_ptr<T> &value) {
 	return !value;
@@ -361,10 +357,6 @@ struct RESTListCodec : public RESTCodec<RESTListCodec<CODEC>> {
 		return WriteItems(writer, value);
 	}
 	template <class T>
-	static JSONMutableValue Write(JSONWriter &writer, const unordered_set<T> &value) {
-		return WriteItems(writer, value);
-	}
-	template <class T>
 	static void Read(RESTJsonIn in, vector<T> &result) {
 		for (auto &item : in.Items()) {
 			result.push_back(CODEC::template Get<T>(item));
@@ -372,12 +364,6 @@ struct RESTListCodec : public RESTCodec<RESTListCodec<CODEC>> {
 	}
 	template <class T>
 	static void Read(RESTJsonIn in, set<T> &result) {
-		for (auto &item : in.Items()) {
-			result.insert(CODEC::template Get<T>(item));
-		}
-	}
-	template <class T>
-	static void Read(RESTJsonIn in, unordered_set<T> &result) {
 		for (auto &item : in.Items()) {
 			result.insert(CODEC::template Get<T>(item));
 		}

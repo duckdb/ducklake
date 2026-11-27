@@ -2,6 +2,7 @@
 #include "common/ducklake_murmur3.hpp"
 #include "storage/ducklake_table_entry.hpp"
 #include "duckdb/common/hive_partitioning.hpp"
+#include "duckdb/common/operator/cast_operators.hpp"
 #include "duckdb/common/types/date.hpp"
 #include "duckdb/common/types/decimal.hpp"
 #include "duckdb/common/types/value.hpp"
@@ -46,6 +47,30 @@ bool DuckLakePartitionUtils::TryGetTransformType(const string &name, DuckLakeTra
 	return false;
 }
 
+string DuckLakePartitionUtils::TransformToString(const DuckLakeTransform &transform) {
+	if (transform.type == DuckLakeTransformType::BUCKET) {
+		return StringUtil::Format("bucket(%d)", transform.bucket_count);
+	}
+	return GetTransformName(transform.type);
+}
+
+DuckLakeTransform DuckLakePartitionUtils::ParseTransform(string transform) {
+	DuckLakeTransform result;
+	if (StringUtil::StartsWith(transform, "bucket(")) {
+		result.type = DuckLakeTransformType::BUCKET;
+		StringUtil::Trim(transform);
+		// "bucket(X)" -> remove prefix and suffix
+		auto inner = transform.substr(7, transform.size() - 8);
+		if (!StringUtil::EndsWith(transform, ")") ||
+		    !TryCast::Operation<string_t, idx_t>(string_t(inner), result.bucket_count) || result.bucket_count == 0) {
+			throw InvalidInputException("Invalid bucket partition transform: %s", transform);
+		}
+	} else if (!TryGetTransformType(transform, result.type) || result.type == DuckLakeTransformType::BUCKET) {
+		throw InvalidInputException("Unsupported partition transform %s", transform);
+	}
+	return result;
+}
+
 string DuckLakePartitionUtils::GetPartitionKeyName(DuckLakeTransformType transform_type, const string &field_name,
                                                    case_insensitive_set_t &used_names) {
 	auto prefix = transform_type == DuckLakeTransformType::IDENTITY ? field_name : GetTransformName(transform_type);
@@ -88,21 +113,6 @@ bool DuckLakePartitionUtils::IsEpochTransform(DuckLakeTransformType transform_ty
 		return true;
 	default:
 		return false;
-	}
-}
-
-static string GetEpochTransformPart(DuckLakeTransformType transform_type) {
-	switch (transform_type) {
-	case DuckLakeTransformType::EPOCH_YEAR:
-		return "year";
-	case DuckLakeTransformType::EPOCH_MONTH:
-		return "month";
-	case DuckLakeTransformType::EPOCH_DAY:
-		return "day";
-	case DuckLakeTransformType::EPOCH_HOUR:
-		return "hour";
-	default:
-		throw InternalException("Transform is not an epoch transform");
 	}
 }
 
@@ -188,6 +198,15 @@ string DuckLakePartitionUtils::GetPartitionDirectoryName(const string &hive_comp
 	return md5.FinishHex();
 }
 
+//! Binds a call of a scalar function or operator to its arguments
+template <class... ARGS>
+static unique_ptr<Expression> BindFunction(ClientContext &context, const string &name, ARGS... args) {
+	vector<unique_ptr<Expression>> children;
+	(children.push_back(std::move(args)), ...);
+	FunctionBinder binder(context);
+	return binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(name), std::move(children));
+}
+
 unique_ptr<Expression> DuckLakePartitionUtils::CreatePartitionPathExpression(ClientContext &context,
                                                                              const LogicalCopyToFile &copy) {
 	for (auto col_idx : copy.partition_columns) {
@@ -195,39 +214,25 @@ unique_ptr<Expression> DuckLakePartitionUtils::CreatePartitionPathExpression(Cli
 			return nullptr;
 		}
 	}
-	FunctionBinder binder(context);
 	vector<unique_ptr<Expression>> components;
 	for (idx_t i = 0; i < copy.partition_columns.size(); i++) {
 		auto col_idx = copy.partition_columns[i];
-		vector<unique_ptr<Expression>> children;
-		children.push_back(make_uniq<BoundConstantExpression>(Value(copy.names[col_idx])));
-		children.push_back(make_uniq<BoundReferenceExpression>(copy.expected_types[col_idx], i));
-		auto component = binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier("hive_partition_component"),
-		                                           std::move(children));
+		auto component = BindFunction(context, "hive_partition_component",
+		                              make_uniq<BoundConstantExpression>(Value(copy.names[col_idx])),
+		                              make_uniq<BoundReferenceExpression>(copy.expected_types[col_idx], i));
 		auto fits = BoundComparisonExpression::Create(
 		    ExpressionType::COMPARE_LESSTHANOREQUALTO, ApplyScalarFunction(context, "strlen", component->Copy()),
 		    make_uniq<BoundConstantExpression>(Value::BIGINT(DuckLakeUtil::MAX_FILE_NAME_LENGTH)));
 		auto hashed = ApplyScalarFunction(context, "md5", component->Copy());
 		components.push_back(make_uniq<BoundCaseExpression>(std::move(fits), std::move(component), std::move(hashed)));
 	}
+	FunctionBinder binder(context);
 	return binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier("path_join"), std::move(components));
 }
 
 unique_ptr<Expression> DuckLakePartitionUtils::ApplyScalarFunction(ClientContext &context, const string &function_name,
                                                                    unique_ptr<Expression> column_expr) {
-	vector<unique_ptr<Expression>> children;
-	children.push_back(std::move(column_expr));
-	FunctionBinder binder(context);
-	return binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(function_name), std::move(children));
-}
-
-static unique_ptr<Expression> BindBinaryOp(ClientContext &context, const string &op, unique_ptr<Expression> left,
-                                           unique_ptr<Expression> right) {
-	vector<unique_ptr<Expression>> children;
-	children.push_back(std::move(left));
-	children.push_back(std::move(right));
-	FunctionBinder binder(context);
-	return binder.BindScalarFunction(Identifier::DefaultSchema(), Identifier(op), std::move(children));
+	return BindFunction(context, function_name, std::move(column_expr));
 }
 
 unique_ptr<Expression> DuckLakePartitionUtils::ApplyBucketTransform(ClientContext &context,
@@ -240,9 +245,9 @@ unique_ptr<Expression> DuckLakePartitionUtils::ApplyBucketTransform(ClientContex
 
 	// Iceberg bucket: (hash & Integer.MAX_VALUE) % N
 	// Mask off sign bit to ensure non-negative result
-	auto and_expr = BindBinaryOp(context, "&", std::move(hash_expr),
+	auto and_expr = BindFunction(context, "&", std::move(hash_expr),
 	                             make_uniq<BoundConstantExpression>(Value::INTEGER(NumericLimits<int32_t>::Maximum())));
-	return BindBinaryOp(context, "%", std::move(and_expr),
+	return BindFunction(context, "%", std::move(and_expr),
 	                    make_uniq<BoundConstantExpression>(Value::INTEGER(NumericCast<int32_t>(bucket_count))));
 }
 
@@ -284,13 +289,13 @@ static unique_ptr<Expression> FloorNanosToMicros(ClientContext &context, unique_
 		return make_uniq<BoundConstantExpression>(Value::BIGINT(val));
 	};
 	auto nanos = DuckLakePartitionUtils::ApplyScalarFunction(context, "epoch_ns", std::move(column_expr));
-	auto remainder = BindBinaryOp(context, "%", nanos->Copy(), bigint_const(1000));
+	auto remainder = BindFunction(context, "%", nanos->Copy(), bigint_const(1000));
 	auto negative_remainder =
 	    BoundComparisonExpression::Create(ExpressionType::COMPARE_LESSTHAN, std::move(remainder), bigint_const(0));
 	auto correction = make_uniq<BoundCaseExpression>(std::move(negative_remainder), bigint_const(1), bigint_const(0));
 	// divide before correcting the quotient to avoid overflow near INT64_MIN
-	auto micros = BindBinaryOp(context, "//", std::move(nanos), bigint_const(1000));
-	auto floored = BindBinaryOp(context, "-", std::move(micros), std::move(correction));
+	auto micros = BindFunction(context, "//", std::move(nanos), bigint_const(1000));
+	auto floored = BindFunction(context, "-", std::move(micros), std::move(correction));
 	return DuckLakePartitionUtils::ApplyScalarFunction(context, "make_timestamp", std::move(floored));
 }
 
@@ -316,12 +321,11 @@ static unique_ptr<Expression> ApplyEpochTransform(ClientContext &context, unique
 		// Iceberg computes epoch transforms on the UTC instant
 		column_expr = TimestampTZToUTC(context, std::move(column_expr));
 	}
-	vector<unique_ptr<Expression>> children;
-	children.push_back(make_uniq<BoundConstantExpression>(Value(GetEpochTransformPart(transform_type))));
-	children.push_back(make_uniq<BoundConstantExpression>(Value::DATE(Date::FromDate(1970, 1, 1))));
-	children.push_back(std::move(column_expr));
-	FunctionBinder binder(context);
-	return binder.BindScalarFunction(Identifier::DefaultSchema(), "date_diff", std::move(children));
+	// the date part of an epoch transform follows the "epoch_" of its name
+	auto date_part = DuckLakePartitionUtils::GetTransformName(transform_type).substr(6);
+	return BindFunction(context, "date_diff", make_uniq<BoundConstantExpression>(Value(date_part)),
+	                    make_uniq<BoundConstantExpression>(Value::DATE(Date::FromDate(1970, 1, 1))),
+	                    std::move(column_expr));
 }
 
 static bool EpochTransformSupportsType(const LogicalType &type) {
