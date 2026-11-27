@@ -273,7 +273,7 @@
       ]
     },
     {
-      "reason": "The commit batch of a quack catalog is sent through quack_query_by_name, so the client log holds no rehomed end delete to count",
+      "reason": "A quack commit batch goes through quack_query_by_name, so the client log holds no rehomed end delete",
       "paths": [
         "test/sql/branches/branch_flush_skipped_payload.test"
       ]

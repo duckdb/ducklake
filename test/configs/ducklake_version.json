@@ -195,7 +195,7 @@
       ]
     },
     {
-      "reason": "Reads or writes the branch column of the 2.0 snapshot and schema versions tables, which a 1.0 catalog does not have",
+      "reason": "Reads or writes the branch column of the 2.0 snapshot and schema versions tables, absent in 1.0",
       "paths": [
         "test/sql/branches/schema_versions_branch_column.test"
       ]
