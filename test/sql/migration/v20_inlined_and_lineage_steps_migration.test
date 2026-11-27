@@ -109,10 +109,10 @@ DELETE FROM meta.ducklake_inlined_data_1_2
 statement ok
 DETACH meta
 
-# the inlined step recreates the empty payload and creates the companion, the lineage step adds the branch columns
+# the inlined step drops the empty payload and creates the companion, the lineage step adds the branch columns
 statement ok
 ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
-    AUTOMATIC_MIGRATION TRUE)
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
 
 query I
 SELECT value FROM dl.options() WHERE option_name = 'version'
