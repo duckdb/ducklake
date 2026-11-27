@@ -4870,7 +4870,7 @@ vector<DuckLakeCompactionFileEntry> DuckLakeMetadataManager::GetFilesForCompacti
 	string candidate_files_cte;
 	string data_file_source = DataFiles(table_id) + " data";
 	string delete_file_filter;
-	string file_filter_clause = " AND data.end_snapshot IS NULL" + CompactionBranchGuard(type, table_id, snapshot);
+	string file_filter_clause = " AND data.end_snapshot IS NULL" + CompactionBranchGuard(type, table_id);
 	auto partition_value_filter = StringUtil::Format("\n\tWHERE table_id=%d", table_id.index);
 
 	map<idx_t, set<idx_t>> inlined_deletions;
@@ -8775,8 +8775,7 @@ string DuckLakeMetadataManager::FileVisibilityGuard(const string &visibility_tab
 	return guard + " AND NOT (" + StringUtil::Join(inherited, " OR ") + ")";
 }
 
-string DuckLakeMetadataManager::CompactionBranchGuard(CompactionType type, TableIndex table_id,
-                                                      DuckLakeSnapshot snapshot) {
+string DuckLakeMetadataManager::CompactionBranchGuard(CompactionType type, TableIndex table_id) {
 	if (!HasBranches()) {
 		return string();
 	}
@@ -8791,8 +8790,9 @@ string DuckLakeMetadataManager::CompactionBranchGuard(CompactionType type, Table
 	                                        "{METADATA_CATALOG}.ducklake_delete_file d ON d.delete_file_id = "
 	                                        "v.delete_file_id",
 	                                        "d.data_file_id = data.data_file_id");
-	auto inlined_table_name = GetInlinedDeletionTableName(table_id, snapshot);
-	if (!inlined_table_name.empty()) {
+	// the first inlined deletion of a branch creates the table without a snapshot of main, so no cached verdict decides
+	auto inlined_table_name = InlinedFileDeletionTableName(table_id);
+	if (CommittedInlinedDeletionTableExists(inlined_table_name)) {
 		guard += " AND " + BranchReferenceGuard(StringUtil::Format("{METADATA_CATALOG}.%s v", inlined_table_name),
 		                                        "v.file_id = data.data_file_id");
 	}

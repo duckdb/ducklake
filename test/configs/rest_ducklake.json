@@ -792,6 +792,7 @@
         "test/sql/branches/branch_insertions_delete_choice.test",
         "test/sql/branches/branch_listing_after_main_flush.test",
         "test/sql/branches/branch_macro_rows.test",
+        "test/sql/branches/branch_merge_first_branch_deletion.test",
         "test/sql/branches/branch_merge_keeps_deleted_files.test",
         "test/sql/branches/branch_nested_chain.test",
         "test/sql/branches/branch_nested_delete_replacement.test",
