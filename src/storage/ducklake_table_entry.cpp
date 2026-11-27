@@ -1375,7 +1375,7 @@ DuckLakeTableEntry::ParseTableOptions(ClientContext &context, DuckLakeCatalog &c
 		if (option == "skip_stats_columns") {
 			option_value = ResolveSkippedStatsColumns(columns, field_data, partition_data, table_name, value);
 		} else if (option == "data_inlining_row_limit" && std::stoull(option_value) > 0) {
-			DuckLakeUtil::ValidateCanEnableInlining(columns, catalog.SupportsV1_1Metadata(), table_name);
+			DuckLakeUtil::ValidateCanEnableInlining(columns, catalog, table_name);
 		}
 		result[option] = std::move(option_value);
 	}
@@ -1412,7 +1412,7 @@ unique_ptr<CatalogEntry> DuckLakeTableEntry::AlterTable(ClientContext &context, 
 		DuckLakeUtil::ValidateConfigOptionName(option);
 		DuckLakeUtil::ValidateConfigOptionScope(option, false, true);
 		if (option == "data_inlining_row_limit" && ducklake_catalog.DataInliningRowLimit(context, GetSchemaId()) > 0) {
-			DuckLakeUtil::ValidateCanEnableInlining(GetColumns(), ducklake_catalog.SupportsV1_1Metadata(), name);
+			DuckLakeUtil::ValidateCanEnableInlining(GetColumns(), ducklake_catalog, name);
 		}
 		options.push_back(std::move(option));
 	}

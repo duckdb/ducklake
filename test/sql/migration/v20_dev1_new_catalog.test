@@ -219,6 +219,20 @@ SELECT schema_name, begin_snapshot, branch_id FROM meta.ducklake_schema
 ----
 main	0	0
 
+# the inlined rows of every table end in one companion, keyed by the table and the birth of the version
+query II
+SELECT column_name, data_type FROM (SELECT DISTINCT column_index, column_name, data_type FROM duckdb_columns()
+    WHERE database_name = 'meta' AND schema_name IN ('main', 'public')
+    AND table_name = 'ducklake_inlined_data_visibility')
+ORDER BY column_index
+----
+table_id	BIGINT
+row_id	BIGINT
+row_branch_id	BIGINT
+row_snapshot	BIGINT
+branch_id	BIGINT
+end_snapshot	BIGINT
+
 statement ok
 CREATE TABLE dl.t AS SELECT 42 AS i
 

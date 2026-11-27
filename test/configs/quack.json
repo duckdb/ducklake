@@ -254,7 +254,8 @@
     {
       "reason": "The commit batch of a quack catalog is sent through quack_query_by_name, so the client log holds no delete file event insert to count",
       "paths": [
-        "test/sql/delete/delete_replacement_commit_statements.test"
+        "test/sql/delete/delete_replacement_commit_statements.test",
+        "test/sql/deletion_inlining/inlined_delete_ends_without_probe.test"
       ]
     },
     {

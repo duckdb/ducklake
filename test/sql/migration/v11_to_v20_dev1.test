@@ -33,6 +33,10 @@ SELECT value FROM dl.options() WHERE option_name = 'version'
 ----
 1.1
 
+# the migration converts no inlined rows, the flush writes them to files
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
 statement ok
 DETACH dl
 

@@ -598,7 +598,11 @@ vector<Identifier> DuckLakeServerSideCommit::LookupInlinedTableNames(TableIndex 
 	auto result = RunQuery(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), "lookup inlined table names",
 	                       transaction_snapshot);
 	for (auto &row : *result) {
-		names.push_back(row.GetValue<Identifier>(0));
+		auto inlined_table_name = row.GetValue<Identifier>(0);
+		if (SupportsRowVisibility(catalog_version)) {
+			DuckLakeMetadataManager::VerifyInlinedTableName(inlined_table_name, table_id);
+		}
+		names.push_back(inlined_table_name);
 	}
 	return names;
 }
@@ -613,6 +617,9 @@ const Identifier &DuckLakeServerSideCommit::ResolveInlinedTableName(TableIndex t
 	Identifier name;
 	for (auto &row : *result) {
 		name = row.GetValue<Identifier>(0);
+		if (SupportsRowVisibility(catalog_version)) {
+			DuckLakeMetadataManager::VerifyInlinedTableName(name, table_id);
+		}
 	}
 	return inlined_table_name_cache.emplace(table_id.index, std::move(name)).first->second;
 }
@@ -641,9 +648,9 @@ string DuckLakeServerSideCommit::BuildInlinedDataInserts(const vector<DuckLakeIn
 		for (auto &tuple : tuples) {
 			cells_per_row.push_back(tuple.size() >= 2 ? tuple.substr(1, tuple.size() - 2) : tuple);
 		}
-		batch += DuckLakeMetadataManager::FormatInlinedDataInsert(inlined_table_name, entry.row_id_start, has_preserved,
-		                                                          has_preserved ? &row_ids_it->second : nullptr,
-		                                                          cells_per_row);
+		batch += DuckLakeMetadataManager::FormatInlinedDataInsert(
+		    inlined_table_name, entry.row_id_start, has_preserved, has_preserved ? &row_ids_it->second : nullptr,
+		    cells_per_row, SupportsRowVisibility(catalog_version));
 	}
 	return batch;
 }
@@ -688,9 +695,10 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	                                const vector<DuckLakeTableInfo> &, const vector<DuckLakeTableInfo> &) -> string {
 		return BuildInlinedDataInserts(new_data);
 	};
-	ctx.write_inlined_file_deletes = [](const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) -> string {
+	ctx.write_inlined_file_deletes = [this](const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) -> string {
 		bool created_new_table = false;
-		return DuckLakeMetadataManager::WriteNewInlinedFileDeletesSql(new_deletes, created_new_table);
+		return DuckLakeMetadataManager::WriteNewInlinedFileDeletesSql(new_deletes, created_new_table,
+		                                                              SupportsRowVisibility(catalog_version));
 	};
 	ctx.get_table_stats = [this](TableIndex table_id) -> shared_ptr<DuckLakeTableStats> {
 		return GetExistingTableStats(table_id);

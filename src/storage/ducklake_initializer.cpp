@@ -314,11 +314,10 @@ void DuckLakeInitializer::LoadExistingDuckLake(DuckLakeTransaction &transaction)
 			}
 			if (catalog_version == DuckLakeVersion::V1_1 && target_version == DuckLakeVersion::V1_1 &&
 			    !metadata_manager.HasV1_1Layout()) {
-				// the first batch of the migration to 2.0 commits with the version still 1.1
+				// the batches of the migration to 2.0 commit with the version still 1.1
 				throw InvalidInputException(
-				    "DuckLake catalog version is %s, but a migration to 2.0-dev1 moved its tables "
-				    "aside. To automatically migrate, set AUTOMATIC_MIGRATION to TRUE when "
-				    "attaching.",
+				    "DuckLake catalog version is %s, but a migration to 2.0-dev1 has begun on it. To "
+				    "automatically migrate, set AUTOMATIC_MIGRATION to TRUE when attaching.",
 				    tag.value);
 			}
 		}

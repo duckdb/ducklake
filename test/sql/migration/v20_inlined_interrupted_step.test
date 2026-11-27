@@ -1,0 +1,82 @@
+# name: test/sql/migration/v20_inlined_interrupted_step.test
+# description: a migration to 2.0-dev1 that stopped after the drop of an empty payload removes the registration left behind
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DUCKLAKE_VERSION '1.1', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+query I
+SELECT count(*) FROM meta.ducklake_inlined_data_1_1
+----
+0
+
+# the step drops the empty payload and then its registration, a backend that commits each statement can stop between
+statement ok
+DROP TABLE meta.ducklake_inlined_data_1_1
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    AUTOMATIC_MIGRATION TRUE, DATA_INLINING_ROW_LIMIT 10)
+
+query I
+SELECT value FROM dl.options() WHERE option_name = 'version'
+----
+2.0-dev1
+
+query I
+SELECT COUNT(*) FROM meta.ducklake_inlined_data_tables
+----
+0
+
+query I
+SELECT i FROM dl.t
+----
+1
+
+# the writer creates the payload in the shape of 2.0 and registers it under the schema version of its commit
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+
+query I
+SELECT table_name FROM meta.ducklake_inlined_data_tables
+----
+ducklake_inlined_data_1_2
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
+
+query III
+SELECT _ducklake_row_id, _ducklake_branch_id, i FROM meta.ducklake_inlined_data_1_2
+----
+1	0	2

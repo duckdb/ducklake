@@ -49,15 +49,11 @@ DELETE FROM partitioned_tbl WHERE values IN ('batch2_0', 'batch2_1')
 statement ok
 CALL ducklake_rewrite_data_files('ducklake', 'partitioned_tbl', delete_threshold => 0)
 
-query I
-SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'partitioned_tbl')
+query II
+SELECT (SELECT COUNT(*) FROM ducklake_list_files('ducklake', 'partitioned_tbl')),
+       (SELECT bool_or(contains(path, 'part_key=')) FROM ducklake_metadata.ducklake_data_file)
 ----
-2
-
-query I
-SELECT bool_or(contains(path, 'part_key=')) FROM ducklake_metadata.ducklake_data_file
-----
-false
+2	false
 
 # explicit opt-in: hive_file_pattern = true on an encrypted table is honored by compaction
 statement ok
