@@ -227,6 +227,7 @@
         "test/sql/branches/branch_flush_inlined_deletes.test",
         "test/sql/branches/branch_flush_rehomes_branch_ends.test",
         "test/sql/branches/branch_flush_skipped_payload.test",
+        "test/sql/branches/branch_flush_watermark_main.test",
         "test/sql/branches/branch_full_delete_feed_capped.test",
         "test/sql/branches/branch_gap_tag_commit.test",
         "test/sql/branches/branch_guard_shared_cleanup.test",

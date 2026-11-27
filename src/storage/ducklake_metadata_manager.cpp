@@ -4221,6 +4221,7 @@ DuckLakeMetadataManager::GetFilesForTable(DuckLakeTableEntry &table, DuckLakeSna
 		optional_idx begin_segment;
 		if (catalog.OnBranch()) {
 			begin_segment = row.GetValue<idx_t>(col_idx++);
+			file_entry.snapshot_branch_id = chain.Segments()[begin_segment.GetIndex()].branch_id;
 			auto delete_segment = OptIdx(row, col_idx++);
 			if (delete_segment.IsValid()) {
 				// an inherited delete file applies the deletes dated up to the cap of its writer's segment
