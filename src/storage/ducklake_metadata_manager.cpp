@@ -2415,6 +2415,28 @@ WHERE table_id = {TABLE_ID} AND schema_version = {SCHEMA_VERSION})" +
 	return GetBeginSnapshotForTable(table_id);
 }
 
+DuckLakeSnapshot DuckLakeMetadataManager::GetSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version) {
+	auto &catalog = transaction.GetCatalog();
+	if (!catalog.OnBranch()) {
+		return DuckLakeSnapshot(GetBeginSnapshotForSchemaVersion(table_id, schema_version), schema_version, 0, 0);
+	}
+	// a payload of main holds the table as of the latest version row of main at or below the version naming it
+	auto query = StringUtil::Format(R"(
+SELECT begin_snapshot, schema_version
+FROM {METADATA_CATALOG}.ducklake_schema_versions
+WHERE table_id = %d AND schema_version <= %d AND branch_id = 0%s
+ORDER BY schema_version DESC
+LIMIT 1)",
+	                                table_id.index, schema_version, SchemaVersionsLineageFilter(""));
+	auto result = Query(query);
+	result->ThrowIfError("Failed to get the version row of main of a schema version from DuckLake: ");
+	for (auto &row : *result) {
+		return DuckLakeSnapshot(row.GetValue<idx_t>(0), row.GetValue<idx_t>(1), 0, 0);
+	}
+	// without a version row of main the table is read as created
+	return DuckLakeSnapshot(GetBeginSnapshotForTable(table_id), schema_version, 0, 0);
+}
+
 string DuckLakeMetadataManager::GetNetDataFileRowCountSql(TableIndex table_id, const Identifier &inlined_deletion_table,
                                                           bool file_events, const DuckLakeBranchChain &chain,
                                                           bool require_exact, bool exclude_new_files) {

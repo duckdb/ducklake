@@ -235,6 +235,7 @@
         "test/sql/branches/branch_inlined_delete_after_fork.test",
         "test/sql/branches/branch_inlined_end_row.test",
         "test/sql/branches/branch_inlined_file_delete_row.test",
+        "test/sql/branches/branch_inlined_registration_without_version_row.test",
         "test/sql/branches/branch_inlined_shared_version_number.test",
         "test/sql/branches/branch_inlined_table_changes.test",
         "test/sql/branches/branch_insertions_delete_choice.test",
