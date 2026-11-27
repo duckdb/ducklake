@@ -96,6 +96,10 @@ void DuckLakeServerSideCommit::SetRetryConfigOverride(const DuckLakeRetryConfig 
 	retry_config = retry_config_p;
 }
 
+void DuckLakeServerSideCommit::SetFilesOwnedByClient(bool files_owned_by_client_p) {
+	files_owned_by_client = files_owned_by_client_p;
+}
+
 DuckLakeServerSideCommitResult DuckLakeServerSideCommit::Run() {
 	auto catalog_version = ReadCatalogVersion();
 	supports_v1_1_metadata = catalog_version >= DuckLakeVersion::V1_1;
@@ -158,6 +162,7 @@ void DuckLakeServerSideCommit::ReadCommitHeader() {
 	}
 	state = make_uniq<DuckLakeTransactionState>(*context.db, /*require_commit_message=*/false, new_name_maps,
 	                                            std::move(data_path), std::move(separator));
+	state->files_owned_by_client = files_owned_by_client;
 	state->commit_info.author = row.GetBaseValue(0);
 	state->commit_info.commit_message = row.GetBaseValue(1);
 	state->commit_info.commit_extra_info = row.GetBaseValue(2);
@@ -616,7 +621,11 @@ vector<Identifier> DuckLakeServerSideCommit::LookupInlinedTableNames(TableIndex 
 	auto sql = SubstitutePlaceholders(DuckLakeMetadataManager::GetInlinedTableNamesSql(table_id), transaction_snapshot);
 	auto result = RunQuery(sql, "lookup inlined table names");
 	for (auto &row : *result) {
-		names.push_back(row.GetValue<Identifier>(0));
+		auto inlined_table_name = row.GetValue<Identifier>(0);
+		if (supports_row_visibility) {
+			DuckLakeMetadataManager::VerifyInlinedTableName(inlined_table_name, table_id);
+		}
+		names.push_back(inlined_table_name);
 	}
 	return names;
 }
@@ -633,6 +642,9 @@ const Identifier &DuckLakeServerSideCommit::ResolveInlinedTableName(TableIndex t
 	Identifier name;
 	for (auto &row : *result) {
 		name = row.GetValue<Identifier>(0);
+		if (supports_row_visibility) {
+			DuckLakeMetadataManager::VerifyInlinedTableName(name, table_id);
+		}
 	}
 	return inlined_table_name_cache.emplace(table_id.index, std::move(name)).first->second;
 }
@@ -663,7 +675,7 @@ string DuckLakeServerSideCommit::BuildInlinedDataInserts(const vector<DuckLakeIn
 		}
 		batch += DuckLakeMetadataManager::FormatInlinedDataInsert(inlined_table_name, entry.row_id_start, has_preserved,
 		                                                          has_preserved ? &row_ids_it->second : nullptr,
-		                                                          cells_per_row);
+		                                                          cells_per_row, supports_row_visibility);
 	}
 	return batch;
 }
@@ -672,6 +684,8 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
                                                              idx_t &committed_schema_version) {
 	DuckLakeCommitContext ctx;
 	ctx.commit_info = state->commit_info;
+	// a commit that a server passes on starts from the snapshot of its client, which other commits can have followed
+	ctx.check_conflicts_first = files_owned_by_client;
 	ctx.skip_drop_empty_inlined = true;
 	ctx.supports_v1_1_metadata = supports_v1_1_metadata;
 	ctx.supports_v2_0_metadata = supports_v2_0_metadata;
@@ -693,6 +707,10 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	};
 	ctx.commit_connection = [this]() {
 		fresh_conn.Commit();
+	};
+	// the outcome only moves forward: PUBLISHED is final
+	ctx.report_commit_outcome = [this](DuckLakeCommitOutcome reported) {
+		commit_outcome = MaxValue(commit_outcome, reported);
 	};
 	ctx.try_rollback = [this]() {
 		if (fresh_conn.context->transaction.HasActiveTransaction()) {
@@ -716,9 +734,10 @@ DuckLakeCommitContext DuckLakeServerSideCommit::BuildContext(idx_t &committed_sn
 	                                const vector<DuckLakeTableInfo> &, const vector<DuckLakeTableInfo> &) -> string {
 		return BuildInlinedDataInserts(new_data);
 	};
-	ctx.write_inlined_file_deletes = [](const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) -> string {
+	ctx.write_inlined_file_deletes = [this](const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes) -> string {
 		bool created_new_table = false;
-		return DuckLakeMetadataManager::WriteNewInlinedFileDeletesSql(new_deletes, created_new_table);
+		return DuckLakeMetadataManager::WriteNewInlinedFileDeletesSql(new_deletes, created_new_table,
+		                                                              supports_row_visibility);
 	};
 	ctx.get_table_stats = [this](TableIndex table_id) -> shared_ptr<DuckLakeTableStats> {
 		return GetExistingTableStats(table_id);

@@ -255,7 +255,13 @@
         "test/sql/compaction/expire_snapshots_entity_rows.test",
         "test/sql/catalog/catalog_tag_row_companions.test",
         "test/sql/compaction/expire_snapshots_tag_rows.test",
-        "test/sql/alter/create_table_drop_column_same_transaction.test"
+        "test/sql/alter/create_table_drop_column_same_transaction.test",
+        "test/sql/data_inlining/inlined_companion_layout.test",
+        "test/sql/data_inlining/inlined_shared_visibility_layout.test",
+        "test/sql/data_inlining/inlined_flush_keeps_own_deletes.test",
+        "test/sql/data_inlining/inlined_ends_expire.test",
+        "test/sql/deletion_inlining/inlined_deletion_table_branch.test",
+        "test/sql/deletion_inlining/inlined_delete_ends_without_probe.test"
       ]
     }
   ]

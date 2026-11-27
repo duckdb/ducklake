@@ -711,8 +711,10 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 		// LCOV_EXCL_STOP
 	}
 
+	auto &latest_table = GetLatestTableEntry(catalog, transaction, table);
+
 	string data_path;
-	if (partition_id.IsValid()) {
+	if (partition_id.IsValid() && catalog.UseHiveFilePattern(!catalog.IsEncrypted(), latest_table)) {
 		auto partition_table = ResolvePartitionSpecTable(table, source_files[0], partition_id.GetIndex());
 		if (partition_table) {
 			data_path =
@@ -755,7 +757,6 @@ DuckLakeCompactor::GenerateCompactionCommand(vector<DuckLakeCompactionFileEntry>
 	    },
 	    copy);
 
-	auto &latest_table = GetLatestTableEntry(catalog, transaction, table);
 	auto sort_data = latest_table.GetSortData();
 	bool sort_applied = false;
 	if (sort_data) {
