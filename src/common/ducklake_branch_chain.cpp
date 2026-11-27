@@ -107,13 +107,6 @@ string DuckLakeBranchChain::Predicate(const string &prefix, const string &snapsh
 	return StringUtil::Join(arms, " OR ");
 }
 
-string DuckLakeBranchChain::ViewPredicate(const string &prefix, const string &snapshot_column,
-                                          const string &read_snapshot, const string &branch_column) const {
-	// the read snapshot caps every arm of the chain predicate
-	return StringUtil::Format("(%s) AND %s%s <= %s", Predicate(prefix, snapshot_column, branch_column),
-	                          ColumnPrefix(prefix), snapshot_column, read_snapshot);
-}
-
 string DuckLakeBranchChain::SegmentPosition(const string &prefix, const string &branch_column) const {
 	string arms;
 	for (idx_t position = 0; position < segments.size(); position++) {

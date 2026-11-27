@@ -44,9 +44,6 @@ public:
 	//! Prefix "" gives bare column names, "v" gives v.branch_id and v.snapshot_id, both columns can be renamed
 	string Predicate(const string &prefix, const string &snapshot_column = "snapshot_id",
 	                 const string &branch_column = "branch_id") const;
-	//! The chain predicate with every segment also capped by read_snapshot, an SQL expression such as a placeholder
-	string ViewPredicate(const string &prefix, const string &snapshot_column, const string &read_snapshot,
-	                     const string &branch_column = "branch_id") const;
 	//! The CASE mapping the branch column of a row to the position of its segment, root first
 	string SegmentPosition(const string &prefix, const string &branch_column = "branch_id") const;
 	//! Whether the view of the chain holds the snapshot of the branch
