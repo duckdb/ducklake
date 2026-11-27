@@ -29,7 +29,7 @@ namespace duckdb {
 
 //! The protocol carries no branch bounds, so a served DuckLake has to be on main
 static void RefuseServedBranch(Catalog &catalog) {
-	if (catalog.Cast<DuckLakeCatalog>().OnBranch()) {
+	if (catalog.GetCatalogType() == "ducklake" && catalog.Cast<DuckLakeCatalog>().OnBranch()) {
 		throw NotImplementedException("Serving a branch of a DuckLake through REST is not supported yet");
 	}
 }
