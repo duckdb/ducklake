@@ -1,0 +1,109 @@
+# name: test/sql/deletion_inlining/inlined_delete_ends_without_probe.test
+# description: a delete of inlined rows ends the latest version of each row id with one statement per chunk that probes no companion
+# group: [deletion_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE lake.t(i INTEGER)
+
+statement ok
+INSERT INTO lake.t VALUES (1), (2), (3), (4), (5)
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage = 'memory')
+
+statement ok
+DELETE FROM lake.t WHERE i IN (2, 4)
+
+statement ok
+CALL disable_logging()
+
+# the ends come from the payload rows of the deleted ids alone
+query II
+SELECT count(*) FILTER (WHERE query LIKE '%deleted_row_list%' AND query LIKE '%ducklake_inlined_data_visibility%'),
+       count(*) FILTER (WHERE query LIKE '%deleted_row_list%' AND query LIKE '%NOT EXISTS%')
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1	0
+
+query III
+SELECT row_id, row_snapshot, end_snapshot FROM meta.ducklake_inlined_data_visibility ORDER BY row_id
+----
+1	2	3
+3	2	3
+
+query I
+SELECT i FROM lake.t ORDER BY i
+----
+1
+3
+5
+
+query I
+SELECT i FROM lake.t AT (VERSION => 2) ORDER BY i
+----
+1
+2
+3
+4
+5
+
+# a second delete ends more rows of the same payload
+statement ok
+DELETE FROM lake.t WHERE i = 5
+
+query III
+SELECT row_id, row_snapshot, end_snapshot FROM meta.ducklake_inlined_data_visibility ORDER BY row_id
+----
+1	2	3
+3	2	3
+4	2	4
+
+query I
+SELECT i FROM lake.t ORDER BY i
+----
+1
+3
+
+# an update keeps the row id, the delete then ends the version the update wrote
+statement ok
+UPDATE lake.t SET i = i + 10 WHERE i = 1
+
+query I
+SELECT i FROM lake.t ORDER BY i
+----
+3
+11
+
+statement ok
+DELETE FROM lake.t WHERE i = 11
+
+query III
+SELECT row_id, row_snapshot, end_snapshot FROM meta.ducklake_inlined_data_visibility ORDER BY row_id, row_snapshot
+----
+0	2	5
+0	5	6
+1	2	3
+3	2	3
+4	2	4
+
+query I
+SELECT i FROM lake.t ORDER BY i
+----
+3
+
+query I
+SELECT i FROM lake.t AT (VERSION => 5) ORDER BY i
+----
+3
+11

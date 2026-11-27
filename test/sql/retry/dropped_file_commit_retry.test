@@ -55,7 +55,7 @@ SELECT count(*) FROM ducklake_list_files('ducklake', 't')
 query I
 SELECT s.record_count
 FROM dropped_file_retry_meta.ducklake_table_stats s
-JOIN dropped_file_retry_meta.ducklake_table t ON t.table_id = s.table_id AND t.end_snapshot IS NULL
+JOIN dropped_file_retry_meta.ducklake_table t ON t.table_id = s.table_id
 WHERE t.table_name = 't'
 ----
 100

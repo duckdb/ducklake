@@ -60,6 +60,19 @@ AUTOMATIC_MIGRATION
 
 # the migration renames the legacy named inlined tables
 statement ok
+ATTACH 'ducklake:{TEST_DIR}/dev1_hint.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_hint_files', DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+SELECT _ducklake_row_id, _ducklake_begin_snapshot, _ducklake_end_snapshot FROM __ducklake_metadata_dl.ducklake_inlined_data_1_1 LIMIT 0
+
+# the migration to 2.0 converts no inlined rows, the flush writes them to files first
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+DETACH dl
+
+statement ok
 ATTACH 'ducklake:{TEST_DIR}/dev1_hint.db' AS dl (DATA_PATH '{TEST_DIR}/dev1_hint_files', AUTOMATIC_MIGRATION TRUE)
 
 query II
@@ -79,7 +92,7 @@ statement ok
 ATTACH '{TEST_DIR}/dev1_hint.db' AS meta;
 
 query I
-SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_name = 'ducklake_inlined_data_1_1' AND column_name IN ('_ducklake_row_id', '_ducklake_begin_snapshot', '_ducklake_end_snapshot')
+SELECT COUNT(*) FROM duckdb_columns() WHERE database_name = 'meta' AND table_name LIKE 'ducklake_inlined_data_1_%' AND column_name IN ('_ducklake_row_id', '_ducklake_begin_snapshot', '_ducklake_branch_id')
 ----
 3
 

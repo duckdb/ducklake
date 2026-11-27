@@ -1,0 +1,145 @@
+# name: test/sql/stats/null_first_bounds_unrelated_commits.test
+# description: Commits of another catalog to other tables keep the columns found with values, unless their changes cannot be read
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.u (i INTEGER);
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS other (METADATA_CATALOG '__ducklake_metadata_ducklake')
+
+statement ok
+CREATE TABLE ducklake.t (id INTEGER, s VARCHAR, s2 VARCHAR);
+
+# Parquet stores no bounds for the long strings, so s and s2 have a NULL and unknown bounds
+statement ok
+INSERT INTO ducklake.t VALUES (1, NULL, NULL), (2, repeat(chr(1076), 200), repeat(chr(1076), 200));
+
+# this commit finds that s and s2 hold values
+statement ok
+INSERT INTO ducklake.t VALUES (3, 'c', 'c');
+
+statement ok
+INSERT INTO other.u VALUES (1);
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+# new NULL values do not set bounds, so nothing is read
+statement ok
+INSERT INTO ducklake.t VALUES (4, NULL, NULL);
+
+statement ok
+CALL disable_logging()
+
+query II
+SELECT count(*) FILTER (WHERE regexp_matches(query, 'SELECT changes_made\s+FROM \S+ducklake_snapshot_changes\s+WHERE snapshot_id > \d+ AND snapshot_id <= \d+')),
+       count(*) FILTER (WHERE regexp_matches(query, 'FROM \S+ducklake_file_column_stats s\s+JOIN'))
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+0	0
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+INSERT INTO ducklake.t VALUES (5, 'e', 'e');
+
+statement ok
+INSERT INTO ducklake.t VALUES (6, 'f', 'f');
+
+statement ok
+CALL disable_logging()
+
+# the first commit reads the changes of the other catalog once for both columns, not their values
+query II
+SELECT count(*) FILTER (WHERE regexp_matches(query, 'SELECT changes_made\s+FROM \S+ducklake_snapshot_changes\s+WHERE snapshot_id > \d+ AND snapshot_id <= \d+')),
+       count(*) FILTER (WHERE regexp_matches(query, 'FROM \S+ducklake_file_column_stats s\s+JOIN'))
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1	0
+
+query II
+SELECT s.min_value IS NULL, s.max_value IS NULL FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 't' AND s.column_id = 2
+----
+true	true
+
+# an older DuckLake deleted the changes of the snapshots it expired, without them the values are checked again
+statement ok
+INSERT INTO other.u VALUES (2);
+
+statement ok
+INSERT INTO other.u VALUES (3);
+
+statement ok
+DELETE FROM __ducklake_metadata_ducklake.ducklake_snapshot_changes WHERE snapshot_id = (SELECT max(snapshot_id) - 1 FROM __ducklake_metadata_ducklake.ducklake_snapshot_changes)
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+INSERT INTO ducklake.t VALUES (7, 'g', 'g');
+
+statement ok
+CALL disable_logging()
+
+query II
+SELECT count(*) FILTER (WHERE regexp_matches(query, 'SELECT changes_made\s+FROM \S+ducklake_snapshot_changes\s+WHERE snapshot_id > \d+ AND snapshot_id <= \d+')),
+       count(*) FILTER (WHERE regexp_matches(query, 'FROM \S+ducklake_file_column_stats s\s+JOIN'))
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+1	1
+
+# the changes of many snapshots are not read, the values are checked again
+loop i 0 1001
+
+statement ok
+INSERT INTO other.u VALUES ({i});
+
+endloop
+
+statement ok
+CALL truncate_duckdb_logs()
+
+statement ok
+CALL enable_logging('DuckLakeMetadata')
+
+statement ok
+INSERT INTO ducklake.t VALUES (8, 'h', 'h');
+
+statement ok
+CALL disable_logging()
+
+query II
+SELECT count(*) FILTER (WHERE regexp_matches(query, 'SELECT changes_made\s+FROM \S+ducklake_snapshot_changes\s+WHERE snapshot_id > \d+ AND snapshot_id <= \d+')),
+       count(*) FILTER (WHERE regexp_matches(query, 'FROM \S+ducklake_file_column_stats s\s+JOIN'))
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+----
+0	1
+
+query II
+SELECT s.min_value IS NULL, s.max_value IS NULL FROM __ducklake_metadata_ducklake.ducklake_table_column_stats s JOIN __ducklake_metadata_ducklake.ducklake_table t USING (table_id) WHERE t.table_name = 't' AND s.column_id = 2
+----
+true	true
+
+query III
+SELECT count(*), count(s), count(*) FILTER (WHERE s > 'z') FROM ducklake.t
+----
+8	6	1

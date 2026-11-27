@@ -32,6 +32,12 @@ public:
 	DuckLakeServerSideCommitResult Run();
 	//! Override the retry configuration
 	void SetRetryConfigOverride(const DuckLakeRetryConfig &retry_config);
+	//! The staged files belong to the client of a server that passed on the commit, which removes them itself
+	void SetFilesOwnedByClient(bool files_owned_by_client);
+	//! What is known about the publication of the commit, also after it failed
+	DuckLakeCommitOutcome GetCommitOutcome() const {
+		return commit_outcome;
+	}
 
 private:
 	//! Read commit metadata (author, message, snapshot ids).
@@ -94,6 +100,8 @@ private:
 	const int64_t schema_version;
 	Connection fresh_conn;
 	DuckLakeRetryConfig retry_config;
+	bool files_owned_by_client = false;
+	DuckLakeCommitOutcome commit_outcome = DuckLakeCommitOutcome::NOT_PUBLISHED;
 
 	DuckLakeNameMapSet new_name_maps;
 	unique_ptr<DuckLakeTransactionState> state;
@@ -106,6 +114,7 @@ private:
 	bool supports_v1_1_metadata = false;
 	bool supports_v2_0_metadata = false;
 	bool supports_file_visibility_events = false;
+	bool supports_row_visibility = false;
 	bool branch_keyed_lookups = false;
 	bool staged_dropped_files_read = false;
 	vector<pair<string, idx_t>> staged_dropped_files;

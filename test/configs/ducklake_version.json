@@ -61,7 +61,8 @@
         "test/sql/tags/tags_replace_conflict.test",
         "test/sql/tags/sqlite_wal_tags_replace.test",
         "test/sql/tags/tags_time_travel.test",
-        "test/sql/tags/tags_transaction.test"
+        "test/sql/tags/tags_transaction.test",
+        "test/sql/tags/tags_row_collation.test"
       ]
     },
     {
@@ -247,7 +248,20 @@
         "test/sql/sorted_table/merge_adjacent_sorted_transaction_renamed.test",
         "test/sql/stats/skip_stats_columns.test",
         "test/sql/stats/table_stats_null_totals.test",
-        "test/sql/stats/table_stats_null_totals_retry.test"
+        "test/sql/stats/table_stats_null_totals_retry.test",
+        "test/sql/catalog/catalog_row_companions.test",
+        "test/sql/compaction/expire_snapshots_catalog_rows.test",
+        "test/sql/catalog/catalog_entity_row_companions.test",
+        "test/sql/compaction/expire_snapshots_entity_rows.test",
+        "test/sql/catalog/catalog_tag_row_companions.test",
+        "test/sql/compaction/expire_snapshots_tag_rows.test",
+        "test/sql/alter/create_table_drop_column_same_transaction.test",
+        "test/sql/data_inlining/inlined_companion_layout.test",
+        "test/sql/data_inlining/inlined_shared_visibility_layout.test",
+        "test/sql/data_inlining/inlined_flush_keeps_own_deletes.test",
+        "test/sql/data_inlining/inlined_ends_expire.test",
+        "test/sql/deletion_inlining/inlined_deletion_table_branch.test",
+        "test/sql/deletion_inlining/inlined_delete_ends_without_probe.test"
       ]
     }
   ]

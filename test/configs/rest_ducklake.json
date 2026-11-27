@@ -47,7 +47,10 @@
         "test/sql/stats/count_star_optimization_cache.test",
         "test/sql/general/ducklake_metadata_logging.test",
         "test/sql/transaction/commit_skips_catalog_load.test",
-        "test/sql/transaction/commit_retry_skips_catalog_load.test"
+        "test/sql/transaction/commit_retry_skips_catalog_load.test",
+        "test/sql/transaction/commit_table_paths_from_catalog.test",
+        "test/sql/stats/stats_reads_filter_table.test",
+        "test/sql/stats/null_first_bounds_unrelated_commits.test"
       ]
     },
     {
@@ -91,6 +94,9 @@
         "test/sql/cleanup/expire_retry_keeps_tagged_files.test",
         "test/sql/compaction/expire_snapshot_global_option.test",
         "test/sql/compaction/expire_snapshot_table_scoped_option.test",
+        "test/sql/compaction/expire_snapshots_catalog_rows.test",
+        "test/sql/compaction/expire_snapshots_entity_rows.test",
+        "test/sql/compaction/expire_snapshots_tag_rows.test",
         "test/sql/compaction/expire_snapshots_empty_versions.test",
         "test/sql/compaction/expire_snapshots_invalid_params.test",
         "test/sql/compaction/older_than_unsupported_timestamps.test",
@@ -202,6 +208,7 @@
         "test/sql/remove_orphans/orphan_after_expire.test",
         "test/sql/settings/parquet_row_group_size_above_bigint.test",
         "test/sql/stats/rewrite_global_stats_recompute.test",
+        "test/sql/stats/retype_in_creating_transaction_bounds.test",
         "test/sql/table_changes/ducklake_table_deletions_flushed_deletion_vector.test",
         "test/sql/table_changes/table_changes_rewrite_data_files.test",
         "test/sql/table_changes/table_changes_rewrite_merged_twice.test",
@@ -251,6 +258,12 @@
       "reason": "Reads the metadata catalog of the DuckLake or configures it with attach options, but the REST server (in a database of its own) attaches the catalog and creates the DuckLake",
       "paths": [
         "test/sql/remove_files/remove_data_files_stats.test",
+        "test/sql/data_inlining/inlined_companion_layout.test",
+        "test/sql/data_inlining/inlined_shared_visibility_layout.test",
+        "test/sql/data_inlining/inlined_flush_keeps_own_deletes.test",
+        "test/sql/data_inlining/inlined_ends_expire.test",
+        "test/sql/data_inlining/inlining_branch_column_v11.test",
+        "test/sql/deletion_inlining/inlined_deletion_table_branch.test",
         "test/sql/add_files/add_file_epoch_partitioned.test",
         "test/sql/add_files/add_file_partitioned.test",
         "test/sql/add_files/add_file_repeated_bucket.test",
@@ -424,6 +437,7 @@
         "test/sql/partitioning/bucket_pruning.test",
         "test/sql/partitioning/bucket_pruning_type_promotion.test",
         "test/sql/partitioning/data_inlining_disable_hive_partitioning.test",
+        "test/sql/partitioning/disable_hive_partitioning.test",
         "test/sql/partitioning/epoch_timestamptz.test",
         "test/sql/partitioning/epoch_transforms.test",
         "test/sql/partitioning/merge_adjacent_null_partition.test",
@@ -555,6 +569,25 @@
         "test/sql/migration/v20_file_events_migration_resume_events.test",
         "test/sql/migration/v20_file_events_migration_resume_columns.test",
         "test/sql/migration/v20_file_events_migration_resume_one_table.test",
+        "test/sql/migration/v20_row_companions_migration.test",
+        "test/sql/migration/v20_row_companions_migration_resume.test",
+        "test/sql/migration/v20_row_companions_migration_resume2.test",
+        "test/sql/migration/v20_row_companions_superseded.test",
+        "test/sql/migration/v20_row_companions_interleaved_drop_refused.test",
+        "test/sql/migration/v20_row_companions_interleaved_drop_absorbed.test",
+        "test/sql/migration/v20_row_companions_superseded_stats.test",
+        "test/sql/catalog/catalog_row_companions.test",
+        "test/sql/migration/v20_entity_row_companions_migration.test",
+        "test/sql/migration/v20_entity_row_companions_resume.test",
+        "test/sql/catalog/catalog_entity_row_companions.test",
+        "test/sql/migration/v20_tag_row_companions_migration.test",
+        "test/sql/migration/v20_tag_row_companions_resume.test",
+        "test/sql/migration/v20_inlined_visibility_migration.test",
+        "test/sql/migration/v20_inlined_visibility_collisions.test",
+        "test/sql/migration/v20_inlined_registry_names.test",
+        "test/sql/migration/v20_inlined_registry_names_commit.test",
+        "test/sql/catalog/catalog_tag_row_companions.test",
+        "test/sql/alter/create_table_drop_column_same_transaction.test",
         "test/sql/metadata/file_visibility_layout.test",
         "test/sql/delete/delete_file_events_main.test",
         "test/sql/delete/delete_replacement_commit_statements.test",
@@ -569,7 +602,12 @@
         "test/sql/data_inlining/inlining_obstacle_log.test",
         "test/sql/compaction/user_columns_named_like_internal_columns.test",
         "test/sql/data_inlining/data_inlining_transaction_local_field_readd_rejected.test",
-        "test/sql/data_inlining/data_inlining_variant_stats.test"
+        "test/sql/data_inlining/data_inlining_variant_stats.test",
+        "test/sql/deletion_inlining/inlined_delete_ends_without_probe.test",
+        "test/sql/migration/v20_inlined_dropped_table_rows.test",
+        "test/sql/migration/v20_inlined_orphan_deletions.test",
+        "test/sql/migration/v20_inlined_rows_after_first_batch.test",
+        "test/sql/migration/v20_inlined_interrupted_step.test"
       ]
     },
     {
@@ -605,7 +643,8 @@
         "test/sql/tags/tags_replace_conflict.test",
         "test/sql/tags/tags_time_travel.test",
         "test/sql/tags/tags_transaction.test",
-        "test/sql/tags/tags_version_gate.test"
+        "test/sql/tags/tags_version_gate.test",
+        "test/sql/tags/tags_row_collation.test"
       ]
     },
     {
@@ -639,6 +678,12 @@
       ]
     },
     {
+      "reason": "Expects concurrent commits to exhaust their retries, but the REST server runs the commits one at a time",
+      "paths": [
+        "test/sql/settings/max_retry_count.test"
+      ]
+    },
+    {
       "reason": "Tests a PostgreSQL, SQLite or Quack metadata catalog, but the REST server serves the DuckLake from a DuckDB database",
       "paths": [
         "test/sql/benchmark/postgres_catalog.test",
@@ -665,6 +710,7 @@
         "test/sql/metadata/postgres_text_protocol.test",
         "test/sql/migration/postgres_concurrent_migration.test",
         "test/sql/migration/postgres_dev1_migration_skips_present_ddl.test",
+        "test/sql/migration/postgres_row_companions_index_names.test",
         "test/sql/migration/postgres_dev_migration_failure.test",
         "test/sql/migration/postgres_inlined_unknown_column.test",
         "test/sql/migration/postgres_v04_dev1_missing_inlined_table.test",

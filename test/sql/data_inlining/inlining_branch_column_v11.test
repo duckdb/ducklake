@@ -1,0 +1,41 @@
+# name: test/sql/data_inlining/inlining_branch_column_v11.test
+# description: a 1.1 catalog inlines a table with a column _ducklake_branch_id, the name is reserved from 2.0 on
+# group: [data_inlining]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+# a 1.0 catalog reserved the three bare names alone, so a user column can be named like the branch column
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', DUCKLAKE_VERSION '1.0', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER, _ducklake_branch_id INTEGER)
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DUCKLAKE_VERSION '1.1', AUTOMATIC_MIGRATION TRUE)
+
+# the inlined data tables of 1.1 have no branch column
+statement ok
+CALL dl.set_option('data_inlining_row_limit', 10, table_name => 't')
+
+statement ok
+INSERT INTO dl.t VALUES (1, 7)
+
+query II
+SELECT i, _ducklake_branch_id FROM dl.t
+----
+1	7
+
+query I
+SELECT COUNT(*) FROM ducklake_list_files('dl', 't')
+----
+0

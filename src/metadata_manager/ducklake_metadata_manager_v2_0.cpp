@@ -13,7 +13,78 @@ string DuckLakeMetadataManagerV2_0<Base>::GetCreateTableStatements() {
 	result += DuckLakeMetadataManager::GetMainBranchRowStatement() + "\n";
 	result += DuckLakeMetadataManager::GetFileVisibilityTableStatement() + "\n";
 	result += DuckLakeMetadataManager::GetDeleteFileVisibilityTableStatement() + "\n";
+	for (auto &kind : DuckLakeMetadataManager::RowVisibilityKinds()) {
+		result += DuckLakeMetadataManager::GetRowVisibilityTableStatement(kind) + "\n";
+	}
+	result += DuckLakeMetadataManager::GetInlinedVisibilityTableStatement(
+	              DuckLakeMetadataManager::RowVisibilityTableName("inlined_data")) +
+	          "\n";
 	return result;
+}
+
+// the version rows keep their birth and end in the companion tables, branch_id comes last like a migrated catalog
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetSchemaTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_schema(schema_id BIGINT PRIMARY KEY, schema_uuid UUID, "
+	       "begin_snapshot BIGINT, schema_name VARCHAR, path VARCHAR, path_is_relative BOOLEAN, parent_schema_id "
+	       "BIGINT, branch_id BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetTableTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_table(table_id BIGINT, table_uuid UUID, begin_snapshot BIGINT, "
+	       "schema_id BIGINT, table_name VARCHAR, path VARCHAR, path_is_relative BOOLEAN, branch_id BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetViewTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_view(view_id BIGINT, view_uuid UUID, begin_snapshot BIGINT, "
+	       "schema_id BIGINT, view_name VARCHAR, dialect VARCHAR, sql VARCHAR, column_aliases VARCHAR, branch_id "
+	       "BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetColumnTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_column(column_id BIGINT, begin_snapshot BIGINT, table_id BIGINT, "
+	       "column_order BIGINT, column_name VARCHAR, column_type VARCHAR, initial_default VARCHAR, default_value "
+	       "VARCHAR, nulls_allowed BOOLEAN, parent_column BIGINT, default_value_type VARCHAR, default_value_dialect "
+	       "VARCHAR, branch_id BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetPartitionInfoTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_partition_info(partition_id BIGINT, table_id BIGINT, "
+	       "begin_snapshot BIGINT, branch_id BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetSortInfoTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_sort_info(sort_id BIGINT, table_id BIGINT, begin_snapshot BIGINT, "
+	       "branch_id BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetMacroTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_macro(schema_id BIGINT, macro_id BIGINT, macro_name VARCHAR, "
+	       "begin_snapshot BIGINT, branch_id BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetTagTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_tag(object_id BIGINT, begin_snapshot BIGINT, key VARCHAR, value "
+	       "VARCHAR, branch_id BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetColumnTagTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_column_tag(table_id BIGINT, column_id BIGINT, begin_snapshot "
+	       "BIGINT, key VARCHAR, value VARCHAR, branch_id BIGINT DEFAULT 0);";
+}
+
+template <typename Base>
+string DuckLakeMetadataManagerV2_0<Base>::GetViewColumnTagTableStatement() {
+	return "CREATE TABLE {METADATA_CATALOG}.ducklake_view_column_tag(view_id BIGINT, column_name VARCHAR, "
+	       "begin_snapshot BIGINT, key VARCHAR, value VARCHAR, branch_id BIGINT DEFAULT 0);";
 }
 
 template <typename Base>

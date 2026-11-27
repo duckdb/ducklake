@@ -1,0 +1,105 @@
+# name: test/sql/migration/postgres_row_companions_index_names.test
+# description: a migrated Postgres catalog names the primary key indexes of the row companions like a fresh one
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+require postgres_scanner
+
+require-env DUCKLAKE_CI
+
+require-env DUCKLAKE_CONNECTION
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH '{DUCKLAKE_CONNECTION}' AS pg
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS row_companion_indexes CASCADE')
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA IF EXISTS row_companion_indexes_fresh CASCADE')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/row_companion_indexes', METADATA_SCHEMA 'row_companion_indexes', DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+# the migration to 2.0 converts no inlined rows, the flush writes the row to a file
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+DETACH dl
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl
+(DATA_PATH '{DATA_PATH}/row_companion_indexes', METADATA_SCHEMA 'row_companion_indexes', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS fresh
+(DATA_PATH '{DATA_PATH}/row_companion_indexes_fresh', METADATA_SCHEMA 'row_companion_indexes_fresh')
+
+# the renamed companions carry the index names of a fresh catalog
+query I
+SELECT indexname FROM postgres_query('pg', 'SELECT indexname FROM pg_indexes
+    WHERE schemaname = ''row_companion_indexes'' AND tablename LIKE ''ducklake_%_visibility'' ORDER BY indexname')
+----
+ducklake_column_tag_visibility_pkey
+ducklake_column_visibility_pkey
+ducklake_delete_file_visibility_pkey
+ducklake_file_visibility_pkey
+ducklake_inlined_data_visibility_pkey
+ducklake_macro_visibility_pkey
+ducklake_partition_visibility_pkey
+ducklake_schema_visibility_pkey
+ducklake_snapshot_tag_visibility_pkey
+ducklake_sort_visibility_pkey
+ducklake_table_visibility_pkey
+ducklake_tag_visibility_pkey
+ducklake_view_column_tag_visibility_pkey
+ducklake_view_visibility_pkey
+
+query I
+SELECT indexname FROM postgres_query('pg', 'SELECT indexname FROM pg_indexes
+    WHERE schemaname = ''row_companion_indexes_fresh'' AND tablename LIKE ''ducklake_%_visibility'' ORDER BY indexname')
+----
+ducklake_column_tag_visibility_pkey
+ducklake_column_visibility_pkey
+ducklake_delete_file_visibility_pkey
+ducklake_file_visibility_pkey
+ducklake_inlined_data_visibility_pkey
+ducklake_macro_visibility_pkey
+ducklake_partition_visibility_pkey
+ducklake_schema_visibility_pkey
+ducklake_snapshot_tag_visibility_pkey
+ducklake_sort_visibility_pkey
+ducklake_table_visibility_pkey
+ducklake_tag_visibility_pkey
+ducklake_view_column_tag_visibility_pkey
+ducklake_view_visibility_pkey
+
+query I
+SELECT i FROM dl.t
+----
+42
+
+statement ok
+DETACH dl
+
+statement ok
+DETACH fresh
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA row_companion_indexes CASCADE')
+
+statement ok
+CALL postgres_execute('pg', 'DROP SCHEMA row_companion_indexes_fresh CASCADE')
+
+statement ok
+DETACH pg

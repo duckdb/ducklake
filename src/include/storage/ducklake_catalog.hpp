@@ -314,6 +314,8 @@ public:
 	//! The committed macro at the snapshot
 	optional_ptr<CatalogEntry> GetEntryById(DuckLakeTransaction &transaction, DuckLakeSnapshot snapshot,
 	                                        MacroIndex macro_id);
+	//! The data path of a table at the snapshot if its schema is loaded, empty otherwise
+	string GetLoadedTableDataPath(DuckLakeSnapshot snapshot, TableIndex table_id);
 	string GeneratePathFromName(const string &uuid, const string &name);
 
 	bool InMemory() override;
@@ -344,6 +346,7 @@ public:
 		                                                 default_value ? "true" : "false", table_options);
 		return hive_file_pattern == "true";
 	}
+	bool UseHiveFilePattern(bool default_value, DuckLakeTableEntry &table) const;
 
 	bool WriteDeletionVectors(SchemaIndex schema_id, TableIndex table_id,
 	                          optional_ptr<const map<string, string>> table_options = nullptr) const {
@@ -382,6 +385,10 @@ public:
 		return ducklake_version >= DuckLakeVersion::V2_0_DEV1;
 	}
 	bool SupportsFileVisibilityEvents() const {
+		return ducklake_version >= DuckLakeVersion::V2_0_DEV1;
+	}
+	//! Whether the catalog rows keep their birth and end in companion tables, the layout of 2.0
+	bool SupportsRowVisibility() const {
 		return ducklake_version >= DuckLakeVersion::V2_0_DEV1;
 	}
 	//! Whether an expiry commits a snapshot whose changes list the expired snapshots
@@ -493,6 +500,11 @@ public:
 	void SetColumnHoldsValues(TableIndex table_id, FieldIndex column_id, idx_t snapshot_id);
 	//! The columns found with values stay valid for the snapshot of a commit that directly follows theirs
 	void AdvanceColumnsWithValues(idx_t snapshot_id);
+	//! The snapshot of the columns found with values if it is older than `snapshot_id` and they include the column
+	optional_idx OlderColumnsWithValuesSnapshot(TableIndex table_id, FieldIndex column_id, idx_t snapshot_id);
+	//! Moves the columns found with values across the commits of other catalogs, without the tables they changed
+	//! A null `changed` means the changes are unknown, and forgets all of them
+	void AdvanceColumnsWithValues(idx_t from_snapshot, idx_t to_snapshot, optional_ptr<const set<TableIndex>> changed);
 	void ForgetColumnsWithValues(const set<TableIndex> &table_ids);
 
 	//! Invalidate the cached table stats entry for a given stats cache key.

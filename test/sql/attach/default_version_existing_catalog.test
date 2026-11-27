@@ -51,6 +51,10 @@ SELECT (SELECT value FROM __ducklake_metadata_l10.ducklake_metadata WHERE key = 
 ----
 1.0	1
 
+# the migration to 2.0 converts no inlined rows, the flush writes the row to a file
+statement ok
+CALL ducklake_flush_inlined_data('l10')
+
 statement ok
 DETACH l10
 

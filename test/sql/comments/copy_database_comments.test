@@ -85,13 +85,14 @@ SELECT table_name, column_name, comment FROM duckdb_columns() WHERE database_nam
 t	v	column comment
 t3	v	new column comment
 
-# one comment per entry
+# one comment row per entry, the comment replaced within the creating transaction left no row
 query II
-SELECT count(*), count(DISTINCT object_id) FROM __ducklake_metadata_lake.ducklake_tag WHERE key = 'comment' AND end_snapshot IS NULL
+SELECT count(*), count(DISTINCT object_id) FROM __ducklake_metadata_lake.ducklake_tag WHERE key = 'comment'
 ----
 3	3
 
 query II
-SELECT count(*), count(DISTINCT (table_id, column_id)) FROM __ducklake_metadata_lake.ducklake_column_tag WHERE key = 'comment' AND end_snapshot IS NULL
+SELECT count(*), count(DISTINCT (table_id, column_id)) FROM __ducklake_metadata_lake.ducklake_column_tag
+WHERE key = 'comment'
 ----
 2	2

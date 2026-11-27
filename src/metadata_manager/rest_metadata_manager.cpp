@@ -35,26 +35,9 @@ RESTMetadataManager::~RESTMetadataManager() {
 
 //! The core refers to the inlined data of a table at a schema version by the name that the inlined data table has in a
 //! metadata database (users see it as the filename of the rows). The REST API only knows the table and the version.
-static const char *INLINED_TABLE_PREFIX = "ducklake_inlined_data_";
 
 static Identifier InlinedTableName(TableIndex table_id, idx_t schema_version) {
 	return DuckLakeMetadataManager::InlinedTableNameFor(table_id.index, schema_version);
-}
-
-struct RESTInlinedTableHandle {
-	TableIndex table_id;
-	idx_t schema_version;
-};
-
-static RESTInlinedTableHandle ParseInlinedTableName(const string &name) {
-	if (!StringUtil::StartsWith(name, INLINED_TABLE_PREFIX)) {
-		throw InternalException("\"%s\" is not the name of the inlined data of a REST catalog", name);
-	}
-	auto parts = StringUtil::Split(name.substr(strlen(INLINED_TABLE_PREFIX)), '_');
-	if (parts.size() != 2) {
-		throw InternalException("\"%s\" is not the name of the inlined data of a REST catalog", name);
-	}
-	return {TableIndex(std::stoull(parts[0])), std::stoull(parts[1])};
 }
 
 //! Entries created by the transaction are referred to by negative placeholder ids
@@ -493,9 +476,13 @@ unique_ptr<QueryResult> RESTMetadataManager::ReadCachedInlinedRows(RESTInlinedRo
                                                                    DuckLakeSnapshot snapshot,
                                                                    const string &inlined_table_name,
                                                                    const vector<string> &columns_to_read) {
-	auto handle = ParseInlinedTableName(inlined_table_name);
+	idx_t schema_version;
+	auto table_id = DuckLakeMetadataManager::ParseInlinedTableName(inlined_table_name, schema_version);
+	if (!table_id.IsValid()) {
+		throw InternalException("\"%s\" is not the name of the inlined data of a REST catalog", inlined_table_name);
+	}
 	idx_t start_snapshot_id = kind == RESTInlinedRowsKind::SCAN ? 0 : start_snapshot.snapshot_id;
-	RESTInlinedRowsKey key {kind, start_snapshot_id, snapshot.snapshot_id, handle.table_id.index};
+	RESTInlinedRowsKey key {kind, start_snapshot_id, snapshot.snapshot_id, table_id.GetIndex()};
 	auto rows_ptr = inlined_rows_cache.Find(key, columns_to_read);
 	if (!rows_ptr) { // LCOV_EXCL_START
 		// the rows usually came along with the file list of the scan. Otherwise (or if they came with other
@@ -1165,16 +1152,27 @@ void RESTMetadataManager::FlushChangesServerSide(DuckLakeTransaction &flush_tran
 	request.retry->max_retry_count = retry_config.max_retry_count;
 	request.retry->retry_wait_ms = retry_config.retry_wait_ms;
 	request.retry->retry_backoff = retry_config.retry_backoff;
+	// a group commit lets the server publish the transaction in a snapshot that it shares with other transactions
+	bool group_commit = false;
+	auto context = transaction.context.lock();
+	if (context) {
+		context->TryGetCurrentSetting("ducklake_rest_group_commit", group_commit);
+	}
 	RESTCommitTransactionResponse response;
 	try {
-		response = GetClient().CommitTransaction(request);
+		response = group_commit ? GetClient().GroupCommitTransaction(request) : GetClient().CommitTransaction(request);
 	} catch (std::exception &ex) {
-		// the server rejected the commit, but after a failed request or response it might have committed
-		if (ErrorData(ex).Type() != ExceptionType::IO) {
+		if (ErrorData(ex).Type() == ExceptionType::IO) {
+			// after a failed request or response the server might have committed
+			flush_transaction.ReportCommitOutcome(DuckLakeCommitOutcome::PUBLICATION_UNKNOWN);
+		} else {
+			// the server rejected the commit
 			flush_transaction.CleanupFiles();
 		}
 		throw;
 	}
+	// the server answered: the commit is published, also if applying its answer fails
+	flush_transaction.ReportCommitOutcome(DuckLakeCommitOutcome::PUBLISHED);
 	if (RESTIsNull(response.snapshot)) {
 		// nothing was written that creates a snapshot (e.g. only options were set)
 		flush_transaction.ApplyServerSideCommit(transaction_snapshot.schema_version);

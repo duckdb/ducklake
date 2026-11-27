@@ -86,6 +86,6 @@ INSERT INTO dl.c VALUES ('POINT(3 4)'::GEOMETRY)
 
 query I
 SELECT extra_stats FROM dl_meta.ducklake_table_column_stats
-WHERE table_id = (SELECT table_id FROM dl_meta.ducklake_table WHERE table_name = 'c' AND end_snapshot IS NULL)
+WHERE table_id = (SELECT table_id FROM dl_meta.ducklake_table WHERE table_name = 'c')
 ----
 {"bbox":{"xmin":1.0,"xmax":3.0,"ymin":2.0,"ymax":4.0,"zmin":null,"zmax":null,"mmin":null,"mmax":null},"types":["point"]}
