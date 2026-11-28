@@ -64,8 +64,26 @@ SELECT file_count, delete_file_count FROM ducklake_table_info('dl') WHERE table_
 ----
 1	0
 
+# the delete file the rewrite ended stays, with its events, while the rewrite snapshot 3 exists
 statement ok
 CALL ducklake_expire_snapshots('dl', versions => [1, 2])
+
+query II
+SELECT (SELECT count(*) FROM meta.ducklake_delete_file), (SELECT count(*) FROM meta.ducklake_delete_file_visibility)
+----
+1	2
+
+query II
+SELECT count(*), sum(i) FROM dl.t
+----
+9	42
+
+# once the rewrite snapshot is expired the delete file and its events go
+statement ok
+INSERT INTO dl.t VALUES (10)
+
+statement ok
+CALL ducklake_expire_snapshots('dl', versions => [3])
 
 query II
 SELECT (SELECT count(*) FROM meta.ducklake_delete_file), (SELECT count(*) FROM meta.ducklake_delete_file_visibility)
@@ -75,7 +93,7 @@ SELECT (SELECT count(*) FROM meta.ducklake_delete_file), (SELECT count(*) FROM m
 query II
 SELECT count(*), sum(i) FROM dl.t
 ----
-9	42
+10	52
 
 statement ok
 DETACH dl

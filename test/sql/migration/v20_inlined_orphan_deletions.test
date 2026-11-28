@@ -24,6 +24,10 @@ DELETE FROM dl.t WHERE i = 5
 statement ok
 CALL ducklake_rewrite_data_files('dl', 't', delete_threshold => 0)
 
+# a rewritten file stays until its rewrite snapshot is expired, so a later snapshot comes first
+statement ok
+CREATE SCHEMA dl.later
+
 statement ok
 CALL ducklake_expire_snapshots('dl', older_than => now())
 
