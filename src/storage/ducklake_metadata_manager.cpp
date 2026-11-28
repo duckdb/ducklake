@@ -3176,6 +3176,11 @@ string DuckLakeMetadataManager::GenerateConstantFilterDouble(ExpressionType comp
 	return GenerateConstantFilter(comparison_type, constant, type, referenced_stats, stats_alias);
 }
 
+string DuckLakeMetadataManager::AnyFilterMatches(const string &predicates) const {
+	// Boolean membership preserves OR semantics without adding parser depth for each value.
+	return "TRUE IN (" + predicates + ")";
+}
+
 string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
                                                              unordered_set<string> &referenced_stats,
                                                              const string &stats_alias, bool &complete) {
@@ -3223,7 +3228,7 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 			    !ExpressionFilter::IsSimpleFilterColumnRef(*op_expr.GetChildren()[0])) {
 				return string();
 			}
-			string result;
+			string predicates;
 			for (idx_t i = 1; i < op_expr.GetChildren().size(); i++) {
 				auto &child = *op_expr.GetChildren()[i];
 				if (child.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT) {
@@ -3237,12 +3242,12 @@ string DuckLakeMetadataManager::GenerateFilterFromExpression(const Expression &e
 				if (next_filter.empty()) {
 					return string();
 				}
-				if (!result.empty()) {
-					result += " OR ";
+				if (i > 1) {
+					predicates += ", ";
 				}
-				result += "(" + next_filter + ")";
+				predicates += next_filter;
 			}
-			return result;
+			return AnyFilterMatches(predicates);
 		}
 		default:
 			return string();

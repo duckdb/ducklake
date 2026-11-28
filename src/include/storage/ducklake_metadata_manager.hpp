@@ -1132,6 +1132,7 @@ private:
 	virtual string GenerateFilterFromExpression(const Expression &expr, const LogicalType *type,
 	                                            unordered_set<string> &referenced_stats, const string &stats_alias,
 	                                            bool &complete);
+	virtual string AnyFilterMatches(const string &predicates) const;
 	virtual string CastValueToTarget(const Value &val, const LogicalType &type);
 	virtual string CastStatsToTarget(const string &stats, const LogicalType &type,
 	                                 StatsCastType cast_type = StatsCastType::ORDERING);

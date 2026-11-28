@@ -73,6 +73,7 @@ protected:
 	                             vector<idx_t> &runtime_filter_stats_columns, FileListType file_list_type,
 	                             const string &metadata_table_prefix) override;
 	bool MaterializeStatsCTEs() const override;
+	string AnyFilterMatches(const string &predicates) const override;
 	string CastValueToTarget(const Value &value, const LogicalType &type) override;
 	string CastStatsToTarget(const string &stats, const LogicalType &type, StatsCastType cast_type) override;
 
