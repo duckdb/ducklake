@@ -62,11 +62,18 @@ snapshot_id	BIGINT
 begin_snapshot	BIGINT
 expires_at	TIMESTAMP WITH TIME ZONE
 branch_id	BIGINT
+snapshot_branch_id	BIGINT
 
 query I
 SELECT COUNT(*) FROM meta.ducklake_snapshot_tag
 ----
 0
+
+# the schema versions of the 1.1 catalog are those of main
+query II
+SELECT COUNT(*) > 0, COUNT(*) FILTER (WHERE branch_id IS DISTINCT FROM 0) FROM meta.ducklake_schema_versions
+----
+true	0
 
 query I
 SELECT * FROM dl.t

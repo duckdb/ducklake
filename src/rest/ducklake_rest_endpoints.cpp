@@ -627,6 +627,8 @@ RESTListSnapshotsResponse DuckLakeRESTEndpoints::ListSnapshots(DuckLakeRESTReque
 	filter.older_than = parameters.older_than;
 	filter.has_snapshot_ids = parameters.snapshot_ids.has_value;
 	filter.snapshot_ids = parameters.snapshot_ids.value;
+	// the listing and its pages hold the lineage of the served catalog, as ducklake_snapshots does
+	filter.chain_only = true;
 	RESTListSnapshotsResponse result;
 	result.snapshots = request.GetMetadataManager().GetAllSnapshots(filter);
 	GetKeyPage(

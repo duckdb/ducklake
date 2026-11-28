@@ -1509,6 +1509,7 @@ DuckLakeFileInfo DuckLakeTransaction::BuildDataFileInfo(const DuckLakeDataFile &
 	data_file.begin_snapshot = file.begin_snapshot;
 	data_file.max_partial_file_snapshot = file.max_partial_file_snapshot;
 	data_file.column_stats = file.column_stats;
+	data_file.rehomed_deletions = file.rehomed_deletions;
 	for (auto &partition_entry : file.partition_values) {
 		DuckLakeFilePartitionInfo partition_info;
 		partition_info.partition_column_idx = partition_entry.partition_column_idx;
@@ -1936,7 +1937,6 @@ void DuckLakeTransaction::RunCommitLoop(DuckLakeSnapshot transaction_snapshot,
 	context.supports_v2_0_metadata = ducklake_catalog.SupportsBranching();
 	context.supports_file_visibility_events = ducklake_catalog.SupportsFileVisibilityEvents();
 	context.supports_row_visibility = ducklake_catalog.SupportsRowVisibility();
-	context.branch_keyed_lookups = metadata_manager->BranchKeyedLookups();
 	context.snapshot_and_stats_query =
 	    metadata_manager->GetSnapshotAndStatsAndChangesQuery(transaction_snapshot, context.supports_v1_1_metadata);
 	state->Commit(transaction_snapshot, transaction_changes, retry_config, context);
@@ -2090,6 +2090,7 @@ void DuckLakeTransaction::CreateSnapshotTag(const string &name, idx_t snapshot_i
 	DuckLakeSnapshotTagInfo tag;
 	tag.name = name;
 	tag.snapshot_id = snapshot_id;
+	tag.snapshot_branch_id = ducklake_catalog.AttachedChain().OwnerOf(snapshot_id);
 	tag.expires_at = expires_at;
 	state->new_snapshot_tags[name] = std::move(tag);
 }
@@ -2151,6 +2152,7 @@ void DuckLakeTransaction::ReplaceSnapshotTag(const string &name, idx_t snapshot_
 	CheckNotExpiredInTransaction(snapshot_id);
 	auto changed = tag;
 	changed.snapshot_id = snapshot_id;
+	changed.snapshot_branch_id = ducklake_catalog.AttachedChain().OwnerOf(snapshot_id);
 	ChangeSnapshotTag(tag, std::move(changed));
 	ExpireReleasedSnapshots();
 }
@@ -2196,11 +2198,12 @@ vector<DuckLakeSnapshotTagInfo> DuckLakeTransaction::GetSnapshotTagsInternal(boo
 	if (state->new_snapshot_tags.empty()) {
 		return result;
 	}
-	// the times of the snapshots this transaction tagged
+	// the times of the snapshots this transaction tagged, which the view of the attached branch holds
 	map<idx_t, Value> snapshot_times;
 	if (with_snapshot_time) {
 		DuckLakeSnapshotFilter filter;
 		filter.has_snapshot_ids = true;
+		filter.chain_only = true;
 		for (auto &tag : state->new_snapshot_tags) {
 			filter.snapshot_ids.push_back(tag.second.snapshot_id);
 		}
@@ -2223,10 +2226,18 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshots(const DuckL
 }
 
 vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshotsInternal(const DuckLakeSnapshotFilter &filter) {
-	auto tagged_snapshots = TaggedSnapshotsInternal();
+	auto protected_snapshots = TaggedSnapshotsInternal();
+	auto branch_protected =
+	    GetMetadataManager().GetBranchProtectedSnapshots(ducklake_catalog.AttachedBranchId(), start_time);
+	protected_snapshots.insert(branch_protected.begin(), branch_protected.end());
+	auto lineage_filter = filter;
+	if (ducklake_catalog.SupportsBranching()) {
+		// an expiry removes snapshots of the attached branch alone, other branches number theirs alike
+		lineage_filter.branch_id = ducklake_catalog.AttachedBranchId();
+	}
 	vector<DuckLakeSnapshotInfo> result;
-	for (auto &snapshot : GetMetadataManager().GetAllSnapshots(filter)) {
-		if (tagged_snapshots.find(snapshot.id) == tagged_snapshots.end()) {
+	for (auto &snapshot : GetMetadataManager().GetAllSnapshots(lineage_filter)) {
+		if (protected_snapshots.find(snapshot.id) == protected_snapshots.end()) {
 			result.push_back(std::move(snapshot));
 		}
 	}
@@ -2234,9 +2245,11 @@ vector<DuckLakeSnapshotInfo> DuckLakeTransaction::ExpirableSnapshotsInternal(con
 }
 
 set<idx_t> DuckLakeTransaction::TaggedSnapshotsInternal() {
+	// an expiry removes snapshots of the attached branch, so only the tags naming those protect
 	set<idx_t> result;
+	auto branch_id = ducklake_catalog.AttachedBranchId();
 	for (auto &tag : GetSnapshotTagsInternal(false)) {
-		if (!SnapshotTagExpired(tag)) {
+		if (!SnapshotTagExpired(tag) && tag.snapshot_branch_id == branch_id) {
 			result.insert(tag.snapshot_id);
 		}
 	}
@@ -2397,9 +2410,10 @@ void DuckLakeTransaction::MarkMetadataWritten() {
 }
 
 void DuckLakeTransaction::MarkInlinedDataForDeletion(DuckLakeInlinedTableInfo inlined_table, idx_t flush_snapshot_id,
-                                                     bool wrote_files) {
+                                                     bool wrote_files, vector<DuckLakeRehomedEnd> rehomed_ends) {
 	lock_guard<mutex> guard(flushed_inlined_lock);
-	state->flushed_inlined_tables.push_back({std::move(inlined_table), flush_snapshot_id, wrote_files});
+	state->flushed_inlined_tables.push_back(
+	    {std::move(inlined_table), flush_snapshot_id, wrote_files, std::move(rehomed_ends)});
 }
 
 bool DuckLakeTransaction::InlinedTableFlushed(const Identifier &table_name) {

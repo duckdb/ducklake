@@ -1,0 +1,70 @@
+# name: test/sql/catalog/snapshot_v11_statements.test
+# description: a DuckLake 1.1 catalog reads its snapshots by the 1.x statements, which name no branch
+# group: [catalog]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_files',
+    METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.1')
+
+statement ok
+CREATE TABLE dl.t AS SELECT 42 AS i
+
+statement ok
+INSERT INTO dl.t VALUES (43)
+
+statement ok
+SET immediate_transaction_mode = true
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage => 'memory')
+
+# a new transaction reads the head, the listing and a version
+query I
+SELECT count(*) FROM dl.t
+----
+2
+
+query I
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
+----
+[0, 1, 2]
+
+query I
+SELECT count(*) FROM dl.t AT (VERSION => 1)
+----
+1
+
+statement ok
+CALL disable_logging()
+
+# the head read selects the greatest snapshot id of the one table
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM %ducklake_snapshot);%'
+----
+true
+
+# the listing joins the changes by the snapshot id alone
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%LEFT JOIN %ducklake_snapshot_changes USING (snapshot_id)%' AND query NOT LIKE '%branch_id%'
+----
+true
+
+# the version lookup selects the snapshot id below the head
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%WHERE snapshot_id = 1 AND snapshot_id <= 2;%'
+----
+true
+
+# no read of the snapshot tables names a branch
+query I
+SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%ducklake_snapshot%' AND query LIKE '%branch_id%'
+----
+0

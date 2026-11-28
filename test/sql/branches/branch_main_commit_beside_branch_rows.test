@@ -1,0 +1,99 @@
+# name: test/sql/branches/branch_main_commit_beside_branch_rows.test
+# description: a retried commit on main reads the head and the changes of main alone while a branch holds higher ids
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files',
+    METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (1)
+
+statement ok
+INSERT INTO dl.t VALUES (2)
+
+query I
+SELECT table_id FROM meta.ducklake_table WHERE table_name = 't'
+----
+1
+
+# dev forks at the first insert and holds the snapshots 3 to 5, the last of which drops the table on dev
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+loop n 3 6
+
+statement ok
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id,
+    branch_id) SELECT {n}, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot
+    WHERE snapshot_id = 2 AND branch_id = 0
+
+endloop
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (4, NULL, NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (5, 'dropped_table:1', NULL, NULL, NULL, 1)
+
+statement ok
+SET immediate_transaction_mode = true
+
+# the second commit retries after the first one and reads the head of main, not the higher ids of dev
+statement ok con1
+BEGIN
+
+statement ok con2
+BEGIN
+
+statement ok con1
+INSERT INTO dl.t VALUES (3)
+
+statement ok con2
+INSERT INTO dl.t VALUES (4)
+
+statement ok con1
+COMMIT
+
+statement ok con2
+COMMIT
+
+query II
+SELECT snapshot_id, next_file_id FROM meta.ducklake_snapshot WHERE branch_id = 0 AND snapshot_id > 3
+ORDER BY snapshot_id
+----
+4	3
+5	4
+
+query I
+SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()
+----
+[0, 1, 2, 3, 4, 5]
+
+query I
+SELECT i FROM dl.t ORDER BY i
+----
+1
+2
+3
+4
+
+query II
+SELECT snapshot_id, branch_id FROM meta.ducklake_snapshot WHERE snapshot_id = 5 ORDER BY branch_id
+----
+5	0
+5	1

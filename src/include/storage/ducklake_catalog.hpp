@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include "common/ducklake_branch_chain.hpp"
 #include "common/ducklake_encryption.hpp"
 #include "duckdb/main/attached_database.hpp"
 #include "duckdb/catalog/catalog_entry/schema_catalog_entry.hpp"
@@ -395,6 +396,20 @@ public:
 	bool RecordsExpiredSnapshots() const {
 		return SupportsSnapshotTags();
 	}
+	//! The branch the catalog is attached at, 0 for main
+	idx_t AttachedBranchId() const {
+		return attached_chain.BranchId();
+	}
+	bool OnBranch() const {
+		return attached_chain.OnBranch();
+	}
+	//! The branches the attached branch reads through, main alone by default
+	const DuckLakeBranchChain &AttachedChain() const {
+		return attached_chain;
+	}
+	void SetAttachedChain(DuckLakeBranchChain chain) {
+		attached_chain = std::move(chain);
+	}
 
 	void OnDetach(ClientContext &context) override;
 
@@ -453,7 +468,6 @@ public:
 
 	shared_ptr<const DuckLakeNameMap> TryGetMappingById(DuckLakeTransaction &transaction, MappingIndex mapping_id);
 	MappingIndex TryGetCompatibleNameMap(DuckLakeTransaction &transaction, const DuckLakeNameMap &name_map);
-	idx_t GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version, DuckLakeTransaction &transaction);
 	optional_ptr<DuckLakeTableEntry> GetTableAtSchemaVersion(DuckLakeTransaction &transaction, TableIndex table_id,
 	                                                         idx_t schema_version);
 
@@ -574,6 +588,8 @@ private:
 	unique_ptr<DuckLakeRESTClient> rest_client;
 	//! The resolved DuckLake spec version of the attached catalog
 	DuckLakeVersion ducklake_version = DuckLakeVersion::V1_0;
+	//! The chain of the branch the catalog is attached at, main by default
+	DuckLakeBranchChain attached_chain = DuckLakeBranchChain::Main();
 	//! A per-instance identifier used to scope ObjectCache keys.
 	string instance_id;
 	mutex cache_entries_lock;

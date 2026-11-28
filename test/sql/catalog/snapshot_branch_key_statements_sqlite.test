@@ -1,5 +1,5 @@
 # name: test/sql/catalog/snapshot_branch_key_statements_sqlite.test
-# description: a SQLite catalog of 2.0 names the branch of main in the lookups its composite key serves, not in scans
+# description: a SQLite catalog of 2.0 reads main's snapshots by its chain predicate, its commits name the branch too
 # group: [catalog]
 
 require ducklake
@@ -63,35 +63,30 @@ COMMIT
 statement ok
 CALL ducklake_expire_snapshots('dl', versions => [1])
 
-# the head read looks its row up by the key of main, DuckDB computes the MAX over the scanned table
+# the head read, the listing and the version lookup select the snapshots of main by the chain predicate of main
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM %ducklake_snapshot) AND branch_id = 0;%'
+WHERE query LIKE '%WHERE (branch_id = 0) AND snapshot_id = (SELECT MAX(snapshot_id) FROM %'
+  AND query LIKE '%snapshot_id = (SELECT MAX(snapshot_id) FROM %ducklake_snapshot WHERE branch_id = 0);%'
 ----
 true
 
 query I
-SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%MAX(snapshot_id) FROM %ducklake_snapshot WHERE branch_id = 0%'
-----
-0
-
-# the listing joins and scans both tables as in 1.x
-query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%LEFT JOIN %ducklake_snapshot_changes USING (snapshot_id)%' AND query NOT LIKE '%branch_id%'
+WHERE query LIKE '%ducklake_snapshot_changes USING (snapshot_id, branch_id)%WHERE snapshot_id <= 2 AND (branch_id = 0)%'
 ----
 true
 
 query I
-SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata') WHERE query LIKE '%USING (snapshot_id, branch_id)%'
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%WHERE snapshot_id = 1 AND snapshot_id <= 2 AND (branch_id = 0);%'
 ----
-0
+true
 
-# the version lookup and the delete of the expiry name the branch beside snapshot_id
+# the expiry keeps the head of main and its delete names the branch beside snapshot_id
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%WHERE snapshot_id = 1 AND snapshot_id <= 2 AND branch_id = 0;%'
+WHERE query LIKE '%snapshot_id != (SELECT MAX(snapshot_id) FROM %ducklake_snapshot WHERE branch_id = 0)%'
 ----
 true
 
@@ -101,21 +96,34 @@ WHERE query LIKE '%DELETE FROM %ducklake_snapshot WHERE snapshot_id IN (1) AND b
 ----
 true
 
-# the conflict check keys the range over the changes and the head lookup, not the MAX over the table
+# the conflict check reads the changes of main and the head of main by the chain predicate of main
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
 WHERE regexp_replace(query, '\s+', ' ', 'g') LIKE '%WHERE c.snapshot_id > 2 AND c.branch_id = 0 )%'
-  AND regexp_replace(query, '\s+', ' ', 'g') LIKE '%FROM %ducklake_snapshot) AND branch_id = 0 UNION ALL%'
-  AND query NOT LIKE '%ducklake_snapshot WHERE branch_id = 0%'
+  AND regexp_replace(query, '\s+', ' ', 'g') LIKE '%WHERE (branch_id = 0) AND snapshot_id = (SELECT MAX(snapshot_id)%'
+  AND regexp_replace(query, '\s+', ' ', 'g') LIKE '%ducklake_snapshot WHERE branch_id = 0) UNION ALL%'
 ----
 true
 
-# the existence checks of the expiry scan the snapshots as in 1.x
+# the row sweeps of the cleanup scan the snapshots of main, the table check of 1.x does not run
 query I
 SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%snapshot_id < end_snapshot AND branch_id%' OR query LIKE '%ASOF LEFT JOIN (SELECT%'
+WHERE query LIKE '%snapshot_id >= begin_snapshot AND snapshot_id < end_snapshot%'
 ----
 0
+
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%snapshot_id < e.end_snapshot AND branch_id = 0%'
+----
+true
+
+# the unused file checks of the cleanup scan the snapshots of main
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%ASOF LEFT JOIN (SELECT snapshot_id FROM %ducklake_snapshot WHERE TRUE AND branch_id = 0) s%'
+----
+true
 
 query I
 SELECT list(snapshot_id ORDER BY snapshot_id) FROM dl.snapshots()

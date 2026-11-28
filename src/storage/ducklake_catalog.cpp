@@ -556,16 +556,9 @@ string DuckLakeCatalog::GetLoadedTableDataPath(DuckLakeSnapshot snapshot, TableI
 	return entry->Cast<DuckLakeTableEntry>().DataPath();
 }
 
-idx_t DuckLakeCatalog::GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version,
-                                                        DuckLakeTransaction &transaction) {
-	auto &metadata_manager = transaction.GetMetadataManager();
-	return metadata_manager.GetBeginSnapshotForSchemaVersion(table_id, schema_version);
-}
-
 optional_ptr<DuckLakeTableEntry> DuckLakeCatalog::GetTableAtSchemaVersion(DuckLakeTransaction &transaction,
                                                                           TableIndex table_id, idx_t schema_version) {
-	DuckLakeSnapshot snapshot(GetBeginSnapshotForSchemaVersion(table_id, schema_version, transaction), schema_version,
-	                          0, 0);
+	auto snapshot = transaction.GetMetadataManager().GetSnapshotForSchemaVersion(table_id, schema_version);
 	auto entry = GetEntryById(transaction, snapshot, table_id);
 	if (!entry) {
 		// LCOV_EXCL_START

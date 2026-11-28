@@ -16,6 +16,7 @@
 #include "duckdb/common/optional_idx.hpp"
 #include "duckdb/common/reference_map.hpp"
 #include "duckdb/common/types/value.hpp"
+#include "common/ducklake_branch_chain.hpp"
 #include "common/ducklake_row_helpers.hpp"
 #include "common/ducklake_snapshot.hpp"
 #include "storage/ducklake_partition_data.hpp"
@@ -376,6 +377,7 @@ public:
 	virtual string GetTagTableStatement();
 	virtual string GetColumnTagTableStatement();
 	virtual string GetViewColumnTagTableStatement();
+	virtual string GetSchemaVersionsTableStatement();
 	//! A catalog table whose version rows end in a companion table, with the key columns naming an entity
 	struct RowVisibilityKind {
 		string kind;
@@ -413,7 +415,10 @@ public:
 	static string GetRowVisibilityTableStatement(const RowVisibilityKind &kind);
 	//! The shared companion of the inlined rows of every table, under the given name
 	static string GetInlinedVisibilityTableStatement(const string &table);
-	//! Whether a version row of the alias is visible on the main branch at the read snapshot, latest when empty
+	//! Whether a version row of the alias is visible in the view of the chain at the read snapshot, latest when empty
+	static string RowVisibility(const DuckLakeBranchChain &chain, const string &alias, const RowVisibilityKind &kind,
+	                            const string &read_snapshot);
+	//! The same on the main branch alone
 	static string RowVisibility(const string &alias, const RowVisibilityKind &kind, const string &read_snapshot);
 	//! Ends the version rows of a kind the filter selects, live at the commit snapshot, in its companion
 	static string EndRows(const RowVisibilityKind &kind, const string &filter);
@@ -433,8 +438,19 @@ public:
 	//! A file table with begin_snapshot and end_snapshot, derived from the branch 0 events when the catalog keeps them
 	static string DataFileSource(bool file_events, const string &prefix, optional_idx table_id = optional_idx());
 	static string DeleteFileSource(bool file_events, const string &prefix, optional_idx table_id = optional_idx());
+	//! On a branch the ranges come from the events of the chain, with the segment of the writer as begin_segment
+	static string DataFileSource(bool file_events, const DuckLakeBranchChain &chain, const string &prefix,
+	                             optional_idx table_id = optional_idx());
+	static string DeleteFileSource(bool file_events, const DuckLakeBranchChain &chain, const string &prefix,
+	                               optional_idx table_id = optional_idx());
+	//! The per file ranges of a branch, begin_segment is the segment of the earliest add event
+	static string VisibilityEventRanges(const string &visibility_table, const string &file_id_column,
+	                                    const DuckLakeBranchChain &chain, const string &prefix);
+	//! The delete files the filter selects on a branch, one per data file (and begin) with the writer nearest the leaf
+	static string ChosenDeleteFiles(const DuckLakeBranchChain &chain, const string &source, const string &filter,
+	                                bool per_begin_snapshot = false);
 	bool WritesFileVisibilityEvents() const;
-	//! The file sources of the attached catalog, with the table filter pushed into the events when given
+	//! The file sources of the attached chain, with the table filter pushed into the events when given
 	string DataFiles() const;
 	string DataFiles(TableIndex table_id) const;
 	string DeleteFiles() const;
@@ -477,17 +493,21 @@ public:
 	//! Pure SQL templates (use `{METADATA_CATALOG}` placeholder) — caller substitutes + executes.
 	//! Both used by the regular metadata-manager methods and by server-side commit, which runs the
 	//! SQL on a fresh Connection without going through the metadata-manager wrapper.
-	//! keyed_lookups puts branch_id = 0 beside the predicates on snapshot_id, keyed_scans on a MAX over the table
-	static string LatestSnapshotQuery(bool keyed_lookups, bool keyed_scans);
+	static string LatestSnapshotQuery();
 	//! With table ids only those tables' stats are read
 	static string GlobalTableStatsQuery(bool include_exactness, const vector<TableIndex> &table_ids = {});
+	//! The filter that selects the head of the snapshots the predicate matches
+	static string HeadSnapshotFilter(const string &head_predicate);
+	//! The head of the snapshots the predicate selects with the catalog version and its branch
+	static string HeadSnapshotQuery(const string &head_predicate);
 	//! Pure parsers for the results of the above queries.
 	static unique_ptr<DuckLakeSnapshot> ParseSnapshot(QueryResult &result,
 	                                                  optional_ptr<string> catalog_version = nullptr);
 	static vector<DuckLakeGlobalStatsInfo> ParseGlobalTableStats(QueryResult &result);
-	//! Take the table sizes that stats rows lack from the live data files
+	//! Take the table sizes that stats rows lack from the live data files of the source
 	static void FillMissingTableSizes(vector<DuckLakeGlobalStatsInfo> &stats,
-	                                  const std::function<unique_ptr<QueryResult>(string)> &executor, bool file_events);
+	                                  const std::function<unique_ptr<QueryResult>(string)> &executor,
+	                                  const string &data_files);
 	//! Whether the result contains a column with the given name
 	static bool ResultHasColumn(QueryResult &result, const string &name);
 
@@ -495,12 +515,12 @@ public:
 	virtual DuckLakeCatalogInfo GetCatalogForSnapshot(DuckLakeSnapshot snapshot);
 	//! Transaction-free build of the catalog snapshot. Caller supplies a snapshot-aware query
 	//! executor (responsible for `{METADATA_CATALOG}` / `{SNAPSHOT_ID}` substitution) plus the
-	//! data path and separator used for resolving stored relative paths.
+	//! data path and separator used for resolving stored relative paths, the rows are those of the chain
 	static DuckLakeCatalogInfo
 	BuildCatalogForSnapshot(DuckLakeSnapshot snapshot,
 	                        const std::function<unique_ptr<QueryResult>(DuckLakeSnapshot, string)> &query_executor,
-	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata = false,
-	                        bool row_visibility = false);
+	                        const string &base_data_path, const string &separator, bool supports_v1_1_metadata,
+	                        bool row_visibility, const DuckLakeBranchChain &chain);
 	//! The global stats of every table of the snapshot, or of the given tables
 	virtual vector<DuckLakeGlobalStatsInfo> GetGlobalTableStats(DuckLakeSnapshot snapshot,
 	                                                            const vector<TableIndex> &table_ids = {});
@@ -518,6 +538,9 @@ public:
 	GetTableDeletions(DuckLakeTableEntry &table, DuckLakeSnapshot start_snapshot, DuckLakeSnapshot snapshot,
 	                  bool include_local_changes = true,
 	                  optional_ptr<const vector<DuckLakeProjectedColumn>> projection = nullptr);
+	//! The earlier delete files of the view dating the rows the undated chosen files of the entries copied
+	void ReadEarlierDeleteFiles(DuckLakeTableEntry &table, DuckLakeSnapshot end_snapshot,
+	                            vector<DuckLakeDeleteScanEntry> &files, const vector<idx_t> &undated_entries);
 	//! The snapshots of the range that rewrote data files of the table without changing its rows
 	set<idx_t> GetTableRewriteSnapshots(TableIndex table_id, DuckLakeSnapshot start_snapshot,
 	                                    DuckLakeSnapshot snapshot);
@@ -533,6 +556,8 @@ public:
 	                                                                  DuckLakeFileSizeOptions options);
 	virtual idx_t GetBeginSnapshotForTable(TableIndex table_id);
 	virtual idx_t GetBeginSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version);
+	//! The snapshot that loads a table at a schema version, on a branch through the version rows of main alone
+	DuckLakeSnapshot GetSnapshotForSchemaVersion(TableIndex table_id, idx_t schema_version);
 	virtual DuckLakeTableSchemaVersions GetTableSchemaVersions(TableIndex table_id, DuckLakeSnapshot snapshot);
 	//! The net row count of the data files that were committed before the snapshot's next file id
 	virtual idx_t GetNetDataFileRowCount(TableIndex table_id, DuckLakeSnapshot snapshot);
@@ -544,18 +569,24 @@ public:
 	//! With require_exact, the count is NULL if any visible file is only partially visible to the snapshot.
 	//! With exclude_new_files, the files of the commit, which can already be in the catalog, are not counted.
 	static string GetNetDataFileRowCountSql(TableIndex table_id, const Identifier &inlined_deletion_table,
-	                                        bool file_events, bool require_exact = false,
-	                                        bool exclude_new_files = false);
+	                                        bool file_events, const DuckLakeBranchChain &chain,
+	                                        bool require_exact = false, bool exclude_new_files = false);
 	static string GetNetInlinedRowCountSql(const Identifier &inlined_table_name,
-	                                       const DuckLakeInlinedColNames &col_names, bool row_visibility);
+	                                       const DuckLakeInlinedColNames &col_names, bool row_visibility,
+	                                       const DuckLakeBranchChain &chain);
 	//! The rows that are stored, deleted ones included, and the rows that are live
 	static string GetInlinedRowCountsSql(const Identifier &inlined_table_name, const DuckLakeInlinedColNames &col_names,
 	                                     bool row_visibility);
-	static string GetTableColumnSchemaSql(TableIndex table_id, bool row_visibility);
-	static string GetInlinedTableNamesSql(TableIndex table_id);
-	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id);
-	//! The top-level columns of each inlined data table at the schema version of that table
-	static string GetInlinedTableColumnsSql(optional_idx table_id, bool row_visibility);
+	static string GetTableColumnSchemaSql(TableIndex table_id, bool row_visibility, const DuckLakeBranchChain &chain);
+	//! The inlined data table registrations a branch reads, those whose schema version is in its lineage
+	static string InlinedTableRegistrations(bool row_visibility, const DuckLakeBranchChain &chain,
+	                                        optional_idx table_id);
+	static string GetInlinedTableNamesSql(TableIndex table_id, bool row_visibility, const DuckLakeBranchChain &chain);
+	static string GetInlinedTablesBeforeSchemaChangeSql(TableIndex table_id, bool row_visibility,
+	                                                    const DuckLakeBranchChain &chain);
+	//! The columns of each inlined data table at its schema version, in the lineage once the versions carry a branch
+	static string GetInlinedTableColumnsSql(optional_idx table_id, bool row_visibility,
+	                                        const DuckLakeBranchChain &chain, bool schema_versions_branch);
 	//! The inserts of the given rows, in batches
 	static string InsertValuesSql(const string &table_name, const vector<string> &values);
 	//! The inserts of the given rows into the given table, in batches
@@ -652,9 +683,16 @@ public:
 	//! SQL branch of WriteNewInlinedFileDeletes — returns the CREATE/INSERT statements and marks the
 	//! metadata-manager cache for clearing when a new per-table deletion table is created.
 	string WriteNewInlinedFileDeletesSqlBatch(const vector<DuckLakeInlinedFileDeletionInfo> &new_deletes);
+	//! The inlined deletion rows of the alias that apply at the read snapshot, those of the chain from 2.0 on
+	static string InlinedDeletionView(bool branch_aware, const DuckLakeBranchChain &chain, const string &alias,
+	                                  const string &read_snapshot);
+	//! The same for the attached chain
+	string InlinedDeletionView(const string &alias, const string &read_snapshot) const;
 	//! Get the name of the inlined deletion table for a given table ID
 	virtual Identifier GetInlinedDeletionTableName(TableIndex table_id, DuckLakeSnapshot snapshot,
 	                                               bool include_local_changes = true);
+	//! Whether the catalog keeps the verdicts of the deletion table probes across transactions
+	bool KeepsInlinedDeletionVerdicts() const;
 	//! Whether the inlined deletion table exists, for the reads of the transaction's snapshot
 	bool InlinedDeletionTableExists(const Identifier &table_name);
 	//! Whether the inlined deletion table exists now, for the checks of a commit
@@ -688,7 +726,8 @@ public:
 	static string DropDataFiles(const set<DataFileIndex> &dropped_files, bool file_events);
 	//! The deletes recorded against the given data files of the table at the snapshot
 	static string GetDeleteCountForDataFilesSql(TableIndex table_id, const set<DataFileIndex> &file_ids,
-	                                            const Identifier &inlined_deletion_table, bool file_events);
+	                                            const Identifier &inlined_deletion_table, bool file_events,
+	                                            const DuckLakeBranchChain &chain);
 	//! Selects the given data files that are still in the metadata
 	static string GetExistingDataFilesSql(const set<DataFileIndex> &files);
 	//! Selects the given columns that a live data file of the table records values of, or holds the default of
@@ -744,15 +783,15 @@ public:
 	GetSnapshotAndStatsAndChanges(SnapshotAndStats &current_snapshot,
 	                              const std::function<unique_ptr<QueryResult>(string)> &executor, const string &query,
 	                              bool file_events);
-	static string SnapshotAndStatsAndChangesQuery(bool include_exactness, bool keyed_lookups, bool keyed_scans);
+	//! The head predicate selects the snapshots of the commit lineage, the commit branch the changes that conflict
+	static string SnapshotAndStatsAndChangesQuery(bool include_exactness, bool branch_aware,
+	                                              const string &head_predicate, idx_t commit_branch_id);
 	//! The query of the conflict check, which must read the latest snapshot and the table stats consistently
 	virtual string GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot, bool include_exactness) const;
 	static SnapshotChangeInfo ParseSnapshotAndStatsAndChanges(QueryResult &result, SnapshotAndStats &current_snapshot);
 	virtual unique_ptr<DuckLakeSnapshot> GetSnapshot();
 	//! Whether the metadata statements run on DuckDB itself, rather than through the scanner of another database
 	static bool IsDuckDBMetadataType(const string &metadata_type);
-	//! Whether a lookup on snapshot_id names the branch of main, where the metadata engine serves it from the key
-	bool BranchKeyedLookups() const;
 	//! Throws when the newest expired snapshot a time travel by timestamp could see is its resolved snapshot or newer
 	void CheckSnapshotAfterExpiredGap(const DuckLakeSnapshot &snapshot, const Value &timestamp,
 	                                  idx_t newest_snapshot_id, const set<idx_t> &expired_in_transaction);
@@ -780,10 +819,11 @@ public:
 	                                                           const DuckLakeTableEntry &table,
 	                                                           const string &sort_order_sql,
 	                                                           const vector<string> &columns_to_read);
-	//! The deleted versions of the inlined rows that a flush writes
+	//! The deleted versions of the inlined rows that a flush writes, the ends of other branches on them rehomed
 	virtual DuckLakeDeletedRowVersions GetDeletedInlinedRowVersions(DuckLakeTableEntry &table,
 	                                                                const Identifier &inlined_table_name,
-	                                                                DuckLakeSnapshot snapshot);
+	                                                                DuckLakeSnapshot snapshot,
+	                                                                DuckLakeRehomedRowEnds &rehomed_rows);
 	//! The inlined deletions of rows of data files, which a flush writes to delete files
 	virtual vector<DuckLakeInlinedFileDeletionEntry> GetInlinedFileDeletionsForFlush(DuckLakeTableEntry &table,
 	                                                                                 DuckLakeSnapshot snapshot);
@@ -803,22 +843,30 @@ public:
 	                                               const map<TableIndex, idx_t> &flushed_file_deletions,
 	                                               const identifier_set_t &deleted_payloads,
 	                                               const DuckLakeInlinedColNames &col_names, bool row_visibility);
-	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids);
+	//! The schema version rows of the changed tables, born on main from 2.0 on
+	static string InsertNewSchema(const DuckLakeSnapshot &snapshot, const set<TableIndex> &table_ids,
+	                              bool write_branch_id);
 
 	virtual vector<DuckLakeSnapshotInfo> GetAllSnapshots(const DuckLakeSnapshotFilter &filter = {});
 	//! The snapshots in the column order of ducklake_snapshots, then next_file_id
 	unique_ptr<QueryResult> ReadSnapshots(const string &filter);
+	//! The chain predicate of the attached branch with bare column names, preceded by AND, empty before 2.0
+	string BranchLineageFilter() const;
+	//! The chain predicate over the begin snapshots of the schema version rows, preceded by AND, empty before 2.0
+	string SchemaVersionsLineageFilter(const string &prefix) const;
 	//! The live snapshot tags, with the times of their snapshots if requested
 	virtual vector<DuckLakeSnapshotTagInfo> GetSnapshotTags(bool with_snapshot_time = true);
-	//! The snapshot of the live snapshot tag with the name, if any
-	optional_idx GetTaggedSnapshot(const string &name);
-	//! The snapshot id of a VERSION value, a snapshot id or the name of a snapshot tag
+	//! The live snapshot tag with the name, if any
+	unique_ptr<DuckLakeSnapshotTagInfo> GetTaggedSnapshot(const string &name);
+	//! The snapshot id of a VERSION value, a snapshot id or the name of a snapshot tag the attached chain reads
 	idx_t ResolveSnapshotVersion(const Value &version);
 	static string WriteSnapshotTagChanges(const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &created,
 	                                      const case_insensitive_map_t<DuckLakeSnapshotTagInfo> &dropped);
 	//! Ends the row of a committed tag at the snapshot of the commit
 	static string EndSnapshotTagSql(const DuckLakeSnapshotTagInfo &tag);
-	static string DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots, bool branch_keyed);
+	//! The branch id is a placeholder in a commit batch and a literal where no snapshot substitutes it
+	static string DeleteSnapshotsSql(const vector<DuckLakeSnapshotInfo> &snapshots, bool branch_aware,
+	                                 const string &branch_id = "{BRANCH_ID}");
 	//! Deletes the snapshots once the caller checked the catalog version
 	virtual void DeleteSnapshots(const vector<DuckLakeSnapshotInfo> &snapshots);
 	//! Deletes the metadata that only the deleted snapshots referenced, once the caller checked the catalog version
@@ -865,6 +913,21 @@ public:
 	static string GetBranchTableStatement();
 	//! Inserts the row of the main branch unless the table has it
 	static string GetMainBranchRowStatement();
+	//! Every branch of the catalog
+	vector<DuckLakeBranchInfo> LoadBranches();
+	//! Whether the catalog holds any branch besides main, false before 2.0
+	bool HasBranches();
+	//! The resolved chain of every branch other than main
+	vector<DuckLakeBranchChain> LoadBranchChains();
+	//! The snapshots of a branch that the chains of the other branches continue from, the root caps for main
+	set<idx_t> LoadBranchCaps(idx_t branch_id);
+	//! The snapshots of a branch an expiry keeps, its head, the forks and the unexpired tag targets of other branches
+	set<idx_t> GetBranchProtectedSnapshots(idx_t branch_id, timestamp_tz_t start_time);
+	//! Keeps the files a branch references through its events or, with the root caps, inherits from main
+	string FileVisibilityGuard(const string &visibility_table, const string &file_id_column, const string &alias = "f",
+	                           bool include_inherited = true);
+	//! Keeps the files a branch references through its events and, in a merge, through its deletions
+	string CompactionBranchGuard(CompactionType type, TableIndex table_id);
 	//! Whether the catalog already has every metadata table and column of v1.1
 	bool HasV1_1Additions();
 	//! Whether the catalog has the tables of 1.1 under their names in their shape, false once a migration to 2.0 began
@@ -953,11 +1016,21 @@ public:
 	V2_0InlinedCompanion ProbeV2_0InlinedCompanion();
 	//! The step: the empty payloads and deletion tables of the previous shape go, the companion comes last
 	string V2_0InlinedCompanionSql(const V2_0InlinedCompanion &inlined) const;
+	//! The branch columns of the schema versions and the tagged snapshots, probed so an interrupted step resumes
+	struct V2_0LineageColumns {
+		bool has_schema_versions_branch = false;
+		bool has_snapshot_tag_table = false;
+		bool has_snapshot_tag_target_branch = false;
+	};
+	V2_0LineageColumns ProbeV2_0LineageColumns();
+	//! Adds the branch columns the catalog lacks and fills the branch of the existing rows
+	static string V2_0LineageColumnsSql(const V2_0LineageColumns &lineage);
 	//! The shape of the catalog against the steps of 2.0, one probe of the metadata schema
 	struct V2_0Layout {
 		V2_0SnapshotAdditions additions;
 		V2_0FileRanges ranges;
 		V2_0RowCompanions rows;
+		V2_0LineageColumns lineage;
 		V2_0InlinedCompanion inlined;
 	};
 	V2_0Layout ProbeV2_0Layout();
@@ -1011,8 +1084,10 @@ protected:
 	enum class StatsCastType : uint8_t { ORDERING, MIN, MAX };
 
 	virtual string GetLatestSnapshotQuery() const;
-	//! The branch conjunct of a lookup on snapshot_id, preceded by AND, empty where the engine would not use it
+	//! The branch conjunct of a lookup on the snapshots of main, preceded by AND, empty before 2.0
 	string MainSnapshotFilter() const;
+	//! The WHERE conditions of a snapshot filter, the latest snapshot is the head of the attached branch from 2.0 on
+	string SnapshotFilterSql(const DuckLakeSnapshotFilter &filter) const;
 	//! The changes of the snapshots from first_snapshot to last_snapshot that recorded a rewrite
 	virtual string GetRewriteSnapshotsQuery(idx_t first_snapshot, idx_t last_snapshot) const;
 

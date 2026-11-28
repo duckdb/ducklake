@@ -73,6 +73,9 @@ string DuckLakeInitializer::GetAttachOptions() {
 void DuckLakeInitializer::Initialize() {
 	auto &transaction = DuckLakeTransaction::Get(context, catalog);
 	if (transaction.GetMetadataManager().IsRemote()) {
+		if (!options.branch_name.empty() && !StringUtil::CIEquals(options.branch_name, "main")) {
+			throw NotImplementedException("BRANCH attaches through a REST catalog are not supported yet");
+		}
 		catalog.ConnectREST();
 		// a remote metadata server has no metadata database to attach or migrate
 		LoadExistingDuckLake(transaction);
@@ -125,8 +128,25 @@ void DuckLakeInitializer::Initialize() {
 	auto &current_metadata_manager = transaction.GetMetadataManager();
 	// probe the metadata server for optional capabilities (e.g. server-side commit retries) once per attach
 	current_metadata_manager.ProbeServerCapabilities();
-	if (metadata_cache_stale) {
+	// an attach at a branch reads through the fork, which a cache kept from another attach does not
+	if (metadata_cache_stale || !options.branch_name.empty()) {
 		current_metadata_manager.ClearCache();
+	}
+	if (!options.branch_name.empty() && !catalog.SupportsBranching()) {
+		ThrowUnsupportedByVersion(catalog.GetDuckLakeVersion(), "branches");
+	}
+	if (!options.branch_name.empty() && !StringUtil::CIEquals(options.branch_name, "main")) {
+		auto branches = current_metadata_manager.LoadBranches();
+		optional_idx branch_id;
+		for (auto &branch : branches) {
+			if (StringUtil::CIEquals(branch.name, options.branch_name)) {
+				branch_id = branch.branch_id;
+			}
+		}
+		if (!branch_id.IsValid()) {
+			throw InvalidInputException("No branch with the name \"%s\" exists", options.branch_name);
+		}
+		catalog.SetAttachedChain(DuckLakeBranchChain::Resolve(branches, branch_id.GetIndex()));
 	}
 	if (options.at_clause) {
 		// if the user specified a snapshot try to load it to trigger an error if it does not exist

@@ -1,0 +1,95 @@
+# name: test/sql/rest/rest_flush_rehomes_branch_end.test
+# description: A flush through a REST client runs on the server, which rehomes the end of a branch on a moved row
+# group: [rest]
+
+require ducklake
+
+require parquet
+
+require json
+
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dl (DATA_PATH '{TEST_DIR}/{BASE_TEST_NAME}_files',
+    METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok rest_db:rest_server_con
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok rest_db:rest_server_con
+INSERT INTO dl.t VALUES (1), (2), (3)
+
+# dev forks from main at 2 and holds the snapshot 3
+statement ok rest_db:rest_server_con
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+statement ok rest_db:rest_server_con
+INSERT INTO meta.ducklake_snapshot (snapshot_id, snapshot_time, schema_version, next_catalog_id, next_file_id,
+    branch_id) SELECT 3, NOW(), schema_version, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot
+    WHERE snapshot_id = 2 AND branch_id = 0
+
+statement ok rest_db:rest_server_con
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, NULL, NULL, NULL, NULL, 1)
+
+# dev ends the second row of t at its 3
+statement ok rest_db:rest_server_con
+INSERT INTO meta.ducklake_inlined_data_visibility VALUES (1, 1, 0, 2, 1, 3)
+
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I rest_db:rest_server_con
+SELECT i FROM dev.t ORDER BY i
+----
+1
+3
+
+statement ok rest_db:rest_server_con
+SET VARIABLE rest_listen_uri = (SELECT listen_uri FROM ducklake_rest_serve('dl'))
+
+set variable rest_server <variable:rest_server_con:rest_listen_uri>
+
+statement ok
+ATTACH 'ducklake:rest:{rest_server}' AS client
+
+# the client asks the server to flush, the server flushes in a transaction of its own
+query III
+SELECT * FROM ducklake_flush_inlined_data('client')
+----
+main	t	3
+
+query I
+SELECT i FROM client.t ORDER BY i
+----
+1
+2
+3
+
+# the end of dev is now a deletion row of dev on the flushed file, dated at its own 3
+query III rest_db:rest_server_con
+SELECT row_id, begin_snapshot, branch_id FROM meta.ducklake_inlined_delete_1
+----
+1	3	1
+
+query I rest_db:rest_server_con
+SELECT count(*) FROM meta.ducklake_inlined_data_visibility
+----
+0
+
+statement ok rest_db:rest_server_con
+DETACH dev
+
+# a fresh attach of dev reads the flushed file with the deletion row
+statement ok rest_db:rest_server_con
+ATTACH 'ducklake:{TEST_DIR}/{BASE_TEST_NAME}.db' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+query I rest_db:rest_server_con
+SELECT i FROM dev.t ORDER BY i
+----
+1
+3
+
+statement ok
+DETACH client
+
+statement ok rest_db:rest_server_con
+SELECT * FROM ducklake_rest_stop(regexp_extract(getvariable('rest_listen_uri'), '^(.*://[^/]+)', 1))

@@ -1,5 +1,5 @@
 # name: test/sql/catalog/snapshot_branch_key_statements.test
-# description: a DuckDB catalog of 2.0 keeps the snapshot statements of 1.x, DuckDB folds a branch conjunct away
+# description: a DuckDB catalog of 2.0 reads main's snapshots by its chain predicate, its commits name the branch too
 # group: [catalog]
 
 require ducklake
@@ -60,43 +60,47 @@ COMMIT
 statement ok
 CALL ducklake_expire_snapshots('dl', versions => [1])
 
-# the head read, the listing, the version lookup, the conflict check and the expiry ran
+# the head read, the listing and the version lookup select the snapshots of main by the chain predicate of main
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%WHERE snapshot_id = (SELECT MAX(snapshot_id) FROM %ducklake_snapshot);%'
+WHERE query LIKE '%WHERE (branch_id = 0) AND snapshot_id = (SELECT MAX(snapshot_id) FROM %'
+  AND query LIKE '%snapshot_id = (SELECT MAX(snapshot_id) FROM %ducklake_snapshot WHERE branch_id = 0);%'
 ----
 true
 
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%LEFT JOIN %ducklake_snapshot_changes USING (snapshot_id)%'
+WHERE query LIKE '%ducklake_snapshot_changes USING (snapshot_id, branch_id)%WHERE snapshot_id <= 2 AND (branch_id = 0)%'
 ----
 true
 
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%WHERE snapshot_id = 1 AND snapshot_id <= 2;%'
+WHERE query LIKE '%WHERE snapshot_id = 1 AND snapshot_id <= 2 AND (branch_id = 0);%'
+----
+true
+
+# the conflict check of a commit reads the changes of main and the head of main by the chain predicate of main
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE regexp_replace(query, '\s+', ' ', 'g') LIKE '%WHERE c.snapshot_id > 2 AND c.branch_id = 0 )%'
+  AND regexp_replace(query, '\s+', ' ', 'g') LIKE '%WHERE (branch_id = 0) AND snapshot_id = (SELECT MAX(snapshot_id)%'
+  AND regexp_replace(query, '\s+', ' ', 'g') LIKE '%ducklake_snapshot WHERE branch_id = 0) UNION ALL%'
+----
+true
+
+# the expiry keeps the head of main and its delete names the branch beside snapshot_id
+query I
+SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%snapshot_id != (SELECT MAX(snapshot_id) FROM %ducklake_snapshot WHERE branch_id = 0)%'
 ----
 true
 
 query I
 SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%STRING_AGG(changes_made%'
+WHERE query LIKE '%DELETE FROM %ducklake_snapshot WHERE snapshot_id IN (1) AND branch_id = 0;%'
 ----
 true
-
-query I
-SELECT count(*) > 0 FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE query LIKE '%DELETE FROM %ducklake_snapshot WHERE snapshot_id IN (1);%'
-----
-true
-
-# no snapshot predicate names the branch, also not through the changes alias, the catalog rows qualify theirs
-query I
-SELECT count(*) FROM duckdb_logs_parsed('DuckLakeMetadata')
-WHERE regexp_matches(query, '(^|[^.\w]|\Wc\.)branch_id = 0') AND query NOT LIKE '%file_visibility%'
-----
-0
 
 # the file sources read the events of branch 0
 query I

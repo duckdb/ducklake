@@ -410,8 +410,9 @@ unordered_set<string> PostgresMetadataManager::ListInlinedDeletionTables() {
 
 void PostgresMetadataManager::MigrateInlinedDataTypes() {
 	// a 2.0 catalog whose version string was rewound reaches this step with the column rows already converted
-	auto columns = DuckLakeMetadataManager::Query(
-	    GetInlinedTableColumnsSql(optional_idx(), HasMetadataColumn("ducklake_column", "branch_id")));
+	auto columns = DuckLakeMetadataManager::Query(GetInlinedTableColumnsSql(
+	    optional_idx(), HasMetadataColumn("ducklake_column", "branch_id"), DuckLakeBranchChain::Main(),
+	    HasMetadataColumn("ducklake_schema_versions", "branch_id")));
 	columns->ThrowIfError("Failed to read the columns of inlined-data tables while migrating: ");
 	map<Identifier, identifier_map_t<string>> inlined_tables;
 	for (auto &row : *columns) {
@@ -559,9 +560,8 @@ ORDER BY c.relname, a.attnum)",
 }
 
 string PostgresMetadataManager::GetLatestSnapshotQuery() const {
-	// the server plans both conjuncts from the composite key
-	bool branch_keyed = transaction.GetCatalog().SupportsBranching();
-	auto remote_query = LatestSnapshotQuery(branch_keyed, branch_keyed);
+	// the chain head query is standard SQL, so the server runs it
+	auto remote_query = DuckLakeMetadataManager::GetLatestSnapshotQuery();
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	return PostgresQuery(remote_query);
@@ -570,8 +570,10 @@ string PostgresMetadataManager::GetLatestSnapshotQuery() const {
 string PostgresMetadataManager::GetSnapshotAndStatsAndChangesQuery(DuckLakeSnapshot snapshot,
                                                                    bool include_exactness) const {
 	// one statement reads the latest snapshot and the table stats from the same state at any isolation level
-	bool branch_keyed = transaction.GetCatalog().SupportsBranching();
-	auto remote_query = SnapshotAndStatsAndChangesQuery(include_exactness, branch_keyed, branch_keyed);
+	auto &catalog = transaction.GetCatalog();
+	auto remote_query =
+	    SnapshotAndStatsAndChangesQuery(include_exactness, catalog.SupportsBranching(),
+	                                    catalog.AttachedChain().Predicate(""), catalog.AttachedBranchId());
 	SubstituteCatalogPlaceholders(remote_query,
 	                              SQLQuotedIdentifier::ToString(transaction.GetCatalog().MetadataSchemaName()));
 	SubstituteSnapshotPlaceholders(snapshot, remote_query);

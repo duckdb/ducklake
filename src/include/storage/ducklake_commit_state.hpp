@@ -69,6 +69,8 @@ struct DuckLakeCommitState {
 	map<idx_t, idx_t> committed_partition_ids;
 	map<MappingIndex, MappingIndex> committed_mapping_indexes;
 	map<TableIndex, vector<DuckLakeDeleteFile>> local_delete_files;
+	//! The ends of other branches a flush rehomes onto its new files, with the file ids this commit allocated
+	map<TableIndex, vector<DuckLakeRehomedFileDeletion>> rehomed_file_deletions;
 	//! The columns this commit widens from FLOAT to DOUBLE
 	map<TableIndex, set<FieldIndex>> float_widened_columns;
 	//! The widened columns with values that read as DOUBLE without FLOAT rounding

@@ -630,6 +630,7 @@ vector<DuckLakeInlinedTableInfo> RESTMetadataManager::GetInlinedDataTables(const
 }
 
 vector<DuckLakeSnapshotInfo> RESTMetadataManager::GetAllSnapshots(const DuckLakeSnapshotFilter &filter) {
+	// the chain restriction of the filter stays unsent, the server applies the lineage of its catalog
 	RESTListSnapshotsRequest request;
 	request.exclude_latest = filter.exclude_latest;
 	request.older_than = filter.older_than;

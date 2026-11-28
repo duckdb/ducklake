@@ -1,0 +1,122 @@
+# name: test/sql/branches/branch_inlined_shared_version_number.test
+# description: a payload main inlines at a version number a branch minted too is placed by the version row of main
+# group: [branches]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{DATA_PATH}/{BASE_TEST_NAME}_files', METADATA_CATALOG 'meta',
+    DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t (i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (42)
+
+# dev forks main at 2
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (1, 'dev', 0, 2)
+
+# main renames i to j at 3, its schema version 2, and inlines a row of that version at 4
+statement ok
+ALTER TABLE dl.t RENAME i TO j
+
+statement ok
+INSERT INTO dl.t VALUES (100)
+
+query III
+SELECT table_name, schema_version, table_id FROM meta.ducklake_inlined_data_tables ORDER BY schema_version
+----
+ducklake_inlined_data_1_1	1	1
+ducklake_inlined_data_1_2	2	1
+
+# dev renames i to k at its snapshot 3, minting the schema version 2 of its own lineage
+statement ok
+INSERT INTO meta.ducklake_snapshot SELECT 3, NOW(), 2, next_catalog_id, next_file_id, 1 FROM meta.ducklake_snapshot
+WHERE branch_id = 0 AND snapshot_id = 2
+
+statement ok
+INSERT INTO meta.ducklake_snapshot_changes VALUES (3, 'altered_table:1', NULL, NULL, NULL, 1)
+
+statement ok
+INSERT INTO meta.ducklake_column_visibility SELECT 1, table_id, column_id, branch_id, begin_snapshot, 3
+FROM meta.ducklake_column WHERE column_name = 'i'
+
+statement ok
+INSERT INTO meta.ducklake_column SELECT column_id, 3, table_id, column_order, 'k', column_type, initial_default,
+    default_value, nulls_allowed, parent_column, default_value_type, default_value_dialect, 1
+FROM meta.ducklake_column WHERE column_name = 'i'
+
+statement ok
+INSERT INTO meta.ducklake_schema_versions VALUES (3, 2, 1, 1)
+
+query III
+SELECT begin_snapshot, schema_version, branch_id FROM meta.ducklake_schema_versions ORDER BY branch_id, begin_snapshot
+----
+1	1	0
+3	2	0
+3	2	1
+
+# feature forks dev at 3 and reads main through the cap of dev
+statement ok
+INSERT INTO meta.ducklake_branch VALUES (2, 'feature', 1, 3)
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dev (METADATA_CATALOG 'meta', BRANCH 'dev')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS feature (METADATA_CATALOG 'meta', BRANCH 'feature')
+
+query I
+SELECT column_name FROM (DESCRIBE dev.t)
+----
+k
+
+# the payload of main's version 2 begins above the fork, the branch reads the row of the fork under its own name
+query I
+SELECT k FROM dev.t
+----
+42
+
+query I
+SELECT COUNT(*) FROM dev.t
+----
+1
+
+query I
+SELECT i FROM dev.t AT (VERSION => 2)
+----
+42
+
+query I
+SELECT k FROM feature.t
+----
+42
+
+query I
+SELECT COUNT(*) FROM feature.t
+----
+1
+
+statement ok
+DETACH feature
+
+statement ok
+DETACH dev
+
+# main reads both payloads under its own name
+query I
+SELECT j FROM dl.t ORDER BY j
+----
+42
+100
+
+statement ok
+DETACH dl

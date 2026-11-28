@@ -731,10 +731,11 @@ vector<DuckLakeFileListEntry> DuckLakeMultiFileList::ReadCommittedFiles(
 		}
 		auto result = metadata_manager.GetFilesForTable(read_info.table, read_info.snapshot, filter_info.get(),
 		                                                read_info.include_local_changes, scan_projection);
-		// without inlined rows a flush cannot move any of them
+		// without inlined rows a flush cannot move any of them, and a file of a branch is not one main wrote since
 		bool written_since = next_file_id.IsValid() &&
 		                     std::any_of(result.begin(), result.end(), [&](const DuckLakeFileListEntry &entry) {
-			                     return entry.file_id.IsValid() && entry.file_id.index >= next_file_id.GetIndex();
+			                     return entry.file_id.IsValid() && entry.snapshot_branch_id == 0 &&
+			                            entry.file_id.index >= next_file_id.GetIndex();
 		                     });
 		if (!written_since) {
 			return result;
@@ -814,6 +815,8 @@ void DuckLakeMultiFileList::GetTableDeletions() const {
 		file_entry.row_id_start = file.row_id_start;
 		file_entry.snapshot_id = file.snapshot_id;
 		file_entry.mapping_id = file.mapping_id;
+		// the rows of an inherited partial file past the cap of its writer's segment were never visible
+		file_entry.snapshot_filter_max = file.row_snapshot_max;
 		files.emplace_back(std::move(file_entry));
 	}
 	AddInlinedDataTables(transaction);
