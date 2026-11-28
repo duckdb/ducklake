@@ -1,0 +1,85 @@
+# name: test/sql/transaction/commit_published_checkpoint_options.test
+# description: Rolled back option changes restore the options of a published commit whose checkpoint failed
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/commit_published_checkpoint_options.db' AS dl (DATA_PATH '{TEST_DIR}/commit_published_checkpoint_options_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+CREATE TABLE dl.u(i INTEGER)
+
+statement ok
+SET auto_checkpoint_skip_wal_threshold = 9999999999
+
+statement ok
+BEGIN
+
+# a set and a reset leave no row for the option, so later changes of it can overlap
+statement ok
+ALTER TABLE dl.t SET (data_inlining_row_limit = 20)
+
+statement ok
+ALTER TABLE dl.t RESET (data_inlining_row_limit)
+
+statement ok
+INSERT INTO dl.u SELECT range FROM range(30)
+
+# the commit of the metadata is durable, the checkpoint that follows it fails
+statement ok
+SET wal_autocheckpoint_entries = 1
+
+statement ok
+PRAGMA debug_checkpoint_abort = 'before_header_non_fatal'
+
+statement error
+COMMIT
+----
+Transaction COMMIT succeeded
+
+statement ok
+PRAGMA debug_checkpoint_abort = 'none'
+
+statement ok
+SET wal_autocheckpoint_entries = 0
+
+# only the metadata database is reopened, the DuckLake keeps its option cache
+statement ok
+DETACH meta
+
+statement ok
+ATTACH '{TEST_DIR}/commit_published_checkpoint_options.db' AS meta
+
+# two overlapping changes of the option are rolled back, the first one first
+statement ok con1
+BEGIN
+
+statement ok con1
+ALTER TABLE dl.t SET (data_inlining_row_limit = 100)
+
+statement ok con2
+BEGIN
+
+statement ok con2
+ALTER TABLE dl.t SET (data_inlining_row_limit = 200)
+
+statement ok con1
+ROLLBACK
+
+statement ok con2
+ROLLBACK
+
+# the table has no limit of its own, so 15 rows are over the limit of 10 and go to a file
+statement ok
+INSERT INTO dl.t SELECT range FROM range(15)
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/commit_published_checkpoint_options_files/main/t/*.parquet')
+----
+1

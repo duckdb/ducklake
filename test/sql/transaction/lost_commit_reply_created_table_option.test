@@ -1,0 +1,52 @@
+# name: test/sql/transaction/lost_commit_reply_created_table_option.test
+# description: The option of a table created by a commit whose COMMIT reply was lost is applied afterwards
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/lost_commit_reply_created_table_option', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0)
+
+# the catalog carries the COMMIT out, only its reply is lost
+statement ok
+SET ducklake_debug_lose_commit_reply = 'after'
+
+statement ok
+BEGIN
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER) WITH (data_inlining_row_limit = 20)
+
+# a commit without files cannot be recognized in the catalog, so its outcome stays unknown
+statement error
+COMMIT
+----
+whether it carried the commit out is unknown
+
+statement ok
+RESET ducklake_debug_lose_commit_reply
+
+query I
+SELECT value FROM metadata.ducklake_metadata WHERE key = 'data_inlining_row_limit' AND scope = 'table'
+----
+20
+
+# the option of the created table follows the catalog, so the row is inlined
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/lost_commit_reply_created_table_option/main/t/*.parquet')
+----
+0
+
+query I
+SELECT i FROM ducklake.t
+----
+1

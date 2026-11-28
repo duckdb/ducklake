@@ -48,6 +48,7 @@ public:
 	unordered_set<string> ListInlinedDeletionTables() override;
 	void MigrateInlinedDataTypes() override;
 	bool IsRetryableCommitError(const string &message) const override;
+	bool IsCommitOutcomeUnknown(const string &message) const override;
 	bool ProbeMetadataColumns() override;
 	string CommitErrorWithoutQuery(const string &message) const override;
 	string ConfigOptionLockSql() const override;

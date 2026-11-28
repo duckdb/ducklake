@@ -887,25 +887,22 @@ UPDATE {METADATA_CATALOG}.ducklake_metadata SET value = '1.0' WHERE key = 'versi
 	result->ThrowIfError("Failed to migrate DuckLake from v0.4 to v1.0: ");
 }
 
-struct DuckLakeAddedColumn {
-	const char *table;
-	const char *column;
-	const char *type;
-};
-
-static constexpr const DuckLakeAddedColumn V1_1_ADDED_COLUMNS[] = {
-    {"ducklake_data_file", "row_group_count", "BIGINT"},
-    {"ducklake_delete_file", "row_group_count", "BIGINT"},
-    {"ducklake_file_column_stats", "min_is_exact", "BOOLEAN DEFAULT NULL"},
-    {"ducklake_file_column_stats", "max_is_exact", "BOOLEAN DEFAULT NULL"},
-    {"ducklake_table_column_stats", "min_is_exact", "BOOLEAN DEFAULT NULL"},
-    {"ducklake_table_column_stats", "max_is_exact", "BOOLEAN DEFAULT NULL"},
-    {"ducklake_schema", "parent_schema_id", "BIGINT"}};
+const vector<DuckLakeAddedColumn> &DuckLakeMetadataManager::V1_1AddedColumns() {
+	static const vector<DuckLakeAddedColumn> columns {
+	    {"ducklake_data_file", "row_group_count", "BIGINT"},
+	    {"ducklake_delete_file", "row_group_count", "BIGINT"},
+	    {"ducklake_file_column_stats", "min_is_exact", "BOOLEAN DEFAULT NULL"},
+	    {"ducklake_file_column_stats", "max_is_exact", "BOOLEAN DEFAULT NULL"},
+	    {"ducklake_table_column_stats", "min_is_exact", "BOOLEAN DEFAULT NULL"},
+	    {"ducklake_table_column_stats", "max_is_exact", "BOOLEAN DEFAULT NULL"},
+	    {"ducklake_schema", "parent_schema_id", "BIGINT"}};
+	return columns;
+}
 
 static string V1_1MigrationQuery(bool has_additions) {
 	string query;
 	if (!has_additions) {
-		for (auto &added : V1_1_ADDED_COLUMNS) {
+		for (auto &added : DuckLakeMetadataManager::V1_1AddedColumns()) {
 			query += StringUtil::Format("ALTER TABLE {METADATA_CATALOG}.%s ADD COLUMN {IF_NOT_EXISTS} %s %s;\n",
 			                            added.table, added.column, added.type);
 		}
@@ -945,7 +942,7 @@ bool DuckLakeMetadataManager::HasV1_1Layout() {
 
 bool DuckLakeMetadataManager::HasV1_1Additions() {
 	vector<std::pair<string, string>> columns {{"ducklake_view_column_tag", "*"}};
-	for (auto &added : V1_1_ADDED_COLUMNS) {
+	for (auto &added : V1_1AddedColumns()) {
 		columns.emplace_back(added.table, added.column);
 	}
 	return !Query(ColumnProbeSql(columns))->HasError();
@@ -1108,7 +1105,10 @@ void DuckLakeMetadataManager::MigrateV11(bool from_dev1) {
 	auto rename_query = V2_0SnapshotRenameSql(layout.additions) + V2_0FileRenameSql(layout.ranges);
 	if (!rename_query.empty()) {
 		ExecuteMigration(rename_query, false, from_version, "2.0-dev1");
+		CommitMigration();
 		transaction.ReleaseMetadataTransaction();
+		// a catalog that commits each statement runs the second batch in a migration transaction of its own
+		BeginMigration();
 		layout = ProbeV2_0Layout();
 		// a writer of the previous layout may have inlined rows before the renames fenced it
 		VerifyV2_0InlinedStep(layout, from_version);
@@ -1610,6 +1610,8 @@ void DuckLakeMetadataManager::VerifyV2_0InlinedStep(const V2_0Layout &layout, co
 		auto undo_query = V2_0RenameUndoSql(layout);
 		if (!undo_query.empty()) {
 			ExecuteMigration(undo_query, false, from_version, "2.0-dev1");
+			// the renames back commit before the refusal rolls the migration transaction back
+			CommitMigration();
 			transaction.ReleaseMetadataTransaction();
 		}
 		throw;
@@ -1905,7 +1907,8 @@ LEFT JOIN {METADATA_CATALOG}.ducklake_table tbl ON idt.table_id = tbl.table_id A
 		return;
 	}
 	// on a re-run one probe over all inlined tables detects an already migrated catalog
-	if (probe_renamed && !Query(renamed_probe)->HasError()) {
+	// a failed probe would abort the migration transaction of a catalog that commits each statement
+	if (probe_renamed && !CommitsEachStatement() && !Query(renamed_probe)->HasError()) {
 		return;
 	}
 	map<Identifier, vector<pair<Identifier, Identifier>>> renames;
@@ -8775,6 +8778,26 @@ WHERE key = %s AND %s
 )",
 	                                       SQLString(option.option.key), scope_filter));
 	return result->Fetch()->GetValue(0, 0).GetValue<idx_t>();
+}
+
+bool DuckLakeMetadataManager::TryGetConfigOption(DuckLakeConfigOption &option) {
+	string scope;
+	string scope_id;
+	string scope_filter;
+	ConfigOptionScope(option, scope, scope_id, scope_filter);
+	auto result = Query(StringUtil::Format(R"(
+SELECT value
+FROM {METADATA_CATALOG}.ducklake_metadata
+WHERE key = %s AND %s
+)",
+	                                       SQLString(option.option.key), scope_filter));
+	result->ThrowIfError("Failed to read config option from DuckLake: ");
+	auto chunk = result->Fetch();
+	if (!chunk || chunk->size() == 0) {
+		return false;
+	}
+	option.option.value = chunk->GetValue(0, 0).ToString();
+	return true;
 }
 
 idx_t DuckLakeMetadataManager::SetConfigOption(const DuckLakeConfigOption &option) {

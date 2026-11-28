@@ -1,0 +1,62 @@
+# name: test/sql/transaction/lost_commit_reply_option_set_reset_retry.test
+# description: An option set and reset by a retried commit whose COMMIT reply was lost stays reset in the cache
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS ducklake (DATA_PATH '{DATA_PATH}/lost_commit_reply_option_set_reset_retry', METADATA_CATALOG 'metadata', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE ducklake.t(i INTEGER)
+
+statement ok
+ALTER TABLE ducklake.t SET (data_inlining_row_limit = 20)
+
+statement ok con1
+BEGIN
+
+statement ok con1
+ALTER TABLE ducklake.t SET (data_inlining_row_limit = 50)
+
+statement ok con1
+ALTER TABLE ducklake.t RESET (data_inlining_row_limit)
+
+statement ok con1
+CREATE TABLE ducklake.a(i INTEGER)
+
+# another connection commits first, so the commit of con1 is retried and writes its option changes again
+statement ok con2
+CREATE TABLE ducklake.u(i INTEGER)
+
+# the catalog carries the retried COMMIT out, only its reply is lost
+statement ok con1
+SET ducklake_debug_lose_commit_reply = 'after'
+
+statement error con1
+COMMIT
+----
+whether it carried the commit out is unknown
+
+statement ok con1
+RESET ducklake_debug_lose_commit_reply
+
+query I
+SELECT count(*) FROM metadata.ducklake_metadata WHERE key = 'data_inlining_row_limit'
+----
+0
+
+# the reset holds, so the limit of the ATTACH applies and the row goes to a file
+statement ok
+INSERT INTO ducklake.t VALUES (1)
+
+query I
+SELECT count(*) FROM glob('{DATA_PATH}/lost_commit_reply_option_set_reset_retry/main/t/*.parquet')
+----
+1

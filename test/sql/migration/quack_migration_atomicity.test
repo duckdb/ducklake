@@ -1,0 +1,97 @@
+# name: test/sql/migration/quack_migration_atomicity.test
+# description: a failed 1.0 migration on Quack leaves the catalog as it was
+# group: [migration]
+
+require ducklake
+
+require parquet
+
+require-env DUCKLAKE_CONNECTION quack:localhost:19999
+
+require quack
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (DATA_PATH '{TEST_DIR}/migration_atomicity', METADATA_CATALOG 'meta',
+DUCKLAKE_VERSION '1.0', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+INSERT INTO dl.t VALUES (42)
+
+# the column the migration adds already exists, so the migration fails after the renames
+statement ok
+CALL quack_query_by_name('meta', 'ALTER TABLE ducklake_data_file ADD COLUMN row_group_count BIGINT')
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+----
+row_group_count
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.0')
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
+----
+1.0
+
+query I
+SELECT * FROM dl.t
+----
+42
+
+# without the extra column the migration gets to 2.0, which converts no inlined rows, and its refusal leaves 1.0 too
+statement ok
+CALL quack_query_by_name('meta', 'ALTER TABLE ducklake_data_file DROP COLUMN row_group_count')
+
+statement ok
+DETACH dl
+
+statement error
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+----
+converts no inlined rows
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_CATALOG 'meta', DUCKLAKE_VERSION '1.0')
+
+# the flush writes the row to a file, then the migration completes
+statement ok
+CALL ducklake_flush_inlined_data('dl')
+
+statement ok
+DETACH dl
+
+statement ok
+CALL enable_logging('DuckLakeMetadata', storage = 'memory')
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS dl (METADATA_CATALOG 'meta', AUTOMATIC_MIGRATION TRUE)
+
+statement ok
+CALL disable_logging()
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'version'
+----
+2.0-dev1
+
+# the renames of the first batch commit before the copies, each batch in a server transaction of its own
+query I
+SELECT string_agg(CASE WHEN query LIKE '%''BEGIN TRANSACTION;'')' THEN 'begin' WHEN query LIKE '%''COMMIT;'')' THEN 'commit'
+    WHEN query LIKE '%RENAME TO ducklake_snapshot_old%' THEN 'rename' ELSE 'copy' END, ' ' ORDER BY timestamp)
+FROM duckdb_logs_parsed('DuckLakeMetadata')
+WHERE query LIKE '%''BEGIN TRANSACTION;'')' OR query LIKE '%''COMMIT;'')' OR query LIKE '%RENAME TO ducklake_snapshot_old%'
+    OR query LIKE '%2.0-dev1%'
+----
+begin rename commit begin copy commit
+
+query I
+SELECT * FROM dl.t
+----
+42

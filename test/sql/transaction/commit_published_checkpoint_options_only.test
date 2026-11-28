@@ -1,0 +1,61 @@
+# name: test/sql/transaction/commit_published_checkpoint_options_only.test
+# description: A commit of options alone that is in the metadata keeps its options when the checkpoint after it fails
+# group: [transaction]
+
+require ducklake
+
+require parquet
+
+statement ok
+ATTACH 'ducklake:{TEST_DIR}/commit_published_checkpoint_options_only.db' AS dl (DATA_PATH '{TEST_DIR}/commit_published_checkpoint_options_only_files', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 10)
+
+statement ok
+CREATE TABLE dl.t(i INTEGER)
+
+statement ok
+SET auto_checkpoint_skip_wal_threshold = 9999999999
+
+statement ok
+BEGIN
+
+statement ok
+ALTER TABLE dl.t SET (data_inlining_row_limit = 20)
+
+# the commit of the metadata is durable, the checkpoint that follows it fails
+statement ok
+SET wal_autocheckpoint_entries = 1
+
+statement ok
+PRAGMA debug_checkpoint_abort = 'before_header_non_fatal'
+
+statement error
+COMMIT
+----
+Transaction COMMIT succeeded
+
+statement ok
+PRAGMA debug_checkpoint_abort = 'none'
+
+statement ok
+SET wal_autocheckpoint_entries = 0
+
+# only the metadata database is reopened, the DuckLake keeps its option cache
+statement ok
+DETACH meta
+
+statement ok
+ATTACH '{TEST_DIR}/commit_published_checkpoint_options_only.db' AS meta
+
+query I
+SELECT value FROM meta.ducklake_metadata WHERE key = 'data_inlining_row_limit' AND scope = 'table'
+----
+20
+
+# 15 rows are under the committed limit of 20, so they are inlined and no file is written
+statement ok
+INSERT INTO dl.t SELECT range FROM range(15)
+
+query I
+SELECT count(*) FROM glob('{TEST_DIR}/commit_published_checkpoint_options_only_files/main/t/*.parquet')
+----
+0

@@ -357,6 +357,31 @@ string PostgresMetadataManager::GetColumnTypeInternal(const LogicalType &column_
 	}
 }
 
+bool PostgresMetadataManager::IsCommitOutcomeUnknown(const string &message) const {
+	// libpq's texts for a connection that broke, the server still commits a COMMIT it received
+	static const char *CONNECTION_LOST[] = {"server closed the connection",
+	                                        "could not receive data from server",
+	                                        "could not send data to server",
+	                                        "connection to server",
+	                                        "no connection to the server",
+	                                        "terminating connection",
+	                                        "connection timed out",
+	                                        "connection reset",
+	                                        "broken pipe",
+	                                        "ssl syscall error",
+	                                        "ssl connection has been closed",
+	                                        "ssl error",
+	                                        "unexpected eof",
+	                                        "eof detected"};
+	auto lower = StringUtil::Lower(message);
+	for (auto text : CONNECTION_LOST) {
+		if (StringUtil::Contains(lower, text)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 optional_idx PostgresMetadataManager::BatchServerErrorStart(const string &message) const {
 	// the batch and the server error can contain any text, so the batch is found by its size
 	const string failed_batch = "Failed to execute query \"";
