@@ -1,0 +1,53 @@
+# name: test/sql/list_files/list_files_absolute_remote_path.test
+# description: A local data directory does not change the separators of remote file paths
+# group: [list_files]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{BASE_TEST_NAME}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/remote_path', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.items AS SELECT 42 AS i
+
+# Write an absolute URL to the metadata without relying on a remote server.
+foreach scheme https S3 lake-storage
+
+statement ok
+UPDATE meta.ducklake_data_file
+SET path = '{scheme}://example.invalid/warehouse/data.parquet', path_is_relative = false
+
+query I
+SELECT data_file = '{scheme}://example.invalid/warehouse/data.parquet' FROM ducklake_list_files('lake', 'items')
+----
+true
+
+endloop
+
+# A stored UNC table path can be joined with a relative file path without opening the share.
+statement ok
+UPDATE meta.ducklake_table SET path = '//server/share/lake/', path_is_relative = false
+
+statement ok
+UPDATE meta.ducklake_data_file SET path = 'nested/data.parquet', path_is_relative = true
+
+statement ok
+DETACH lake
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/remote_path', METADATA_CATALOG 'meta')
+
+query I
+SELECT data_file = CASE
+    WHEN parse_path('a\b', 'system') = ['a', 'b']
+    THEN replace('//server/share/lake/nested/data.parquet', '/', chr(92))
+    ELSE '//server/share/lake/nested/data.parquet'
+END FROM ducklake_list_files('lake', 'items')
+----
+true
