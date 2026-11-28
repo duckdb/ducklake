@@ -4,6 +4,7 @@
 #include "storage/ducklake_geo_stats.hpp"
 #include "storage/ducklake_metadata_info.hpp"
 #include "storage/ducklake_variant_stats.hpp"
+#include "duckdb/common/types/blob.hpp"
 #include "duckdb/common/types/string.hpp"
 #include "duckdb/common/types/timestamp.hpp"
 #include "duckdb/common/types/value.hpp"
@@ -104,6 +105,16 @@ DuckLakeColumnStats DuckLakeColumnStats::FromGlobalStats(const LogicalType &type
 	return stats;
 }
 
+string DuckLakeColumnStats::EncodeBlobBound(string_t value) {
+	auto bytes = const_data_ptr_cast(value.GetData());
+	string hex(value.GetSize() * 2, '\0');
+	for (idx_t idx = 0; idx < value.GetSize(); idx++) {
+		hex[idx * 2] = Blob::HEX_TABLE[bytes[idx] >> 4];
+		hex[idx * 2 + 1] = Blob::HEX_TABLE[bytes[idx] & 0x0F];
+	}
+	return hex;
+}
+
 DuckLakeColumnStats DuckLakeColumnStats::FromConstant(const LogicalType &type, const Value &value, idx_t count) {
 	DuckLakeColumnStats stats(type);
 	stats.has_num_values = true;
@@ -115,7 +126,8 @@ DuckLakeColumnStats DuckLakeColumnStats::FromConstant(const LogicalType &type, c
 	} else if (count == 0) {
 		stats.any_valid = false;
 	} else {
-		stats.min = stats.max = value.ToString();
+		stats.min = stats.max =
+		    value.type().id() == LogicalTypeId::BLOB ? EncodeBlobBound(StringValue::Get(value)) : value.ToString();
 		stats.has_min = stats.has_max = true;
 		stats.min_is_exact = stats.max_is_exact = true;
 	}

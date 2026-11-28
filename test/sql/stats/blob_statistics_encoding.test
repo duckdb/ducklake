@@ -1,0 +1,42 @@
+# name: test/sql/stats/blob_statistics_encoding.test
+# description: BLOB bounds use hex for both Parquet files and inlined data
+# group: [stats]
+
+require ducklake
+
+require parquet
+
+test-env DUCKLAKE_CONNECTION {TEST_DIR}/{UUID}.db
+
+test-env DATA_PATH {TEST_DIR}
+
+statement ok
+ATTACH 'ducklake:{DUCKLAKE_CONNECTION}' AS lake (DATA_PATH '{DATA_PATH}/blob_statistics_encoding', METADATA_CATALOG 'meta', DATA_INLINING_ROW_LIMIT 0)
+
+statement ok
+CREATE TABLE lake.items AS SELECT from_hex('7A7A') AS b
+
+statement ok
+COPY (SELECT from_hex('FF005C') AS b) TO '{DATA_PATH}/{BASE_TEST_NAME}_blob_bounds.parquet' (FORMAT PARQUET)
+
+statement ok
+CALL ducklake_add_data_files('lake', 'items', '{DATA_PATH}/{BASE_TEST_NAME}_blob_bounds.parquet')
+
+statement ok
+CALL lake.set_option('data_inlining_row_limit', 10)
+
+statement ok
+INSERT INTO lake.items VALUES (from_hex('00FF')), (from_hex('21')), (from_hex('A500')), (NULL)
+
+query II
+SELECT min_value, max_value FROM meta.ducklake_table_column_stats
+----
+00FF	FF005C
+
+statement ok
+CALL ducklake_flush_inlined_data('lake')
+
+query II
+SELECT min_value, max_value FROM meta.ducklake_table_column_stats
+----
+00FF	FF005C

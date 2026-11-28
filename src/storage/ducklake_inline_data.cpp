@@ -192,6 +192,12 @@ struct StatsFallbackOperator {
 	}
 };
 
+struct StatsBlobOperator : public StatsFallbackOperator {
+	static string GetFinalStats(string_t input) {
+		return DuckLakeColumnStats::EncodeBlobBound(input);
+	}
+};
+
 template <class T, class OP>
 DuckLakeColumnStats TemplatedUpdateStats(Vector &input_vec, const LogicalType &type, idx_t row_count) {
 	UnifiedVectorFormat format;
@@ -287,6 +293,9 @@ DuckLakeColumnStats GetVectorStats(Vector &input_vec, idx_t row_count) {
 	auto &type = input_vec.GetType();
 	if (type.id() == LogicalTypeId::VARIANT) {
 		return GetVariantStats(input_vec, row_count);
+	}
+	if (type.id() == LogicalTypeId::BLOB) {
+		return TemplatedUpdateStats<string_t, StatsBlobOperator>(input_vec, type, row_count);
 	}
 	Vector str_vector(LogicalType::VARCHAR, row_count);
 	VectorOperations::DefaultCast(input_vec, str_vector, row_count);
